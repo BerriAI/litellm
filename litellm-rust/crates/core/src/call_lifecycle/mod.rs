@@ -7,9 +7,10 @@ pub mod registration;
 pub mod types;
 
 pub use callbacks::{
-    CallbackFamily, CallbackId, CallbackInvocation, CallbackKind, CallbackMethod, Delivery,
-    DispatchCursor, DispatchFacts, DispatchStep, InvocationOutcome, LoggedMarker, ReleaseGate,
-    SuccessDispatch, SuccessFacts, TargetErrorPolicy, plan_failure, plan_success,
+    CallbackFamily, CallbackId, CallbackInvocation, CallbackKind, CallbackMethod, CursorFacts,
+    Delivery, Dispatch, DispatchCursor, DispatchFacts, DispatchStep, InvocationOutcome,
+    LoggedMarker, ReleaseGate, SuccessFacts, TargetErrorPolicy, object_target_eligible,
+    plan_failure, plan_request, plan_success,
 };
 pub use types::{
     CallLifecycleContext, CallLifecyclePhase, CallLifecyclePhaseTiming, CallLifecycleRequest,

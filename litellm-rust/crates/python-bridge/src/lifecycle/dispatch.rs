@@ -1,6 +1,7 @@
 use litellm_core::call_lifecycle::{
-    CallbackFamily, CallbackId, CallbackInvocation, CallbackKind, CallbackMethod, Delivery,
-    DispatchCursor, DispatchFacts, DispatchStep, InvocationOutcome, LoggedMarker,
+    CallbackFamily, CallbackId, CallbackInvocation, CallbackKind, CallbackMethod, CursorFacts,
+    Delivery, Dispatch, DispatchCursor, DispatchFacts, DispatchStep, InvocationOutcome,
+    LoggedMarker, object_target_eligible, plan_request,
 };
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
@@ -125,12 +126,13 @@ pub(super) struct Job {
     pub logger: PythonLogger,
     pub targets: Targets,
     pub ids: Vec<CallbackId>,
-    pub family: CallbackFamily,
+    pub dispatch: Dispatch,
     pub response: Option<Py<PyAny>>,
     pub error: Option<Py<PyBaseException>>,
     pub start: Py<PyAny>,
     pub end: Py<PyAny>,
     pub stream: bool,
+    pub sync_request: bool,
 }
 
 impl Job {
@@ -144,7 +146,7 @@ impl Job {
     }
 
     fn family_name(&self) -> &'static str {
-        match self.family {
+        match self.dispatch.family {
             CallbackFamily::SyncSuccess => "sync_success",
             CallbackFamily::AsyncSuccess => "async_success",
             CallbackFamily::SyncFailure => "sync_failure",
@@ -154,7 +156,7 @@ impl Job {
     }
 
     fn outcome(&self) -> Outcome {
-        match self.family {
+        match self.dispatch.family {
             CallbackFamily::SyncSuccess | CallbackFamily::AsyncSuccess => Outcome::Success,
             _ => Outcome::Failure,
         }
@@ -171,6 +173,9 @@ impl DispatchFacts for Eligibility<'_, '_> {
     fn eligible(&mut self, target: CallbackId, method: CallbackMethod) -> bool {
         let object = self.job.targets.object(self.py, target);
         let kind = self.job.targets.kind(target);
+        if !object_target_eligible(self.job.sync_request, method, kind) {
+            return false;
+        }
         let result = match method {
             CallbackMethod::LoggingHook | CallbackMethod::AsyncLoggingHook => {
                 if kind != CallbackKind::CustomLogger {
@@ -227,14 +232,22 @@ pub(super) struct Runner {
 impl Runner {
     pub(super) fn start(py: Python<'_>, job: Job) -> PyResult<Self> {
         let leaves = leaves(py)?;
-        let already = match job.family.marker() {
+        let already_logged = match job.dispatch.family.marker() {
             Some(marker) => leaves
                 .getattr("already_logged")?
                 .call1((job.logger.object(py), marker.key()))?
                 .extract::<bool>()?,
             None => false,
         };
-        let cursor = DispatchCursor::start(job.family, job.ids.clone(), already, job.stream);
+        let cursor = DispatchCursor::start(
+            job.dispatch,
+            job.ids.clone(),
+            CursorFacts {
+                already_logged,
+                stream: job.stream,
+                sync_request: job.sync_request,
+            },
+        );
         let result = job.response.as_ref().map(|value| value.clone_ref(py));
         Ok(Self {
             job,
@@ -410,7 +423,7 @@ impl Runner {
             Delivery::Await | Delivery::Background => Err(PyRuntimeError::new_err(format!(
                 "{:?} leaf for {:?} returned a non-awaitable {}",
                 invocation.method,
-                self.job.family,
+                self.job.dispatch.family,
                 value.get_type().name()?
             ))),
         }
@@ -552,7 +565,15 @@ pub(super) struct RequestJob<'a> {
 pub(super) fn dispatch_request(py: Python<'_>, job: RequestJob<'_>) -> PyResult<()> {
     let leaves = leaves(py)?;
     let (targets, ids) = family_targets(py, job.logger, job.family)?;
-    let mut cursor = DispatchCursor::start(job.family, ids, false, false);
+    let mut cursor = DispatchCursor::start(
+        plan_request(job.family),
+        ids,
+        CursorFacts {
+            already_logged: false,
+            stream: false,
+            sync_request: true,
+        },
+    );
     let logger = job.logger.object(py);
     let event = match job.family {
         CallbackFamily::RequestPreCall => "pre_api_call",
@@ -712,7 +733,15 @@ impl DeploymentBody {
         Ok(Self {
             logger: logger.clone_ref(py),
             targets,
-            cursor: DispatchCursor::start(family, ids, false, false),
+            cursor: DispatchCursor::start(
+                plan_request(family),
+                ids,
+                CursorFacts {
+                    already_logged: false,
+                    stream: false,
+                    sync_request: true,
+                },
+            ),
             event,
             call_type,
             current,
@@ -872,13 +901,23 @@ target = CustomLogger()
         let list = PyList::new(py, [&target]).unwrap().into_any();
         let (targets, ids) = Targets::read(py, &[list]).unwrap();
         let ids: Vec<CallbackId> = ids.into_iter().flatten().collect();
+        let dispatch = Dispatch::immediate(family, Delivery::Worker);
         Runner {
-            cursor: DispatchCursor::start(family, ids.clone(), false, false),
+            cursor: DispatchCursor::start(
+                dispatch,
+                ids.clone(),
+                CursorFacts {
+                    already_logged: false,
+                    stream: false,
+                    sync_request: true,
+                },
+            ),
             job: Job {
                 logger: logger.extract().unwrap(),
                 targets,
                 ids,
-                family,
+                dispatch,
+                sync_request: true,
                 response: Some(target.clone().unbind()),
                 error: None,
                 start: py.None(),

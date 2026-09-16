@@ -525,6 +525,14 @@ async def async_logging_hook(logger: Logging, callback: CustomLogger, result: ob
     return replaced
 
 
+def is_sync_request(logger: Logging) -> bool:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
+
+    params: Final = _details_of(_logger(logger).model_call_details.get("litellm_params") or _EMPTY)
+    decide: Final = _call_of(LoggingClass._is_sync_litellm_request)  # pyright: ignore[reportPrivateUsage]  # legacy predicate
+    return decide(params) is True
+
+
 def mark_logged(logger: Logging, marker: str) -> None:
     _logger(logger).model_call_details[marker] = True
 

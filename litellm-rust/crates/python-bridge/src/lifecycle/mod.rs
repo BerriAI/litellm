@@ -13,7 +13,7 @@ use litellm_core::call_lifecycle::host::{
     HostCall as NativeCall, HostCallStep as NativeCallStep, HostFailure, HostPhase, HostStep,
 };
 use litellm_core::call_lifecycle::{
-    CallbackFamily, Delivery, ReleaseGate, SuccessFacts, plan_failure, plan_success,
+    CallbackFamily, Delivery, Dispatch, ReleaseGate, SuccessFacts, plan_failure, plan_success,
 };
 
 mod arguments;
@@ -479,14 +479,19 @@ impl PythonCallState {
         }
     }
 
-    fn job(&self, py: Python<'_>, family: CallbackFamily) -> PyResult<dispatch::Job> {
+    fn job(&self, py: Python<'_>, selected: Dispatch) -> PyResult<dispatch::Job> {
         let logger = self.logger()?;
-        let (targets, ids) = dispatch::family_targets(py, logger, family)?;
+        let (targets, ids) = dispatch::family_targets(py, logger, selected.family)?;
+        let sync_request = dispatch::leaves(py)?
+            .getattr("is_sync_request")?
+            .call1((logger.object(py),))?
+            .extract()?;
         Ok(dispatch::Job {
             logger: logger.clone_ref(py),
             targets,
             ids,
-            family,
+            dispatch: selected,
+            sync_request,
             response: self.response.as_ref().map(|value| value.clone_ref(py)),
             error: self.error.as_ref().map(|value| value.clone_ref(py)),
             start: self.start.clone_ref(py),
@@ -518,7 +523,7 @@ impl PythonCallState {
             sync_target_kinds: sync_targets.kinds(&sync_ids),
         };
         for selected in plan_success(&facts) {
-            let runner = dispatch::Runner::start(py, self.job(py, selected.family)?)?;
+            let runner = dispatch::Runner::start(py, self.job(py, selected)?)?;
             match (selected.delivery, selected.gate) {
                 (Delivery::Worker, _) => {
                     let job = Py::new(py, dispatch::WorkerJob::new(runner))?;
@@ -559,14 +564,14 @@ impl PythonCallState {
         } else {
             HostPhase::Failure
         };
-        let Some(family) = plan_failure(phase, self.asynchronous, self.internal) else {
+        let Some(selected) = plan_failure(phase, self.asynchronous, self.internal) else {
             return Ok(None);
         };
         if self.supplied {
-            return compat::dispatch_failure(py, self, family);
+            return compat::dispatch_failure(py, self, selected.family);
         }
-        let mut runner = dispatch::Runner::start(py, self.job(py, family)?)?;
-        match family.delivery() {
+        let mut runner = dispatch::Runner::start(py, self.job(py, selected)?)?;
+        match selected.delivery {
             Delivery::Inline => match runner.resume(py, None)? {
                 dispatch::Step::Done => Ok(None),
                 dispatch::Step::Await(_) => Err(missing_state()),
