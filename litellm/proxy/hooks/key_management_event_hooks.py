@@ -153,10 +153,11 @@ class KeyManagementEventHooks:
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         # Store the generated key in the secret manager - non-blocking, independent operation
-        if data is not None and response.token_id is not None:
+        if response.token_id is not None:
             try:
                 initial_secret_name: Final = existing_key_row.key_alias or f"virtual-key-{existing_key_row.token}"
-                new_secret_name: Final = response.key_alias or data.key_alias or initial_secret_name
+                requested_alias: Final = data.key_alias if data is not None else None
+                new_secret_name: Final = response.key_alias or requested_alias or initial_secret_name
                 verbose_proxy_logger.info(
                     "Updating secret in secret manager: secret_name=%s",
                     new_secret_name,
