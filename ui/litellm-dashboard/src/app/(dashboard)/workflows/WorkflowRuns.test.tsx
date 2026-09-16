@@ -1,7 +1,9 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import WorkflowRuns from "./WorkflowRuns";
 
 vi.mock("@/components/networking", () => ({
@@ -35,7 +37,7 @@ const RUNS: FakeRun[] = [
 ];
 
 function mockFetch(runs: FakeRun[]) {
-  return vi.fn((url: string) => {
+  return vi.fn((url: string, _init: RequestInit) => {
     if (url.includes("/runs?limit")) {
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ runs }) });
     }
@@ -51,12 +53,14 @@ function mockFetch(runs: FakeRun[]) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  testQueryClient.clear();
+  localStorage.clear();
 });
 
 describe("WorkflowRuns (migrated onto shared DataTable)", () => {
   it("renders one DataTable row per fetched run", async () => {
     vi.stubGlobal("fetch", mockFetch(RUNS));
-    const { container } = render(<WorkflowRuns accessToken="tok" />);
+    const { container } = renderWithProviders(<WorkflowRuns accessToken="tok" />);
 
     expect(await screen.findByText("First run")).toBeInTheDocument();
     expect(container.querySelectorAll("tr[data-row-id]")).toHaveLength(2);
@@ -66,7 +70,7 @@ describe("WorkflowRuns (migrated onto shared DataTable)", () => {
     const user = userEvent.setup();
     const fetchSpy = mockFetch(RUNS);
     vi.stubGlobal("fetch", fetchSpy);
-    render(<WorkflowRuns accessToken="tok" />);
+    renderWithProviders(<WorkflowRuns accessToken="tok" />);
 
     await user.click(await screen.findByText("First run"));
 
@@ -77,7 +81,7 @@ describe("WorkflowRuns (migrated onto shared DataTable)", () => {
 
   it("shows the empty state when there are no runs", async () => {
     vi.stubGlobal("fetch", mockFetch([]));
-    render(<WorkflowRuns accessToken="tok" />);
+    renderWithProviders(<WorkflowRuns accessToken="tok" />);
 
     expect(await screen.findByText("No workflow runs yet")).toBeInTheDocument();
   });
@@ -86,12 +90,12 @@ describe("WorkflowRuns (migrated onto shared DataTable)", () => {
     const user = userEvent.setup();
     const fetchSpy = mockFetch(RUNS);
     vi.stubGlobal("fetch", fetchSpy);
-    render(<WorkflowRuns accessToken="tok" />);
+    renderWithProviders(<WorkflowRuns accessToken="tok" />);
 
     await user.click(await screen.findByText("First run"));
 
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3));
-    for (const [url, init] of fetchSpy.mock.calls as [string, RequestInit][]) {
+    for (const [url, init] of fetchSpy.mock.calls) {
       expect(init.headers, url).toEqual({ "x-litellm-api-key": "Bearer tok" });
     }
   });
@@ -170,7 +174,7 @@ async function openDetailDrawer(events = DETAIL_EVENTS, messages = DETAIL_MESSAG
   const user = userEvent.setup();
   const fetchSpy = mockDetailFetch(events, messages);
   vi.stubGlobal("fetch", fetchSpy);
-  render(<WorkflowRuns accessToken="tok" />);
+  renderWithProviders(<WorkflowRuns accessToken="tok" />);
 
   await user.click(await screen.findByText("First run"));
   const drawer = await screen.findByRole("dialog");
@@ -242,5 +246,212 @@ describe("WorkflowRuns detail drawer", () => {
     await user.click(within(drawer).getByRole("button", { name: /close/i }));
 
     await waitFor(() => expect(screen.queryAllByRole("dialog")).toHaveLength(0));
+  });
+});
+
+const rowIds = (): string[] =>
+  screen
+    .queryAllByRole("row")
+    .map((row) => row.getAttribute("data-row-id"))
+    .filter((id): id is string => id !== null);
+
+const lastUrlUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+  onUrlUpdate.mock.calls.at(-1)?.[0];
+
+const renderRuns = (runs: FakeRun[], searchParams = "") => {
+  const fetchSpy = mockFetch(runs);
+  vi.stubGlobal("fetch", fetchSpy);
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  renderWithProviders(<WorkflowRuns accessToken="tok" />, { searchParams, onUrlUpdate });
+  return { fetchSpy, onUrlUpdate };
+};
+
+const detailFetchUrls = (fetchSpy: ReturnType<typeof mockFetch>): string[] =>
+  fetchSpy.mock.calls.map(([url]) => String(url)).filter((url) => !url.includes("/runs?limit"));
+
+const STATE_RUNS: FakeRun[] = [
+  {
+    run_id: "run-labelled",
+    status: "completed",
+    workflow_type: "grill",
+    created_at: "2026-01-01T00:00:00Z",
+    metadata: { title: "Labelled run", state: "awaiting_review" },
+  },
+  {
+    run_id: "run-plain",
+    status: "completed",
+    workflow_type: "autofix",
+    created_at: "2026-01-02T00:00:00Z",
+    metadata: null,
+  },
+];
+
+const MANY_RUNS: FakeRun[] = Array.from({ length: 60 }, (_, index) => ({
+  run_id: `run-${String(index).padStart(2, "0")}`,
+  status: "running",
+  workflow_type: "grill",
+  created_at: "2026-01-01T00:00:00Z",
+  metadata: { title: `Run number ${index}` },
+}));
+
+describe("WorkflowRuns status filter", () => {
+  it("matches the state the status cell renders rather than the raw run status", async () => {
+    renderRuns(STATE_RUNS, "?filter_status=awaiting_review");
+
+    await waitFor(() => expect(rowIds()).toEqual(["run-labelled"]));
+    expect(screen.getByTestId("filter-chip-status")).toHaveTextContent("awaiting_review");
+  });
+
+  it("leaves out a run whose rendered state differs from the selected raw status", async () => {
+    renderRuns(STATE_RUNS, "?filter_status=completed");
+
+    await waitFor(() => expect(rowIds()).toEqual(["run-plain"]));
+  });
+
+  it("offers the rendered states in the drawer and writes the chosen one to the URL", async () => {
+    const user = userEvent.setup();
+    const { onUrlUpdate } = renderRuns(STATE_RUNS);
+    await screen.findByText("Labelled run");
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await chooseSelectOption(user, await screen.findByTestId("filter-status"), "awaiting_review");
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("filter_status")).toBe("awaiting_review"));
+    expect(rowIds()).toEqual(["run-labelled"]);
+  });
+});
+
+describe("WorkflowRuns URL table state", () => {
+  it("applies the search from the URL", async () => {
+    renderRuns(RUNS, "?search=autofix");
+
+    await waitFor(() => expect(rowIds()).toEqual(["run-bbbbbbbb-2222"]));
+    expect(screen.getByTestId("datatable-search")).toHaveValue("autofix");
+  });
+
+  it("writes the search to the URL as it is typed", async () => {
+    const { onUrlUpdate } = renderRuns(RUNS);
+    await screen.findByText("First run");
+
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "grill" } });
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("search")).toBe("grill"));
+    expect(rowIds()).toEqual(["run-aaaaaaaa-1111"]);
+  });
+
+  it("applies the type filter from ?filter_type", async () => {
+    renderRuns(RUNS, "?filter_type=auto");
+
+    await waitFor(() => expect(rowIds()).toEqual(["run-bbbbbbbb-2222"]));
+    expect(screen.getByTestId("filter-chip-workflow_type")).toHaveTextContent("auto");
+  });
+
+  it("writes the type filter applied in the drawer to ?filter_type", async () => {
+    const user = userEvent.setup();
+    const { onUrlUpdate } = renderRuns(RUNS);
+    await screen.findByText("First run");
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.type(await screen.findByPlaceholderText("Filter by type…"), "grill");
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("filter_type")).toBe("grill"));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("filter_workflow_type")).toBe(false);
+    expect(rowIds()).toEqual(["run-aaaaaaaa-1111"]);
+  });
+
+  it("opens the page named in the URL", async () => {
+    renderRuns(MANY_RUNS, "?page=2");
+
+    await waitFor(() => expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2"));
+    expect(rowIds()).toHaveLength(10);
+    expect(rowIds()[0]).toBe("run-50");
+  });
+
+  it("uses the page size from the URL", async () => {
+    renderRuns(MANY_RUNS, "?page_size=100");
+
+    await waitFor(() => expect(rowIds()).toHaveLength(60));
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 1");
+  });
+
+  it("writes the page to the URL when paging forward", async () => {
+    const user = userEvent.setup();
+    const { onUrlUpdate } = renderRuns(MANY_RUNS);
+    await screen.findByText("Run number 0");
+
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("page")).toBe("2"));
+    expect(rowIds()[0]).toBe("run-50");
+  });
+});
+
+describe("WorkflowRuns ?run= drawer", () => {
+  it("opens the drawer for the run named in the URL and loads its detail", async () => {
+    const { fetchSpy } = renderRuns(RUNS, "?run=run-bbbbbbbb-2222");
+
+    const drawer = await screen.findByRole("dialog");
+    await waitFor(() => expect(within(drawer).getByText("Timeline")).toBeInTheDocument());
+    expect(within(drawer).getByText("run-bbbb")).toBeInTheDocument();
+    expect(detailFetchUrls(fetchSpy)).toEqual([
+      "/v1/workflows/runs/run-bbbbbbbb-2222/events",
+      "/v1/workflows/runs/run-bbbbbbbb-2222/messages",
+    ]);
+  });
+
+  it("pushes the clicked run id to the URL", async () => {
+    const user = userEvent.setup();
+    const { onUrlUpdate } = renderRuns(RUNS);
+
+    await user.click(await screen.findByText("First run"));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("run")).toBe("run-aaaaaaaa-1111"));
+    expect(lastUrlUpdate(onUrlUpdate)?.options.history).toBe("push");
+  });
+
+  it("removes the run from the URL when the drawer is closed", async () => {
+    const user = userEvent.setup();
+    const { onUrlUpdate } = renderRuns(RUNS, "?run=run-aaaaaaaa-1111");
+    const drawer = await screen.findByRole("dialog");
+
+    await user.click(await within(drawer).findByRole("button", { name: /close/i }));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("run")).toBe(false));
+    await waitFor(() => expect(screen.queryAllByRole("dialog")).toHaveLength(0));
+  });
+
+  it("says the run was not found when the URL names a run that is not listed", async () => {
+    const { fetchSpy } = renderRuns(RUNS, "?run=run-missing");
+
+    const drawer = await screen.findByRole("dialog");
+    expect(await within(drawer).findByText("Workflow run not found.")).toBeInTheDocument();
+    expect(detailFetchUrls(fetchSpy)).toEqual([]);
+  });
+});
+
+describe("WorkflowRuns column visibility", () => {
+  it("hides the columns saved as hidden for this table", async () => {
+    localStorage.setItem("litellm_table_columns_workflow-runs", JSON.stringify({ workflow_type: false }));
+    renderRuns(RUNS);
+
+    await screen.findByText("First run");
+    expect(screen.queryByRole("columnheader", { name: "Type" })).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
+  });
+
+  it("saves a column hidden from the Columns picker", async () => {
+    const user = userEvent.setup();
+    renderRuns(RUNS);
+    await screen.findByText("First run");
+
+    await user.click(screen.getByTestId("view-options-trigger"));
+    await user.click(await screen.findByTestId("view-option-workflow_type"));
+
+    await waitFor(() => expect(screen.queryByRole("columnheader", { name: "Type" })).not.toBeInTheDocument());
+    expect(JSON.parse(localStorage.getItem("litellm_table_columns_workflow-runs") ?? "{}")).toEqual({
+      workflow_type: false,
+    });
   });
 });

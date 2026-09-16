@@ -1,12 +1,17 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { skipToken, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { ArrowLeft, ChevronDown, RefreshCw } from "lucide-react";
-import type { ColumnDef, ColumnFiltersState } from "@tanstack/react-table";
+import { functionalUpdate, type ColumnDef } from "@tanstack/react-table";
+import { parseAsString, useQueryState } from "nuqs";
 import { getGlobalLitellmHeaderName, proxyBaseUrl } from "@/components/networking";
 import {
   DataTable,
   DataTableFilterDrawer,
   DataTableFilterField,
   DataTableToolbar,
+  usePersistedColumnVisibility,
+  useUrlTableState,
+  type UrlTableStateOptions,
 } from "@/components/shared/DataTable";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -59,6 +64,23 @@ interface WorkflowRunMessage {
   created_at: string;
 }
 
+interface WorkflowRunDetail {
+  events: WorkflowRunEvent[];
+  messages: WorkflowRunMessage[];
+}
+
+type RunFilterColumn = "status" | "workflow_type";
+
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<RunFilterColumn> = {
+  sortFields: [],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 50,
+  filterColumns: ["status", "workflow_type"],
+  urlKeys: { filter_workflow_type: "filter_type" },
+};
+
+const RUN_PARAM = parseAsString.withOptions({ history: "push" });
+
 // ── design tokens ─────────────────────────────────────────────────────────────
 
 const STATUS_DOT: Record<RunStatus, string> = {
@@ -69,7 +91,7 @@ const STATUS_DOT: Record<RunStatus, string> = {
   failed: "bg-destructive",
 };
 
-const RUN_STATUS_OPTIONS: RunStatus[] = ["pending", "running", "paused", "completed", "failed"];
+const RUN_STATUS_OPTIONS: readonly RunStatus[] = ["pending", "running", "paused", "completed", "failed"];
 const STATUS_LABELS: Record<RunStatus, string> = {
   pending: "Pending",
   running: "Running",
@@ -77,6 +99,10 @@ const STATUS_LABELS: Record<RunStatus, string> = {
   completed: "Completed",
   failed: "Failed",
 };
+
+const isRunStatus = (value: string): value is RunStatus => RUN_STATUS_OPTIONS.some((status) => status === value);
+
+const stateLabel = (state: string): string => (isRunStatus(state) ? STATUS_LABELS[state] : state);
 
 const EVENT_COLOR: Record<string, { bar: string; text: string }> = {
   "step.started": { bar: "border-success/30 bg-success/10", text: "text-success" },
@@ -117,6 +143,23 @@ function runTitle(run: WorkflowRun): string {
 
 function shortId(id: string): string {
   return id.slice(0, 8);
+}
+
+function displayedState(run: WorkflowRun): string {
+  return run.metadata?.state ?? run.status;
+}
+
+function bySequence<T extends { sequence_number: number }>(items: readonly T[] | undefined): T[] {
+  return [...(items ?? [])].sort((a, b) => a.sequence_number - b.sequence_number);
+}
+
+async function fetchRunDetail(accessToken: string, runId: string, signal: AbortSignal): Promise<WorkflowRunDetail> {
+  const runUrl = `${proxyBaseUrl ?? ""}/v1/workflows/runs/${encodeURIComponent(runId)}`;
+  const init = { headers: { [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}` }, signal };
+  const [evRes, msgRes] = await Promise.all([fetch(`${runUrl}/events`, init), fetch(`${runUrl}/messages`, init)]);
+  const evData: { events?: WorkflowRunEvent[] } = evRes.ok ? await evRes.json() : {};
+  const msgData: { messages?: WorkflowRunMessage[] } = msgRes.ok ? await msgRes.json() : {};
+  return { events: bySequence(evData.events), messages: bySequence(msgData.messages) };
 }
 
 // ── status dot ────────────────────────────────────────────────────────────────
@@ -376,19 +419,127 @@ const DetailSection: React.FC<{
   </Collapsible>
 );
 
+// ── run detail drawer body ────────────────────────────────────────────────────
+
+const DrawerSpinner: React.FC = () => (
+  <div className="flex justify-center py-20">
+    <UiLoadingSpinner className="size-8 text-muted-foreground" />
+  </div>
+);
+
+const DrawerCloseButton: React.FC<{ onClose: () => void }> = ({ onClose }) => (
+  <Button
+    variant="ghost"
+    size="sm"
+    className="px-0 text-xs font-normal text-muted-foreground hover:bg-transparent"
+    onClick={onClose}
+  >
+    <ArrowLeft />
+    close
+  </Button>
+);
+
+interface RunDetailBodyProps {
+  run: WorkflowRun | undefined;
+  runsLoading: boolean;
+  detail: WorkflowRunDetail | undefined;
+  detailLoading: boolean;
+  onClose: () => void;
+  onRefresh: () => void;
+}
+
+const RunDetailBody: React.FC<RunDetailBodyProps> = ({
+  run,
+  runsLoading,
+  detail,
+  detailLoading,
+  onClose,
+  onRefresh,
+}) => {
+  if (run === undefined) {
+    return runsLoading ? (
+      <DrawerSpinner />
+    ) : (
+      <div className="px-7 py-6">
+        <DrawerCloseButton onClose={onClose} />
+        <p className="mt-4 text-sm text-muted-foreground">Workflow run not found.</p>
+      </div>
+    );
+  }
+  if (detailLoading) {
+    return <DrawerSpinner />;
+  }
+
+  const events = detail?.events ?? [];
+  const messages = detail?.messages ?? [];
+
+  return (
+    <div className="px-7 py-6">
+      <div className="mb-4 flex items-center justify-between">
+        <DrawerCloseButton onClose={onClose} />
+        <Button variant="outline" size="sm" onClick={onRefresh}>
+          <RefreshCw />
+          Refresh
+        </Button>
+      </div>
+      <MetadataCard run={run} />
+      <div className="divide-y overflow-hidden rounded-lg border">
+        <DetailSection
+          title="Timeline"
+          meta={
+            <>
+              {events.length} {events.length === 1 ? "event" : "events"}
+            </>
+          }
+          defaultOpen
+        >
+          <GanttTimeline run={run} events={events} />
+        </DetailSection>
+        <DetailSection title="Messages" meta={messages.length}>
+          {messages.length === 0 ? (
+            <div className="py-3 font-mono text-xs text-muted-foreground">No messages</div>
+          ) : (
+            <div>
+              {messages.map((msg) => (
+                <MessageRow key={msg.message_id} msg={msg} />
+              ))}
+            </div>
+          )}
+        </DetailSection>
+      </div>
+    </div>
+  );
+};
+
 // ── main component ────────────────────────────────────────────────────────────
 
 const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
-  const [loadingRuns, setLoadingRuns] = useState(false);
-  const [selectedRun, setSelectedRun] = useState<WorkflowRun | null>(null);
-  const [events, setEvents] = useState<WorkflowRunEvent[]>([]);
-  const [messages, setMessages] = useState<WorkflowRunMessage[]>([]);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
-  const [globalFilter, setGlobalFilter] = useState("");
+  const [loadingRuns, setLoadingRuns] = useState(Boolean(accessToken));
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const { search, setSearch, pagination, onPaginationChange, columnFilters, onColumnFiltersChange } =
+    useUrlTableState(TABLE_STATE_OPTIONS);
+  const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("workflow-runs");
+  const [runId, setRunId] = useQueryState("run", RUN_PARAM);
+  const [shownRunId, setShownRunId] = useState(runId);
+  if (runId !== null && runId !== shownRunId) {
+    setShownRunId(runId);
+  }
+  const shownRun = runs.find((run) => run.run_id === shownRunId);
+
+  const detailQueryOptions: UseQueryOptions<WorkflowRunDetail> = {
+    queryKey: ["workflow-run-detail", shownRun?.run_id],
+    queryFn:
+      accessToken && shownRun !== undefined
+        ? ({ signal }) => fetchRunDetail(accessToken, shownRun.run_id, signal)
+        : skipToken,
+    enabled: runId !== null,
+    refetchOnWindowFocus: false,
+    retry: false,
+  };
+  const detailQuery = useQuery(detailQueryOptions);
+
+  const closeRun = useCallback(() => void setRunId(null), [setRunId]);
 
   const fetchRuns = useCallback(async () => {
     if (!accessToken) return;
@@ -407,48 +558,14 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
     }
   }, [accessToken]);
 
-  const fetchRunDetail = useCallback(
-    async (run: WorkflowRun) => {
-      if (!accessToken) return;
-      setSelectedRun(run);
-      setDrawerOpen(true);
-      setLoadingDetail(true);
-      setEvents([]);
-      setMessages([]);
-      try {
-        const base = proxyBaseUrl ?? "";
-        const [evRes, msgRes] = await Promise.all([
-          fetch(`${base}/v1/workflows/runs/${run.run_id}/events`, {
-            headers: { [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}` },
-          }),
-          fetch(`${base}/v1/workflows/runs/${run.run_id}/messages`, {
-            headers: { [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}` },
-          }),
-        ]);
-        const evData = evRes.ok ? await evRes.json() : { events: [] };
-        const msgData = msgRes.ok ? await msgRes.json() : { messages: [] };
-        setEvents(
-          [...(evData.events ?? [])].sort(
-            (a: WorkflowRunEvent, b: WorkflowRunEvent) => a.sequence_number - b.sequence_number,
-          ),
-        );
-        setMessages(
-          [...(msgData.messages ?? [])].sort(
-            (a: WorkflowRunMessage, b: WorkflowRunMessage) => a.sequence_number - b.sequence_number,
-          ),
-        );
-      } catch (err) {
-        console.error("workflow run detail fetch failed:", err);
-      } finally {
-        setLoadingDetail(false);
-      }
-    },
-    [accessToken],
-  );
-
   useEffect(() => {
     fetchRuns();
   }, [fetchRuns]);
+
+  const statusFilterItems = useMemo(() => {
+    const states = new Set([...RUN_STATUS_OPTIONS, ...runs.map(displayedState)]);
+    return Object.fromEntries([...states].map((state) => [state, stateLabel(state)]));
+  }, [runs]);
 
   const columns = useMemo<ColumnDef<WorkflowRun, unknown>[]>(
     () => [
@@ -481,7 +598,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
       },
       {
         id: "status",
-        accessorKey: "status",
+        accessorFn: displayedState,
         header: "Status",
         meta: { title: "Status" },
         filterFn: "equalsString",
@@ -490,7 +607,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
           return (
             <div className="flex items-center gap-1.5">
               <StatusDot status={run.status} className="size-[7px]" />
-              <span className="text-xs capitalize text-muted-foreground">{run.metadata?.state ?? run.status}</span>
+              <span className="text-xs capitalize text-muted-foreground">{displayedState(run)}</span>
             </div>
           );
         },
@@ -523,20 +640,24 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         loadingMessage="Loading workflow runs…"
         noDataMessage={<div className="py-6 text-center text-[13px] text-muted-foreground">No workflow runs yet</div>}
         paginationMode="client"
+        pagination={pagination}
+        onPaginationChange={onPaginationChange}
         pageSizeOptions={[50, 100]}
         filterMode="client"
         columnFilters={columnFilters}
-        onColumnFiltersChange={setColumnFilters}
-        globalFilter={globalFilter}
-        onGlobalFilterChange={setGlobalFilter}
-        onRowClick={fetchRunDetail}
+        onColumnFiltersChange={onColumnFiltersChange}
+        globalFilter={search}
+        onGlobalFilterChange={(updater) => setSearch(functionalUpdate(updater, search))}
+        columnVisibility={columnVisibility}
+        onColumnVisibilityChange={onColumnVisibilityChange}
+        onRowClick={(run) => void setRunId(run.run_id)}
         size="compact"
         toolbar={(table) => (
           <>
             <DataTableToolbar
               table={table}
-              searchValue={globalFilter}
-              onSearchChange={setGlobalFilter}
+              searchValue={search}
+              onSearchChange={setSearch}
               searchPlaceholder="Search runs…"
               onRefresh={fetchRuns}
               isRefreshing={loadingRuns}
@@ -553,18 +674,18 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
                 <>
                   <DataTableFilterField label="Status">
                     <Select
-                      items={STATUS_LABELS}
+                      items={statusFilterItems}
                       value={(get("status") as string) || null}
                       onValueChange={(value: string | null) => set("status", value ?? "")}
                     >
-                      <SelectTrigger className="w-full">
+                      <SelectTrigger className="w-full" data-testid="filter-status">
                         <SelectValue placeholder="All statuses" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value={null}>All statuses</SelectItem>
-                        {RUN_STATUS_OPTIONS.map((status) => (
-                          <SelectItem key={status} value={status}>
-                            {STATUS_LABELS[status]}
+                        {Object.entries(statusFilterItems).map(([state, label]) => (
+                          <SelectItem key={state} value={state}>
+                            {label}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -585,7 +706,12 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
       />
 
       {/* detail drawer */}
-      <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+      <Sheet
+        open={runId !== null}
+        onOpenChange={(open) => {
+          if (!open) closeRun();
+        }}
+      >
         <SheetContent
           showCloseButton={false}
           className="overflow-y-auto p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[680px]"
@@ -594,59 +720,14 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
           <SheetDescription className="sr-only">
             Metadata, timeline and messages for the selected workflow run
           </SheetDescription>
-          {!selectedRun ? null : loadingDetail ? (
-            <div className="flex justify-center py-20">
-              <UiLoadingSpinner className="size-8 text-muted-foreground" />
-            </div>
-          ) : (
-            <div className="px-7 py-6">
-              {/* drawer close + refresh */}
-              <div className="mb-4 flex items-center justify-between">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="px-0 text-xs font-normal text-muted-foreground hover:bg-transparent"
-                  onClick={() => setDrawerOpen(false)}
-                >
-                  <ArrowLeft />
-                  close
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => fetchRunDetail(selectedRun)}>
-                  <RefreshCw />
-                  Refresh
-                </Button>
-              </div>
-
-              {/* metadata card — top */}
-              <MetadataCard run={selectedRun} />
-
-              {/* collapsible sections */}
-              <div className="divide-y overflow-hidden rounded-lg border">
-                <DetailSection
-                  title="Timeline"
-                  meta={
-                    <>
-                      {events.length} {events.length === 1 ? "event" : "events"}
-                    </>
-                  }
-                  defaultOpen
-                >
-                  <GanttTimeline run={selectedRun} events={events} />
-                </DetailSection>
-                <DetailSection title="Messages" meta={messages.length}>
-                  {messages.length === 0 ? (
-                    <div className="py-3 font-mono text-xs text-muted-foreground">No messages</div>
-                  ) : (
-                    <div>
-                      {messages.map((msg) => (
-                        <MessageRow key={msg.message_id} msg={msg} />
-                      ))}
-                    </div>
-                  )}
-                </DetailSection>
-              </div>
-            </div>
-          )}
+          <RunDetailBody
+            run={shownRun}
+            runsLoading={loadingRuns}
+            detail={detailQuery.data}
+            detailLoading={detailQuery.isFetching}
+            onClose={closeRun}
+            onRefresh={() => void detailQuery.refetch()}
+          />
         </SheetContent>
       </Sheet>
     </div>
