@@ -13,6 +13,7 @@ from types import MappingProxyType
 from typing import Final, Literal, Protocol
 from urllib.parse import urlsplit
 
+from botocore.eventstream import EventStreamBuffer, ParserError
 from e2e_http import (
     NetworkError,
     StreamChunk,
@@ -36,6 +37,19 @@ SIGNATURE_HEADERS: Final = frozenset(
     {"authorization", "x-amz-date", "x-amz-security-token", "x-amz-content-sha256"}
 )
 BEDROCK_MOUNT_PREFIX: Final = "bedrock"
+BEDROCK_CONVERSE_SUFFIX: Final = "/converse"
+BEDROCK_INVOKE_SUFFIX: Final = "/invoke"
+BEDROCK_CONVERSE_STREAM_SUFFIX: Final = "/converse-stream"
+BEDROCK_INVOKE_STREAM_SUFFIX: Final = "/invoke-with-response-stream"
+BEDROCK_SUFFIXES: Final = (
+    BEDROCK_CONVERSE_SUFFIX,
+    BEDROCK_INVOKE_SUFFIX,
+    BEDROCK_CONVERSE_STREAM_SUFFIX,
+    BEDROCK_INVOKE_STREAM_SUFFIX,
+)
+EVENTSTREAM_PRELUDE_BYTES: Final = 4
+EVENT_TYPE_HEADER: Final = ":event-type"
+EVENTSTREAM_HEADERS: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict[str, str])
 OPENAI_JSON_PATHS: Final = frozenset({"/v1/chat/completions", "/v1/messages", "/v1/embeddings", "/v1/responses"})
 JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
@@ -145,7 +159,7 @@ def cacheable_endpoint(mount: str, method: str, url: str, body: bytes | None) ->
         return False
     path: Final = urlsplit(url).path
     if is_bedrock(mount):
-        return path.startswith("/model/") and path.endswith(("/converse", "/invoke"))
+        return path.startswith("/model/") and path.endswith(BEDROCK_SUFFIXES)
     return path in OPENAI_JSON_PATHS
 
 
@@ -176,16 +190,7 @@ def successful_response(mount: str, url: str, status: int, headers: Mapping[str,
             return complete_responses_stream(values)
         if urlsplit(url).path == "/v1/chat/completions":
             return events[-1] == "[DONE]" and "[DONE]" not in events[:-1] and complete_chat_stream(values)
-        return (
-            "[DONE]" not in events
-            and isinstance(values[0], dict) and values[0].get("type") == "message_start"
-            and isinstance(values[-1], dict) and values[-1].get("type") == "message_stop"
-            and any(
-                isinstance(value, dict) and value.get("type") == "message_delta"
-                and isinstance(delta := value.get("delta"), dict) and isinstance(delta.get("stop_reason"), str)
-                for value in values
-            )
-        )
+        return "[DONE]" not in events and complete_anthropic_stream(values)
     try:
         value: Final = JSON_VALUE.validate_json(body)
     except ValidationError:
@@ -214,19 +219,129 @@ def complete_bedrock_response(url: str, body: bytes) -> bool:
     """Converse answers with ``output`` plus a ``stopReason``; InvokeModel on an
     Anthropic model answers the Anthropic message shape. Either way a truncated
     or error body is missing the terminator field, which is what makes it safe to
-    record. The streaming variants never reach here: they are not cacheable."""
+    record."""
+    path: Final = urlsplit(url).path
+    if path.endswith(BEDROCK_CONVERSE_STREAM_SUFFIX):
+        return complete_converse_stream(body)
+    if path.endswith(BEDROCK_INVOKE_STREAM_SUFFIX):
+        return complete_invoke_stream(body)
     try:
         value: Final = JSON_VALUE.validate_json(body)
     except ValidationError:
         return False
     if not isinstance(value, dict) or "message" in value:
         return False
-    if urlsplit(url).path.endswith("/converse"):
+    if path.endswith(BEDROCK_CONVERSE_SUFFIX):
         return isinstance(value.get("output"), dict) and isinstance(value.get("stopReason"), str)
     return (
         value.get("type") == "message"
         and isinstance(value.get("content"), list)
         and isinstance(value.get("stop_reason"), str)
+    )
+
+
+def whole_eventstream_messages(body: bytes) -> bool:
+    """Whether the body is exactly a whole number of eventstream messages.
+
+    A dropped connection is the failure this catches, and it has to be caught
+    here: botocore yields the messages it did receive and silently discards a
+    trailing partial one, so a stream cut a single byte short parses clean. Each
+    message declares its own total length in its first four bytes, so walking
+    those is enough to tell a complete body from a cut one."""
+    offset = 0  # rebind-ok: a cursor walking the declared frame lengths
+    while offset + EVENTSTREAM_PRELUDE_BYTES <= len(body):
+        total: int = int.from_bytes(body[offset : offset + EVENTSTREAM_PRELUDE_BYTES], "big")
+        if total <= 0 or offset + total > len(body):
+            return False
+        offset += total
+    return offset == len(body)
+
+
+def eventstream_events(body: bytes) -> tuple[tuple[str, JsonValue], ...] | None:
+    """The stream's (event type, decoded payload) pairs, or None if it is not a
+    complete, uncorrupted stream.
+
+    botocore validates both CRCs and raises ``ParserError`` rather than decoding
+    corruption into something plausible. A failure that began after Bedrock had
+    already answered 200 arrives as an ``exception`` frame in place of the
+    terminator, so it is the terminator rules below that reject it and this does
+    not need to inspect ``:message-type`` as well."""
+    if not body or not whole_eventstream_messages(body):
+        return None
+    buffer: Final = EventStreamBuffer()
+    buffer.add_data(body)
+    try:
+        return tuple(
+            (event_type(event.headers), JSON_VALUE.validate_json(event.payload))
+            for event in buffer
+        )
+    except (ParserError, ValidationError, ValueError):
+        return None
+
+
+def event_type(headers: object) -> str:
+    """botocore's eventstream headers come back untyped, so the one header this
+    reads is validated into a string rather than trusted."""
+    parsed: Final = EVENTSTREAM_HEADERS.validate_python(headers)
+    return parsed.get(EVENT_TYPE_HEADER, "")
+
+
+def complete_converse_stream(body: bytes) -> bool:
+    """ConverseStream ends with ``metadata``, not with ``messageStop``.
+
+    Requiring the metadata frame rather than the stop frame is deliberate: it
+    carries the token usage litellm prices the call from, so a stream cut between
+    the two still names a stop reason but would replay as a free call."""
+    events: Final = eventstream_events(body)
+    if not events or events[-1][0] != "metadata":
+        return False
+    return any(
+        event_type == "messageStop" and isinstance(payload, dict) and isinstance(payload.get("stopReason"), str)
+        for event_type, payload in events
+    )
+
+
+def complete_invoke_stream(body: bytes) -> bool:
+    """InvokeModelWithResponseStream wraps the ordinary Anthropic event grammar
+    in ``chunk`` frames, one base64 payload each, so it is held to the same
+    terminator rule as the Anthropic SSE path. A frame Bedrock sends instead of a
+    chunk, an exception among them, carries no such payload and fails the rule
+    without the frame type needing to be read."""
+    events: Final = eventstream_events(body)
+    if not events:
+        return False
+    values: Final = tuple(invoke_chunk_value(payload) for _, payload in events)
+    return all(value is not None for value in values) and complete_anthropic_stream(values)
+
+
+def invoke_chunk_value(payload: JsonValue) -> JsonValue | None:
+    """The Anthropic event inside one ``chunk`` frame, or None for a frame that
+    carries no readable one."""
+    if not isinstance(payload, dict) or not isinstance(encoded := payload.get("bytes"), str):
+        return None
+    try:
+        return JSON_VALUE.validate_json(base64.b64decode(encoded, validate=True))
+    except (ValidationError, ValueError):
+        return None
+
+
+def complete_anthropic_stream(values: tuple[JsonValue, ...]) -> bool:
+    """The Anthropic event grammar, shared by the SSE mounts and by Bedrock's
+    invoke stream, which carries the same events inside eventstream frames. A
+    ``message_delta`` naming a stop reason is what separates a finished turn from
+    one the connection cut short."""
+    if not values:
+        return False
+    first: Final = values[0]
+    last: Final = values[-1]
+    return (
+        isinstance(first, dict) and first.get("type") == "message_start"
+        and isinstance(last, dict) and last.get("type") == "message_stop"
+        and any(
+            isinstance(value, dict) and value.get("type") == "message_delta"
+            and isinstance(delta := value.get("delta"), dict) and isinstance(delta.get("stop_reason"), str)
+            for value in values
+        )
     )
 
 
