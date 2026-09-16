@@ -792,3 +792,27 @@ async def test_completed_event_without_usage_counts_multimodal_input_as_messages
     usage = iterator.completed_response.response.usage
     assert usage is not None
     assert usage.input_tokens < json_count / 2
+
+
+@pytest.mark.asyncio
+async def test_completed_event_survives_a_failing_usage_estimate():
+    """A raising token_counter must not break a stream that previously completed:
+    the estimate is best-effort and falls back to usage None."""
+    response = _responses_api_response_without_usage()
+    iterator = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_text.delta", "delta": "hello world"}),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=_mock_config_with_completed_response(response),
+        request_data={"input": "count these input tokens please"},
+    )
+
+    with patch.object(litellm, "token_counter", side_effect=RuntimeError("tokenizer exploded")):
+        yielded: list = []
+        async for chunk in iterator:
+            yielded.append(chunk)
+
+    assert yielded
+    assert iterator.completed_response.response.usage is None
