@@ -13,6 +13,7 @@ from urllib.parse import unquote
 
 import litellm
 from litellm.constants import (
+    DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
     MAX_BASE64_LENGTH_STDOUT_LOG,
@@ -88,11 +89,25 @@ def _is_redacted(record: logging.LogRecord) -> bool:
     return getattr(record, _REDACTED_RECORD_ATTR, False) is True
 
 
+def _is_secret_free(key: str | None, value: object, depth: int) -> bool:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return False
+    if isinstance(value, str):
+        return _redact_structured_value(key, value) == value
+    if isinstance(value, _UNREDACTED_SCALAR_TYPES):
+        return True
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _is_secret_free(k, v, depth + 1) for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return all(_is_secret_free(key, item, depth + 1) for item in value)
+    return False
+
+
 def _redact_extra_value(key: str, value: object) -> object:
+    if _is_secret_free(key, value, 1):
+        return value
     try:
-        rendered: Final = safe_dumps({key: value})
-        scrubbed: Final = safe_dumps({key: value}, value_transform=_redact_structured_value)
-        return value if scrubbed == rendered else json.loads(scrubbed)[key]
+        return json.loads(safe_dumps({key: value}, value_transform=_redact_structured_value))[key]
     except (TypeError, ValueError, KeyError):
         return _redact_string(str(value))
 
