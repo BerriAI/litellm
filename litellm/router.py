@@ -2477,7 +2477,6 @@ class Router:
             )
             silent_model: Final = litellm_params.pop("silent_model", None)
 
-            shadow_kwargs: Final = _silent_experiment_kwargs_snapshot(kwargs)
             for silent_target in _silent_experiment_targets(silent_model):
                 # Mirroring traffic to a secondary model
                 # Use threading.Thread (not ThreadPoolExecutor) - executor.submit()
@@ -2486,7 +2485,7 @@ class Router:
                 threading.Thread(
                     target=self._silent_experiment_completion,
                     args=(silent_target, messages),
-                    kwargs=shadow_kwargs,
+                    kwargs=_silent_experiment_kwargs_snapshot(kwargs),
                     daemon=True,
                 ).start()
 
@@ -3591,7 +3590,6 @@ class Router:
             )
             silent_model: Final = litellm_params.pop("silent_model", None)
 
-            shadow_kwargs: Final = _silent_experiment_kwargs_snapshot(kwargs)
             for silent_target in _silent_experiment_targets(silent_model):
                 # Mirroring traffic to a secondary model
                 # This is a silent experiment, so we don't want to block the primary request
@@ -3599,7 +3597,7 @@ class Router:
                     self._silent_experiment_acompletion(
                         silent_model=silent_target,
                         messages=messages,  # Use messages instead of *args
-                        **shadow_kwargs,
+                        **_silent_experiment_kwargs_snapshot(kwargs),
                     )
                 )
 
