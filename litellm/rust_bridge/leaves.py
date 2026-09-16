@@ -17,12 +17,14 @@ import datetime
 import json
 import traceback
 from collections.abc import Awaitable, Callable, Mapping
-from typing import (  # noqa: TID251  # narrows the untyped legacy Logging and CustomLogger surfaces once
+from types import MappingProxyType
+from typing import (
     TYPE_CHECKING,
     Final,
     Literal,
     Protocol,
-    cast,
+    TypeAlias,
+    cast,  # noqa: TID251  # narrows the untyped legacy Logging and CustomLogger surfaces once
 )
 
 from litellm.integrations.custom_logger import CustomLogger
@@ -30,12 +32,14 @@ from litellm.integrations.custom_logger import CustomLogger
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
-TerminalFamily = Literal["sync_success", "async_success", "sync_failure", "async_failure"]
-Family = Literal["request", TerminalFamily]
-Details = dict[str, object]
-Timestamp = datetime.datetime
-LegacyCall = Callable[..., object]
-LegacyAsyncCall = Callable[..., Awaitable[None]]
+TerminalFamily: TypeAlias = Literal["sync_success", "async_success", "sync_failure", "async_failure"]
+Family: TypeAlias = Literal["request", TerminalFamily]
+Details: TypeAlias = dict[
+    str, object
+]  # mutable-ok: model_call_details is the shared mutable envelope callbacks write to
+Timestamp: TypeAlias = datetime.datetime
+LegacyCall: TypeAlias = Callable[..., object]
+LegacyAsyncCall: TypeAlias = Callable[..., Awaitable[None]]
 
 
 class LoggerView(Protocol):
@@ -60,17 +64,19 @@ class LoggerView(Protocol):
 
     def _pre_call(self, input: str, api_key: str | None, model: str | None, additional_args: Details) -> None: ...
 
-    def _print_llm_call_debugging_log(self, api_base: str, headers: Details, additional_args: Details) -> None: ...
+    def _print_llm_call_debugging_log(
+        self, api_base: str, headers: Mapping[str, str], additional_args: Details
+    ) -> None: ...
 
     def _get_request_curl_command(
-        self, api_base: str, headers: Details | None, additional_args: Details, data: object
+        self, api_base: str, headers: Mapping[str, str] | None, additional_args: Details, data: object
     ) -> str: ...
 
     def _get_masked_api_base(self, api_base: str) -> str: ...
 
     def _get_raw_request_body(self, data: object) -> Details: ...
 
-    def _get_masked_headers(self, headers: Details) -> Details: ...
+    def _get_masked_headers(self, headers: Mapping[str, str]) -> Details: ...
 
     def _response_cost_calculator(self, result: object) -> float | None: ...
 
@@ -137,6 +143,31 @@ class IntegrationView(Protocol):
     ) -> Awaitable[None]: ...
 
 
+_EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _details_of(value: object) -> Details:
+    return cast(Details, value)  # cast-ok: legacy model_call_details nesting is untyped and shared by callbacks
+
+
+def _call_of(value: object) -> LegacyCall:
+    return cast(LegacyCall, value)  # cast-ok: legacy integration entry points are untyped
+
+
+def _attribute(target: object, name: str) -> object:
+    value: Final[object] = getattr(target, name)  # pyright: ignore[reportAny]  # legacy attributes are untyped by definition
+    return value
+
+
+def _seed(details: Details, key: str) -> Details:
+    existing: Final[object] = details.get(key)
+    if isinstance(existing, dict):
+        return _details_of(existing)  # pyright: ignore[reportUnknownArgumentType]  # isinstance yields dict[Unknown, Unknown]
+    seeded: Final[Details] = {}  # mutable-ok: legacy envelope seed shared with callbacks
+    details[key] = seeded  # rebind-ok: seeding a nested dict on the shared envelope is the legacy contract
+    return seeded
+
+
 def _logger(logger: Logging) -> LoggerView:
     return cast(LoggerView, logger)  # cast-ok: legacy Logging is untyped; this protocol names the attributes we read
 
@@ -148,9 +179,9 @@ def _integration(callback: CustomLogger) -> IntegrationView:
 def _legacy_module() -> Mapping[str, object]:
     from litellm.litellm_core_utils import litellm_logging
 
-    return cast(
+    return cast(  # cast-ok: module globals hold the legacy integration singletons
         Mapping[str, object], vars(litellm_logging)
-    )  # cast-ok: module globals hold the legacy integration singletons
+    )
 
 
 def _print_verbose() -> LegacyCall:
@@ -160,17 +191,18 @@ def _print_verbose() -> LegacyCall:
 
 
 def _method(target: object, name: str) -> LegacyCall:
-    return cast(LegacyCall, getattr(target, name))  # cast-ok: legacy integration singletons are untyped
+    return _call_of(_attribute(target, name))
 
 
 def _async_method(target: object, name: str) -> LegacyAsyncCall:
-    return cast(LegacyAsyncCall, getattr(target, name))  # cast-ok: legacy integration singletons are untyped
+    return cast(LegacyAsyncCall, _attribute(target, name))  # cast-ok: legacy integration singletons are untyped
 
 
 def _redact_string(value: str) -> str:
     from litellm.litellm_core_utils import litellm_logging
 
-    return cast(Callable[[str], str], litellm_logging._redact_string)(value)  # pyright: ignore[reportPrivateUsage]  # cast-ok: legacy helper
+    redact: Final = _call_of(litellm_logging._redact_string)  # pyright: ignore[reportPrivateUsage]  # private legacy helper
+    return str(redact(value))
 
 
 def _redact_result(details: Details, result: object) -> object:
@@ -185,13 +217,17 @@ def record_pre_call(
     *,
     api_key: str | None,
     body: Details,
-    headers: dict[str, str],
+    headers: Mapping[str, str],
     url: str,
 ) -> None:
     view: Final = _logger(logger)
-    additional_args: Final[Details] = {"complete_input_dict": body, "headers": headers, "api_base": url}
+    additional_args: Final[Details] = {  # mutable-ok: legacy additional_args is rebound by callbacks in place
+        "complete_input_dict": body,
+        "headers": headers,
+        "api_base": url,
+    }
     view._pre_call(input="OCR document processing", api_key=api_key, model=None, additional_args=additional_args)  # pyright: ignore[reportPrivateUsage]  # legacy state writer
-    view._print_llm_call_debugging_log(api_base=url, headers=dict(headers), additional_args=additional_args)  # pyright: ignore[reportPrivateUsage]  # legacy debug output
+    view._print_llm_call_debugging_log(api_base=url, headers=headers, additional_args=additional_args)  # pyright: ignore[reportPrivateUsage]  # legacy debug output
     _capture_raw_request(view, additional_args)
     _run_logger_fn(logger)
     view.record_api_call_start_time()
@@ -204,15 +240,13 @@ def _capture_raw_request(view: LoggerView, additional_args: Details) -> None:
     if not (view.log_raw_request_response or litellm.log_raw_request_response):
         return
     details: Final = view.model_call_details
-    params: Final = cast(Details, details.get("litellm_params") or {})  # cast-ok: legacy nested dict
-    metadata: Final = cast(Details, params.get("metadata") or {})  # cast-ok: legacy nested dict
-    params.setdefault("metadata", metadata)
+    metadata: Final = _seed(_seed(details, "litellm_params"), "metadata")
     if litellm.turn_off_message_logging:
         metadata["raw_request"] = "redacted by litellm. 'litellm.turn_off_message_logging=True'"
         return
     api_base: Final = str(additional_args.get("api_base") or "")
-    headers: Final = cast(Details, additional_args.get("headers") or {})  # cast-ok: legacy nested dict
-    body: Final = additional_args.get("complete_input_dict", {})
+    headers: Final = cast(Mapping[str, str], additional_args.get("headers") or _EMPTY)  # cast-ok: legacy nested dict
+    body: Final = additional_args.get("complete_input_dict", _EMPTY)
     try:
         curl: Final = view._get_request_curl_command(  # pyright: ignore[reportPrivateUsage]  # legacy debug formatter
             api_base=api_base, headers=headers, additional_args=additional_args, data=body
@@ -232,18 +266,16 @@ def _capture_raw_request(view: LoggerView, additional_args: Details) -> None:
 def _run_logger_fn(logger: Logging) -> None:
     from litellm._logging import verbose_logger
 
-    logger_fn: Final = cast(
-        Callable[[Details], object] | None, getattr(logger, "logger_fn", None)
-    )  # cast-ok: user hook is untyped
+    logger_fn: Final = getattr(logger, "logger_fn", None)
     if not callable(logger_fn):
         return
     try:
-        logger_fn(_logger(logger).model_call_details)
+        _call_of(logger_fn)(_logger(logger).model_call_details)
     except Exception as error:  # noqa: BLE001  # user logger_fn failures never fail the request
         verbose_logger.exception("LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", error)
 
 
-def record_post_call(logger: Logging, *, original_response: object, body: Details, headers: dict[str, str]) -> None:
+def record_post_call(logger: Logging, *, original_response: object, body: Details, headers: Mapping[str, str]) -> None:
     view: Final = _logger(logger)
     serialized: Final = (
         json.dumps(original_response, default=str) if isinstance(original_response, dict) else original_response
@@ -252,7 +284,7 @@ def record_post_call(logger: Logging, *, original_response: object, body: Detail
         original_response=serialized,
         input=None,
         api_key=None,
-        additional_args={"complete_input_dict": body, "headers": headers},
+        additional_args={"complete_input_dict": body, "headers": headers},  # mutable-ok: rebound in place by callbacks
     )
     _run_logger_fn(logger)
     _redact_result(view.model_call_details, serialized)
@@ -330,12 +362,9 @@ def prepare_success_logging(logger: Logging, response: object, start_time: Times
     details["log_event_type"] = "successful_api_call"
     details["end_time"] = end_time
     details["cache_hit"] = None
-    hidden: Final = cast(Details, getattr(response, "_hidden_params", None) or {})  # cast-ok: legacy response attribute
-    params: Final = cast(Details | None, details.get("litellm_params"))  # cast-ok: legacy nested dict
-    if hidden and params is not None:
-        metadata: Final = cast(Details, params.get("metadata") or {})  # cast-ok: legacy nested dict
-        params["metadata"] = metadata
-        metadata["hidden_params"] = hidden
+    hidden: Final = _details_of(getattr(response, "_hidden_params", None) or {})  # mutable-ok: legacy fallback envelope
+    if hidden and isinstance(details.get("litellm_params"), dict):
+        _seed(_seed(details, "litellm_params"), "metadata")["hidden_params"] = hidden
     existing: Final = details.get("response_cost")
     if "response_cost" in hidden:
         details["response_cost"] = hidden["response_cost"]
@@ -345,7 +374,7 @@ def prepare_success_logging(logger: Logging, response: object, start_time: Times
     details["standard_logging_object"] = payload
     if payload is not None:
         emit_standard_logging_payload(
-            cast(StandardLoggingPayload, payload)
+            cast(StandardLoggingPayload, payload)  # cast-ok: legacy builder returns the payload TypedDict
         )  # cast-ok: legacy builder returns the payload TypedDict
     return _redact_result(details, response)
 
@@ -368,16 +397,16 @@ def prepare_failure_logging(
     if details.get("combined_usage_object") is None:
         details["response_cost"] = 0
     headers: Final = getattr(exception, "headers", None)
-    if isinstance(headers, dict):
-        params: Final = cast(Details, details.setdefault("litellm_params", {}))  # cast-ok: legacy nested dict
-        metadata: Final = cast(Details, params.get("metadata") or {})  # cast-ok: legacy nested dict
-        metadata.update(cast(Details, headers))  # cast-ok: exception headers are a plain dict
-    build: Final = cast(
+    if isinstance(headers, Mapping):
+        _seed(_seed(details, "litellm_params"), "metadata").update(
+            _details_of(headers)  # pyright: ignore[reportUnknownArgumentType]  # exception headers carry no element types
+        )
+    build: Final = cast(  # cast-ok: labeled leaf: native payload pending
         LegacyCall, litellm_logging.get_standard_logging_object_payload
-    )  # cast-ok: labeled leaf: native payload pending
+    )
     details["standard_logging_object"] = build(
         kwargs=details,
-        init_response_obj={},
+        init_response_obj=_EMPTY,
         start_time=start_time,
         end_time=end_time,
         logging_obj=logger,
@@ -389,17 +418,19 @@ def prepare_failure_logging(
     return formatted
 
 
-_EVENT_HOOKS: Final[Mapping[TerminalFamily, str]] = {
-    "sync_success": "success_handler",
-    "async_success": "async_success_handler",
-    "sync_failure": "failure_handler",
-    "async_failure": "async_failure_handler",
-}
+_EVENT_HOOKS: Final[Mapping[TerminalFamily, str]] = MappingProxyType(
+    {
+        "sync_success": "success_handler",
+        "async_success": "async_success_handler",
+        "sync_failure": "failure_handler",
+        "async_failure": "async_failure_handler",
+    }
+)
 
 
 def should_run_callback(logger: Logging, callback: object, family: TerminalFamily) -> bool:
     view: Final = _logger(logger)
-    params: Final = cast(Details, view.model_call_details.get("litellm_params") or {})  # cast-ok: legacy nested dict
+    params: Final = _details_of(view.model_call_details.get("litellm_params") or _EMPTY)
     return view.should_run_callback(callback=callback, litellm_params=params, event_hook=_EVENT_HOOKS[family])
 
 
@@ -427,9 +458,9 @@ async def async_logging_hook(logger: Logging, callback: CustomLogger, result: ob
     from litellm.litellm_core_utils import redact_messages
 
     view: Final = _logger(logger)
-    redact: Final = cast(
+    redact: Final = cast(  # cast-ok: legacy helper
         LegacyCall, redact_messages.redact_message_input_output_from_custom_logger
-    )  # cast-ok: legacy helper
+    )
     redacted: Final = (
         result
         if isinstance(callback, CustomGuardrail)
@@ -467,9 +498,9 @@ def async_log_success_event(
     details: Final = integration.redact_standard_logging_payload_from_model_call_details(
         model_call_details=_logger(logger).model_call_details
     )
-    redact: Final = cast(
+    redact: Final = cast(  # cast-ok: legacy helper
         Callable[..., Details], redact_messages.redact_streaming_responses_for_custom_logger
-    )  # cast-ok: legacy helper
+    )
     view: Final = redact(model_call_details=details, custom_logger=callback)
     return integration.async_log_success_event(
         kwargs=view, response_obj=response, start_time=start_time, end_time=end_time
@@ -533,19 +564,21 @@ def dispatch_callable(
             )
 
 
-_SUCCESS_SINGLETONS: Final[Mapping[str, str]] = {
-    "promptlayer": "promptLayerLogger",
-    "supabase": "supabaseClient",
-    "wandb": "weightsBiasesLogger",
-    "logfire": "logfireLogger",
-    "lunary": "lunaryLogger",
-    "helicone": "heliconeLogger",
-    "greenscale": "greenscaleLogger",
-    "athina": "athinaLogger",
-    "traceloop": "traceloopLogger",
-    "s3": "s3Logger",
-    "openmeter": "openMeterLogger",
-}
+_SUCCESS_SINGLETONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "promptlayer": "promptLayerLogger",
+        "supabase": "supabaseClient",
+        "wandb": "weightsBiasesLogger",
+        "logfire": "logfireLogger",
+        "lunary": "lunaryLogger",
+        "helicone": "heliconeLogger",
+        "greenscale": "greenscaleLogger",
+        "athina": "athinaLogger",
+        "traceloop": "traceloopLogger",
+        "s3": "s3Logger",
+        "openmeter": "openMeterLogger",
+    }
+)
 
 
 def dispatch_named_success(
@@ -555,7 +588,9 @@ def dispatch_named_success(
     details: Final = view.model_call_details
     print_verbose: Final = _print_verbose()
     integration: Final = _legacy_module().get(_SUCCESS_SINGLETONS.get(name, ""))
-    without_response: Final = {key: value for key, value in details.items() if key != "original_response"}
+    without_response: Final = {  # mutable-ok: legacy integrations receive a private mutable copy
+        key: value for key, value in details.items() if key != "original_response"
+    }
     match name:
         case "promptlayer" | "wandb" | "athina" if integration is not None:
             _method(integration, "log_event")(
@@ -678,10 +713,12 @@ def _langfuse(
 
     view: Final = _logger(logger)
     module: Final = _legacy_module()
-    kwargs: Final = {key: value for key, value in view.model_call_details.items() if key != "original_response"}
-    select: Final = cast(
+    kwargs: Final = {  # mutable-ok: langfuse receives a private mutable copy
+        key: value for key, value in view.model_call_details.items() if key != "original_response"
+    }
+    select: Final = cast(  # cast-ok: legacy factory
         LegacyCall, langfuse_handler.LangFuseHandler.get_langfuse_logger_for_request
-    )  # cast-ok: legacy factory
+    )
     handler: Final = select(
         globalLangfuseLogger=module.get("langFuseLogger"),
         standard_callback_dynamic_params=view.standard_callback_dynamic_params,
@@ -689,7 +726,9 @@ def _langfuse(
     )
     if handler is None:
         return
-    extra: Final[Details] = {"level": level, "status_message": status_message} if level is not None else {}
+    extra: Final[Mapping[str, object]] = (
+        MappingProxyType({"level": level, "status_message": status_message}) if level is not None else _EMPTY
+    )
     result: Final = _method(handler, "log_event_on_langfuse")(
         kwargs=kwargs,
         response_obj=response,
@@ -699,7 +738,7 @@ def _langfuse(
         **extra,
     )
     trace_id: Final = (
-        cast(Details, result).get("trace_id") if isinstance(result, dict) else None
+        cast(Details, result).get("trace_id") if isinstance(result, dict) else None  # cast-ok: legacy response dict
     )  # cast-ok: legacy response dict
     if trace_id is not None:
         _method(module["in_memory_trace_id_cache"], "set_cache")(
@@ -719,6 +758,9 @@ def dispatch_named_failure(
     module: Final = _legacy_module()
     details: Final = view.model_call_details
     print_verbose: Final = _print_verbose()
+    without_response: Final = MappingProxyType(
+        {key: value for key, value in details.items() if key != "original_response"}
+    )
     match name:
         case "lunary" if (lunary := module.get("lunaryLogger")) is not None:
             _method(lunary, "log_event")(
@@ -771,8 +813,8 @@ def dispatch_named_failure(
             from litellm.integrations.logfire_logger import LogfireLevel
 
             _method(logfire, "log_event")(
-                kwargs={
-                    **{key: value for key, value in details.items() if key != "original_response"},
+                kwargs={  # mutable-ok: logfire receives a private mutable copy
+                    **without_response,
                     "exception": exception,
                 },
                 response_obj=None,
@@ -805,11 +847,5 @@ def enqueue_background(coroutine: Awaitable[None]) -> None:
 
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-    enqueue: Final = cast(
-        Callable[[Awaitable[None]], None], GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue
-    )  # cast-ok: legacy worker accepts any coroutine
+    enqueue: Final = _call_of(_attribute(GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"))
     contextvars.copy_context().run(enqueue, coroutine)
-
-
-def now() -> Timestamp:
-    return datetime.datetime.now()

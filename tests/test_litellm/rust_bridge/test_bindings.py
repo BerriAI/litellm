@@ -46,8 +46,4 @@ def test_decline_accessor_only_catches_admission_declines(monkeypatch: pytest.Mo
     native: Final = SimpleNamespace(RustBridgeDeclined=Declined, RustUpstreamError=Upstream) if available else None
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
     assert bindings.native_decline_types() == ((Declined,) if available else ())
-    with pytest.raises(Upstream):
-        try:
-            raise Upstream("already dispatched")
-        except bindings.native_decline_types():
-            pytest.fail("upstream failure was allowed to replay")
+    assert not isinstance(Upstream("already dispatched"), bindings.native_decline_types())

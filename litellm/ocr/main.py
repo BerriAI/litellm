@@ -38,4 +38,3 @@ async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: pr
         Callable[..., Awaitable[OCRResponse]], legacy.aocr
     )
     return await fallback(*args, **kwargs)
-
