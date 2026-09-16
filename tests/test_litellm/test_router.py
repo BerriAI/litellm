@@ -7,7 +7,7 @@ import os
 import sys
 import threading
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1358,6 +1358,56 @@ def test_add_invalid_provider_to_router():
         )
 
     assert router.pattern_router.patterns == {}
+
+
+@pytest.fixture
+def registered_custom_provider(monkeypatch: pytest.MonkeyPatch) -> str:
+    from litellm import CustomLLM
+    from litellm.types.utils import ModelResponse
+
+    class OnPremLLM(CustomLLM):
+        def completion(self, *args, **kwargs) -> ModelResponse:
+            return litellm.completion(
+                model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], mock_response="served by onprem handler"
+            )
+
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "test-onprem-llm", "custom_handler": OnPremLLM()}])
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", list(litellm._custom_providers))
+    return "test-onprem-llm"
+
+
+def test_router_init_accepts_custom_provider_map_prefix_before_first_completion(registered_custom_provider: str):
+    assert registered_custom_provider not in litellm.provider_list
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "onprem", "litellm_params": {"model": f"{registered_custom_provider}/my-model"}},
+        ],
+    )
+
+    assert router.get_model_list(model_name="onprem")[0]["litellm_params"]["model"] == (
+        f"{registered_custom_provider}/my-model"
+    )
+    response = router.completion(model="onprem", messages=[{"role": "user", "content": "hi"}])
+    assert response.choices[0].message.content == "served by onprem handler"
+
+
+def test_router_add_deployment_accepts_explicit_custom_provider_from_custom_provider_map(
+    registered_custom_provider: str,
+):
+    from litellm.types.router import Deployment
+
+    router = litellm.Router(model_list=[])
+
+    router.add_deployment(
+        Deployment(
+            model_name="onprem",
+            litellm_params={"model": "my-model", "custom_llm_provider": registered_custom_provider},
+        )
+    )
+
+    assert router.get_model_list(model_name="onprem")[0]["litellm_params"]["model"] == "my-model"
 
 
 @pytest.mark.asyncio
@@ -8520,6 +8570,106 @@ class TestAdvisorSubCallCooldown:
         assert "dep-1" not in self._cooled_down_ids(router)
 
 
+class TestCallerTimeoutCooldown:
+    """A timeout the caller set (the proxy's `timeout` body field or x-litellm-timeout
+    header) comes back as a 408 whatever the deployment's health, so it must neither
+    count toward allowed_fails nor bench the deployment. A 408 without that marker, or
+    one that arrives before the caller's deadline could have fired, is the provider's
+    and keeps cooling the deployment down."""
+
+    def _router(self):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "slow-model",
+                    "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                    "model_info": {"id": "dep-1"},
+                }
+            ],
+            allowed_fails=0,
+            cooldown_time=120,
+            num_retries=0,
+        )
+
+    def _kwargs(self, marker, started=None, ended=None):
+        exception = litellm.Timeout(message="Request timed out", model="gpt-5.6", llm_provider="openai")
+        return {
+            "exception": exception,
+            "api_call_start_time": started,
+            "end_time": ended,
+            "litellm_params": {"model_info": {"id": "dep-1"}, "metadata": {}, **marker},
+        }
+
+    def _fail_count(self, router):
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+
+        return get_deployment_failures_for_current_minute(litellm_router_instance=router, deployment_id="dep-1")
+
+    def _cooled_down_ids(self, router):
+        active = router.cooldown_cache.get_active_cooldowns(model_ids=["dep-1"], parent_otel_span=None)
+        return [entry[0] for entry in active]
+
+    @pytest.mark.asyncio
+    async def test_caller_timeout_408_leaves_failure_counter_and_cooldown_untouched(self):
+        router = self._router()
+        started = datetime.now()
+        ended = started + timedelta(seconds=2.05)
+        kwargs = self._kwargs({"client_side_timeout": True, "timeout": 2}, started=started, ended=ended)
+        assert router.deployment_callback_on_failure(kwargs, None, started, ended) is False
+        assert self._fail_count(router) == 0
+        assert self._cooled_down_ids(router) == []
+
+    @pytest.mark.asyncio
+    async def test_provider_timeout_408_still_counts_and_cools_down(self):
+        router = self._router()
+        now = datetime.now()
+        assert router.deployment_callback_on_failure(self._kwargs({}), None, now, now) is True
+        assert self._fail_count(router) == 1
+        assert self._cooled_down_ids(router) == ["dep-1"]
+
+    @pytest.mark.asyncio
+    async def test_provider_408_before_caller_deadline_still_counts_and_cools_down(self):
+        """The marker only says the caller configured a timeout. A 408 that comes back
+        well before that deadline was raised by the provider, so it is a real health
+        signal and must not hide behind the caller's timeout."""
+        router = self._router()
+        started = datetime.now()
+        ended = started + timedelta(seconds=0.4)
+        kwargs = self._kwargs({"client_side_timeout": True, "timeout": 30}, started=started, ended=ended)
+        assert router.deployment_callback_on_failure(kwargs, None, started, ended) is True
+        assert self._fail_count(router) == 1
+        assert self._cooled_down_ids(router) == ["dep-1"]
+
+    @pytest.mark.asyncio
+    async def test_caller_timeout_marker_reaches_failure_callback_end_to_end(self):
+        router = self._router()
+        seen = []
+        recorded = threading.Event()
+
+        def record(kwargs, completion_response, start_time, end_time):
+            seen.append(kwargs)
+            recorded.set()
+
+        litellm.failure_callback.append(record)
+        try:
+            with pytest.raises(litellm.Timeout):
+                await router.acompletion(
+                    model="slow-model",
+                    messages=[{"role": "user", "content": "hello"}],
+                    mock_timeout=True,
+                    timeout=0.001,
+                    client_side_timeout=True,
+                )
+            assert await asyncio.to_thread(recorded.wait, 5)
+        finally:
+            litellm.failure_callback.remove(record)
+        assert seen[0]["litellm_params"]["client_side_timeout"] is True
+        assert self._fail_count(router) == 0
+        assert self._cooled_down_ids(router) == []
+
+
 def test_stream_chunks_have_generated_content_detects_text_and_non_text():
     from litellm.router import _stream_chunks_have_generated_content
     from litellm.types.utils import (
@@ -12054,6 +12204,83 @@ def test_model_group_info_reasoning_efforts_are_unknown_when_any_deployment_is_o
     assert result is not None
     assert result.supported_reasoning_efforts is None
 
+
+
+@pytest.mark.parametrize(
+    "model,provider,expected",
+    [
+        ("anthropic/claude-opus-5", None, True),
+        ("claude-opus-4-8", None, True),
+        ("anthropic/claude-opus-4-7", None, False),
+        ("anthropic/claude-opus-4-6", None, False),
+        ("anthropic/claude-sonnet-5", None, False),
+        ("anthropic/off-map-opus", None, False),
+        ("vertex_ai/claude-opus-5", None, False),
+        ("bedrock/claude-opus-5", None, False),
+        ("claude-opus-5", "vertex_ai", False),
+        ("claude-opus-5", "bedrock", False),
+    ],
+)
+@pytest.mark.parametrize("operator_flag", [True, False])
+def test_model_group_info_fast_mode_uses_exact_provider_catalog(
+    local_model_cost_map: None, model: str, provider: str | None, expected: bool, operator_flag: bool
+) -> None:
+    router: Final = Router(model_list=[{
+        "model_name": "fast-group",
+        "litellm_params": {"model": model, "custom_llm_provider": provider, "api_key": "fake-key"},
+        "model_info": {"supports_fast_mode": operator_flag},
+    }])
+
+    result: Final = router.get_model_group_info("fast-group")
+
+    assert result is not None
+    assert result.supports_fast_mode is expected
+
+
+@pytest.mark.parametrize("flag", [None, False, "true", 1])
+def test_model_group_info_fast_mode_fails_closed_without_explicit_boolean(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, flag: object
+) -> None:
+    entry: Final = {key: value for key, value in litellm.model_cost["claude-opus-5"].items()
+                   if key != "supports_fast_mode"}
+    if flag is not None:
+        entry["supports_fast_mode"] = flag
+    monkeypatch.setitem(litellm.model_cost, "claude-opus-5", entry)
+    router: Final = Router(model_list=[{
+        "model_name": "fast-group",
+        "litellm_params": {"model": "anthropic/claude-opus-5", "api_key": "fake-key"},
+        "model_info": {"supports_fast_mode": True},
+    }])
+
+    result: Final = router.get_model_group_info("fast-group")
+
+    assert result is not None
+    assert result.supports_fast_mode is False
+
+
+@pytest.mark.parametrize("other_model,expected", [
+    ("anthropic/claude-opus-4-8", True),
+    ("anthropic/claude-opus-4-7", False),
+    ("anthropic/off-map-opus", False),
+    ("vertex_ai/claude-opus-5", False),
+    ("bedrock/claude-opus-5", False),
+])
+@pytest.mark.parametrize("reverse", [True, False])
+def test_model_group_info_fast_mode_requires_every_deployment(
+    local_model_cost_map: None, other_model: str, expected: bool, reverse: bool
+) -> None:
+    models: Final = (other_model, "anthropic/claude-opus-5") if reverse else (
+        "anthropic/claude-opus-5", other_model
+    )
+    router: Final = Router(model_list=[{
+        "model_name": "fast-group",
+        "litellm_params": {"model": model, "api_key": "fake-key"},
+    } for model in models])
+
+    result: Final = router.get_model_group_info("fast-group")
+
+    assert result is not None
+    assert result.supports_fast_mode is expected
 
 
 def test_model_group_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
@@ -15973,6 +16200,60 @@ async def test_an_open_circuit_breaker_skips_the_session_binding_without_a_warni
     assert binding is None
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_model_name_colliding_with_a_deployment_id_still_load_balances_the_group():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "k", "weight": 0, "mock_response": "A"},
+                "model_info": {"id": "gpt-5-nano"},
+            },
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "k", "weight": 1, "mock_response": "B"},
+                "model_info": {"id": "gpt-5-mini-dep"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    by_group = await router.acompletion(model="gpt-5-nano", messages=[{"role": "user", "content": "hi"}])
+    by_id = await router.acompletion(model="gpt-5-mini-dep", messages=[{"role": "user", "content": "hi"}])
+
+    assert by_group._hidden_params["model_id"] == "gpt-5-mini-dep"
+    assert by_group.choices[0].message.content == "B"
+    assert by_id._hidden_params["model_id"] == "gpt-5-mini-dep"
+
+
+def test_sync_completion_runs_pre_call_checks_for_a_model_name_colliding_with_a_deployment_id():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "k", "weight": 0, "mock_response": "A"},
+                "model_info": {"id": "gpt-5-nano"},
+            },
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "k", "weight": 1, "mock_response": "B"},
+                "model_info": {"id": "gpt-5-mini-dep"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    with patch.object(router, "routing_strategy_pre_call_checks") as pre_call_checks:
+        by_group = router.completion(model="gpt-5-nano", messages=[{"role": "user", "content": "hi"}])
+        assert by_group._hidden_params["model_id"] == "gpt-5-mini-dep"
+        pre_call_checks.assert_called_once()
+        assert pre_call_checks.call_args.kwargs["deployment"]["model_info"]["id"] == "gpt-5-mini-dep"
+
+        by_id = router.completion(model="gpt-5-mini-dep", messages=[{"role": "user", "content": "hi"}])
+        assert by_id._hidden_params["model_id"] == "gpt-5-mini-dep"
+        pre_call_checks.assert_called_once()
 
 
 class TestMemberAutoRouterInference:

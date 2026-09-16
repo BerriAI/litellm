@@ -42,9 +42,10 @@ import { Restricted, restrictedBy } from "./TierRestrictions";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 import {
   ReasoningEffort,
+  TierModelParamChange,
   TierModelParamsByTier,
   classifierEffortOptionsForModels,
-  setTierModelReasoningEffort,
+  setTierModelParam,
   tierEffortOptionsForModels,
   tierRowLabel,
 } from "./complexity_router_tiers";
@@ -143,7 +144,14 @@ export interface ClassifierLLMConfig {
   system_prompt?: string;
 }
 
-export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "heuristic_first" | "hybrid";
+export type ClassifierType =
+  | "heuristic"
+  | "heuristic_v2"
+  | "llm"
+  | "heuristic_first"
+  | "hybrid"
+  | "capability"
+  | "llm_v2";
 
 /**
  * Whether this router can call classifier_llm_config.model. Mirrors the backend's
@@ -151,7 +159,7 @@ export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "heuristic_f
  * control and payload key, so a new chaining type cannot strip knobs the operator set.
  */
 export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
-  classifierType === "llm" || classifierType === "heuristic_first" || classifierType === "hybrid";
+  (["llm", "heuristic_first", "hybrid", "capability", "llm_v2"] as const).some((type) => type === classifierType);
 
 export type ClassifierFallback = "heuristic" | "default_model";
 
@@ -176,7 +184,8 @@ export const heuristicScoringRoleFor = (
   classifierType: ClassifierType,
   classifierFallback: ClassifierFallback | undefined,
 ): HeuristicScoringRole => {
-  if (classifierType === "heuristic_v2") return "never";
+  if (classifierType === "heuristic_v2" || classifierType === "capability" || classifierType === "llm_v2")
+    return "never";
   if (classifierType === "heuristic" || classifierType === "heuristic_first" || classifierType === "hybrid")
     return "decides";
   return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";
@@ -613,6 +622,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const exitToBuiltInTiers = () => dispatch({ kind: "restore" });
 
   const tierEffortOptionsByModel = tierEffortOptionsForModels(modelInfo);
+  const fastModeByModel = Object.fromEntries(
+    modelInfo.map((model) => [model.model_group, model.supports_fast_mode === true]),
+  );
   const classifierEffortOptionsByModel = classifierEffortOptionsForModels(modelInfo);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
@@ -623,12 +635,11 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       label: model.model_group,
     }));
 
-  const handleTierModelEffortChange = (tier: string, model: string, effort: ReasoningEffort | undefined) => {
+  const handleTierModelParamChange = (tier: string, model: string, change: TierModelParamChange) =>
     onChange({
       ...value,
-      tier_model_params: setTierModelReasoningEffort(value.tier_model_params, tier, model, effort),
+      tier_model_params: setTierModelParam(value.tier_model_params, tier, model, change),
     });
-  };
 
   // Clearing the select drops the key entirely rather than storing "", so an emptied pin reads as
   // "track the tiers" everywhere downstream instead of as a blank model name.
@@ -726,7 +737,13 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                     models={row.models}
                     effortOptionsByModel={tierEffortOptionsByModel}
                     paramsByModel={row.params}
-                    onEffortChange={(model, effort) => handleTierModelEffortChange(row.id, model, effort)}
+                    fastModeByModel={fastModeByModel}
+                    onEffortChange={(model, effort) =>
+                      handleTierModelParamChange(row.id, model, ["reasoning_effort", effort])
+                    }
+                    onFastModeChange={(model, enabled) =>
+                      handleTierModelParamChange(row.id, model, ["speed", enabled ? "fast" : undefined])
+                    }
                   />
                   {row.models.length > 1 && (
                     <span className="text-xs text-muted-foreground">

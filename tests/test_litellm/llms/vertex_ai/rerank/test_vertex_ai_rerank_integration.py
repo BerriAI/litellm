@@ -104,10 +104,12 @@ class TestVertexAIRerankIntegration:
             raw_response=mock_response,
             model_response=model_response,
             logging_obj=mock_logging,
+            request_data=request_data,
         )
 
         # Verify response structure
-        assert result.id == f"vertex_ai_rerank_{self.model}"
+        assert result.id.startswith("vertex_ai_rerank_")
+        assert result.id != f"vertex_ai_rerank_{self.model}"
         assert len(result.results) == 2
 
         # Results should be sorted by relevance score (descending)
@@ -116,8 +118,8 @@ class TestVertexAIRerankIntegration:
         assert result.results[1]["index"] == 0  # Second highest score
         assert result.results[1]["relevance_score"] == 0.92
 
-        # Verify metadata
-        assert result.meta["billed_units"]["search_units"] == 2
+        # Verify metadata: 4 input records bill as 1 search unit (ceil(4/100))
+        assert result.meta["billed_units"]["search_units"] == 1
 
     def test_return_documents_false_flow(self):
         """Test rerank flow when return_documents=False (ID-only response)."""
