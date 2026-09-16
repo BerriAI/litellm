@@ -7,6 +7,7 @@
 import asyncio
 import os
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -731,7 +732,7 @@ async def list_batches(
     )
 
     verbose_proxy_logger.debug("GET /v1/batches after=%s limit=%s", after, limit)
-    data: dict = {}
+    data: Mapping[str, object] = MappingProxyType({})
     try:
         if llm_router is None:
             raise HTTPException(

@@ -392,7 +392,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
-    LITELLM_CALL_ID_HEADER,
+    headers_with_litellm_call_id,
     litellm_call_id_headers,
     with_litellm_call_id,
 )
@@ -11696,7 +11696,7 @@ async def audio_speech(
             raise HTTPException(
                 status_code=e.status_code,
                 detail=e.detail,
-                headers={LITELLM_CALL_ID_HEADER: litellm_call_id, **(e.headers or {})},
+                headers=headers_with_litellm_call_id(e.headers, litellm_call_id),
             )
         raise ProxyException(
             message=getattr(e, "message", f"{e}"),
