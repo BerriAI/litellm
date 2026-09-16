@@ -98,10 +98,51 @@ def test_cleanup_router_config_variables_fails_on_unknown_attr_raises():
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monkeypatch):
+    """
+    The gateway request fold lives in memory, so shutdown drains it to the database.
+
+    That drain has to happen while prisma is still connected: a write attempted
+    after ``disconnect()`` raises ClientNotConnectedError, the flush swallows it
+    and merges the counts back onto an accumulator the process is about to
+    discard, and the final interval is lost silently on every restart. Ordering is
+    the whole behavior here, so assert the order rather than that both ran.
+    """
+    calls: list = []  # mutable-ok: records call order, which is the assertion
+
+    fake_prisma = MagicMock()
+    fake_prisma.disconnect = AsyncMock(side_effect=lambda: calls.append("disconnect"))
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+    monkeypatch.setattr(ps, "_await_logging_callbacks_on_shutdown", AsyncMock(), raising=False)
+    monkeypatch.setattr(ps, "_flush_spend_logs_queue_on_shutdown", AsyncMock(), raising=False)
+
+    async def _record_flush(client, accumulator):
+        calls.append("flush")
+        assert client is fake_prisma
+
+    monkeypatch.setattr(ps, "flush_gateway_requests", _record_flush, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert calls == ["flush", "disconnect"]
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_event_disconnects_prisma_and_resets(monkeypatch):
     fake_prisma = MagicMock()
     fake_prisma.disconnect = AsyncMock()
     monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+    monkeypatch.setattr(ps, "_await_logging_callbacks_on_shutdown", AsyncMock(), raising=False)
     monkeypatch.setattr(ps, "_flush_spend_logs_queue_on_shutdown", AsyncMock(), raising=False)
     monkeypatch.setattr(ps, "master_key", "sk-x", raising=False)
 
@@ -132,45 +173,6 @@ async def test_proxy_shutdown_event_disconnects_prisma_and_resets(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monkeypatch):
-    """
-    The gateway request fold lives in memory, so shutdown drains it to the database.
-
-    That drain has to happen while prisma is still connected: a write attempted
-    after ``disconnect()`` raises ClientNotConnectedError, the flush swallows it
-    and merges the counts back onto an accumulator the process is about to
-    discard, and the final interval is lost silently on every restart. Ordering is
-    the whole behavior here, so assert the order rather than that both ran.
-    """
-    calls: list = []  # mutable-ok: records call order, which is the assertion
-
-    fake_prisma = MagicMock()
-    fake_prisma.disconnect = AsyncMock(side_effect=lambda: calls.append("disconnect"))
-    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
-    monkeypatch.setattr(ps, "_flush_spend_logs_queue_on_shutdown", AsyncMock(), raising=False)
-
-    async def _record_flush(client, accumulator):
-        calls.append("flush")
-        assert client is fake_prisma
-
-    monkeypatch.setattr(ps, "flush_gateway_requests", _record_flush, raising=False)
-
-    fake_jwt = MagicMock()
-    fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
-    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
-
-    import litellm
-
-    monkeypatch.setattr(litellm, "cache", None, raising=False)
-    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
-
-    await proxy_shutdown_event()
-
-    assert calls == ["flush", "disconnect"]
-
-
-@pytest.mark.asyncio
 async def test_proxy_shutdown_drains_spend_logs_before_disconnecting(monkeypatch):
     """
     SpendLogs, tool-usage, and auto-router turn queues live in memory.
@@ -186,6 +188,11 @@ async def test_proxy_shutdown_drains_spend_logs_before_disconnecting(monkeypatch
     fake_prisma = MagicMock()
     fake_prisma.disconnect = AsyncMock(side_effect=lambda: calls.append("disconnect"))
     monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+
+    async def _record_await_callbacks() -> None:
+        calls.append("await_callbacks")
+
+    monkeypatch.setattr(ps, "_await_logging_callbacks_on_shutdown", _record_await_callbacks, raising=False)
 
     async def _record_drain() -> None:
         calls.append("drain_spend")
@@ -211,7 +218,89 @@ async def test_proxy_shutdown_drains_spend_logs_before_disconnecting(monkeypatch
 
     await proxy_shutdown_event()
 
-    assert calls == ["drain_spend", "flush_gateway", "disconnect"]
+    assert calls == ["await_callbacks", "drain_spend", "flush_gateway", "disconnect"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_awaits_logging_callbacks_before_spend_drain(monkeypatch):
+    """
+    Detached streaming success callbacks enqueue spend through the logging
+    worker. Awaiting them before the spend drain is what closes the race
+    Greptile flagged: callback finishes after drain, Prisma disconnects, row
+    never reaches LiteLLM_SpendLogs.
+    """
+    calls: list[str] = []  # mutable-ok: records call order, which is the assertion
+
+    fake_prisma = MagicMock()
+    fake_prisma.disconnect = AsyncMock(side_effect=lambda: calls.append("disconnect"))
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+
+    async def _record_await_callbacks() -> None:
+        calls.append("await_callbacks")
+
+    monkeypatch.setattr(ps, "_await_logging_callbacks_on_shutdown", _record_await_callbacks, raising=False)
+
+    async def _record_drain() -> None:
+        calls.append("drain_spend")
+
+    monkeypatch.setattr(ps, "_flush_spend_logs_queue_on_shutdown", _record_drain, raising=False)
+    async def _record_gateway(*_a: object, **_k: object) -> None:
+        calls.append("flush_gateway")
+
+    monkeypatch.setattr(ps, "flush_gateway_requests", _record_gateway, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert calls.index("await_callbacks") < calls.index("drain_spend") < calls.index("disconnect")
+
+
+@pytest.mark.asyncio
+async def test_await_logging_callbacks_on_shutdown_flushes_worker(monkeypatch):
+    flush = AsyncMock()
+
+    class _Worker:
+        async def flush(self) -> None:
+            await flush()
+
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER",
+        _Worker(),
+        raising=False,
+    )
+    monkeypatch.setattr("litellm.constants.MAX_TIME_TO_CLEAR_QUEUE", 1.0, raising=False)
+
+    await ps._await_logging_callbacks_on_shutdown()
+
+    assert flush.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_await_logging_callbacks_on_shutdown_continues_after_timeout(monkeypatch):
+    async def _hang() -> None:
+        await asyncio.sleep(60)
+
+    class _Worker:
+        async def flush(self) -> None:
+            await _hang()
+
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.logging_worker.GLOBAL_LOGGING_WORKER",
+        _Worker(),
+        raising=False,
+    )
+    monkeypatch.setattr("litellm.constants.MAX_TIME_TO_CLEAR_QUEUE", 0.01, raising=False)
+
+    await ps._await_logging_callbacks_on_shutdown()
 
 
 @pytest.mark.asyncio
@@ -220,6 +309,7 @@ async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch
     flush = AsyncMock()
     monkeypatch.setattr(ps, "flush_gateway_requests", flush, raising=False)
     monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(ps, "_await_logging_callbacks_on_shutdown", AsyncMock(), raising=False)
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
@@ -241,6 +331,7 @@ async def test_proxy_shutdown_event_prisma_disconnect_raises_error(monkeypatch):
     fake_prisma = MagicMock()
     fake_prisma.disconnect = AsyncMock(side_effect=RuntimeError("db gone"))
     monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+    monkeypatch.setattr(ps, "_await_logging_callbacks_on_shutdown", AsyncMock(), raising=False)
     monkeypatch.setattr(ps, "_flush_spend_logs_queue_on_shutdown", AsyncMock(), raising=False)
 
     fake_jwt = MagicMock()
