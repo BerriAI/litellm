@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER, EMPTY_MAPPING
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER, EMPTY_MAPPING, REDACTED_BY_LITELLM
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.integrations.custom_logger import AgenticLoopPlan
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
@@ -900,9 +900,19 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         if turn_off_message_logging is False and not excluded_fields:
             return model_call_details
 
+        redacted_model_call_details: Final = (
+            {  # mutable-ok: callback payload copy
+                **model_call_details,
+                "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],  # mutable-ok: callback payload copy
+                "prompt": "",
+                "input": "",
+            }
+            if turn_off_message_logging and not self.redacts_messages_itself()
+            else model_call_details.copy()
+        )
         standard_logging_object: Final = model_call_details.get("standard_logging_object")
         if standard_logging_object is None:
-            return model_call_details.copy()
+            return redacted_model_call_details
 
         # Make a copy of just the standard_logging_object to avoid modifying the original
         standard_logging_object_copy: Final = {
@@ -950,7 +960,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             else EMPTY_MAPPING
         )
         return {
-            **model_call_details,
+            **redacted_model_call_details,
             **redacted_params,
             "standard_logging_object": standard_logging_object_copy,
         }

@@ -93,6 +93,8 @@ from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
+    redact_model_call_details_for_custom_logger,
+    redact_response_for_custom_logger,
     redact_streaming_responses_for_custom_logger,
     should_redact_message_logging,
 )
@@ -2885,8 +2887,16 @@ class Logging(LiteLLMLoggingBaseClass):
                     ):  # custom logger class
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
-                                kwargs=self.model_call_details,
-                                response_obj=result,
+                                kwargs=redact_model_call_details_for_custom_logger(
+                                    model_call_details=redact_streaming_responses_for_custom_logger(
+                                        model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                                            model_call_details=self.model_call_details
+                                        ),
+                                        custom_logger=callback,
+                                    ),
+                                    custom_logger=callback,
+                                ),
+                                response_obj=redact_response_for_custom_logger(result=result, custom_logger=callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
@@ -2898,8 +2908,16 @@ class Logging(LiteLLMLoggingBaseClass):
                                 result = self.model_call_details["complete_response"]
 
                             callback.log_success_event(
-                                kwargs=self.model_call_details,
-                                response_obj=result,
+                                kwargs=redact_model_call_details_for_custom_logger(
+                                    model_call_details=redact_streaming_responses_for_custom_logger(
+                                        model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                                            model_call_details=self.model_call_details
+                                        ),
+                                        custom_logger=callback,
+                                    ),
+                                    custom_logger=callback,
+                                ),
+                                response_obj=redact_response_for_custom_logger(result=result, custom_logger=callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
@@ -3205,35 +3223,39 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
 
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    model_call_details: dict = self.model_call_details
-                    ##################################
-                    # call redaction hook for custom logger
-                    model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
-                        model_call_details=model_call_details
+                    redacted_model_call_details: Final[dict] = (  # pyright: ignore[reportGeneralTypeIssues]  # loop-local callback payload
+                        redact_model_call_details_for_custom_logger(
+                            model_call_details=redact_streaming_responses_for_custom_logger(
+                                model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                                    model_call_details=self.model_call_details
+                                ),
+                                custom_logger=callback,
+                            ),
+                            custom_logger=callback,
+                        )
                     )
-                    model_call_details = redact_streaming_responses_for_custom_logger(
-                        model_call_details=model_call_details, custom_logger=callback
-                    )
-                    ##################################
                     if self.stream is True:
-                        if "async_complete_streaming_response" in model_call_details:
+                        if "async_complete_streaming_response" in redacted_model_call_details:
                             await callback.async_log_success_event(
-                                kwargs=model_call_details,
-                                response_obj=model_call_details["async_complete_streaming_response"],
+                                kwargs=redacted_model_call_details,
+                                response_obj=redact_response_for_custom_logger(
+                                    result=redacted_model_call_details["async_complete_streaming_response"],
+                                    custom_logger=callback,
+                                ),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
                         else:
                             await callback.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
-                                kwargs=model_call_details,
-                                response_obj=result,
+                                kwargs=redacted_model_call_details,
+                                response_obj=redact_response_for_custom_logger(result=result, custom_logger=callback),
                                 start_time=start_time,
                                 end_time=end_time,
                             )
                     else:
                         await callback.async_log_success_event(
-                            kwargs=model_call_details,
-                            response_obj=result,
+                            kwargs=redacted_model_call_details,
+                            response_obj=redact_response_for_custom_logger(result=result, custom_logger=callback),
                             start_time=start_time,
                             end_time=end_time,
                         )
@@ -3521,8 +3543,13 @@ class Logging(LiteLLMLoggingBaseClass):
                         callback.log_failure_event(
                             start_time=start_time,
                             end_time=end_time,
-                            response_obj=result,
-                            kwargs=self.model_call_details,
+                            response_obj=redact_response_for_custom_logger(result=result, custom_logger=callback),
+                            kwargs=redact_model_call_details_for_custom_logger(
+                                model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                                    model_call_details=self.model_call_details
+                                ),
+                                custom_logger=callback,
+                            ),
                         )
                     if callback == "langfuse":
                         global langFuseLogger
@@ -3653,8 +3680,13 @@ class Logging(LiteLLMLoggingBaseClass):
                     continue
                 if isinstance(callback, CustomLogger):  # custom logger class
                     await callback.async_log_failure_event(
-                        kwargs=self.model_call_details,
-                        response_obj=result,
+                        kwargs=redact_model_call_details_for_custom_logger(
+                            model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
+                                model_call_details=self.model_call_details
+                            ),
+                            custom_logger=callback,
+                        ),
+                        response_obj=redact_response_for_custom_logger(result=result, custom_logger=callback),
                         start_time=start_time,
                         end_time=end_time,
                     )
@@ -4265,10 +4297,31 @@ def _init_custom_logger_compatible_class(
     custom_logger_init_args: dict | None = {},
 ) -> CustomLogger | None:
     """
-    Initialize a custom logger compatible class
+    Initialize a custom logger compatible class and apply its proxy `callback_settings`.
     """
+    custom_logger: Final = _construct_custom_logger_compatible_class(
+        logging_integration, internal_usage_cache, llm_router, custom_logger_init_args
+    )
+    if custom_logger is None:
+        return None
+    turn_off_message_logging: Final = _get_custom_logger_settings_from_proxy_server(
+        callback_name=logging_integration
+    ).get("turn_off_message_logging")
+    if isinstance(turn_off_message_logging, bool):
+        custom_logger.turn_off_message_logging = turn_off_message_logging
+    return custom_logger
+
+
+def _construct_custom_logger_compatible_class(
+    logging_integration: _custom_logger_compatible_callbacks_literal,
+    internal_usage_cache: DualCache | None,
+    llm_router: Any | None,  # expect litellm.Router, but typing errors due to circular import
+    custom_logger_init_args: dict | None = None,  # mutable-ok: callback constructor API
+) -> CustomLogger | None:
     try:
-        custom_logger_init_args = custom_logger_init_args or {}
+        custom_logger_init_args = (  # rebind-ok: callback constructors require normalized kwargs
+            custom_logger_init_args or {}
+        )
         if logging_integration == "agentops":  # Add AgentOps initialization
             _v2 = _maybe_construct_otel_v2("agentops", _in_memory_loggers)
             if _v2 is not None:
@@ -5251,10 +5304,11 @@ def _get_custom_logger_settings_from_proxy_server(callback_name: str) -> dict:
     callback_settings:
         otel:
             message_logging: False
+        langsmith:
+            turn_off_message_logging: true
     """
-    if litellm.callback_settings:
-        return dict(litellm.callback_settings.get(callback_name, {}))
-    return {}
+    callback_settings: Final = litellm.callback_settings.get(callback_name) if litellm.callback_settings else None
+    return dict(callback_settings) if isinstance(callback_settings, dict) else {}
 
 
 def use_custom_pricing_for_model(litellm_params: dict | None) -> bool:

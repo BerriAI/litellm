@@ -48,10 +48,15 @@ def redact_message_input_output_from_custom_logger(
 def redact_streaming_responses_for_custom_logger(model_call_details: dict, custom_logger: CustomLogger) -> dict:
     """
     Returns a copy of model_call_details whose streaming response entries are redacted deepcopies
-    when the custom logger has opted out of message logging. The shared model_call_details is left
-    untouched so other callbacks still receive the unredacted response.
+    when the custom logger has opted out of message logging via `message_logging=False` or
+    `turn_off_message_logging=True`. The shared model_call_details is left untouched so other
+    callbacks still receive the unredacted response.
     """
-    if not (hasattr(custom_logger, "message_logging") and custom_logger.message_logging is not True):
+    opted_out: Final = (
+        getattr(custom_logger, "message_logging", True) is not True
+        or getattr(custom_logger, "turn_off_message_logging", False) is True
+    )
+    if not opted_out:
         return model_call_details
     redacted_entries: Final = {
         streaming_key: _redacted_streaming_response_copy(model_call_details[streaming_key])
@@ -61,6 +66,61 @@ def redact_streaming_responses_for_custom_logger(model_call_details: dict, custo
     if not redacted_entries:
         return model_call_details
     return {**model_call_details, **redacted_entries}
+
+
+def redact_response_for_custom_logger(result: object, custom_logger: CustomLogger) -> object:
+    opted_out: Final = (
+        getattr(custom_logger, "message_logging", True) is not True
+        or getattr(custom_logger, "turn_off_message_logging", False) is True
+    )
+    if not opted_out or custom_logger.redacts_messages_itself():
+        return result
+    return perform_redaction(  # mutable-ok: redaction scratch payload
+        model_call_details={}, result=result, redact_streaming_responses=False
+    )
+
+
+def redact_model_call_details_for_custom_logger(
+    model_call_details: dict[str, object],  # mutable-ok: logger hook payload
+    custom_logger: CustomLogger,
+) -> dict[str, object]:  # mutable-ok: logger hook payload
+    opted_out: Final = (
+        getattr(custom_logger, "message_logging", True) is not True
+        or getattr(custom_logger, "turn_off_message_logging", False) is True
+    )
+    if not opted_out or custom_logger.redacts_messages_itself():
+        return model_call_details
+    response_keys: Final = ("response", "original_response", "complete_response")
+    raw_request_typed_dict: Final = model_call_details.get("raw_request_typed_dict")
+    raw_request_body: Final = (
+        raw_request_typed_dict.get("raw_request_body") if isinstance(raw_request_typed_dict, dict) else None
+    )
+    redacted_raw_request_typed_dict: Final = (
+        {  # mutable-ok: callback payload copy
+            **raw_request_typed_dict,
+            "raw_request_body": {
+                **raw_request_body,  # mutable-ok: callback payload copy
+                "messages": [{"role": "user", "content": REDACTED_BY_LITELLM}],  # mutable-ok: callback payload copy
+                "input": "",
+                "prompt": "",
+            },
+        }
+        if isinstance(raw_request_typed_dict, dict) and isinstance(raw_request_body, dict)
+        else raw_request_typed_dict
+    )
+    return {  # mutable-ok: callback payload copy
+        **model_call_details,
+        **{  # mutable-ok: callback payload copy
+            key: redact_response_for_custom_logger(result=model_call_details[key], custom_logger=custom_logger)
+            for key in response_keys
+            if model_call_details.get(key) is not None
+        },
+        **(
+            {"raw_request_typed_dict": redacted_raw_request_typed_dict}  # mutable-ok: callback payload copy
+            if redacted_raw_request_typed_dict is not raw_request_typed_dict
+            else {}
+        ),
+    }
 
 
 def _redacted_streaming_response_copy(streaming_response):
