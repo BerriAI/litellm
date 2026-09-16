@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { ColumnFiltersState } from "@tanstack/react-table";
@@ -107,6 +107,17 @@ export default function AuditLogsPanel({
 
   const rows = query.data?.audit_logs ?? EMPTY_ROWS;
   const selectedLog = useMemo(() => rows.find((log) => log.id === selectedLogId) ?? null, [rows, selectedLogId]);
+  const [drawerLog, setDrawerLog] = useState<AuditLogEntry | null>(null);
+  if (selectedLog !== null && selectedLog !== drawerLog) {
+    setDrawerLog(selectedLog);
+  }
+
+  const hasSettledPage = query.isSuccess && !query.isPlaceholderData;
+  const isSelectionMissing = selectedLogId !== null && selectedLog === null;
+  const isSelectionStale = isSelectionMissing && (!isActive || hasSettledPage);
+  useEffect(() => {
+    if (isSelectionStale) void setSelectedLogId(null, { history: "replace" });
+  }, [isSelectionStale, setSelectedLogId]);
 
   const handleViewLog = useCallback((log: AuditLogEntry) => void setSelectedLogId(log.id), [setSelectedLogId]);
   const closeDrawer = useCallback(() => void setSelectedLogId(null), [setSelectedLogId]);
@@ -148,7 +159,7 @@ export default function AuditLogsPanel({
       <AuditLogsTable
         data={rows}
         rowCount={query.data?.total ?? 0}
-        isLoading={query.isLoading}
+        isLoading={query.isPending}
         isError={query.isError}
         isRefreshing={query.isFetching}
         pagination={pagination}
@@ -161,7 +172,7 @@ export default function AuditLogsPanel({
         onViewLog={handleViewLog}
       />
 
-      <AuditLogDrawer open={selectedLog !== null} onClose={closeDrawer} log={selectedLog} />
+      <AuditLogDrawer open={selectedLog !== null} onClose={closeDrawer} log={drawerLog} />
     </>
   );
 }

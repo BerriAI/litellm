@@ -1,3 +1,4 @@
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
@@ -37,6 +38,7 @@ const tabContentClassName = (tabId: LogsTabId): string =>
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
   const canViewAuditLogs = useCan("viewAuditLogs");
   const canViewDeletedTeams = useCan("viewDeletedTeams");
+  const { isLoading: isOrgMembershipLoading } = useOrganizations();
 
   const tabs: LogsTab[] = [
     REQUEST_LOGS_TAB,
@@ -44,7 +46,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     DELETED_KEYS_TAB,
     ...(canViewDeletedTeams ? [DELETED_TEAMS_TAB] : []),
   ];
-  const visibleSlugs: readonly LogsTabSlug[] = userRole ? tabs.map((tab) => tab.slug) : LOGS_TAB_SLUGS;
+  const isRoleResolved = Boolean(userRole) && !isOrgMembershipLoading;
+  const visibleSlugs: readonly LogsTabSlug[] = isRoleResolved ? tabs.map((tab) => tab.slug) : LOGS_TAB_SLUGS;
   const [activeSlug, setActiveSlug] = useUrlTab(visibleSlugs, REQUEST_LOGS_TAB.slug);
 
   if (!accessToken || !token || !userRole || !userID) {

@@ -1,4 +1,6 @@
 "use client";
+import { useCallback } from "react";
+import { OnChangeFn, SortingState } from "@tanstack/react-table";
 import { Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { DEFAULT_PAGE_SIZE_OPTIONS, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
@@ -18,6 +20,13 @@ const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
 export default function DeletedTeamsPage() {
   const { premiumUser } = useAuthorized();
   const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
+  const sortLoadedPage = useCallback<OnChangeFn<SortingState>>(
+    (updater) => {
+      onSortingChange(updater);
+      onPaginationChange(pagination);
+    },
+    [onSortingChange, onPaginationChange, pagination],
+  );
   const { data: teamsData, isLoading, isError } = useDeletedTeams(pagination.pageIndex + 1, pagination.pageSize);
 
   return (
@@ -36,7 +45,7 @@ export default function DeletedTeamsPage() {
         isLoading={isLoading}
         isError={isError}
         sorting={sorting}
-        onSortingChange={onSortingChange}
+        onSortingChange={sortLoadedPage}
         pagination={pagination}
         onPaginationChange={onPaginationChange}
         rowCount={teamsData?.total ?? 0}

@@ -18,8 +18,6 @@ function EntityCell({ value, href }: { value: string | null | undefined; href: s
   );
 }
 
-export const DELETED_TEAMS_SORT_FIELDS: readonly string[] = ["spend", "created_at", "deleted_at"];
-
 export const getDeletedTeamsTableColumns = (): ColumnDef<DeletedTeam>[] => [
   {
     id: "team_alias",
@@ -119,3 +117,7 @@ export const getDeletedTeamsTableColumns = (): ColumnDef<DeletedTeam>[] => [
     },
   },
 ];
+
+export const DELETED_TEAMS_SORT_FIELDS: readonly string[] = getDeletedTeamsTableColumns().flatMap((column) =>
+  column.enableSorting && column.id ? [column.id] : [],
+);

@@ -1,8 +1,10 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { ReactElement } from "react";
 import { vi, it, expect, beforeEach, MockedFunction, type Mock } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import DeletedKeysPage from "./DeletedKeysPage";
 import { useDeletedKeys, DeletedKeyResponse } from "@/app/(dashboard)/hooks/keys/useKeys";
 
@@ -154,6 +156,20 @@ const rowAliases = (aliases: string[]) =>
 
 const lastUrl = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
 
+const renderKeepingUrlWrites = (ui: ReactElement, searchParams: string, onUrlUpdate: OnUrlUpdateFunction) =>
+  render(
+    <NuqsTestingAdapter
+      searchParams={searchParams}
+      onUrlUpdate={onUrlUpdate}
+      hasMemory
+      resetUrlUpdateQueueOnMount={false}
+    >
+      <QueryClientProvider client={testQueryClient}>{ui}</QueryClientProvider>
+    </NuqsTestingAdapter>,
+  );
+
+const flushUrlWrites = () => new Promise((resolve) => setTimeout(resolve, 150));
+
 it("requests the page and page size named by the deleted_keys_ URL keys", () => {
   renderWithProviders(<DeletedKeysPage />, { searchParams: { deleted_keys_page: "3", deleted_keys_page_size: "25" } });
 
@@ -179,6 +195,34 @@ it("writes deleted_keys_page when the next page is requested", async () => {
   expect(mockUseDeletedKeys).toHaveBeenLastCalledWith(2, 50);
 });
 
+it("writes deleted_keys_page_size when the page size changes", async () => {
+  const user = userEvent.setup();
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  mockUseDeletedKeys.mockReturnValue(deletedKeysResult([mockDeletedKey], 120));
+  renderWithProviders(<DeletedKeysPage />, { onUrlUpdate });
+
+  await chooseSelectOption(user, screen.getByTestId("pagination-page-size"), "100");
+
+  await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("deleted_keys_page_size")).toBe("100"));
+  expect(lastUrl(onUrlUpdate)?.has("page_size")).toBe(false);
+  expect(mockUseDeletedKeys).toHaveBeenLastCalledWith(1, 100);
+});
+
+it("keeps ?deleted_keys_page= when the deleted keys request fails", async () => {
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  mockUseDeletedKeys.mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    isError: true,
+  } as unknown as ReturnType<typeof useDeletedKeys>);
+  renderKeepingUrlWrites(<DeletedKeysPage />, "?deleted_keys_page=3", onUrlUpdate);
+
+  await flushUrlWrites();
+
+  expect(onUrlUpdate).not.toHaveBeenCalled();
+  expect(mockUseDeletedKeys).toHaveBeenLastCalledWith(3, 50);
+});
+
 it.each([
   ["asc", ["cheap-key", "pricey-key"]],
   ["desc", ["pricey-key", "cheap-key"]],
@@ -192,24 +236,36 @@ it.each([
 });
 
 it("falls back to deleted_at descending when deleted_keys_sort_by is not a sortable column", () => {
-  mockUseDeletedKeys.mockReturnValue(deletedKeysResult(SORT_KEYS, 2));
+  mockUseDeletedKeys.mockReturnValue(deletedKeysResult([...SORT_KEYS].reverse(), 2));
   renderWithProviders(<DeletedKeysPage />, { searchParams: { deleted_keys_sort_by: "key_alias" } });
 
   expect(rowAliases(["cheap-key", "pricey-key"])).toEqual(["cheap-key", "pricey-key"]);
 });
 
-it("writes deleted_keys_sort_by and a direction that matches the rendered order when a header is clicked", async () => {
+it("writes deleted_keys_sort_by and deleted_keys_sort_order when a sorted header is clicked again", async () => {
   const user = userEvent.setup();
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
   mockUseDeletedKeys.mockReturnValue(deletedKeysResult(SORT_KEYS, 2));
-  renderWithProviders(<DeletedKeysPage />, { onUrlUpdate });
+  renderWithProviders(<DeletedKeysPage />, { searchParams: { deleted_keys_sort_by: "spend" }, onUrlUpdate });
+  expect(rowAliases(["cheap-key", "pricey-key"])).toEqual(["pricey-key", "cheap-key"]);
+
+  await user.click(screen.getByTestId("sort-header-spend"));
+
+  await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("deleted_keys_sort_order")).toBe("asc"));
+  expect(lastUrl(onUrlUpdate)?.get("deleted_keys_sort_by")).toBe("spend");
+  expect(lastUrl(onUrlUpdate)?.has("sort_by")).toBe(false);
+  expect(rowAliases(["cheap-key", "pricey-key"])).toEqual(["cheap-key", "pricey-key"]);
+});
+
+it("stays on the current page when a header is clicked, since sorting only reorders the loaded page", async () => {
+  const user = userEvent.setup();
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  mockUseDeletedKeys.mockReturnValue(deletedKeysResult(SORT_KEYS, 120));
+  renderWithProviders(<DeletedKeysPage />, { searchParams: { deleted_keys_page: "3" }, onUrlUpdate });
 
   await user.click(screen.getByTestId("sort-header-spend"));
 
   await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("deleted_keys_sort_by")).toBe("spend"));
-  const ascending = lastUrl(onUrlUpdate)?.get("deleted_keys_sort_order") === "asc";
-  expect(rowAliases(["cheap-key", "pricey-key"])).toEqual(
-    ascending ? ["cheap-key", "pricey-key"] : ["pricey-key", "cheap-key"],
-  );
-  expect(lastUrl(onUrlUpdate)?.has("sort_by")).toBe(false);
+  expect(lastUrl(onUrlUpdate)?.get("deleted_keys_page")).toBe("3");
+  expect(mockUseDeletedKeys).toHaveBeenLastCalledWith(3, 50);
 });

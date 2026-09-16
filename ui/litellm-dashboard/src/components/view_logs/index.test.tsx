@@ -1,5 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
+import type { PropsWithChildren } from "react";
 import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
@@ -64,22 +65,39 @@ const renderAs = (sessionRole: string, organizations: unknown[] = [], urlOptions
   return renderWithProviders(<SpendLogsTable {...defaultProps} userRole={sessionRole} />, urlOptions);
 };
 
-const renderKeepingMountUrlWrites = (sessionRole: string, searchParams: string, onUrlUpdate: OnUrlUpdateFunction) => {
+interface OrganizationsResult {
+  data: unknown[] | undefined;
+  isLoading?: boolean;
+}
+
+const keepingMountUrlWrites = (searchParams: string, onUrlUpdate: OnUrlUpdateFunction) =>
+  function Providers({ children }: PropsWithChildren) {
+    return (
+      <NuqsTestingAdapter
+        searchParams={searchParams}
+        onUrlUpdate={onUrlUpdate}
+        hasMemory
+        resetUrlUpdateQueueOnMount={false}
+      >
+        <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+      </NuqsTestingAdapter>
+    );
+  };
+
+const renderKeepingMountUrlWrites = (
+  sessionRole: string,
+  searchParams: string,
+  onUrlUpdate: OnUrlUpdateFunction,
+  organizations: OrganizationsResult = { data: [] },
+) => {
   useAuthorizedMock.mockReturnValue({ userId: "user-1", userRole: sessionRole });
-  useOrganizationsMock.mockReturnValue({ data: [] });
-  return render(
-    <NuqsTestingAdapter
-      searchParams={searchParams}
-      onUrlUpdate={onUrlUpdate}
-      hasMemory
-      resetUrlUpdateQueueOnMount={false}
-    >
-      <QueryClientProvider client={testQueryClient}>
-        <SpendLogsTable {...defaultProps} userRole={sessionRole} />
-      </QueryClientProvider>
-    </NuqsTestingAdapter>,
-  );
+  useOrganizationsMock.mockReturnValue(organizations);
+  return render(<SpendLogsTable {...defaultProps} userRole={sessionRole} />, {
+    wrapper: keepingMountUrlWrites(searchParams, onUrlUpdate),
+  });
 };
+
+const flushUrlWrites = () => new Promise((resolve) => setTimeout(resolve, 150));
 
 const lastUrl = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
 
@@ -277,6 +295,41 @@ describe("SpendLogsTable", () => {
       renderAs("Internal User", ORG_ADMIN_MEMBERSHIPS, { searchParams: "?tab=deleted-teams" });
 
       expect(screen.getByRole("tab", { name: "Deleted Teams" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("keeps ?tab=deleted-teams while an org admin's memberships load, then lands on it", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      const { rerender } = renderKeepingMountUrlWrites("Internal User", "?tab=deleted-teams", onUrlUpdate, {
+        data: undefined,
+        isLoading: true,
+      });
+
+      await flushUrlWrites();
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+
+      useOrganizationsMock.mockReturnValue({ data: ORG_ADMIN_MEMBERSHIPS, isLoading: false });
+      rerender(<SpendLogsTable {...defaultProps} userRole="Internal User" />);
+
+      expect(screen.getByRole("tab", { name: "Deleted Teams" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByTestId("deleted-teams-page")).toBeInTheDocument();
+      await flushUrlWrites();
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
+    it("clears ?tab=deleted-teams once the memberships load without an org_admin role", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      const { rerender } = renderKeepingMountUrlWrites("Internal User", "?tab=deleted-teams", onUrlUpdate, {
+        data: undefined,
+        isLoading: true,
+      });
+      await flushUrlWrites();
+
+      useOrganizationsMock.mockReturnValue({ data: [], isLoading: false });
+      rerender(<SpendLogsTable {...defaultProps} userRole="Internal User" />);
+
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(lastUrl(onUrlUpdate)?.has("tab")).toBe(false);
+      expect(screen.getByRole("tab", { name: "Request Logs" })).toHaveAttribute("aria-selected", "true");
     });
 
     it("keeps ?tab=audit-logs while credentials resolve, then lands on it once the admin role is known", async () => {

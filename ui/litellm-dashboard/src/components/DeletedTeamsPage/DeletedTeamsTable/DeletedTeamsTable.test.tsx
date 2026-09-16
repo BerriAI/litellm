@@ -1,3 +1,4 @@
+import { functionalUpdate, type SortingState, type Updater } from "@tanstack/react-table";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi, it, expect, beforeEach } from "vitest";
@@ -25,7 +26,11 @@ const makeDeletedTeam = (overrides: Partial<DeletedTeam> = {}): DeletedTeam => (
   ...overrides,
 });
 
+const DELETED_AT_DESC: SortingState = [{ id: "deleted_at", desc: true }];
+
 const paginationProps = {
+  sorting: DELETED_AT_DESC,
+  onSortingChange: vi.fn(),
   pagination: { pageIndex: 0, pageSize: 25 },
   onPaginationChange: vi.fn(),
 };
@@ -44,7 +49,7 @@ it("should display team information", () => {
   expect(screen.getByText("org-1")).toBeInTheDocument();
 });
 
-it("should sort teams by deleted_at descending by default", () => {
+it("sorts teams by the deleted_at descending sorting it is given", () => {
   const teams = [
     makeDeletedTeam({ team_id: "team-old", team_alias: "older-team", deleted_at: "2024-01-01T10:00:00Z" }),
     makeDeletedTeam({ team_id: "team-new", team_alias: "newer-team", deleted_at: "2024-06-01T10:00:00Z" }),
@@ -74,6 +79,8 @@ it("renders the shared pagination footer with the server row count", () => {
       teams={[makeDeletedTeam()]}
       isLoading={false}
       rowCount={137}
+      sorting={DELETED_AT_DESC}
+      onSortingChange={vi.fn()}
       pagination={{ pageIndex: 2, pageSize: 50 }}
       onPaginationChange={vi.fn()}
     />,
@@ -105,7 +112,7 @@ it("leaves the default_user_id placeholder unlinked in the deleted by cell", () 
 
 it("sorts by the controlled sorting prop and reports header clicks through onSortingChange", async () => {
   const user = userEvent.setup();
-  const onSortingChange = vi.fn();
+  const onSortingChange = vi.fn<(updater: Updater<SortingState>) => void>();
   const teams = [
     makeDeletedTeam({ team_id: "team-cheap", team_alias: "cheap-team", spend: 1 }),
     makeDeletedTeam({ team_id: "team-pricey", team_alias: "pricey-team", spend: 9 }),
@@ -115,9 +122,9 @@ it("sorts by the controlled sorting prop and reports header clicks through onSor
       teams={teams}
       isLoading={false}
       rowCount={2}
+      {...paginationProps}
       sorting={[{ id: "spend", desc: true }]}
       onSortingChange={onSortingChange}
-      {...paginationProps}
     />,
   );
 
@@ -128,4 +135,6 @@ it("sorts by the controlled sorting prop and reports header clicks through onSor
   await user.click(screen.getByTestId("sort-header-deleted_at"));
 
   expect(onSortingChange).toHaveBeenCalledTimes(1);
+  const [next] = functionalUpdate(onSortingChange.mock.calls[0][0], [{ id: "spend", desc: true }]);
+  expect(next?.id).toBe("deleted_at");
 });

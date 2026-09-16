@@ -1,4 +1,6 @@
 "use client";
+import { useCallback } from "react";
+import { OnChangeFn, SortingState } from "@tanstack/react-table";
 import { Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
@@ -18,6 +20,13 @@ const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
 export default function DeletedKeysPage() {
   const { premiumUser } = useAuthorized();
   const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
+  const sortLoadedPage = useCallback<OnChangeFn<SortingState>>(
+    (updater) => {
+      onSortingChange(updater);
+      onPaginationChange(pagination);
+    },
+    [onSortingChange, onPaginationChange, pagination],
+  );
 
   const { data: keysData, isLoading, isError } = useDeletedKeys(pagination.pageIndex + 1, pagination.pageSize);
 
@@ -38,7 +47,7 @@ export default function DeletedKeysPage() {
         isLoading={isLoading}
         isError={isError}
         sorting={sorting}
-        onSortingChange={onSortingChange}
+        onSortingChange={sortLoadedPage}
         pagination={pagination}
         onPaginationChange={onPaginationChange}
       />
