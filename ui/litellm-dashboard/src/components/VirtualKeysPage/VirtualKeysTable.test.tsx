@@ -79,6 +79,7 @@ const mockKey: KeyResponse = {
   key_name: "test-key",
   key_alias: "Test Key Alias",
   spend: 5.5,
+  total_spend: 42.25,
   max_budget: 100,
   expires: "2999-12-31T23:59:59Z",
   models: ["gpt-3.5-turbo", "gpt-4"],
@@ -234,6 +235,14 @@ it("should display key information correctly", async () => {
     expect(screen.getByText("$5.5000")).toBeInTheDocument();
     expect(screen.getByText("of $100")).toBeInTheDocument();
   });
+});
+
+it("shows lifetime spend in its own column next to the period spend meter", async () => {
+  renderWithProviders(<VirtualKeysTable />);
+
+  expect(await screen.findByText("Lifetime Spend")).toBeInTheDocument();
+  expect(screen.getByText("$42.2500")).toBeInTheDocument();
+  expect(screen.getByText("$5.5000")).toBeInTheDocument();
 });
 
 it("should display user email correctly", async () => {
