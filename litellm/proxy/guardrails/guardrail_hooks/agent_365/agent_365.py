@@ -35,6 +35,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     AGENT_365_PROD_API_BASE,
     AGENT_365_PROD_RESOURCE_APP_ID,
@@ -49,9 +50,11 @@ if TYPE_CHECKING:
     from litellm.types.utils import GuardrailStatus
 
 TOKEN_ENDPOINT_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+ENTRA_ISSUER_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/v2.0"
 EVALUATE_PATH: Final = "/agents/tool-evaluation/evaluate"
 MCP_SESSION_ID_HEADER: Final = "mcp-session-id"
 DEFENDER_STATUS_EVALUATED: Final = "Evaluated"
+GATEWAY_SCOPE_TEMPLATE: Final = "api://{client_id}/access_as_user"
 _GATEWAY_OWNED_TOKEN_ERRORS: Final = frozenset(
     {"invalid_client", "unauthorized_client", "invalid_scope", "invalid_resource"}
 )
@@ -93,6 +96,13 @@ def entra_assertion(value: object) -> str | None:
     """``value`` when it is a compact JWS, the only bearer shape the OBO exchange accepts as its assertion.
     A LiteLLM virtual key, session bearer, or opaque upstream token in ``Authorization`` yields ``None``."""
     return value if isinstance(value, str) and value.count(".") == 2 else None
+
+
+def _presented_assertion(oauth2_headers: Mapping[str, str] | None) -> str | None:
+    authorization: Final = oauth2_headers.get("Authorization", "") if oauth2_headers else ""
+    if not authorization.lower().startswith("bearer "):
+        return None
+    return entra_assertion(authorization[len("bearer ") :].strip())
 
 
 class _DefenderResult(TypedDict, total=False):
@@ -459,6 +469,58 @@ class Agent365Guardrail(CustomGuardrail):
         if isinstance(call_id, str) and call_id:
             return call_id
         return str(uuid.uuid4())
+
+    def _gates_sign_in(self, server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None") -> bool:
+        """Whether the gateway advertises this guardrail's sign-in for ``server``: only a ``default_on`` guardrail
+        the caller's key or team has not opted out of, because the anonymous metadata fetch that follows a
+        challenge cannot see which key selected a guardrail and would advertise the wrong issuer. Only servers
+        that leave the caller's top-level ``Authorization`` with the gateway qualify: a forwarded API-key header
+        travels upstream in its own slot and does not displace the Entra assertion."""
+        if not (self.default_on and server.keeps_caller_authorization):
+            return False
+        if user_api_key_auth is None:
+            return True
+        probe: Final[Mapping[str, object]] = {
+            "metadata": {
+                "user_api_key_metadata": user_api_key_auth.metadata,
+                "user_api_key_team_metadata": user_api_key_auth.team_metadata,
+            }
+        }
+        return self.should_run_guardrail(data=dict(probe), event_type=GuardrailEventHooks.pre_mcp_call)
+
+    def gateway_authorization_servers(
+        self, server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None"
+    ) -> tuple[str, ...]:
+        if not self._gates_sign_in(server, user_api_key_auth):
+            return ()
+        return (ENTRA_ISSUER_TEMPLATE.format(tenant_id=self.tenant_id),)
+
+    def gateway_scopes_supported(
+        self, server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None"
+    ) -> tuple[str, ...]:
+        if not self._gates_sign_in(server, user_api_key_auth):
+            return ()
+        return (GATEWAY_SCOPE_TEMPLATE.format(client_id=self.client_id),)
+
+    async def gateway_sign_in_required(
+        self, server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None", oauth2_headers: Mapping[str, str] | None
+    ) -> bool:
+        if not self._gates_sign_in(server, user_api_key_auth):
+            return False
+        assertion: Final = _presented_assertion(oauth2_headers)
+        return assertion is None or await self.exchange_rejects_subject(assertion)
+
+    async def exchange_rejects_subject(self, assertion: str) -> bool:
+        """Whether Entra refuses ``assertion`` as the On-Behalf-Of subject (expired, wrong audience, bad
+        signature). Gateway credential rejections and endpoint failures answer ``False``: the caller cannot fix
+        those by signing in again, so the tool call reports them."""
+        try:
+            await self._get_obo_token(assertion)
+        except Agent365TokenExchangeError as exc:
+            return not exc.gateway_owned
+        except (Agent365ThrottledError, Agent365MalformedResponseError, httpx.HTTPError, LitellmTimeout, TimeoutError):
+            return False
+        return False
 
     async def _get_obo_token(self, assertion: str) -> str:
         cache_key: Final = hashlib.sha256(assertion.encode("utf-8")).hexdigest()

@@ -5,13 +5,14 @@ import secrets
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -56,6 +57,10 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     register_aggregate_client,
     relative_request_url,
     revoke_refresh_token,
+)
+from litellm.proxy._experimental.mcp_server.gateway_sign_in import (
+    gateway_authorization_servers,
+    gateway_scopes_supported,
 )
 from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
     RefreshOwnershipProven,
@@ -2398,7 +2403,7 @@ async def _build_oauth_protected_resource_response(
     request: Request,
     mcp_server_name: str | None,
     use_standard_pattern: bool,
-) -> dict:
+) -> Mapping[str, object]:
     """
     Build OAuth protected resource response with the appropriate URL pattern.
 
@@ -2497,6 +2502,15 @@ async def _build_oauth_protected_resource_response(
     if obo_response is not None:
         return obo_response
 
+    sign_in_issuers: Final = gateway_authorization_servers(mcp_server, None) if mcp_server else ()
+    if mcp_server is not None and sign_in_issuers:
+        sign_in_metadata: Final[_ProtectedResourceMetadata] = {
+            "authorization_servers": sign_in_issuers,
+            "resource": resource_url,
+            "scopes_supported": gateway_scopes_supported(mcp_server, None),
+        }
+        return sign_in_metadata
+
     if mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
         return {
             "authorization_servers": [f"{request_base_url}/mcp"],
@@ -2514,6 +2528,12 @@ async def _build_oauth_protected_resource_response(
         "resource": resource_url,
         "scopes_supported": (mcp_server.scopes if mcp_server and mcp_server.scopes else []),
     }
+
+
+class _ProtectedResourceMetadata(TypedDict):
+    authorization_servers: ReadOnly[tuple[str, ...]]
+    resource: ReadOnly[str]
+    scopes_supported: ReadOnly[tuple[str, ...]]
 
 
 def _obo_protected_resource_response(mcp_server: MCPServer | None, resource_url: str) -> dict | None:
