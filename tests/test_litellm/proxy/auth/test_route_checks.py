@@ -3981,3 +3981,43 @@ def test_auto_router_session_read_grant_rejects_other_methods_paths_and_scopes(
         RouteChecks.should_call_route(route, valid_token, request)
 
     assert error.value.status_code == 403
+
+
+def _team_new_route_check(
+    general_settings: dict[str, object],
+    request_data: dict[str, object] | None = None,
+    role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER,
+) -> None:
+    user = LiteLLM_UserTable(user_id="self-serve-user", user_role=role.value)
+    token = UserAPIKeyAuth(user_id="self-serve-user", user_role=role.value)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    with patch("litellm.proxy.proxy_server.general_settings", general_settings):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user,
+            _user_role=role.value,
+            route="/team/new",
+            request=request,
+            valid_token=token,
+            request_data=request_data or {},
+        )
+
+
+def test_internal_user_team_new_requires_opt_in() -> None:
+    with pytest.raises(Exception, match="Only proxy admin"):
+        _team_new_route_check({})
+
+    _team_new_route_check({"allow_user_team_creation": True})
+
+
+def test_internal_user_team_new_opt_in_requires_standalone_team() -> None:
+    with pytest.raises(Exception, match="Only proxy admin"):
+        _team_new_route_check({"allow_user_team_creation": True}, {"organization_id": "org-1"})
+
+
+def test_team_new_opt_in_is_limited_to_internal_users() -> None:
+    with pytest.raises(Exception, match="Only proxy admin"):
+        _team_new_route_check(
+            {"allow_user_team_creation": True},
+            role=LitellmUserRoles.ORG_ADMIN,
+        )

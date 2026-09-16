@@ -2738,6 +2738,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="sends alerts if requests hang for 5min+",
     )
     ui_access_mode: Literal["admin_only", "all"] | None = Field("all", description="Control access to the Proxy UI")
+    allow_user_team_creation: bool = Field(
+        default=False,
+        description="Allow internal users to create standalone teams through the proxy UI.",
+    )
     allowed_routes: list | None = Field(None, description="Proxy API Endpoints you want users to be able to access")
     reject_clientside_metadata_tags: bool | None = Field(
         None,

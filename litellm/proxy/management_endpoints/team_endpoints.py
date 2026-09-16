@@ -91,6 +91,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_batch_enqueued_token_limit_is_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
@@ -1061,18 +1062,107 @@ async def _check_org_team_limits(
     )
 
 
+def _tightest_cap(*caps: float | None) -> float | None:
+    set_caps: Final = tuple(cap for cap in caps if cap is not None)
+    return min(set_caps) if set_caps else None
+
+
+def _effective_caller_model_scope(
+    key_models: list[str],
+    user_models: list[str] | None,
+) -> tuple[str, ...] | None:
+    """Return the caller's effective model scope, or None when unrestricted."""
+
+    def _restriction(models: list[str] | None) -> tuple[str, ...] | None:
+        if not models:
+            return None
+        if SpecialModelNames.no_default_models.value in models:
+            return ()
+        if SpecialModelNames.all_proxy_models.value in models:
+            return None
+        return tuple(models)
+
+    key_scope: Final = _restriction(key_models)
+    user_scope: Final = _restriction(user_models)
+    if key_scope is None:
+        return user_scope
+    if user_scope is None:
+        return key_scope
+    return tuple(model for model in key_scope if model in user_scope)
+
+
+def _inherit_caller_limits_for_self_served_team(
+    data: NewTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    user_obj: LiteLLM_UserTable | None,
+) -> NewTeamRequest:
+    """Clamp a self-served team to the creator's effective limits."""
+
+    effective_tpm: Final = _tightest_cap(user_api_key_dict.tpm_limit, user_api_key_dict.user_tpm_limit)
+    effective_rpm: Final = _tightest_cap(user_api_key_dict.rpm_limit, user_api_key_dict.user_rpm_limit)
+    effective_budget: Final = user_api_key_dict.user_max_budget
+    effective_models: Final = _effective_caller_model_scope(
+        key_models=cast(list[str], user_api_key_dict.models),
+        user_models=cast(list[str], user_obj.models) if user_obj is not None else None,
+    )
+    requested_models: Final = data.models if "models" in data.model_fields_set else None
+    resulting_models: Final = requested_models if requested_models is not None else list(effective_models or ())
+    if effective_models is not None:
+        allowed_models: Final = list(effective_models)
+        if not resulting_models:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"An empty team model list would grant access to all proxy models, which exceeds the caller's allowed models. Allowed models={allowed_models}. User id={user_api_key_dict.user_id}"
+                },
+            )
+        for model in resulting_models:
+            if model not in effective_models:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Model not in allowed user models. User allowed models={allowed_models}. User id={user_api_key_dict.user_id}"
+                    },
+                )
+
+    return data.model_copy(
+        update={
+            "models": resulting_models,
+            "tpm_limit": _tightest_cap(data.tpm_limit, effective_tpm),
+            "rpm_limit": _tightest_cap(data.rpm_limit, effective_rpm),
+            "max_budget": _tightest_cap(data.max_budget, effective_budget),
+        }
+    )
+
+
+async def _get_caller_user_object(
+    user_id: str | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> LiteLLM_UserTable | None:
+    if user_id is None:
+        return None
+    try:
+        return await get_user_object(
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+        )
+    except ValueError:
+        return None
+
+
 async def _check_user_team_limits(
     data: NewTeamRequest | UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
-    user_api_key_cache: UserApiKeyCache,
+    user_obj: LiteLLM_UserTable | None,
 ) -> None:
     """
     Enforce the caller's personal limits when CREATING a standalone team.
 
     This validates the requested team budget / models / tpm / rpm against the
-    caller's own limits, so a non-admin user cannot mint a brand-new team that
-    is richer than themselves.
+    caller's own limits.
 
     Only used by /team/new for standalone teams (organization_id is None).
     /team/update does NOT call this — an existing team's admin is already
@@ -1080,14 +1170,7 @@ async def _check_user_team_limits(
     wallet. Org-scoped teams use _check_org_team_limits() instead.
     """
     # Validate team budget against user's max_budget
-    if data.max_budget is not None and user_api_key_dict.user_id is not None:
-        user_obj: Final = await get_user_object(
-            user_id=user_api_key_dict.user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-        )
-
+    if data.max_budget is not None:
         if user_obj is not None and user_obj.max_budget is not None and data.max_budget > user_obj.max_budget:
             raise HTTPException(
                 status_code=400,
@@ -1431,6 +1514,28 @@ async def new_team(
                 prisma_client=prisma_client,
             )
 
+        caller_user_obj: Final = (
+            await _get_caller_user_object(
+                user_id=user_api_key_dict.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if data.organization_id is None
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+            else None
+        )
+        effective_data: Final = (
+            _inherit_caller_limits_for_self_served_team(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                user_obj=caller_user_obj,
+            )
+            if data.organization_id is None
+            and user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+            and RouteChecks._user_team_creation_enabled()  # pyright: ignore[reportPrivateUsage]  # shared route gate
+            else data
+        )
+
         if (
             user_api_key_dict.user_role is None or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
         ):  # don't restrict proxy admin
@@ -1438,45 +1543,44 @@ async def new_team(
             # For org-scoped teams, validation is done by _check_org_team_limits()
             if data.organization_id is None:
                 await _check_user_team_limits(
-                    data=data,
+                    data=effective_data,
                     user_api_key_dict=user_api_key_dict,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
+                    user_obj=caller_user_obj,
                 )
 
         if _should_auto_add_team_creator(user_api_key_dict, general_settings):
             creating_user_in_list: Final = any(
-                member.user_id == user_api_key_dict.user_id for member in data.members_with_roles
+                member.user_id == user_api_key_dict.user_id for member in effective_data.members_with_roles
             )
             if not creating_user_in_list:
-                data.members_with_roles.append(Member(role="admin", user_id=user_api_key_dict.user_id))
+                effective_data.members_with_roles.append(Member(role="admin", user_id=user_api_key_dict.user_id))
 
-        _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
+        _check_passthrough_routes_caller_permission(effective_data, user_api_key_dict, entity="team")
 
-        if isinstance(data.metadata, dict):
-            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
+        if isinstance(effective_data.metadata, dict):
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(effective_data.metadata)
 
         await validate_team_metadata_if_configured(
             operation="create",
-            metadata=data.metadata,
+            metadata=effective_data.metadata,
             existing_metadata=None,
-            team_id=data.team_id,
-            team_alias=data.team_alias,
+            team_id=effective_data.team_id,
+            team_alias=effective_data.team_alias,
             user_api_key_dict=user_api_key_dict,
         )
 
         await validate_router_settings_weights(
-            data.router_settings,
-            team_id=data.team_id,
+            effective_data.router_settings,
+            team_id=effective_data.team_id,
             prisma_client=prisma_client,
             llm_router=llm_router,
         )
 
         ## ADD TO MODEL TABLE
         _model_id = None
-        if data.model_aliases is not None and isinstance(data.model_aliases, dict):
+        if effective_data.model_aliases is not None and isinstance(effective_data.model_aliases, dict):
             litellm_modeltable: Final = LiteLLM_ModelTable(
-                model_aliases=json.dumps(data.model_aliases),
+                model_aliases=json.dumps(effective_data.model_aliases),
                 created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
                 updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
             )
@@ -1484,11 +1588,15 @@ async def new_team(
 
             _model_id = model_dict.id
 
-        data_json = data.json()
+        data_json = effective_data.json()
 
         ## Handle Object Permission - MCP, Vector Stores etc.
         await enforce_all_proxy_mcp_servers_grant_is_admin_only(
-            requested_mcp_servers=(data.object_permission.mcp_servers if data.object_permission is not None else None),
+            requested_mcp_servers=(
+                effective_data.object_permission.mcp_servers
+                if effective_data.object_permission is not None
+                else None
+            ),
             existing_object_permission_id=None,
             is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
             prisma_client=prisma_client,
@@ -1499,20 +1607,20 @@ async def new_team(
         )
 
         if TeamMemberBudgetHandler.should_create_budget(
-            team_member_budget=data.team_member_budget,
-            team_member_rpm_limit=data.team_member_rpm_limit,
-            team_member_tpm_limit=data.team_member_tpm_limit,
-            team_member_budget_duration=data.team_member_budget_duration,
+            team_member_budget=effective_data.team_member_budget,
+            team_member_rpm_limit=effective_data.team_member_rpm_limit,
+            team_member_tpm_limit=effective_data.team_member_tpm_limit,
+            team_member_budget_duration=effective_data.team_member_budget_duration,
         ):
             data_json = await TeamMemberBudgetHandler.create_team_member_budget_table(
-                data=data,
+                data=effective_data,
                 new_team_data_json=data_json,
                 user_api_key_dict=user_api_key_dict,
-                team_member_budget=data.team_member_budget,
-                team_member_rpm_limit=data.team_member_rpm_limit,
-                team_member_tpm_limit=data.team_member_tpm_limit,
-                team_member_budget_duration=data.team_member_budget_duration,
-                explicitly_set_fields=data.model_fields_set,
+                team_member_budget=effective_data.team_member_budget,
+                team_member_rpm_limit=effective_data.team_member_rpm_limit,
+                team_member_tpm_limit=effective_data.team_member_tpm_limit,
+                team_member_budget_duration=effective_data.team_member_budget_duration,
+                explicitly_set_fields=effective_data.model_fields_set,
             )
 
         ## ADD TO TEAM TABLE
@@ -1523,19 +1631,19 @@ async def new_team(
 
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-            if getattr(data, field, None) is not None:
+            if getattr(effective_data, field, None) is not None:
                 _set_object_metadata_field(
                     object_data=complete_team_data,
                     field_name=field,
-                    value=getattr(data, field),
+                    value=getattr(effective_data, field),
                 )
 
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
-            if getattr(data, field, None) is not None:
+            if getattr(effective_data, field, None) is not None:
                 _set_object_metadata_field(
                     object_data=complete_team_data,
                     field_name=field,
-                    value=getattr(data, field),
+                    value=getattr(effective_data, field),
                 )
 
         # If budget_duration is set, set `budget_reset_at`
@@ -1566,7 +1674,7 @@ async def new_team(
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
 
         # Serialize router_settings to JSON (matching key creation pattern)
-        router_settings_value: Final = getattr(data, "router_settings", None)
+        router_settings_value: Final = getattr(effective_data, "router_settings", None)
         router_settings_json: Final = (
             safe_dumps(router_settings_value) if router_settings_value is not None else safe_dumps({})
         )
@@ -1590,7 +1698,7 @@ async def new_team(
 
         ## ADD TEAM ID TO USER TABLE ##
         team_member_add_request: Final = TeamMemberAddRequest(
-            team_id=data.team_id,
+            team_id=effective_data.team_id,
             member=members_with_roles,
         )
         await _add_team_members_to_team(
@@ -1618,7 +1726,7 @@ async def new_team(
                         ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                        object_id=data.team_id,
+                        object_id=effective_data.team_id,
                         action="created",
                         updated_values=_updated_values,
                         before_value=None,

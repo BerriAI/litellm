@@ -304,6 +304,11 @@ class UISettings(BaseModel):
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
 
+    allow_user_team_creation: bool = Field(
+        default=False,
+        description="Allow internal users to create standalone teams through the proxy UI.",
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -326,6 +331,7 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
+    "allow_user_team_creation",
 }
 
 ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"
@@ -360,6 +366,7 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
     "disable_key_generate_for_org_admin",
+    "allow_user_team_creation",
 ]
 
 # Extension point: packages outside OSS (e.g. litellm_enterprise) can

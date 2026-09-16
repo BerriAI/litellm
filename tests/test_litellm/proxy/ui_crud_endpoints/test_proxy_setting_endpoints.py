@@ -3266,3 +3266,15 @@ class TestPtuCostAttributionUISetting:
         assert response.status_code == 400
         assert "enable_ptu_cost_attribution" in str(response.json()["detail"])
         assert not mock_prisma.db.litellm_uisettings.upsert.called
+
+
+def test_allow_user_team_creation_is_registered_and_runtime_synced():
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        ALLOWED_UI_SETTINGS_FIELDS,
+        UISettings,
+        _RUNTIME_GENERAL_SETTINGS_FLAGS,
+    )
+
+    assert UISettings.model_fields["allow_user_team_creation"].default is False
+    assert "allow_user_team_creation" in ALLOWED_UI_SETTINGS_FIELDS
+    assert "allow_user_team_creation" in _RUNTIME_GENERAL_SETTINGS_FLAGS
