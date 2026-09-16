@@ -2,7 +2,7 @@
 
 `E2E_PROVIDER_CACHE=1` enables automatic response reuse in the live E2E mode. Standard OpenAI and Anthropic model registrations use the provider edge. Existing custom API bases, named credentials, mocked models and realtime WebSocket deployments keep their existing routing. Other provider protocols remain live
 
-The edge caches complete successful POST responses for `/v1/chat/completions` and `/v1/messages`, including streams. Unsupported endpoints pass through. It matches the method, original URL, effective outbound headers (including authentication and HTTP-library defaults), body presence and exact body bytes using a full keyed digest. It sends the same prepared request used for matching. No prompts, random markers, JSON values or credentials are normalized away
+The edge caches complete successful POST responses for `/v1/chat/completions` and `/v1/messages`, including streams. Unsupported endpoints pass through. It matches the method, original URL, effective outbound headers (including authentication and HTTP-library defaults), body presence and exact body bytes using a full keyed digest. It sends the same prepared request used for matching. No prompts, random markers, JSON values or credentials are normalized away. Provider `Set-Cookie` headers are dropped before validation and never recorded: the edge already withholds them from the proxy, and OpenAI responses always carry Cloudflare bot-management cookies
 
 An eligible miss calls the provider. A complete successful response is stored immediately even if a later test assertion fails. Provider errors, malformed responses, truncated streams and cancelled captures are not stored. Cache reads, writes and lease failures fall through to normal provider behavior; they introduce no provider retry. An already-started response cannot be restarted after a delivery failure
 
@@ -20,7 +20,7 @@ The trusted runner receives:
 
 Do not give cache credentials to candidate deployments. Counter artifacts contain no recorded payloads or credentials. Hits count shared-cache responses; upstream attempts count actual forwards from the edge. Existing application-cache observations still count requests arriving at the edge, including shared-cache hits
 
-Tests that require real provider timing, limits or state use `@pytest.mark.provider_live`. The marker keeps newly registered models on live routes without weakening their assertions. Ordinary assertion failures still fail E2E. The shared cache does not modify provider response IDs or make the proxy aware of replay
+Tests that require real provider timing, limits or state use `@pytest.mark.provider_live`. The marker keeps newly registered models on live routes without weakening their assertions. The provider prompt-caching tests carry it because a replayed priming response reports cache creation rather than a cache read. Ordinary assertion failures still fail E2E. The shared cache does not modify provider response IDs or make the proxy aware of replay
 
 ## Recorded response semantics
 
