@@ -9,6 +9,8 @@ from fastapi import HTTPException
 import httpx
 import pytest
 
+import litellm
+
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
     JWTLiteLLMRoleMap,
@@ -21,6 +23,8 @@ from litellm.proxy._types import (
     Member,
     ProxyErrorTypes,
     ProxyException,
+    RoleBasedPermissions,
+    ScopeMapping,
 )
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
@@ -33,6 +37,7 @@ from litellm.proxy.auth.handle_jwt import (
     JWTHandler,
     NoMatchingJWTPublicKeyError,
 )
+from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.types.agents import AgentResponse
 
 
@@ -7065,6 +7070,47 @@ async def test_auth_builder_denies_jwt_naming_unregistered_agent_before_admin_ch
         )
 
     assert exc_info.value.status_code == 403
+
+
+_JWT_DENIED_CLIENT_MESSAGE = (
+    "The requested model 'gpt-5.6' is not available for this API key, or the model name is invalid. "
+    "Check the models available to you and try again."
+)
+
+
+def test_can_rbac_role_call_model_denial_hides_role_allowlist_from_client():
+    general_settings = {
+        "role_permissions": [
+            RoleBasedPermissions(role=LitellmUserRoles.INTERNAL_USER, models=["gpt-5.6-mini"]),
+        ]
+    }
+
+    with pytest.raises(ModelAccessDeniedHTTPException) as exc_info:
+        JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings=general_settings,
+            model="gpt-5.6",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == _JWT_DENIED_CLIENT_MESSAGE
+    assert exc_info.value.internal_message == (
+        "Role=internal_user not allowed to call model=gpt-5.6. Allowed models=['gpt-5.6-mini']"
+    )
+
+
+def test_check_scope_based_access_denial_hides_scope_allowlist_from_client():
+    with pytest.raises(ModelAccessDeniedHTTPException) as exc_info:
+        JWTAuthManager.check_scope_based_access(
+            scope_mappings=[ScopeMapping(scope="litellm.api.consumer", models=["gpt-5.6-mini"])],
+            scopes=["litellm.api.consumer"],
+            request_data={"model": "gpt-5.6"},
+            general_settings={},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {"error": _JWT_DENIED_CLIENT_MESSAGE}
+    assert exc_info.value.internal_message == "model=gpt-5.6 not allowed. Allowed_models=['gpt-5.6-mini']"
 
 
 @pytest.mark.asyncio
