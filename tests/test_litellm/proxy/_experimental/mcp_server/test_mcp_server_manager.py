@@ -13693,3 +13693,34 @@ class TestProtectedCredentialPreparation:
         with pytest.raises(HTTPException) as exc:
             await MCPServerManager()._create_mcp_client(server, extra_headers={"X-Custom": "", "X-API-Key": ""})
         assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("custom_slot", [None, "X-Custom"])
+    @pytest.mark.parametrize("source", ["caller", "forwarded"])
+    async def test_api_key_preserves_explicit_authorization_credential(
+        self, custom_slot: str | None, source: str
+    ) -> None:
+        server: Final = MCPServer(
+            server_id="caller-auth", name="caller-auth", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.api_key, upstream_token_header=custom_slot,
+        )
+        headers: Final = {"Authorization": "Bearer caller-credential", "X-API-Key": ""}
+        client: Final = await MCPServerManager()._create_mcp_client(
+            server, mcp_auth_header=headers if source == "caller" else None,
+            extra_headers=headers if source == "forwarded" else None,
+        )
+        request: Final = await client.prepare_request_auth()
+        assert request.headers["Authorization"] == "Bearer caller-credential"
+        assert request.headers["X-API-Key"] == ""
+        assert custom_slot is None or custom_slot not in request.headers
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["", " ", "Bearer", "Basic", "token", "ApiKey"])
+    async def test_api_key_rejects_authorization_without_a_credential(self, value: str) -> None:
+        server: Final = MCPServer(
+            server_id="caller-empty", name="caller-empty", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.api_key,
+        )
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, mcp_auth_header={"Authorization": value})
+        assert exc.value.status_code == 500
