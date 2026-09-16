@@ -20373,6 +20373,77 @@
           ]
         }
       },
+      "/transcribe": {
+        "post": {
+          "description": "AWS-SDK-shaped pass-through for Amazon Transcribe: point the SDK's `endpoint_url`\nat `/transcribe` and the operation is read from the `X-Amz-Target` header, per the\nAWS JSON 1.1 protocol.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/transcribe)",
+          "operationId": "transcribe_sdk_proxy_route_transcribe_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Transcribe Sdk Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/transcribe/{operation}": {
+        "post": {
+          "description": "Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.\n\nThe request body is forwarded as-is to the AWS JSON 1.1 API and signed with SigV4\nusing the proxy's AWS credentials. Streaming transcription (`transcribestreaming`)\nuses a separate HTTP/2 event-stream protocol and is not served by this route.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/transcribe)",
+          "operationId": "transcribe_proxy_route_transcribe__operation__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "operation",
+              "required": true,
+              "schema": {
+                "title": "Operation",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Transcribe Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/vertex_ai/discovery/{endpoint}": {
         "delete": {
           "description": "Call any vertex discovery endpoint using the proxy.\n\nJust use `{PROXY_BASE_URL}/vertex_ai/discovery/{endpoint:path}`\n\nTarget url: `https://discoveryengine.googleapis.com`",
