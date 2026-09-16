@@ -200,7 +200,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                         if item_type == "custom_tool_call":
                             payload_key, payload_value = "input", getattr(item, "input", "")
                         else:
-                            tool_arguments: Final = getattr(item, "arguments", "{}")
+                            tool_arguments = getattr(item, "arguments", "{}")
                             payload_key, payload_value = (
                                 "arguments",
                                 (
