@@ -4078,6 +4078,24 @@ def test_get_logging_payload_inferred_provider_never_resolves_declared_authentic
     assert resolution_attempts == []
 
 
+def test_get_logging_payload_router_rejected_request_for_unresolvable_deployment_leaves_provider_empty(
+    monkeypatch,
+):
+    def _router_init_stub(model, custom_llm_provider=None, *args, **kwargs):
+        return model, custom_llm_provider or "openai", None, None
+
+    with monkeypatch.context() as router_init:
+        router_init.setattr(litellm, "get_llm_provider", _router_init_stub)
+        llm_router = litellm.Router(
+            model_list=[{"model_name": "opaque-group", "litellm_params": {"model": "my-unprefixed-model"}}]
+        )
+
+    payload = _router_rejected_failure_payload("opaque-group", llm_router)
+
+    assert payload["model_group"] == "opaque-group"
+    assert payload["custom_llm_provider"] == ""
+
+
 def test_get_logging_payload_inferred_provider_does_not_rewrite_spend_log_model():
     llm_router = litellm.Router(
         model_list=[
