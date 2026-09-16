@@ -4,15 +4,14 @@ from typing import Final
 
 import pytest
 
-
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
-from litellm.types.utils import GenericStreamingChunk
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Delta,
     Function,
+    GenericStreamingChunk,
     ModelResponseStream,
     PromptTokensDetails,
     ServerToolUse,
@@ -1603,3 +1602,112 @@ def test_calculate_usage_falls_back_to_prompt_counter_when_mock_stream_has_no_ad
     )
 
     assert usage.prompt_tokens == 77
+
+
+def test_calculate_usage_preserves_reasoning_tokens_and_counts_from_completion_usage():
+    from unittest.mock import MagicMock
+
+    from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage
+
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    chunk_sdk = ModelResponseStream(
+        id="chatcmpl-reasoning-sdk",
+        model="gpt-4o",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="42", role="assistant"))],
+        usage=CompletionUsage(
+            prompt_tokens=25,
+            completion_tokens=326,
+            total_tokens=351,
+            completion_tokens_details=CompletionTokensDetails(reasoning_tokens=326),
+        ),
+    )
+    processor_sdk = ChunkProcessor(chunks=[chunk_sdk])
+    usage_sdk = processor_sdk.calculate_usage(
+        chunks=[chunk_sdk],
+        model="gpt-4o",
+        completion_output="42",
+    )
+    assert usage_sdk.prompt_tokens == 25
+    assert usage_sdk.completion_tokens == 326
+    assert usage_sdk.total_tokens == 351
+    assert usage_sdk.completion_tokens_details is not None
+    assert usage_sdk.completion_tokens_details.reasoning_tokens == 326
+
+    chunk_dict = {
+        "id": "chatcmpl-reasoning-dict",
+        "model": "gpt-4o",
+        "choices": [{"finish_reason": "stop", "index": 0, "delta": {"content": "42"}}],
+        "usage": {
+            "prompt_tokens": 25,
+            "completion_tokens": 326,
+            "total_tokens": 351,
+            "completion_tokens_details": {"reasoning_tokens": 326},
+        },
+    }
+    processor_dict = ChunkProcessor(chunks=[chunk_dict])
+    usage_dict = processor_dict.calculate_usage(
+        chunks=[chunk_dict],
+        model="gpt-4o",
+        completion_output="42",
+    )
+    assert usage_dict.prompt_tokens == 25
+    assert usage_dict.completion_tokens == 326
+    assert usage_dict.total_tokens == 351
+    assert usage_dict.completion_tokens_details is not None
+    assert usage_dict.completion_tokens_details.reasoning_tokens == 326
+
+    chunk_under = ModelResponseStream(
+        id="chatcmpl-reasoning-under",
+        model="gpt-4o",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="hi"))],
+        usage=Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            completion_tokens_details={"reasoning_tokens": 50},
+        ),
+    )
+    usage_under = ChunkProcessor(chunks=[chunk_under]).calculate_usage(
+        chunks=[chunk_under],
+        model="gpt-4o",
+        completion_output="hi",
+    )
+    assert usage_under.completion_tokens >= 50
+    assert usage_under.total_tokens == usage_under.prompt_tokens + usage_under.completion_tokens
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+    )
+    mock_chunk_dict = ModelResponseStream(
+        id="chatcmpl-dict-usage",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="hi"))],
+    )
+    mock_chunk_dict.usage = {
+        "prompt_tokens": 25,
+        "completion_tokens": 326,
+        "total_tokens": 351,
+        "completion_tokens_details": {"reasoning_tokens": 326},
+    }
+    parsed_response_dict = wrapper.chunk_creator(mock_chunk_dict)
+    assert parsed_response_dict.usage is not None
+    assert parsed_response_dict.usage.completion_tokens_details is not None
+    assert parsed_response_dict.usage.completion_tokens_details.reasoning_tokens == 326
+
+    mock_chunk_sdk = ModelResponseStream(
+        id="chatcmpl-sdk-usage",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="hi"))],
+    )
+    mock_chunk_sdk.usage = CompletionUsage(
+        prompt_tokens=25,
+        completion_tokens=326,
+        total_tokens=351,
+        completion_tokens_details=CompletionTokensDetails(reasoning_tokens=326),
+    )
+    parsed_response_sdk = wrapper.chunk_creator(mock_chunk_sdk)
+    assert parsed_response_sdk.usage is not None
+    assert parsed_response_sdk.usage.completion_tokens_details is not None
+    assert parsed_response_sdk.usage.completion_tokens_details.reasoning_tokens == 326
