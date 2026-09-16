@@ -15,10 +15,15 @@ Layout on one port:
 - ``GET  /health``                      liveness
 - ``POST /_scenarios``                  register a Scenario JSON, returns its id
 - ``DELETE /_scenarios/<id>``           remove it
+- ``POST /_oauth/token``              fake Google OAuth token endpoint for the
+  Vertex service-account credential's refresh call
 - ``POST /<id>/<mount>/<provider path>`` provider wire; mount is one of
-  ``openai``, ``anthropic``, ``gemini``, ``together``, ``fireworks`` and the
-  remainder is whatever path the provider client appends (``chat/completions``,
-  ``responses``, ``v1/messages``, ``models/<m>:generateContent`` ...)
+  ``openai``, ``anthropic``, ``gemini``, ``together``, ``fireworks``, ``azure``,
+  ``bedrock``, ``vertex`` and the remainder is whatever path the provider
+  client appends (``chat/completions``, ``responses``, ``v1/messages``,
+  ``models/<m>:generateContent`` ...). Vertex appends ``:generateContent`` /
+  ``:streamGenerateContent`` to the mount segment itself, and Bedrock Converse
+  targets ``model/<modelId>/converse`` / ``converse-stream``
 
 A request carrying ``"stream": true`` (or the ``:streamGenerateContent`` Gemini
 verb) gets an SSE answer; ``stream_usage`` on the Scenario decides whether the
@@ -28,15 +33,17 @@ final stream chunk carries usage or the provider reports none.
 from __future__ import annotations
 
 import json
+import struct
 import sys
 import threading
 import time
+import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, model_validator
 
@@ -47,6 +54,9 @@ Wire: TypeAlias = Literal[
     "gemini_generate",
     "together_chat",
     "fireworks_chat",
+    "azure_chat",
+    "bedrock_converse",
+    "vertex_generate",
 ]
 
 WIRE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
@@ -57,6 +67,9 @@ WIRE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
         "gemini_generate": "gemini",
         "together_chat": "together",
         "fireworks_chat": "fireworks",
+        "azure_chat": "azure",
+        "bedrock_converse": "bedrock",
+        "vertex_generate": "vertex",
     }
 )
 
@@ -69,6 +82,7 @@ _TERMINAL_CAPS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     {
         "openai_responses": frozenset({"incomplete", "unvalidated"}),
         "gemini_generate": frozenset({"prompt_blocked"}),
+        "vertex_generate": frozenset({"prompt_blocked"}),
     }
 )
 
@@ -131,6 +145,10 @@ class Scenario(BaseModel):
     wire: Wire
     usage: ScriptedUsage
     output: ScriptedOutput
+    # The bare provider-facing model name the renderer echoes when the request
+    # carries no model of its own (Vertex and Bedrock name the model in the URL
+    # path, not the body).
+    model: str
     stream_usage: StreamUsage = "final_chunk"
     service_tier: ServiceTier | None = None
 
@@ -904,7 +922,208 @@ def _responses_sse(scenario: Scenario, requested_model: str) -> bytes:
     )
 
 
-def _render(scenario: Scenario, *, stream: bool, requested_model: str) -> RenderedResponse:
+def _bedrock_usage(u: ScriptedUsage) -> Mapping[str, object]:
+    # Converse reports uncached input in inputTokens and rides cache reads and
+    # writes on top-level fields; totalTokens covers every input kind + output.
+    cache_writes: Final = u.cache_write_5m_tokens + u.cache_write_1h_tokens
+    return _jobj_opt(
+        ("inputTokens", u.fresh_input_tokens),
+        ("outputTokens", u.output_tokens),
+        (
+            "totalTokens",
+            u.fresh_input_tokens + u.cache_read_tokens + cache_writes + u.output_tokens,
+        ),
+        ("cacheReadInputTokens", u.cache_read_tokens) if u.cache_read_tokens else None,
+        ("cacheWriteInputTokens", cache_writes) if cache_writes else None,
+        (
+            (
+                "cacheDetails",
+                tuple(
+                    _jobj(("inputTokens", count), ("ttl", ttl))
+                    for count, ttl in (
+                        (u.cache_write_5m_tokens, "5m"),
+                        (u.cache_write_1h_tokens, "1h"),
+                    )
+                    if count
+                ),
+            )
+            if cache_writes
+            else None
+        ),
+    )
+
+
+def _bedrock_stop_reason(scenario: Scenario) -> str:
+    if scenario.output.tool_call is not None:
+        return "tool_use"
+    return "end_turn" if scenario.output.finish_reason == "stop" else scenario.output.finish_reason
+
+
+def _bedrock_content(scenario: Scenario) -> tuple[Mapping[str, object], ...]:
+    tool_call: Final = scenario.output.tool_call
+    if tool_call is not None:
+        return (
+            _jobj(
+                (
+                    "toolUse",
+                    _jobj(
+                        ("toolUseId", f"tooluse_{scenario.scenario_id}"),
+                        ("name", tool_call.name),
+                        ("input", json.loads(tool_call.arguments)),
+                    ),
+                ),
+            ),
+        )
+    return (_jobj(("text", scenario.output.text)),)
+
+
+def _bedrock_body(scenario: Scenario) -> Mapping[str, object]:
+    return _jobj(
+        (
+            "output",
+            _jobj(
+                (
+                    "message",
+                    _jobj(
+                        ("role", "assistant"),
+                        ("content", _bedrock_content(scenario)),
+                    ),
+                ),
+            ),
+        ),
+        ("stopReason", _bedrock_stop_reason(scenario)),
+        ("usage", _bedrock_usage(scenario.usage)),
+        ("metrics", _jobj(("latencyMs", 42))),
+    )
+
+
+def _aws_event_frame(event_type: str, payload: Mapping[str, object]) -> bytes:
+    """One application/vnd.amazon.eventstream frame: prelude + prelude CRC32 +
+    headers + JSON payload + message CRC32, matching botocore EventStreamBuffer."""
+    try:
+        from botocore.eventstream import crc32 as _crc32
+    except ImportError:
+        _crc32 = zlib.crc32
+
+    def _str_header(name: str, value: str) -> bytes:
+        name_b: Final = name.encode()
+        value_b: Final = value.encode()
+        return (
+            struct.pack("!B", len(name_b))
+            + name_b
+            + struct.pack("!B", 7)
+            + struct.pack("!H", len(value_b))
+            + value_b
+        )
+
+    payload_bytes: Final = json.dumps(payload, default=dict, separators=(",", ":")).encode()
+    headers_bytes: Final = (
+        _str_header(":event-type", event_type)
+        + _str_header(":content-type", "application/json")
+        + _str_header(":message-type", "event")
+    )
+    total_length: Final = 12 + len(headers_bytes) + len(payload_bytes) + 4
+    prelude: Final = struct.pack("!II", total_length, len(headers_bytes))
+    prelude_crc: Final = struct.pack("!I", _crc32(prelude) & 0xFFFFFFFF)
+    message: Final = prelude + prelude_crc + headers_bytes + payload_bytes
+    return message + struct.pack("!I", _crc32(message, 0) & 0xFFFFFFFF)
+
+
+def _bedrock_eventstream(scenario: Scenario) -> bytes:
+    tool_call: Final = scenario.output.tool_call
+    block_start: Final[tuple[bytes, ...]] = (
+        (
+            _aws_event_frame(
+                "contentBlockStart",
+                _jobj(
+                    (
+                        "start",
+                        _jobj(
+                            (
+                                "toolUse",
+                                _jobj(
+                                    ("toolUseId", f"tooluse_{scenario.scenario_id}"),
+                                    ("name", tool_call.name),
+                                ),
+                            ),
+                        ),
+                    ),
+                    ("contentBlockIndex", 0),
+                ),
+            ),
+        )
+        if tool_call is not None
+        else ()
+    )
+    deltas: Final[tuple[bytes, ...]] = (
+        tuple(
+            _aws_event_frame(
+                "contentBlockDelta",
+                _jobj(
+                    ("delta", _jobj(("toolUse", _jobj(("input", arguments_slice))))),
+                    ("contentBlockIndex", 0),
+                ),
+            )
+            for arguments_slice in _split_arguments(tool_call.arguments)
+        )
+        if tool_call is not None
+        else (
+            _aws_event_frame(
+                "contentBlockDelta",
+                _jobj(
+                    ("delta", _jobj(("text", scenario.output.text))),
+                    ("contentBlockIndex", 0),
+                ),
+            ),
+        )
+    )
+    return b"".join(
+        (
+            _aws_event_frame("messageStart", _jobj(("role", "assistant"))),
+            *block_start,
+            *deltas,
+            _aws_event_frame("contentBlockStop", _jobj(("contentBlockIndex", 0))),
+            _aws_event_frame("messageStop", _jobj(("stopReason", _bedrock_stop_reason(scenario)))),
+            *(
+                (
+                    _aws_event_frame(
+                        "metadata",
+                        _jobj(
+                            ("usage", _bedrock_usage(scenario.usage)),
+                            ("metrics", _jobj(("latencyMs", 42))),
+                        ),
+                    ),
+                )
+                if scenario.stream_usage == "final_chunk"
+                else ()
+            ),
+        )
+    )
+
+
+def _render(
+    scenario: Scenario, *, stream: bool, requested_model: str, path_tail: str
+) -> RenderedResponse:
+    # Azure bridges gpt-5.4+ chat requests carrying function tools onto the
+    # Responses API, which lands on the same mount at openai/responses.
+    if scenario.wire == "azure_chat" and path_tail.endswith("openai/responses"):
+        if stream:
+            return RenderedResponse(
+                200, "text/event-stream", _responses_sse(scenario, requested_model)
+            )
+        return RenderedResponse(
+            200, "application/json", _json_bytes(_responses_body(scenario, requested_model))
+        )
+    if scenario.wire == "bedrock_converse":
+        if stream:
+            return RenderedResponse(
+                200, "application/vnd.amazon.eventstream", _bedrock_eventstream(scenario)
+            )
+        return RenderedResponse(200, "application/json", _json_bytes(_bedrock_body(scenario)))
+    if scenario.wire == "vertex_generate":
+        if stream:
+            return RenderedResponse(200, "text/event-stream", _gemini_sse(scenario, requested_model))
+        return RenderedResponse(200, "application/json", _json_bytes(_gemini_body(scenario, requested_model)))
     if scenario.wire == "anthropic_messages":
         if stream:
             return RenderedResponse(200, "text/event-stream", _anthropic_sse(scenario, requested_model))
@@ -917,7 +1136,8 @@ def _render(scenario: Scenario, *, stream: bool, requested_model: str) -> Render
         if stream:
             return RenderedResponse(200, "text/event-stream", _responses_sse(scenario, requested_model))
         return RenderedResponse(200, "application/json", _json_bytes(_responses_body(scenario, requested_model)))
-    # openai_chat, together_chat, fireworks_chat share the OpenAI chat shape.
+    # openai_chat, together_chat, fireworks_chat and azure_chat share the
+    # OpenAI chat shape.
     if stream:
         return RenderedResponse(200, "text/event-stream", _openai_chat_sse(scenario, requested_model))
     return RenderedResponse(200, "application/json", _json_bytes(_openai_chat_body(scenario, requested_model)))
@@ -954,17 +1174,28 @@ def _request_body(body: bytes) -> Mapping[str, object]:
         return MappingProxyType({})
 
 
-def _request_wants_stream(path_tail: str, body: bytes) -> bool:
-    if ":streamGenerateContent" in path_tail:
+def _request_wants_stream(mount_endpoint: str | None, path_tail: str, body: bytes) -> bool:
+    if mount_endpoint == "streamGenerateContent" or ":streamGenerateContent" in path_tail:
+        return True
+    if path_tail.endswith("converse-stream"):
         return True
     if not body:
         return False
     return _request_body(body).get("stream") is True
 
 
-def _request_model(body: bytes) -> str:
+def _request_model(body: bytes, path_tail: str, scenario: Scenario) -> str:
     model: Final = _request_body(body).get("model")
-    return model if isinstance(model, str) else "unknown"
+    if isinstance(model, str):
+        return model
+    # Bedrock Converse names the model in the path: model/<modelId>/converse[-stream].
+    if path_tail.startswith("model/"):
+        path_model: Final = path_tail.split("/", 2)[1] if path_tail.count("/") >= 2 else ""
+        if path_model:
+            return unquote(path_model)
+    # Vertex names it in the URL too, but the mount segment swallowed it when
+    # the api_base carried a path; fall back to the scenario's declared model.
+    return scenario.model
 
 
 def handle_request(store: _ScenarioStore, method: str, raw_path: str, body: bytes) -> RenderedResponse:
@@ -972,6 +1203,22 @@ def handle_request(store: _ScenarioStore, method: str, raw_path: str, body: byte
     segments: Final = tuple(segment for segment in path.split("/") if segment)
     if method == "GET" and segments == ("health",):
         return RenderedResponse(200, "application/json", _json_bytes(_jobj(("status", "ok"))))
+    if segments and segments[0] == "_oauth":
+        if method == "POST" and segments == ("_oauth", "token"):
+            return RenderedResponse(
+                200,
+                "application/json",
+                _json_bytes(
+                    _jobj(
+                        ("access_token", "scripted-token"),
+                        ("token_type", "Bearer"),
+                        ("expires_in", 3600),
+                    )
+                ),
+            )
+        return RenderedResponse(
+            404, "application/json", _json_bytes(_jobj(("error", "unknown control route")))
+        )
     if segments and segments[0] == "_scenarios":
         if method == "POST" and len(segments) == 1:
             try:
@@ -998,7 +1245,15 @@ def handle_request(store: _ScenarioStore, method: str, raw_path: str, body: byte
         return RenderedResponse(
             404, "application/json", _json_bytes(_jobj(("error", f"no route for {method} {path}")))
         )
-    scenario_id, mount = segments[0], segments[1]
+    scenario_id: Final = segments[0]
+    # Vertex builds {api_base}:{endpoint}, so the mount segment can carry a
+    # :generateContent / :streamGenerateContent suffix.
+    mount_segment: Final = segments[1]
+    mount, mount_endpoint = (
+        mount_segment.split(":", 1)
+        if ":" in mount_segment
+        else (mount_segment, None)
+    )
     found: Final = store.get(scenario_id)
     if found is None:
         return RenderedResponse(
@@ -1013,7 +1268,12 @@ def handle_request(store: _ScenarioStore, method: str, raw_path: str, body: byte
             ),
         )
     tail: Final = "/".join(segments[2:])
-    return _render(found, stream=_request_wants_stream(tail, body), requested_model=_request_model(body))
+    return _render(
+        found,
+        stream=_request_wants_stream(mount_endpoint, tail, body),
+        requested_model=_request_model(body, tail, found),
+        path_tail=tail,
+    )
 
 
 class _ScriptedHandler(BaseHTTPRequestHandler):

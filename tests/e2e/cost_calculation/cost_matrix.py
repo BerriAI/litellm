@@ -88,7 +88,14 @@ class FrontierModel:
     litellm_model: str
     wire: Wire
     map_key: str
-    override_model: str
+    override_model: str | None = None
+    override_map_key: str | None = None
+    # Registered as model_info.base_model; when set, the provider-reported
+    # model loses to it and every case bills at this deployment's own rates.
+    base_model: str | None = None
+    # Extra litellm_params merged into the /model/new registration (api_version,
+    # aws_* credentials, vertex_* auth).
+    litellm_params: Mapping[str, str] = MappingProxyType({})
 
     @property
     def rates(self) -> CostMapEntry:
@@ -96,11 +103,16 @@ class FrontierModel:
 
     @property
     def override_rates(self) -> CostMapEntry:
+        if self.base_model is not None or self.override_map_key is None:
+            return self.rates
         return _COST_MAP[self.override_map_key]
 
     @property
-    def override_map_key(self) -> str:
-        return _OVERRIDE_MAP_KEYS[self.override_model]
+    def provider_model(self) -> str:
+        """The bare provider-facing model name: litellm_model minus the provider
+        prefix and any routing segment (converse/, responses/)."""
+        tail: Final = self.litellm_model.split("/")[1:]
+        return "/".join(tail[1:] if tail and tail[0] in ("converse", "responses") else tail)
 
     @property
     def provider(self) -> str:
@@ -166,6 +178,92 @@ _FRONTIER_SPECS: Final[tuple[tuple[str, str, Wire], ...]] = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _ExtendedSpec:
+    """A frontier entry whose override target, model_info.base_model or extra
+    litellm_params can't be derived from the map key alone."""
+
+    map_key: str
+    litellm_model: str
+    wire: Wire
+    override_model: str | None = None
+    override_map_key: str | None = None
+    base_model: str | None = None
+    litellm_params: Mapping[str, str] = MappingProxyType({})
+
+
+_AZURE_PARAMS: Final[Mapping[str, str]] = MappingProxyType({"api_version": "2025-04-01-preview"})
+_BEDROCK_PARAMS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "aws_access_key_id": "AKIASCRIPTEDPROVIDER",
+        "aws_secret_access_key": "scripted-secret",
+        "aws_region_name": "us-east-1",
+    }
+)
+_VERTEX_PARAMS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "vertex_project": "cc-scripted-project",
+        "vertex_location": "us-central1",
+    }
+)
+
+_EXTENDED_SPECS: Final[tuple[_ExtendedSpec, ...]] = (
+    _ExtendedSpec(
+        map_key="azure/gpt-5.6",
+        litellm_model="azure/gpt-5.6",
+        wire="azure_chat",
+        override_model="gpt-5.4-mini",
+        override_map_key="azure/gpt-5.4-mini",
+        litellm_params=_AZURE_PARAMS,
+    ),
+    _ExtendedSpec(
+        # Deployment name is not a model; base_model pins billing so the
+        # response's model field loses, proving base_model wins.
+        map_key="azure/gpt-5.4-mini",
+        litellm_model="azure/cc-pinned-deployment",
+        wire="azure_chat",
+        override_model="gpt-5.6",
+        override_map_key="azure/gpt-5.6",
+        base_model="azure/gpt-5.4-mini",
+        litellm_params=_AZURE_PARAMS,
+    ),
+    _ExtendedSpec(
+        map_key="anthropic.claude-sonnet-5-v1:0",
+        litellm_model="bedrock/converse/anthropic.claude-sonnet-5-v1:0",
+        wire="bedrock_converse",
+        litellm_params=_BEDROCK_PARAMS,
+    ),
+    _ExtendedSpec(
+        map_key="us.anthropic.claude-opus-5-v1:0",
+        litellm_model="bedrock/converse/us.anthropic.claude-opus-5-v1:0",
+        wire="bedrock_converse",
+        litellm_params=_BEDROCK_PARAMS,
+    ),
+    _ExtendedSpec(
+        map_key="meta.llama4-maverick-17b-instruct-v1:0",
+        litellm_model="bedrock/converse/meta.llama4-maverick-17b-instruct-v1:0",
+        wire="bedrock_converse",
+        litellm_params=_BEDROCK_PARAMS,
+    ),
+    _ExtendedSpec(
+        map_key="gemini-3.8-flash",
+        litellm_model="vertex_ai/gemini-3.8-flash",
+        wire="vertex_generate",
+        override_model="gemini-3.1-pro-preview",
+        override_map_key="gemini-3.1-pro-preview",
+        litellm_params=_VERTEX_PARAMS,
+    ),
+    _ExtendedSpec(
+        map_key="gemini-3.1-pro-preview",
+        litellm_model="vertex_ai/gemini-3.1-pro-preview",
+        wire="vertex_generate",
+        override_model="gemini-3.8-flash",
+        override_map_key="gemini-3.8-flash",
+        litellm_params=_VERTEX_PARAMS,
+    ),
+)
+
+
 def _frontier() -> tuple[FrontierModel, ...]:
     return tuple(
         FrontierModel(
@@ -174,8 +272,21 @@ def _frontier() -> tuple[FrontierModel, ...]:
             wire=wire,
             map_key=map_key,
             override_model=_OVERRIDE_MODELS[map_key],
+            override_map_key=_OVERRIDE_MAP_KEYS[_OVERRIDE_MODELS[map_key]],
         )
         for map_key, litellm_model, wire in _FRONTIER_SPECS
+    ) + tuple(
+        FrontierModel(
+            model_name=f"cc-{spec.map_key.replace('/', '-').replace(':', '-').replace('.', '-').lower()}",
+            litellm_model=spec.litellm_model,
+            wire=spec.wire,
+            map_key=spec.map_key,
+            override_model=spec.override_model,
+            override_map_key=spec.override_map_key,
+            base_model=spec.base_model,
+            litellm_params=spec.litellm_params,
+        )
+        for spec in _EXTENDED_SPECS
     )
 
 
@@ -217,6 +328,24 @@ _WIRE_CAPS: Final[Mapping[str, frozenset[str]]] = MappingProxyType({
         {
             "cache_read", "cache_write_5m", "cache_write_1h", "reasoning", "audio",
             "web_search", "response_model", "absent_usage", "tool_call", "image_input",
+        }
+    ),
+    "azure_chat": frozenset(
+        {
+            "cache_read", "cache_write_5m", "cache_write_1h", "reasoning", "audio",
+            "web_search", "response_model", "absent_usage", "tool_call", "image_input",
+        }
+    ),
+    "bedrock_converse": frozenset(
+        {
+            "cache_read", "cache_write_5m", "cache_write_1h", "absent_usage",
+            "tool_call", "image_input",
+        }
+    ),
+    "vertex_generate": frozenset(
+        {
+            "cache_read", "reasoning", "audio", "web_search", "response_model",
+            "absent_usage", "tool_call", "image_input", "prompt_blocked",
         }
     ),
 })
@@ -270,6 +399,7 @@ class Case:
             scenario_id=scenario_id,
             wire=model.wire,
             usage=self.usage,
+            model=model.provider_model,
             output=ScriptedOutput(
                 text=text,
                 response_model=model.override_model if self.response_model_override else None,
@@ -296,7 +426,9 @@ _PROMPT_BLOCKED_USAGE: Final = ScriptedUsage(fresh_input_tokens=1000, output_tok
 
 
 def _web_search_case(model: FrontierModel) -> Case:
-    counts_exactly: Final = model.wire in ("openai_responses", "anthropic_messages", "gemini_generate")
+    counts_exactly: Final = model.wire in (
+        "openai_responses", "anthropic_messages", "gemini_generate", "vertex_generate"
+    )
     return Case(
         name="web_search",
         usage=ScriptedUsage(fresh_input_tokens=100, output_tokens=30, web_search_calls=3),
@@ -611,12 +743,12 @@ def expected_token_columns(model: FrontierModel, case: Case) -> tuple[int, int]:
     wire's normalization: Anthropic folds cache read/write into prompt_tokens,
     everyone else reports the totals the wire emitted."""
     u: Final = case.usage
-    if model.wire == "anthropic_messages":
+    if model.wire in ("anthropic_messages", "bedrock_converse"):
         return (
             u.fresh_input_tokens + u.cache_read_tokens + u.cache_write_5m_tokens + u.cache_write_1h_tokens,
             u.output_tokens,
         )
-    if model.wire == "gemini_generate":
+    if model.wire in ("gemini_generate", "vertex_generate"):
         return (
             u.fresh_input_tokens + u.cache_read_tokens + u.audio_input_tokens,
             u.output_tokens + u.reasoning_tokens + u.audio_output_tokens,
