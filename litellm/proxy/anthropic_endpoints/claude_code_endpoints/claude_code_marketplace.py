@@ -160,9 +160,10 @@ async def get_marketplace(request: Request, key: str | None = None):
                 entry["keywords"] = manifest["keywords"]
             if "category" in manifest:
                 entry["category"] = manifest["category"]
-            installation_preference: Final[str | None] = _get_manifest_string(manifest, "installation_preference")
-            if installation_preference is not None:
-                entry["installationPreference"] = installation_preference
+            if (installation_preference := _get_manifest_string(manifest, "installation_preference")) is not None:
+                entry["installationPreference"] = (  # pyright: ignore[reportTypedDictNotRequiredAccess]  # assembled incrementally
+                    installation_preference
+                )
 
             plugin_list.append(entry)
 
