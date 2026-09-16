@@ -21,7 +21,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Annotated, Final, Protocol, TypedDict, cast
+from typing import Annotated, Final, Protocol, TypedDict
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -71,6 +71,11 @@ class _MarketplaceEntry(TypedDict, total=False):
     keywords: object
     category: object
     installationPreference: str
+
+
+def _get_manifest_string(manifest: Mapping[str, object], key: str) -> str | None:
+    value: Final = manifest.get(key)
+    return value if isinstance(value, str) else None
 
 
 async def _get_prisma_client() -> object:
@@ -154,8 +159,9 @@ async def get_marketplace(request: Request, key: str | None = None):
                 entry["keywords"] = manifest["keywords"]
             if "category" in manifest:
                 entry["category"] = manifest["category"]
-            if "installation_preference" in manifest:
-                entry["installationPreference"] = cast(str, manifest["installation_preference"])
+            installation_preference: Final[str | None] = _get_manifest_string(manifest, "installation_preference")
+            if installation_preference is not None:
+                entry["installationPreference"] = installation_preference
 
             plugin_list.append(entry)
 
@@ -439,10 +445,7 @@ async def list_plugins(
                     category=manifest.get("category"),
                     domain=manifest.get("domain"),
                     namespace=manifest.get("namespace"),
-                    installation_preference=cast(
-                        str | None,
-                        cast(Mapping[str, object], manifest).get("installation_preference"),
-                    ),
+                    installation_preference=_get_manifest_string(manifest, "installation_preference"),
                     enabled=p.enabled,
                     created_at=p.created_at.isoformat() if p.created_at else None,
                     updated_at=p.updated_at.isoformat() if p.updated_at else None,
