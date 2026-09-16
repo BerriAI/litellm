@@ -7,8 +7,10 @@ import pytest
 
 pytest.importorskip("opentelemetry")
 
-from opentelemetry.sdk.trace import SpanLimits  # noqa: E402
-from opentelemetry.trace import SpanKind  # noqa: E402
+from opentelemetry.sdk.trace import SpanLimits, TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
+from opentelemetry.trace import NoOpTracer, SpanKind  # noqa: E402
 from opentelemetry.trace.status import StatusCode  # noqa: E402
 
 from litellm.integrations.otel import (  # noqa: E402
@@ -18,7 +20,7 @@ from litellm.integrations.otel import (  # noqa: E402
 )
 from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
-from litellm.integrations.otel.emitter import SpanEmitter  # noqa: E402
+from litellm.integrations.otel.emitter import SpanEmitter, span_attribute_limit  # noqa: E402
 from litellm.integrations.otel.emitter import stamp_error  # noqa: E402
 from litellm.integrations.otel.mappers.utils import MAX_TOOL_DEFINITION_ATTRS_PER_SPAN  # noqa: E402
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
@@ -439,15 +441,19 @@ def _conversation_payload(turns, choices=1, **overrides):
     )
 
 
-def _conversation_span(mapper_names, payload, legacy_compat=False):
-    """The exported LLM-call span for ``payload`` with content capture on."""
+def _conversation_span(mapper_names, payload, legacy_compat=False, span_limits=None):
+    """The exported LLM-call span for ``payload`` with content capture on.
+
+    ``span_limits`` builds the provider with programmatic limits instead of the environment's."""
     cfg = OpenTelemetryV2Config(
         exporter="in_memory",
         legacy_compat=legacy_compat,
         mapper_names=list(mapper_names),
         capture_message_content="span_only",
     )
-    provider, exporter = providers.in_memory_provider(cfg)
+    provider, exporter = (
+        providers.in_memory_provider(cfg) if span_limits is None else _provider_with_limits(span_limits)
+    )
     engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
     engine.emit(
         SpanRole.LLM_CALL,
@@ -455,6 +461,13 @@ def _conversation_span(mapper_names, payload, legacy_compat=False):
     )
     (span,) = exporter.get_finished_spans()
     return span
+
+
+def _provider_with_limits(span_limits):
+    provider = TracerProvider(span_limits=span_limits)
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider, exporter
 
 
 def _indexed_messages(attributes, prefix):
@@ -617,13 +630,41 @@ def test_error_and_pre_stamped_attributes_keep_their_room_on_a_long_conversation
     a = s.attributes
 
     assert s.dropped_attributes == 0
-    assert len(a) <= SpanLimits().max_span_attributes
+    assert SpanLimits().max_span_attributes - 1 <= len(a) <= SpanLimits().max_span_attributes
     assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
     assert a["litellm.metadata.baggage_0"] == "value 0"
     assert a["error.type"] == "RateLimitError"
     assert a["litellm.provider.error.stack_trace"] == "tb"
     assert a["llm.input_messages.0.message.content"] == "turn 0"
     assert a["llm.input_messages.59.message.content"] == "turn 59"
+
+
+def test_indexed_messages_follow_the_providers_own_span_limits(monkeypatch):
+    """A provider built with programmatic ``SpanLimits`` sets the budget, whatever the environment says."""
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "1000")
+    span = _conversation_span(
+        ["genai", "openinference"], _conversation_payload(60), span_limits=SpanLimits(max_span_attributes=40)
+    )
+    _assert_core_intact(span)
+    a = span.attributes
+    assert 39 <= len(a) <= 40
+    assert a["llm.input_messages.0.message.content"] == "turn 0"
+    assert a["llm.input_messages.59.message.content"] == "turn 59"
+    assert a["llm.output_messages.0.message.content"] == "reply 0"
+
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "48")
+    unbounded = _conversation_span(
+        ["genai", "openinference"],
+        _conversation_payload(60),
+        span_limits=SpanLimits(max_span_attributes=SpanLimits.UNSET),
+    )
+    _assert_core_intact(unbounded)
+    assert _indexed_messages(unbounded.attributes, "llm.input_messages") == list(range(60))
+
+
+def test_span_attribute_limit_falls_back_to_the_environment_for_tracers_outside_the_sdk(monkeypatch):
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "48")
+    assert span_attribute_limit(NoOpTracer()) == 48
 
 
 def test_fully_populated_span_with_every_vocabulary_stays_within_the_attribute_limit():

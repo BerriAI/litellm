@@ -7,6 +7,7 @@ from typing import Final
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, SpanLimits
+from opentelemetry.sdk.trace import Tracer as SdkTracer
 from opentelemetry.trace import Link, Span, Tracer
 from opentelemetry.trace.status import Status, StatusCode
 
@@ -83,6 +84,13 @@ def error_attributes(error: SpanError) -> Mapping[str, AttrValue]:
     return MappingProxyType({key: value for key, value in pairs if value})
 
 
+def span_attribute_limit(tracer: Tracer) -> int | None:
+    """The attribute count limit spans started by ``tracer`` are built with, ``None`` when unbounded."""
+    if not isinstance(tracer, SdkTracer):
+        return SpanLimits().max_span_attributes
+    return tracer._span_limits.max_span_attributes  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
+
+
 def stamp_error(
     span: Span,
     error: SpanError,
@@ -126,14 +134,11 @@ class SpanEmitter:
         config: OpenTelemetryV2Config,
         mappers: Sequence[AttributeMapper] | None = None,
         event_recorder: GenAIEventRecorder | None = None,
-        span_attribute_limit: int | None = None,
     ) -> None:
         self._tracer = tracer
         self._config = config
         self._event_recorder = event_recorder
-        self._span_attribute_limit: int | None = (
-            SpanLimits().max_span_attributes if span_attribute_limit is None else span_attribute_limit
-        )
+        self._span_attribute_limit: int | None = span_attribute_limit(tracer)
         # The mapper chain is the sole source of span attributes. When not
         # passed in, resolve it from the config so there's one source of truth.
         self._mappers: list[AttributeMapper] = (
@@ -269,7 +274,8 @@ class SpanEmitter:
         mapped: Final = MappingProxyType(
             {key: value for mapper in self._mappers for key, value in mapper.map(data).items()}
         )
-        reserved: Final = len(error_attributes(error)) if error else 0
+        stamped_later: Final = error_attributes(error) if error else _NO_ATTRIBUTES
+        reserved: Final = len(stamped_later.keys() - mapped.keys())
         for key, value in fit_indexed_messages(mapped, self._attribute_budget(span, reserved)).items():
             span.set_attribute(key, value)
         if error:
