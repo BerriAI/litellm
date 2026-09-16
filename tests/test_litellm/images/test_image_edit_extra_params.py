@@ -122,7 +122,7 @@ def test_image_edit_forwards_scalar_array_as_repeated_fields():
 
 
 @pytest.mark.parametrize("drop_params", [True, False])
-def test_image_edit_strips_per_model_drop_params_from_multipart(drop_params):
+def test_image_edit_strips_per_model_drop_params_from_multipart(drop_params: bool):
     """Per-model drop_params / additional_drop_params are LiteLLM control
     flags. If they survive into non_default_params they are flattened onto the
     OpenAI images/edits multipart body and the provider rejects the call with
