@@ -1,4 +1,5 @@
 pub mod audio_transcription;
+pub mod call_arguments;
 pub mod call_lifecycle;
 pub mod chat_completions;
 pub mod constants;

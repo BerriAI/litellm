@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use super::OcrArguments;
 use super::types::{LiteLLMOcrRequest, OcrConnection, OcrDocument};
+use crate::call_arguments::{ArgumentSpec, CallArguments};
 use litellm_auth::InputSource;
 use serde::{
     Deserialize,
@@ -11,6 +11,7 @@ use serde::{
 use serde_json::{Map, Value};
 
 const COMMON_OPTION_FIELDS: &[&str] = &["req_format", "extra_body", "max_response_bytes"];
+pub const BOUND_FIELDS: &[&str] = &["model", "document", "timeout", "input_sources"];
 const AZURE_AUTH_OPTION_FIELDS: &[&str] = &[
     "azure_ad_token",
     "tenant_id",
@@ -31,12 +32,6 @@ const VERTEX_AUTH_OPTION_FIELDS: &[&str] = &[
     "vertex_ai_location",
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct OptionalParamSpec {
-    pub name: &'static str,
-    pub secret: bool,
-}
-
 #[derive(Debug)]
 pub struct DecodedOcrResponse<T> {
     pub data: T,
@@ -54,7 +49,7 @@ pub struct OcrWireRequest {
     pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     #[serde(default)]
-    pub optional_params: OcrArguments,
+    pub optional_params: CallArguments,
     #[serde(default)]
     pub input_sources: BTreeMap<String, InputSource>,
     pub timeout_seconds: Option<f64>,
@@ -91,11 +86,11 @@ pub fn consumed_optional_param_names(
 pub fn consumed_optional_params(
     model: &str,
     custom_llm_provider: Option<&str>,
-) -> Result<Vec<OptionalParamSpec>, crate::ocr::Error> {
+) -> Result<Vec<ArgumentSpec>, crate::ocr::Error> {
     consumed_optional_param_names(model, custom_llm_provider).map(|names| {
         names
             .into_iter()
-            .map(|name| OptionalParamSpec {
+            .map(|name| ArgumentSpec {
                 name,
                 secret: matches!(
                     name,
@@ -108,17 +103,6 @@ pub fn consumed_optional_params(
             })
             .collect()
     })
-}
-
-pub fn project_argument(
-    name: &str,
-    consumed: &[OptionalParamSpec],
-    host_fields: &[String],
-) -> bool {
-    consumed.iter().any(|field| field.name == name)
-        || (!host_fields.iter().any(|field| field == name)
-            && !crate::params::is_control_param(name)
-            && !matches!(name, "model" | "document" | "timeout" | "input_sources"))
 }
 
 pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, crate::ocr::Error> {
@@ -269,14 +253,14 @@ mod tests {
     #[test]
     fn core_selects_consumed_values_without_serializing_host_objects() {
         let fields = consumed_optional_params("mistral/model", None).unwrap();
-        let host_fields = vec!["metadata".into(), "callbacks".into(), "id".into()];
-        assert!(project_argument("future_option", &fields, &host_fields));
-        assert!(project_argument("extra_body", &fields, &host_fields));
-        assert!(project_argument("id", &fields, &host_fields));
-        assert!(!project_argument("metadata", &fields, &host_fields));
-        assert!(!project_argument("callbacks", &fields, &host_fields));
-        assert!(!project_argument("api_key", &fields, &host_fields));
-        assert!(!project_argument("document", &fields, &host_fields));
+        use crate::call_arguments::should_project;
+        assert!(should_project("future_option", &fields, BOUND_FIELDS));
+        assert!(should_project("extra_body", &fields, BOUND_FIELDS));
+        assert!(should_project("id", &fields, BOUND_FIELDS));
+        assert!(!should_project("metadata", &fields, BOUND_FIELDS));
+        assert!(!should_project("callbacks", &fields, BOUND_FIELDS));
+        assert!(!should_project("api_key", &fields, BOUND_FIELDS));
+        assert!(!should_project("document", &fields, BOUND_FIELDS));
     }
 
     #[test]

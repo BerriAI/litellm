@@ -90,19 +90,15 @@ pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyRe
 
 pub(crate) fn project_optional_fields(
     kwargs: &Bound<'_, PyDict>,
-    fields: &[litellm_core::ocr::wire::OptionalParamSpec],
+    fields: &[litellm_core::call_arguments::ArgumentSpec],
+    bound_fields: &[&str],
 ) -> PyResult<Map<String, Value>> {
-    let controls: Vec<String> = kwargs
-        .py()
-        .import("litellm.types.utils")?
-        .getattr("all_litellm_params")?
-        .extract()?;
     kwargs
         .iter()
         .map(|(name, value)| Ok((name.extract::<String>()?, value)))
         .filter_map(|entry: PyResult<_>| match entry {
             Ok((name, value))
-                if litellm_core::ocr::wire::project_argument(&name, fields, &controls) =>
+                if litellm_core::call_arguments::should_project(&name, fields, bound_fields) =>
             {
                 Some(from_py(&value).map(|value| (name, value)))
             }

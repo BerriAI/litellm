@@ -29,12 +29,12 @@ pub(super) struct ProjectedOcrCall {
     pub fields: ProjectedOcrFields,
 }
 
-struct OcrArguments<'a, 'py> {
+struct PythonOcrFields<'a, 'py> {
     request: &'a Bound<'py, PyAny>,
     kwargs: &'a Bound<'py, PyDict>,
 }
 
-impl<'py> OcrArguments<'_, 'py> {
+impl<'py> PythonOcrFields<'_, 'py> {
     fn lookup(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
         match self.kwargs.get_item(name)? {
             Some(value) => Ok(value),
@@ -116,7 +116,7 @@ pub(super) fn project_request(
     kwargs: &Bound<'_, PyDict>,
 ) -> PyResult<ProjectedOcrCall> {
     let boundary_request = request.clone().unbind();
-    let arguments = OcrArguments { request, kwargs };
+    let arguments = PythonOcrFields { request, kwargs };
     let model = arguments.model()?;
     let custom_llm_provider = arguments.custom_llm_provider()?;
     let (wire_document, retained_document) =
@@ -124,7 +124,8 @@ pub(super) fn project_request(
     let api_key = arguments.api_key()?;
     let specs = consumed_optional_params(&model, custom_llm_provider.as_deref())
         .map_err(ocr_error_to_pyerr)?;
-    let optional_params = project_optional_fields(kwargs, &specs)?;
+    let optional_params =
+        project_optional_fields(kwargs, &specs, litellm_core::ocr::wire::BOUND_FIELDS)?;
     let input_sources = request_input_sources(
         kwargs,
         optional_params
@@ -191,8 +192,8 @@ mod tests {
     fn arguments<'a, 'py>(
         request: &'a Bound<'py, PyAny>,
         kwargs: &'a Bound<'py, PyDict>,
-    ) -> OcrArguments<'a, 'py> {
-        OcrArguments { request, kwargs }
+    ) -> PythonOcrFields<'a, 'py> {
+        PythonOcrFields { request, kwargs }
     }
 
     fn project_document(

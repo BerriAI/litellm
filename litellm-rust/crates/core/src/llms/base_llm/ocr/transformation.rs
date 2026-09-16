@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::ocr::OcrArguments;
+use crate::call_arguments::{CallArguments, parse_options};
 use crate::ocr::OcrClient;
 use crate::ocr::hooks::OcrHooks;
 use crate::ocr::types::{LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrResponseFormat};
@@ -20,20 +20,14 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
 
     fn map_ocr_params(
         &self,
-        _non_default_params: &OcrArguments,
-        optional_params: &OcrArguments,
-        _model: &str,
-    ) -> Result<OcrArguments, crate::ocr::Error> {
-        Ok(optional_params.clone())
-    }
-
-    fn parse_options(
-        &self,
-        arguments: &OcrArguments,
+        arguments: &CallArguments,
         model: &str,
     ) -> Result<Self::OcrParams, crate::ocr::Error> {
-        self.map_ocr_params(arguments, &OcrArguments::default(), model)?
-            .parse()
+        Ok(parse_options(
+            &arguments
+                .select(self.get_supported_ocr_params(model))
+                .into(),
+        )?)
     }
 
     fn async_transform_ocr_request(

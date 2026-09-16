@@ -3,7 +3,6 @@ use serde_json::Value;
 
 use crate::constants::MISTRAL_OCR_API_BASE;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
-use crate::ocr::OcrArguments;
 use crate::ocr::OcrClient;
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{
@@ -78,17 +77,6 @@ impl BaseOcrConfig for MistralOCRConfig {
         ]
     }
 
-    fn map_ocr_params(
-        &self,
-        non_default_params: &OcrArguments,
-        _optional_params: &OcrArguments,
-        model: &str,
-    ) -> Result<OcrArguments, crate::ocr::Error> {
-        Ok(non_default_params
-            .select(self.get_supported_ocr_params(model))
-            .into())
-    }
-
     async fn async_transform_ocr_request(
         &self,
         model: &str,
@@ -115,7 +103,7 @@ impl MistralOCRConfig {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.parse_options(&request.optional_params, &request.model)?;
+        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
         let headers = self.validate_environment(&request.connection, &credential_env)?;
         let url = self.get_complete_url(request.connection.api_base.as_deref())?;
         let body = self
@@ -275,18 +263,17 @@ mod tests {
     }
 
     #[test]
-    fn parameter_mapping_uses_only_supported_non_default_values() {
+    fn map_ocr_params_selects_known_fields_without_changing_arguments() {
         let input =
             serde_json::from_value(json!({"pages":null,"extract_header":false,"unknown":true}))
                 .unwrap();
-        let supplied = serde_json::from_value(json!({"pages":[9],"extension":true})).unwrap();
-        let params = MistralOCRConfig
-            .map_ocr_params(&input, &supplied, "model")
-            .unwrap();
+        let params = MistralOCRConfig.map_ocr_params(&input, "model").unwrap();
         assert_eq!(
             serde_json::to_value(params).unwrap(),
             json!({"pages":null,"extract_header":false})
         );
+        assert_eq!(input["unknown"], true);
+        assert_eq!(input.get("pages"), Some(&Value::Null));
     }
 
     #[test]
@@ -328,13 +315,8 @@ mod tests {
     }
 
     fn mapped_params(value: Value) -> Value {
-        let params = serde_json::from_value::<OcrArguments>(value).unwrap();
-        serde_json::to_value(
-            MistralOCRConfig
-                .map_ocr_params(&params, &OcrArguments::default(), "model")
-                .unwrap(),
-        )
-        .unwrap()
+        let params = serde_json::from_value(value).unwrap();
+        serde_json::to_value(MistralOCRConfig.map_ocr_params(&params, "model").unwrap()).unwrap()
     }
 
     fn document() -> OcrDocument {
@@ -402,7 +384,7 @@ mod tests {
     }
 
     #[rstest]
-    fn map_ocr_params_filters_unsupported_non_default_params() {
+    fn map_ocr_params_excludes_extensions_from_the_provider_options() {
         let mapped = mapped_params(json!({"extract_header":true,"unsupported_param":"value"}));
         assert_eq!(mapped["extract_header"], true);
         assert!(mapped.get("unsupported_param").is_none());
