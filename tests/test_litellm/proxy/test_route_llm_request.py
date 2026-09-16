@@ -1,10 +1,9 @@
 
-import pytest
-
-
-
+from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock
+
+import pytest
 
 from fastapi import HTTPException
 
@@ -41,6 +40,69 @@ async def test_route_request_dynamic_credentials(route_type, required_body_param
     assert response == "fake_response"
     # Now assert that the dynamic method was called once with the expected kwargs.
     getattr(llm_router, route_type).assert_called_once_with(**data)
+
+
+@pytest.mark.asyncio
+async def test_route_request_distinguishes_dropped_deployments_from_unknown_models():
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "pool",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"},
+            },
+            {
+                "model_name": "live",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "classifier_type": "heuristic_v2",
+                        "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                    },
+                },
+                "model_info": {"id": "id-live"},
+            },
+        ],
+        auto_router_capability_limit=lambda: 1,
+        ignore_invalid_deployments=True,
+    )
+    from litellm.types.router import Deployment
+
+    assert router.upsert_deployment(
+        Deployment(
+            model_name="x",
+            litellm_params={
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "classifier_type": "heuristic_v2",
+                    "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                },
+            },
+            model_info={"id": "id-x"},
+        )
+    ) is None
+    assert "id-x" in router.dropped_deployments
+
+    with pytest.raises(HTTPException) as dropped_error:
+        await route_request(
+            data={"model": "x", "messages": [{"role": "user", "content": "Hello"}]},
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+        )
+    assert dropped_error.value.status_code == 400
+    assert "configured on the proxy but failed to load" in str(dropped_error.value.detail)
+
+    with pytest.raises(HTTPException) as unknown_error:
+        await route_request(
+            data={"model": "unknown", "messages": [{"role": "user", "content": "Hello"}]},
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+        )
+    assert unknown_error.value.status_code == 400
+    assert "Invalid model name" in str(unknown_error.value.detail)
 
 
 @pytest.mark.asyncio
@@ -1146,6 +1208,7 @@ def _db_model_row(model_name: str, mock_response: str):
         litellm_params={"model": "openai/gpt-4o", "api_key": "fake", "mock_response": mock_response},
         model_info={},
         blocked=False,
+        created_at=datetime.min,
     )
 
 

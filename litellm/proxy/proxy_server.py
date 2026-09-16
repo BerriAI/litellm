@@ -26,6 +26,7 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
 from typing import (
@@ -6510,7 +6511,7 @@ class ProxyConfig:
 
         added_models = 0
         ## ADD MODEL LOGIC
-        for m in db_models:
+        for m in sorted(db_models, key=lambda m: (m.created_at or datetime.min, m.model_id)):
             _litellm_params = m.litellm_params
             if isinstance(_litellm_params, dict):
                 # decrypt values
@@ -15060,9 +15061,15 @@ def _get_proxy_model_info(model: dict) -> dict:
     return _translate_model_name_for_response(model)
 
 
-def _model_info_json_response(data: Sequence[Mapping[str, object]] | Mapping[str, object]) -> Response:
+def _model_info_json_response(
+    data: Sequence[Mapping[str, object]] | Mapping[str, object],
+    dropped_deployments: Sequence[Mapping[str, object]] | None = None,
+) -> Response:
+    response_data: Final = (
+        {"data": data} if dropped_deployments is None else {"data": data, "dropped_deployments": dropped_deployments}
+    )
     return Response(
-        content=orjson.dumps({"data": data}, default=jsonable_encoder, option=orjson.OPT_NON_STR_KEYS),
+        content=orjson.dumps(response_data, default=jsonable_encoder, option=orjson.OPT_NON_STR_KEYS),
         media_type="application/json",
     )
 
@@ -15281,7 +15288,12 @@ async def model_info_v1(
     visible_models: Final = [model for model in all_models if model.get("model_name") not in hidden_names]
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
-    return _model_info_json_response(visible_models)
+    dropped_deployments: Final = (
+        [asdict(dropped_deployment) for dropped_deployment in llm_router.dropped_deployments.values()]
+        if _user_has_admin_view(user_api_key_dict)
+        else None
+    )
+    return _model_info_json_response(visible_models, dropped_deployments=dropped_deployments)
 
 
 @router.get(

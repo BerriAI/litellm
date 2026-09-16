@@ -2388,7 +2388,7 @@ def test_ProxyConfig__add_deployment_invalid_litellm_params_skips(monkeypatch):
     fake_router.upsert_deployment = MagicMock(return_value=None)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
-    bad = SimpleNamespace(litellm_params="not-a-dict", model_name="x", model_id="x")
+    bad = SimpleNamespace(litellm_params="not-a-dict", model_name="x", model_id="x", created_at=None)
     # invalid params logs and continues — assert zero added (error-style branch).
     assert pc._add_deployment(db_models=[bad]) == 0
 
@@ -2419,6 +2419,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_after_db_decrypt(monkeypa
             "api_base": "os.environ/LITELLM_MASTER_KEY",
         },
         blocked=False,
+        created_at=None,
     )
 
     added = pc._add_deployment(db_models=[db_model])
@@ -2455,6 +2456,7 @@ def test_ProxyConfig__add_deployment_resolves_team_env_refs(monkeypatch):
             "api_base": "https://team.example",
         },
         blocked=False,
+        created_at=None,
     )
 
     added = pc._add_deployment(db_models=[db_model])
@@ -2531,6 +2533,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_for_aws_bedrock_auth_para
         model_info={"id": "model-1"},
         litellm_params=litellm_params,
         blocked=False,
+        created_at=None,
     )
 
     added = pc._add_deployment(db_models=[db_model])
@@ -2563,6 +2566,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkey
             "some_future_field": "os.environ/SOME_CUSTOM_ENV",
         },
         blocked=False,
+        created_at=None,
     )
 
     added = pc._add_deployment(db_models=[db_model])
@@ -2592,6 +2596,7 @@ def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(m
             "drop_params": encrypt_value_helper(value=stored_drop_params),
         },
         blocked=False,
+        created_at=None,
     )
 
     added = pc._add_deployment(db_models=[db_model])
@@ -2618,6 +2623,7 @@ def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_pa
                 "drop_params": encrypt_value_helper(value=drop_params),
             },
             blocked=False,
+            created_at=None,
         )
 
     added = pc._add_deployment(db_models=[db_model("bad-row", 2), db_model("good-after", "true")])
