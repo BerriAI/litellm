@@ -766,13 +766,20 @@ def test_registration_preserves_unsupported_or_explicit_routes(params: LiteLLMPa
     assert route_cache_model(params, unexpected_edge, enabled=True) is params
 
 
-@pytest.mark.parametrize("model", [
-    "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "bedrock/converse/us.anthropic.claude-sonnet-5",
-    "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+@pytest.mark.parametrize("model,region", [
+    ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", None),
+    ("bedrock/converse/us.anthropic.claude-sonnet-5", None),
+    ("bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0", None),
+    ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "us-east-1"),
+    ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "os.environ/AWS_REGION"),
+    ("bedrock/invoke/us.anthropic.claude-sonnet-5", "os.environ/AWS_REGION"),
 ])
-def test_anthropic_on_bedrock_registers_the_edge_as_its_runtime_endpoint(model: str) -> None:
-    params: Final = LiteLLMParamsBody(model=model)
+def test_anthropic_on_bedrock_registers_the_edge_as_its_runtime_endpoint(model: str, region: str | None) -> None:
+    """Almost every Bedrock deployment in the suite declares its region as
+    `os.environ/AWS_REGION`, which only the proxy can resolve. Treating that
+    string as a region name would leave the whole Anthropic-on-Bedrock surface
+    off the edge, which is the point of mounting it at all."""
+    params: Final = LiteLLMParamsBody(model=model, aws_region_name=region)
     routed: Final = route_cache_model(params, lambda mount: f"http://edge.invalid/{mount}", enabled=True)
     assert routed.aws_bedrock_runtime_endpoint == "http://edge.invalid/bedrock/us-east-1"
     assert routed.api_base is None
@@ -794,15 +801,19 @@ def test_anthropic_on_bedrock_registers_the_edge_as_its_runtime_endpoint(model: 
         aws_bedrock_runtime_endpoint="https://custom.invalid",
     ),
     LiteLLMParamsBody(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", aws_region_name="eu-west-1"),
+    LiteLLMParamsBody(model="bedrock/anthropic.claude-sonnet-5", aws_region_name="os.environ/AWS_REGION"),
+    LiteLLMParamsBody(model="bedrock/invoke/eu.anthropic.claude-sonnet-5", aws_region_name="os.environ/AWS_REGION"),
 ])
 def test_bedrock_deployments_the_edge_must_not_touch_keep_their_direct_route(params: LiteLLMParamsBody) -> None:
     """Non-Anthropic models the runner role cannot invoke, deployments carrying
     their own AWS identity (routing those would replace the assume-role chain the
-    batch suite exists to prove), explicit endpoints, and unmounted regions."""
+    batch suite exists to prove), explicit endpoints, unmounted regions, and a
+    region only the proxy can resolve on a model that is not cross-region, whose
+    real region the harness cannot know."""
     routed: Final = route_cache_model(
         params, lambda mount: None if mount not in EDGE_MOUNTS else f"http://edge.invalid/{mount}", enabled=True,
     )
-    assert routed is params or routed.aws_bedrock_runtime_endpoint == params.aws_bedrock_runtime_endpoint
+    assert routed is params
 
 
 @pytest.mark.parametrize("mode", ["batch", "realtime", "image_generation"])
