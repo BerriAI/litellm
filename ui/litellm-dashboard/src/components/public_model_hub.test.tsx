@@ -392,6 +392,21 @@ describe("PublicModelHub", () => {
     expect(await screen.findByText(/Service unavailable/)).toBeInTheDocument();
   });
 
+  it("keeps a deep-linked ?page= when the model page fails to load", async () => {
+    const user = userEvent.setup();
+    apiGetMock.mockRejectedValue(new Error("boom"));
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderHub({ searchParams: "?page=3", onUrlUpdate });
+    expect(await screen.findByText(/Service unavailable/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Skill Hub" }));
+
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("tab")).toBe("skills"));
+    expect(onUrlUpdate.mock.calls.map(([update]) => update.searchParams.get("page"))).toEqual(
+      onUrlUpdate.mock.calls.map(() => "3"),
+    );
+  });
+
   it("keeps the page usable when the response carries no rows", async () => {
     respondWith([], 0);
 
@@ -429,9 +444,16 @@ describe("PublicModelHub URL state", () => {
     mcp_info: { server_name, description: `${server_name} tools` },
   });
   const MCP_SERVERS = [mcpServer("server-1", "exa_test", "http"), mcpServer("server-2", "zeta-files", "sse")];
+  const padded = (prefix: string, index: number) => `${prefix}-${String(index).padStart(2, "0")}`;
+  const MANY_MCP_SERVERS = Array.from({ length: 60 }, (_, index) =>
+    mcpServer(padded("id", index), padded("mcp", index), index < 30 ? "sse" : "http"),
+  );
+  const MANY_AGENTS = Array.from({ length: 60 }, (_, index) =>
+    agentCard(padded("agent", index), "generated", "1.0.0", index < 30 ? "billing" : "support"),
+  );
 
   const AGENT_ROWS = /^(Billing Router|Support Bot|agent-\d+)$/;
-  const MCP_ROWS = /^(exa_test|zeta-files)$/;
+  const MCP_ROWS = /^(exa_test|zeta-files|mcp-\d+)$/;
   const MODEL_ROWS = /^(gpt-4|claude-3)$/;
 
   const hubMocks = async () => {
@@ -448,10 +470,14 @@ describe("PublicModelHub URL state", () => {
     mocks.mcp.mockResolvedValue([]);
   });
 
-  const renderUrlHub = async (searchParams = "", agents: AgentCard[] = AGENTS) => {
+  const renderUrlHub = async (
+    searchParams = "",
+    agents: AgentCard[] = AGENTS,
+    servers: MCPServerData[] = MCP_SERVERS,
+  ) => {
     const mocks = await hubMocks();
     mocks.agents.mockResolvedValue(agents);
-    mocks.mcp.mockResolvedValue(MCP_SERVERS);
+    mocks.mcp.mockResolvedValue(servers);
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
     renderHub({ searchParams, onUrlUpdate });
     await screen.findByRole("tab", { name: "MCP Hub", hidden: true });
@@ -470,6 +496,7 @@ describe("PublicModelHub URL state", () => {
       .queryAllByRole("button", { name: names, hidden: true })
       .map((button) => button.textContent);
   const selectedTab = () => screen.getByRole("tab", { selected: true });
+  const pageLabel = () => within(activePanel()).getByTestId("pagination-page");
 
   it("opens the hub tab named by ?tab=", async () => {
     await renderUrlHub("?tab=mcp");
@@ -577,7 +604,7 @@ describe("PublicModelHub URL state", () => {
     expect(dialog).toHaveTextContent("Agent Overview");
   });
 
-  it("pushes the clicked agent name into ?agent=", async () => {
+  it("pushes the clicked agent name into ?agent= and clears it when the dialog closes", async () => {
     const { user, onUrlUpdate } = await renderUrlHub("?tab=agents");
 
     await user.click(within(activePanel()).getByRole("button", { name: "Billing Router" }));
@@ -586,6 +613,12 @@ describe("PublicModelHub URL state", () => {
     expect(lastUrl(onUrlUpdate).options.history).toBe("push");
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("heading", { name: "Billing Router" })).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: /close/i }));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.has("agent")).toBe(false));
+    expect(lastUrl(onUrlUpdate).options.history).toBe("push");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("filters agents by agent_q and writes the search back", async () => {
@@ -607,19 +640,28 @@ describe("PublicModelHub URL state", () => {
     expect(within(activePanel()).getByLabelText("support")).toBeInTheDocument();
   });
 
+  it("writes the agent table page to agent_page", async () => {
+    const { user, onUrlUpdate } = await renderUrlHub("?tab=agents", MANY_AGENTS);
+    expect(pageLabel()).toHaveTextContent("Page 1 of 3");
+
+    await user.click(within(activePanel()).getByTestId("pagination-next"));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("agent_page")).toBe("2"));
+    expect(pageLabel()).toHaveTextContent("Page 2 of 3");
+    expect(rowNames(AGENT_ROWS)[0]).toBe("agent-25");
+  });
+
   it("writes picked skills to agent_skills and returns the agent table to its first page", async () => {
-    const manyAgents = Array.from({ length: 30 }, (_, index) =>
-      agentCard(`agent-${String(index).padStart(2, "0")}`, "generated", "1.0.0", index < 5 ? "billing" : "support"),
-    );
-    const { user, onUrlUpdate } = await renderUrlHub("?tab=agents&agent_page=2", manyAgents);
-    expect(within(activePanel()).getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+    const { user, onUrlUpdate } = await renderUrlHub("?tab=agents&agent_page=2", MANY_AGENTS);
+    expect(pageLabel()).toHaveTextContent("Page 2 of 3");
 
     await user.click(screen.getByPlaceholderText("Select skills"));
     await user.click(await screen.findByRole("option", { name: "billing" }));
 
     await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.getAll("agent_skills")).toEqual(["billing"]));
     expect(lastUrl(onUrlUpdate).searchParams.has("agent_page")).toBe(false);
-    expect(rowNames(AGENT_ROWS)).toEqual(["agent-00", "agent-01", "agent-02", "agent-03", "agent-04"]);
+    expect(pageLabel()).toHaveTextContent("Page 1 of 2");
+    expect(rowNames(AGENT_ROWS)[0]).toBe("agent-00");
   });
 
   it("sorts agents from agent_ keys and writes header clicks back", async () => {
@@ -650,7 +692,7 @@ describe("PublicModelHub URL state", () => {
     expect(await screen.findByText("Server Overview")).toBeInTheDocument();
   });
 
-  it("filters MCP servers by mcp_q and mcp_transport from the URL", async () => {
+  it("filters MCP servers by mcp_q from the URL", async () => {
     await renderUrlHub("?tab=mcp&mcp_q=zeta");
     expect(screen.getByPlaceholderText("Search MCP server names or descriptions...")).toHaveValue("zeta");
     expect(rowNames(MCP_ROWS)).toEqual(["zeta-files"]);
@@ -660,6 +702,37 @@ describe("PublicModelHub URL state", () => {
     await renderUrlHub("?tab=mcp&mcp_transport=http");
 
     expect(rowNames(MCP_ROWS)).toEqual(["exa_test"]);
+  });
+
+  it("writes the MCP table page and page size to mcp_page and mcp_page_size", async () => {
+    const { user, onUrlUpdate } = await renderUrlHub("?tab=mcp", AGENTS, MANY_MCP_SERVERS);
+    expect(pageLabel()).toHaveTextContent("Page 1 of 3");
+
+    await user.click(within(activePanel()).getByTestId("pagination-next"));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("mcp_page")).toBe("2"));
+    expect(pageLabel()).toHaveTextContent("Page 2 of 3");
+    expect(rowNames(MCP_ROWS)[0]).toBe("mcp-25");
+
+    await user.click(within(activePanel()).getByTestId("pagination-page-size"));
+    await user.click(await screen.findByRole("option", { name: "50" }));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("mcp_page_size")).toBe("50"));
+    expect(pageLabel()).toHaveTextContent("of 2");
+  });
+
+  it("reads the MCP page from mcp_page and returns to the first page when a transport is picked", async () => {
+    const { user, onUrlUpdate } = await renderUrlHub("?tab=mcp&mcp_page=2", AGENTS, MANY_MCP_SERVERS);
+    expect(pageLabel()).toHaveTextContent("Page 2 of 3");
+    expect(rowNames(MCP_ROWS)[0]).toBe("mcp-25");
+
+    await user.click(screen.getByPlaceholderText("Select transport types"));
+    await user.click(await screen.findByRole("option", { name: "sse" }));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.getAll("mcp_transport")).toEqual(["sse"]));
+    expect(lastUrl(onUrlUpdate).searchParams.has("mcp_page")).toBe(false);
+    expect(pageLabel()).toHaveTextContent("Page 1 of 2");
+    expect(rowNames(MCP_ROWS)[0]).toBe("mcp-00");
   });
 
   it("writes the MCP search, transport and sort to mcp_ keys", async () => {

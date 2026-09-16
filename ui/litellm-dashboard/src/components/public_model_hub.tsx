@@ -473,6 +473,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     onPaginationChange={models.onPaginationChange}
                     rowCount={models.rowCount}
                     isLoading={models.isLoading}
+                    isError={models.error !== null}
                     loadingMessage="Loading models…"
                     noDataMessage={
                       <PublicHubEmptyState

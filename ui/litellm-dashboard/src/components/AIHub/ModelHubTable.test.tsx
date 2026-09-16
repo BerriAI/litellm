@@ -2,7 +2,7 @@ import * as networking from "@/components/networking";
 import userEvent from "@testing-library/user-event";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { afterEach, beforeEach, describe, expect, it, Mock, vi } from "vitest";
-import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
 import ModelHubTable from "./ModelHubTable";
 
 const mockUseUISettings = vi.hoisted(() => vi.fn());
@@ -312,12 +312,29 @@ describe("ModelHubTable", () => {
       updated_by: created_by,
     });
     const MCP_SERVERS = [mcpServer("srv-1", "alpha-search", "zed"), mcpServer("srv-2", "beta-tickets", "amy")];
+    const padded = (prefix: string, index: number) => `${prefix}-${String(index).padStart(2, "0")}`;
+    const MANY_MODELS = Array.from({ length: 60 }, (_, index) =>
+      hubModel(padded("model", index), index % 2 ? "openai" : "anthropic", "chat"),
+    );
+    const MANY_AGENTS = Array.from({ length: 60 }, (_, index) =>
+      agentEntry(padded("id", index), padded("agent", index), "generated", false),
+    );
+    const MANY_MCP_SERVERS = Array.from({ length: 60 }, (_, index) =>
+      mcpServer(padded("srv", index), padded("server", index), "zed"),
+    );
 
-    const renderUrlHub = async (searchParams = "", models: object[] = MODELS) => {
+    interface HubFixtures {
+      models?: object[];
+      agents?: object[];
+      servers?: object[];
+    }
+
+    const renderUrlHub = async (searchParams = "", fixtures: HubFixtures = {}) => {
+      const { models = MODELS, agents = AGENTS, servers = MCP_SERVERS } = fixtures;
       vi.mocked(networking.modelHubCall).mockResolvedValue({ data: models });
       vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
-      vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: AGENTS });
-      vi.mocked(networking.fetchMCPServers).mockResolvedValue(MCP_SERVERS);
+      vi.mocked(networking.getAgentsList).mockResolvedValue({ agents });
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue(servers);
       mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
 
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
@@ -326,8 +343,8 @@ describe("ModelHubTable", () => {
         { searchParams, onUrlUpdate },
       );
       await waitFor(() => expect(screen.queryByText("Loading models…")).not.toBeInTheDocument());
-      await waitFor(() => expect(screen.getAllByText("alpha-search").length).toBeGreaterThan(0));
-      await screen.findByText(/of 2 agents/);
+      await screen.findByText(new RegExp(`^Showing ${servers.length} MCP servers?$`));
+      await screen.findByText(new RegExp(`of ${agents.length} agents`));
       return { user: userEvent.setup(), onUrlUpdate };
     };
 
@@ -338,6 +355,9 @@ describe("ModelHubTable", () => {
     };
 
     const activePanel = () => screen.getByRole("tabpanel");
+    const pageLabel = () => within(activePanel()).getByTestId("pagination-page");
+    const nextPage = (user: ReturnType<typeof userEvent.setup>) =>
+      user.click(within(activePanel()).getByTestId("pagination-next"));
     const rowNames = (names: RegExp) =>
       within(activePanel())
         .queryAllByRole("button", { name: names })
@@ -398,18 +418,25 @@ describe("ModelHubTable", () => {
       expect(rowNames(MODEL_ROWS)).toEqual(["alpha-chat", "beta-embed"]);
     });
 
+    it("reads the model table page from models_page and writes page changes back", async () => {
+      const { user, onUrlUpdate } = await renderUrlHub("?models_page=2", { models: MANY_MODELS });
+      expect(pageLabel()).toHaveTextContent("Page 2 of 3");
+
+      await nextPage(user);
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("models_page")).toBe("3"));
+      expect(pageLabel()).toHaveTextContent("Page 3 of 3");
+    });
+
     it("returns the model table to its first page when a model filter changes", async () => {
-      const models = Array.from({ length: 60 }, (_, index) =>
-        hubModel(`model-${String(index).padStart(2, "0")}`, index % 2 ? "openai" : "anthropic", "chat"),
-      );
-      const { onUrlUpdate } = await renderUrlHub("?models_page=2", models);
-      expect(within(activePanel()).getByTestId("pagination-page")).toHaveTextContent("Page 2 of 3");
+      const { onUrlUpdate } = await renderUrlHub("?models_page=2", { models: MANY_MODELS });
+      expect(pageLabel()).toHaveTextContent("Page 2 of 3");
 
       fireEvent.change(screen.getByDisplayValue("All Providers"), { target: { value: "openai" } });
 
       await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("provider")).toBe("openai"));
       expect(lastUrl(onUrlUpdate).searchParams.has("models_page")).toBe(false);
-      expect(within(activePanel()).getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
+      expect(pageLabel()).toHaveTextContent("Page 1 of 2");
     });
 
     it("sorts the models table from models_ keys and writes header clicks back", async () => {
@@ -444,6 +471,40 @@ describe("ModelHubTable", () => {
       expect(rowNames(AGENT_ROWS)).toEqual(["Billing Router", "Support Bot"]);
     });
 
+    it("sorts the agents table from agents_sort_by and writes header clicks back", async () => {
+      const { user, onUrlUpdate } = await renderUrlHub("?tab=agents&agents_sort_by=description");
+      expect(rowNames(AGENT_ROWS)).toEqual(["Support Bot", "Billing Router"]);
+
+      await user.click(within(activePanel()).getByTestId("sort-header-version"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("agents_sort_by")).toBe("version"));
+      expect(lastUrl(onUrlUpdate).searchParams.has("agents_sort_order")).toBe(false);
+    });
+
+    it("reads the agents table page from agents_page and writes page changes back", async () => {
+      const { user, onUrlUpdate } = await renderUrlHub("?tab=agents&agents_page=2", { agents: MANY_AGENTS });
+      expect(pageLabel()).toHaveTextContent("Page 2 of 3");
+      expect(within(activePanel()).getByRole("button", { name: "agent-25" })).toBeInTheDocument();
+
+      await nextPage(user);
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("agents_page")).toBe("3"));
+      expect(pageLabel()).toHaveTextContent("Page 3 of 3");
+      expect(within(activePanel()).getByRole("button", { name: "agent-50" })).toBeInTheDocument();
+    });
+
+    it("reads the MCP table page from mcp_page and writes page changes back", async () => {
+      const { user, onUrlUpdate } = await renderUrlHub("?tab=mcp&mcp_page=2", { servers: MANY_MCP_SERVERS });
+      expect(pageLabel()).toHaveTextContent("Page 2 of 3");
+      expect(within(activePanel()).getByRole("button", { name: "server-25" })).toBeInTheDocument();
+
+      await nextPage(user);
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("mcp_page")).toBe("3"));
+      expect(pageLabel()).toHaveTextContent("Page 3 of 3");
+      expect(within(activePanel()).getByRole("button", { name: "server-50" })).toBeInTheDocument();
+    });
+
     it("sorts the MCP table from mcp_ keys and writes header clicks back", async () => {
       const { user, onUrlUpdate } = await renderUrlHub("?tab=mcp&mcp_sort_order=desc");
       expect(rowNames(MCP_ROWS)).toEqual(["beta-tickets", "alpha-search"]);
@@ -470,6 +531,13 @@ describe("ModelHubTable", () => {
       expect(dialog).toHaveTextContent("Agent Overview");
     });
 
+    it("opens the agent named in ?agent= by a link from the public hub", async () => {
+      await renderUrlHub("?tab=agents&agent=Support%20Bot");
+
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByRole("heading", { name: "Support Bot" })).toBeInTheDocument();
+    });
+
     it("opens the MCP server whose id is in ?mcp=", async () => {
       await renderUrlHub("?tab=mcp&mcp=srv-2");
 
@@ -489,8 +557,8 @@ describe("ModelHubTable", () => {
       );
 
       expect(await screen.findByText("Public Model Hub not enabled.")).toBeInTheDocument();
-      await waitFor(() => expect(networking.modelHubCall).toHaveBeenCalled());
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await waitFor(() => expect(networking.getConfigFieldSetting).toHaveBeenCalled());
+      await act(async () => {});
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 

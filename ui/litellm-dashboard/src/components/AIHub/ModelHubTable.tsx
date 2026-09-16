@@ -244,7 +244,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const showAgentModal = useCallback((agent: AgentHubData) => openAgent(agent.agent_id ?? agent.name), [openAgent]);
   const showMcpModal = useCallback((server: MCPServerData) => openMcp(server.server_id), [openMcp]);
   const selectedModel = publicPage ? null : modelHubData?.find((model) => model.model_group === hub.modelId) ?? null;
-  const selectedAgent = agentHubData?.find((agent) => (agent.agent_id ?? agent.name) === hub.agentId) ?? null;
+  const selectedAgent =
+    agentHubData?.find((agent) => agent.agent_id === hub.agentId || agent.name === hub.agentId) ?? null;
   const selectedMcpServer = mcpHubData?.find((server) => server.server_id === hub.mcpId) ?? null;
 
   const handleMakePublicPage = () => {

@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import {
   filterModelHubData,
   modelFeatureNames,
   type ModelFiltersState,
+  type ModelFilterValues,
   useLocalModelFiltersState,
 } from "./useModelFiltersState";
 
@@ -40,6 +41,25 @@ const getUniqueModes = (data: ModelGroupInfo[]) =>
 
 const getUniqueFeatures = (data: ModelGroupInfo[]) => [...new Set(data.flatMap(modelFeatureNames))].sort();
 
+const sameModelGroups = (left: ModelGroupInfo[], right: ModelGroupInfo[]) =>
+  left.length === right.length && left.every((model, index) => model.model_group === right[index]?.model_group);
+
+const useFilteredDataNotifier = (
+  modelHubData: ModelGroupInfo[],
+  values: ModelFilterValues,
+  onFilteredDataChange: ModelFiltersProps["onFilteredDataChange"],
+) => {
+  const previousFilteredDataRef = useRef<ModelGroupInfo[]>([]);
+
+  useEffect(() => {
+    if (onFilteredDataChange === undefined) return;
+    const filteredData = filterModelHubData(modelHubData ?? [], values);
+    if (sameModelGroups(filteredData, previousFilteredDataRef.current)) return;
+    previousFilteredDataRef.current = filteredData;
+    onFilteredDataChange(filteredData);
+  }, [modelHubData, values, onFilteredDataChange]);
+};
+
 const ModelFilters: React.FC<ModelFiltersProps> = ({
   modelHubData,
   onFilteredDataChange,
@@ -51,20 +71,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   const { values, update, reset: resetFilters } = filtersState ?? localFiltersState;
   const { search: searchTerm, provider: selectedProvider, mode: selectedMode, feature: selectedFeature } = values;
   const hasActiveFilters = Object.values(values).some(Boolean);
-  const previousFilteredDataRef = useRef<ModelGroupInfo[]>([]);
-
-  const filteredData = useMemo(() => filterModelHubData(modelHubData ?? [], values), [modelHubData, values]);
-
-  useEffect(() => {
-    const hasChanged =
-      filteredData.length !== previousFilteredDataRef.current.length ||
-      filteredData.some((model, index) => model.model_group !== previousFilteredDataRef.current[index]?.model_group);
-
-    if (hasChanged) {
-      previousFilteredDataRef.current = filteredData;
-      onFilteredDataChange?.(filteredData);
-    }
-  }, [filteredData, onFilteredDataChange]);
+  useFilteredDataNotifier(modelHubData, values, onFilteredDataChange);
 
   const filtersContent = (
     <div className="flex flex-wrap gap-4 items-center">
