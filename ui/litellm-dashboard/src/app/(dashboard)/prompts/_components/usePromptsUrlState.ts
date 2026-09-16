@@ -1,10 +1,13 @@
-import { parseAsInteger, parseAsString, parseAsStringLiteral, useQueryState, useQueryStates } from "nuqs";
+import { parseAsInteger, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useCallback, useMemo } from "react";
 
 export const PROMPT_ENV_FILTERS = ["all", "development", "staging", "production"] as const;
 export type PromptEnvFilter = (typeof PROMPT_ENV_FILTERS)[number];
 
-const envFilterParser = parseAsStringLiteral(PROMPT_ENV_FILTERS).withDefault("all");
+const envFilterParsers = {
+  env: parseAsStringLiteral(PROMPT_ENV_FILTERS).withDefault("all"),
+  page: parseAsInteger,
+};
 
 const panelParsers = {
   prompt: parseAsString,
@@ -25,9 +28,12 @@ export const toPromptEnvFilter = (value: unknown): PromptEnvFilter =>
   PROMPT_ENV_FILTERS.find((filter) => filter === value) ?? "all";
 
 export function usePromptEnvFilter(): [PromptEnvFilter, (filter: PromptEnvFilter) => void] {
-  const [envFilter, setEnvFilter] = useQueryState("env", envFilterParser);
-  const selectEnvFilter = useCallback((filter: PromptEnvFilter) => void setEnvFilter(filter), [setEnvFilter]);
-  return [envFilter, selectEnvFilter];
+  const [{ env }, setEnvFilter] = useQueryStates(envFilterParsers);
+  const selectEnvFilter = useCallback(
+    (filter: PromptEnvFilter) => void setEnvFilter({ env: filter, page: null }),
+    [setEnvFilter],
+  );
+  return [env, selectEnvFilter];
 }
 
 export function usePromptsPanelUrlState() {
@@ -43,6 +49,7 @@ export function usePromptsPanelUrlState() {
       openNewPromptEditor: () => void setPanel({ ...CLOSED_PROMPT, view: "editor" }),
       openEditor: () => void setPanel({ view: "editor" }),
       closeEditor: () => void setPanel({ view: null }),
+      dropEditorRequest: () => void setPanel({ view: null }, { history: "replace" }),
     }),
     [prompt, prompt_env, view, setPanel],
   );
@@ -57,6 +64,8 @@ export function usePromptInfoUrlState() {
       selectEnvironment: (environment: string) => void setPromptInfo({ prompt_env: environment, version: null }),
       selectVersion: (nextVersion: number | null, environment: string) =>
         void setPromptInfo({ version: nextVersion, prompt_env: environment }),
+      clearVersion: () => void setPromptInfo({ version: null }),
+      clearEnvironment: () => void setPromptInfo({ prompt_env: null }),
     }),
     [prompt_env, version, setPromptInfo],
   );

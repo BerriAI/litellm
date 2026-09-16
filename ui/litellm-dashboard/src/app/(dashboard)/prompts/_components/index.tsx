@@ -3,10 +3,9 @@ import React, { useState, useEffect } from "react";
 import { Plus, Upload } from "lucide-react";
 import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "@/components/networking";
 import PromptTable from "./PromptTable";
-import PromptInfoView from "./prompt_info";
+import PromptInfoView, { type PromptEditPayload } from "./prompt_info";
 import AddPromptForm from "./add_prompt_form";
 import PromptEditorView from "./prompt_editor_view";
-import type { PromptEditorViewProps } from "./prompt_editor_view/types";
 import { toPromptEnvFilter, usePromptEnvFilter, usePromptsPanelUrlState } from "./usePromptsUrlState";
 import { toast } from "@/lib/toast";
 import { isProxyAdminRole } from "@/utils/roles";
@@ -40,7 +39,7 @@ interface PromptsProps {
 
 interface EditSession {
   promptId: string;
-  data: PromptEditorViewProps["initialPromptData"];
+  data: PromptEditPayload;
 }
 
 const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
@@ -60,6 +59,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const editPromptData = editSession?.promptId === selectedPromptId ? editSession.data : null;
   const canOpenEditor = selectedPromptId === null ? canModify : editPromptData !== null;
   const showEditorView = panel.isEditorRequested && canOpenEditor;
+  const isEditorRequestStale = panel.isEditorRequested && !canOpenEditor;
 
   const fetchPrompts = async () => {
     if (!accessToken) {
@@ -82,6 +82,11 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     fetchPrompts();
   }, [accessToken, selectedEnvironment]);
 
+  const { dropEditorRequest } = panel;
+  useEffect(() => {
+    if (isEditorRequestStale) dropEditorRequest();
+  }, [isEditorRequestStale, dropEditorRequest]);
+
   const handlePromptClick = (promptId: string, environment: string) => {
     setEditSession(null);
     panel.openPrompt(promptId, environment);
@@ -92,7 +97,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     panel.openNewPromptEditor();
   };
 
-  const handleEditPrompt = (promptData: EditSession["data"]) => {
+  const handleEditPrompt = (promptData: PromptEditPayload) => {
     if (selectedPromptId === null) return;
     setEditSession({ promptId: selectedPromptId, data: promptData });
     panel.openEditor();

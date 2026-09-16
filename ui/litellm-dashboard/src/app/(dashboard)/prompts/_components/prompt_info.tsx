@@ -12,7 +12,9 @@ import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
 import { extractModel, extractTemplateVariables, getBasePromptId, getCurrentVersion } from "./prompt_utils";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useUrlTab } from "@/hooks/useUrlTab";
-import { usePromptInfoData } from "./usePromptInfoData";
+import { usePromptInfoData, type PromptInfoResponse } from "./usePromptInfoData";
+
+export type PromptEditPayload = Pick<PromptInfoResponse, "prompt_spec" | "raw_prompt_template">;
 
 export interface PromptInfoProps {
   promptId: string;
@@ -21,7 +23,7 @@ export interface PromptInfoProps {
   accessToken: string | null;
   isAdmin: boolean;
   onDelete?: () => void;
-  onEdit?: (promptData: any) => void;
+  onEdit?: (promptData: PromptEditPayload) => void;
 }
 
 const PROMPT_INFO_TABS = ["overview", "template", "raw"] as const;
@@ -42,7 +44,6 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const {
     rawApiResponse,
-    promptData,
     promptTemplate,
     environments,
     loading,
@@ -55,13 +56,23 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
   } = usePromptInfoData(promptId, accessToken, initialEnvironment);
   const [tab, setTab] = useUrlTab(loading || promptTemplate ? PROMPT_INFO_TABS : TABS_WITHOUT_TEMPLATE, "overview");
 
-  if (loading && !promptData) {
+  if (loading && !rawApiResponse) {
     return <div className="p-4">Loading...</div>;
   }
 
-  if (!promptData) {
-    return <div className="p-4">Prompt not found</div>;
+  if (!rawApiResponse) {
+    return (
+      <div className="p-4">
+        <Button variant="ghost" onClick={onClose} className="mb-4">
+          <ArrowLeft className="size-4" />
+          Back to Prompts
+        </Button>
+        <p>Prompt not found</p>
+      </div>
+    );
   }
+
+  const promptData = rawApiResponse.prompt_spec;
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
@@ -84,7 +95,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
   };
 
   const handleDeleteConfirm = async () => {
-    if (!accessToken || !promptData) return;
+    if (!accessToken) return;
     setIsDeleting(true);
     try {
       await deletePromptCall(accessToken, basePromptId);
@@ -114,7 +125,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
     selectVersion(null, selectedEnv);
   };
 
-  const promptModel = promptData ? extractModel(promptData) || "gpt-4o" : "gpt-4o";
+  const promptModel = extractModel(promptData) || "gpt-4o";
   const basePromptId = getBasePromptId(promptData);
   const currentVersion = getCurrentVersion(promptData);
   const latestVersion = versionHistory.length > 0 ? Math.max(...versionHistory.map((v) => v.version || 1)) : null;
@@ -313,11 +324,11 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
                               onClick={(e) => {
                                 e.stopPropagation();
                                 // Build a response-like object for the editor
-                                const editData = {
+                                const editData: PromptEditPayload = {
                                   prompt_spec: {
                                     ...v,
                                     prompt_id: basePromptId,
-                                    environment: selectedEnv,
+                                    environment: selectedEnv ?? undefined,
                                   },
                                   raw_prompt_template: isSelected ? promptTemplate : null,
                                 };

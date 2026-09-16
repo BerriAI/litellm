@@ -1,7 +1,7 @@
 import { isAdminRole } from "@/utils/roles";
 import { useQuery } from "@tanstack/react-query";
 import { parseAsString, useQueryState } from "nuqs";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { z } from "zod/v4";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { toast } from "@/lib/toast";
@@ -50,6 +50,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   const {
     data: searchTools,
     isLoading: isLoadingTools,
+    isFetching: isFetchingTools,
     isError: isToolsError,
     refetch,
   } = useQuery({
@@ -59,7 +60,13 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       return fetchSearchTools(accessToken).then((res) => res.search_tools || []);
     },
     enabled: !!accessToken,
-  }) as { data: SearchTool[]; isLoading: boolean; isError: boolean; refetch: () => void };
+  }) as {
+    data: SearchTool[] | undefined;
+    isLoading: boolean;
+    isFetching: boolean;
+    isError: boolean;
+    refetch: () => void;
+  };
 
   const { data: providersResponse, isLoading: isLoadingProviders } = useQuery({
     queryKey: ["searchProviders"],
@@ -81,7 +88,6 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
   );
   const [editToolId, setEditToolId] = useState<string | null>(null);
   const [isCreateModalVisible, setCreateModalVisible] = useState(false);
-  const [isEditModalVisible, setEditModalVisible] = useState(false);
   const form = useZodForm(editSearchToolSchema, { defaultValues: EMPTY_EDIT_VALUES });
 
   const handleView = (toolId: string) => {
@@ -101,7 +107,6 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     };
     form.reset(editFormValues);
     setEditToolId(toolId);
-    setEditModalVisible(true);
   };
 
   function handleDelete(toolId: string) {
@@ -139,7 +144,6 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     : null;
 
   const closeEditModal = () => {
-    setEditModalVisible(false);
     form.reset(EMPTY_EDIT_VALUES);
     setEditToolId(null);
   };
@@ -173,6 +177,14 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     if (!accessToken || !editToolId) return;
     void submitEdit();
   };
+
+  const selectedTool = selectedToolId ? searchTools?.find((tool) => tool.search_tool_id === selectedToolId) : undefined;
+  const hasSettledTools = searchTools !== undefined && !isFetchingTools;
+  const isSelectedToolMissing = selectedToolId !== null && !selectedTool && hasSettledTools;
+
+  useEffect(() => {
+    if (isSelectedToolMissing) void setSelectedToolId(null, { history: "replace" });
+  }, [isSelectedToolMissing, setSelectedToolId]);
 
   const renderEditForm = () => (
     <form onSubmit={(event) => event.preventDefault()}>
@@ -229,8 +241,6 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     void setSelectedToolId(null);
     refetch();
   };
-
-  const selectedTool = selectedToolId ? searchTools?.find((tool) => tool.search_tool_id === selectedToolId) : undefined;
 
   const renderToolsContent = () => {
     if (selectedTool) {
@@ -296,7 +306,7 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
       />
 
       <Dialog
-        open={isEditModalVisible}
+        open={editToolId !== null}
         onOpenChange={(open) => {
           if (!open) closeEditModal();
         }}

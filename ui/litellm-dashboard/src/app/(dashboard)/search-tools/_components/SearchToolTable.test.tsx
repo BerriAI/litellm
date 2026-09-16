@@ -41,6 +41,32 @@ const namedTools = (count: number): SearchTool[] =>
 
 const firstRowName = () => within(screen.getAllByRole("row")[1]).getByText(/^tool-name-/).textContent;
 
+const crossOrderedTools: SearchTool[] = [
+  {
+    ...makeSearchTool(),
+    search_tool_id: "tool-c",
+    search_tool_name: "name-b",
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-03T00:00:00Z",
+  },
+  {
+    ...makeSearchTool(),
+    search_tool_id: "tool-b",
+    search_tool_name: "name-a",
+    created_at: "2024-01-02T00:00:00Z",
+    updated_at: "2024-01-02T00:00:00Z",
+  },
+  {
+    ...makeSearchTool(),
+    search_tool_id: "tool-a",
+    search_tool_name: "name-c",
+    created_at: "2024-01-03T00:00:00Z",
+    updated_at: "2024-01-01T00:00:00Z",
+  },
+];
+
+const firstCrossOrderedName = () => within(screen.getAllByRole("row")[1]).getByText(/^name-/).textContent;
+
 describe("SearchToolTable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -128,11 +154,28 @@ describe("SearchToolTable", () => {
   });
 
   describe("URL state", () => {
-    it("orders rows by the sort_by and sort_order in the URL", () => {
-      renderWithProviders(<SearchToolTable {...defaultProps} searchTools={namedTools(3)} />, {
-        searchParams: { sort_by: "search_tool_name", sort_order: "asc" },
+    it("opens newest first when the URL has no sort", () => {
+      renderWithProviders(<SearchToolTable {...defaultProps} searchTools={crossOrderedTools} />);
+      expect(firstCrossOrderedName()).toBe("name-c");
+    });
+
+    it.each([
+      ["search_tool_id", "name-c"],
+      ["search_tool_name", "name-a"],
+      ["created_at", "name-b"],
+      ["updated_at", "name-c"],
+    ])("orders rows ascending by %s from the URL", (sortBy, expectedFirstName) => {
+      renderWithProviders(<SearchToolTable {...defaultProps} searchTools={crossOrderedTools} />, {
+        searchParams: { sort_by: sortBy, sort_order: "asc" },
       });
-      expect(firstRowName()).toBe("tool-name-00");
+      expect(firstCrossOrderedName()).toBe(expectedFirstName);
+    });
+
+    it("falls back to the created date for an unknown sort_by and keeps the sort_order", () => {
+      renderWithProviders(<SearchToolTable {...defaultProps} searchTools={crossOrderedTools} />, {
+        searchParams: { sort_by: "provider", sort_order: "asc" },
+      });
+      expect(firstCrossOrderedName()).toBe("name-b");
     });
 
     it("opens on the page in the URL", () => {
@@ -146,7 +189,7 @@ describe("SearchToolTable", () => {
     it("writes the clicked sort column to the URL", async () => {
       const user = userEvent.setup();
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-      renderWithProviders(<SearchToolTable {...defaultProps} searchTools={namedTools(3)} />, { onUrlUpdate });
+      renderWithProviders(<SearchToolTable {...defaultProps} searchTools={crossOrderedTools} />, { onUrlUpdate });
 
       await user.click(screen.getByTestId("sort-header-search_tool_name"));
 
@@ -154,7 +197,7 @@ describe("SearchToolTable", () => {
       const params = onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
       expect(params?.get("sort_by")).toBe("search_tool_name");
       expect(params?.get("sort_order")).toBe("asc");
-      expect(firstRowName()).toBe("tool-name-00");
+      expect(firstCrossOrderedName()).toBe("name-a");
     });
 
     it("writes the next page to the URL", async () => {

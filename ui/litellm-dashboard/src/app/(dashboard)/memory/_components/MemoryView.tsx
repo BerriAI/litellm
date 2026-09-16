@@ -4,7 +4,7 @@ import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { MemoryRow, createMemory, deleteMemory, fetchMemoryList, updateMemory } from "@/components/networking";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
@@ -60,6 +60,12 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   const rows = useMemo(() => data?.memories ?? [], [data]);
   const total = data?.total ?? 0;
   const detailRow = rows.find((row) => row.memory_id === detailMemoryId) ?? null;
+  const hasSettledPage = data !== undefined && !isFetching;
+  const isDetailRowMissing = detailMemoryId !== null && !detailRow && hasSettledPage;
+
+  useEffect(() => {
+    if (isDetailRowMissing) void setDetailMemoryId(null, { history: "replace" });
+  }, [isDetailRowMissing, setDetailMemoryId]);
 
   // -- Mutations --------------------------------------------------------
   // All three write endpoints share the same success/error plumbing:

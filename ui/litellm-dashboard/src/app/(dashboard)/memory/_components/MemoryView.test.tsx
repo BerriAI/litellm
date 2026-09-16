@@ -1,7 +1,8 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import type { PaginationState } from "@tanstack/react-table";
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +13,7 @@ import { MemoryView } from "./MemoryView";
 
 interface CapturedTableProps {
   isLoading: boolean;
+  isError?: boolean;
   rowCount: number;
   data: MemoryRow[];
   pagination: PaginationState;
@@ -49,6 +51,20 @@ interface RenderViewOptions {
 const renderView = (accessToken: string | null, options: RenderViewOptions = {}) =>
   renderWithProviders(<MemoryView accessToken={accessToken} userID={null} userRole={null} />, options);
 
+const renderViewWithStableUrl = (searchParams: Record<string, string>, onUrlUpdate: OnUrlUpdateFunction) =>
+  render(
+    <NuqsTestingAdapter
+      searchParams={searchParams}
+      onUrlUpdate={onUrlUpdate}
+      hasMemory
+      resetUrlUpdateQueueOnMount={false}
+    >
+      <QueryClientProvider client={testQueryClient}>
+        <MemoryView accessToken="token" userID={null} userRole={null} />
+      </QueryClientProvider>
+    </NuqsTestingAdapter>,
+  );
+
 const drawerRow: MemoryRow = {
   memory_id: "mem-drawer",
   key: "user:profile",
@@ -57,6 +73,8 @@ const drawerRow: MemoryRow = {
   user_id: null,
   team_id: null,
 };
+
+const letUrlUpdatesFlush = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
 
 const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => onUrlUpdate.mock.calls.at(-1)?.[0];
 
@@ -179,12 +197,38 @@ describe("MemoryView", () => {
       expect(screen.getByText("mem-drawer")).toBeInTheDocument();
     });
 
-    it("keeps the drawer closed when the memory in the URL is not on the loaded page", async () => {
+    it("keeps the drawer closed and clears a memory in the URL that is not on the loaded page", async () => {
       fetchMemoryListMock.mockResolvedValue({ memories: [drawerRow], total: 1 });
-      renderView("token", { searchParams: { memory: "mem-elsewhere" } });
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderViewWithStableUrl({ memory: "mem-elsewhere", page: "2" }, onUrlUpdate);
 
       await waitFor(() => expect(captured.current?.data).toEqual([drawerRow]));
       expect(screen.queryByText("Memory ID")).not.toBeInTheDocument();
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("memory")).toBe(false));
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("page")).toBe("2");
+      expect(lastUrl(onUrlUpdate)?.options.history).toBe("replace");
+    });
+
+    it("keeps the memory in the URL while the page that should hold it is still loading", async () => {
+      fetchMemoryListMock.mockReturnValue(new Promise(() => {}));
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderViewWithStableUrl({ memory: "mem-drawer" }, onUrlUpdate);
+
+      await waitFor(() => expect(fetchMemoryListMock).toHaveBeenCalled());
+      expect(captured.current?.isLoading).toBe(true);
+      await letUrlUpdatesFlush();
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
+    it("keeps the requested page and memory when the list fetch fails", async () => {
+      fetchMemoryListMock.mockRejectedValue(new Error("boom"));
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderViewWithStableUrl({ page: "3", memory: "mem-drawer" }, onUrlUpdate);
+
+      await waitFor(() => expect(captured.current?.isError).toBe(true));
+      await letUrlUpdatesFlush();
+      expect(captured.current?.pagination.pageIndex).toBe(2);
+      expect(onUrlUpdate).not.toHaveBeenCalled();
     });
   });
 });

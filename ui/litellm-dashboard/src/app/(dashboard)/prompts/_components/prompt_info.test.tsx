@@ -48,6 +48,30 @@ const versionRow = (version: number) => ({
   environment: "development",
 });
 
+const renderInfoWithStableUrl = (
+  searchParams: Record<string, string>,
+  onUrlUpdate: OnUrlUpdateFunction,
+  props: { initialEnvironment?: string; onClose?: () => void } = {},
+) =>
+  render(
+    <NuqsTestingAdapter
+      searchParams={searchParams}
+      onUrlUpdate={onUrlUpdate}
+      hasMemory
+      resetUrlUpdateQueueOnMount={false}
+    >
+      <QueryClientProvider client={testQueryClient}>
+        <PromptInfoView
+          promptId="support-reply"
+          initialEnvironment={props.initialEnvironment}
+          onClose={props.onClose ?? vi.fn()}
+          accessToken="sk-test"
+          isAdmin={true}
+        />
+      </QueryClientProvider>
+    </NuqsTestingAdapter>,
+  );
+
 const renderInfo = (searchParams: Record<string, string>, onUrlUpdate?: OnUrlUpdateFunction) =>
   renderWithProviders(
     <PromptInfoView
@@ -169,18 +193,7 @@ describe("PromptInfoView tabs", () => {
 
   it("falls back to the overview and clears tab=template when the prompt has no template", async () => {
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-    render(
-      <NuqsTestingAdapter
-        searchParams={{ tab: "template" }}
-        onUrlUpdate={onUrlUpdate}
-        hasMemory
-        resetUrlUpdateQueueOnMount={false}
-      >
-        <QueryClientProvider client={testQueryClient}>
-          <PromptInfoView promptId="support-reply" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />
-        </QueryClientProvider>
-      </NuqsTestingAdapter>,
-    );
+    renderInfoWithStableUrl({ tab: "template" }, onUrlUpdate);
 
     expect(await screen.findByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("tab")).toBe(false));
@@ -261,5 +274,63 @@ describe("PromptInfoView versions and environments in the URL", () => {
 
     await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("version")).toBe(false));
     expect(lastUrl(onUrlUpdate)?.searchParams.get("prompt_env")).toBe("development");
+  });
+});
+
+describe("PromptInfoView load failures", () => {
+  beforeEach(() => {
+    testQueryClient.clear();
+    vi.mocked(networking.getPromptVersions)
+      .mockReset()
+      .mockResolvedValue({ prompts: [versionRow(1), versionRow(2), versionRow(3)] });
+  });
+
+  it("drops a version from the URL that fails to load and shows the latest one", async () => {
+    vi.mocked(networking.getPromptInfo)
+      .mockReset()
+      .mockImplementation((_token, promptId) =>
+        promptId === "support-reply.v9" ? Promise.reject(new Error("404")) : Promise.resolve(promptWithTemplate),
+      );
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderInfoWithStableUrl({ version: "9", prompt_env: "development" }, onUrlUpdate);
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("version")).toBe(false));
+    expect(lastUrl(onUrlUpdate)?.searchParams.get("prompt_env")).toBe("development");
+    expect(lastUrl(onUrlUpdate)?.options.history).toBe("replace");
+    expect(await screen.findByRole("tab", { name: "Overview" })).toBeInTheDocument();
+    expect(networking.getPromptInfo).toHaveBeenCalledWith("sk-test", "support-reply.v9", "development");
+    expect(networking.getPromptInfo).toHaveBeenLastCalledWith("sk-test", "support-reply", "development");
+    expect(screen.queryByText("Prompt not found")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the default environment when the one in the URL fails to load", async () => {
+    vi.mocked(networking.getPromptInfo)
+      .mockReset()
+      .mockImplementation((_token, _promptId, environment) =>
+        environment === "qa" ? Promise.reject(new Error("404")) : Promise.resolve(promptWithTemplate),
+      );
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderInfoWithStableUrl({ prompt_env: "qa", tab: "raw" }, onUrlUpdate);
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("prompt_env")).toBe(false));
+    expect(lastUrl(onUrlUpdate)?.searchParams.get("tab")).toBe("raw");
+    expect(await screen.findByRole("tab", { name: "Raw JSON" })).toHaveAttribute("aria-selected", "true");
+    expect(networking.getPromptInfo).toHaveBeenLastCalledWith("sk-test", "support-reply", undefined);
+  });
+
+  it("offers a way back when the prompt itself cannot be loaded", async () => {
+    vi.mocked(networking.getPromptInfo).mockReset().mockRejectedValue(new Error("404"));
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderInfoWithStableUrl({}, onUrlUpdate, { onClose });
+
+    expect(await screen.findByText("Prompt not found")).toBeInTheDocument();
+    expect(networking.getPromptInfo).toHaveBeenCalledTimes(1);
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /back to prompts/i }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,7 +1,8 @@
 import * as roles from "@/utils/roles";
-import { screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import * as networking from "@/components/networking";
@@ -19,13 +20,21 @@ vi.mock("@/utils/roles", () => ({
   isAdminRole: vi.fn(),
 }));
 
-vi.mock("./SearchToolView", () => {
-  const SearchToolView = ({ searchTool, onBack }: { searchTool: SearchTool; onBack: () => void }) => (
-    <div data-testid="search-tool-view">
-      <div>Search Tool View: {searchTool.search_tool_name}</div>
-      <button onClick={onBack}>Back</button>
-    </div>
-  );
+const searchToolViewMounts = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("./SearchToolView", async () => {
+  const { useEffect } = await import("react");
+  const SearchToolView = ({ searchTool, onBack }: { searchTool: SearchTool; onBack: () => void }) => {
+    useEffect(() => {
+      searchToolViewMounts.count += 1;
+    }, []);
+    return (
+      <div data-testid="search-tool-view">
+        <div>Search Tool View: {searchTool.search_tool_name}</div>
+        <button onClick={onBack}>Back</button>
+      </div>
+    );
+  };
   SearchToolView.displayName = "SearchToolView";
   return { SearchToolView };
 });
@@ -111,6 +120,7 @@ describe("SearchTools", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     testQueryClient.clear();
+    searchToolViewMounts.count = 0;
     vi.mocked(networking.fetchSearchTools).mockResolvedValue({ search_tools: mockSearchTools });
     vi.mocked(networking.fetchAvailableSearchProviders).mockResolvedValue({ providers: mockAvailableProviders });
     vi.mocked(roles.isAdminRole).mockReturnValue(true);
@@ -230,16 +240,67 @@ describe("SearchTools", () => {
   describe("URL state", () => {
     const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => onUrlUpdate.mock.calls.at(-1)?.[0];
 
+    const renderWithStableUrl = (searchParams: Record<string, string>, onUrlUpdate: OnUrlUpdateFunction) =>
+      render(
+        <NuqsTestingAdapter
+          searchParams={searchParams}
+          onUrlUpdate={onUrlUpdate}
+          hasMemory
+          resetUrlUpdateQueueOnMount={false}
+        >
+          <QueryClientProvider client={testQueryClient}>
+            <SearchTools {...defaultProps} />
+          </QueryClientProvider>
+        </NuqsTestingAdapter>,
+      );
+
     it("opens the tool named by search_tool in the URL", async () => {
       renderWithProviders(<SearchTools {...defaultProps} />, { searchParams: { search_tool: "tool-2" } });
       expect(await screen.findByText(/Search Tool View: Tavily Search/)).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /tool-1/ })).not.toBeInTheDocument();
     });
 
-    it("falls back to the table when search_tool names an unknown tool", async () => {
-      renderWithProviders(<SearchTools {...defaultProps} />, { searchParams: { search_tool: "missing" } });
+    it("falls back to the table and clears search_tool when it names an unknown tool", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithStableUrl({ search_tool: "missing" }, onUrlUpdate);
+
       expect(await screen.findByRole("button", { name: /tool-1/ })).toBeInTheDocument();
       expect(screen.queryByTestId("search-tool-view")).not.toBeInTheDocument();
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("search_tool")).toBe(false));
+      expect(lastUrl(onUrlUpdate)?.options.history).toBe("replace");
+    });
+
+    it("shows a loading state for a search_tool deep link until the tools arrive", async () => {
+      let resolveTools: (value: { search_tools: SearchTool[] }) => void = () => {};
+      vi.mocked(networking.fetchSearchTools).mockReturnValue(
+        new Promise((resolve) => {
+          resolveTools = resolve;
+        }),
+      );
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithStableUrl({ search_tool: "tool-2" }, onUrlUpdate);
+
+      expect(await screen.findByText("Loading search tool…")).toBeInTheDocument();
+      expect(screen.queryByTestId("search-tool-view")).not.toBeInTheDocument();
+      expect(screen.queryByText("No search tools configured")).not.toBeInTheDocument();
+
+      resolveTools({ search_tools: mockSearchTools });
+
+      expect(await screen.findByText(/Search Tool View: Tavily Search/)).toBeInTheDocument();
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
+    it("keeps the open tool view mounted when the page opens a modal", async () => {
+      const user = userEvent.setup({ delay: null });
+      renderWithProviders(<SearchTools {...defaultProps} />, { searchParams: { search_tool: "tool-2" } });
+      await screen.findByText(/Search Tool View: Tavily Search/);
+      expect(searchToolViewMounts.count).toBe(1);
+
+      await user.click(screen.getByRole("button", { name: /add new search tool/i }));
+
+      expect(screen.getByTestId("create-search-tool-modal")).toBeInTheDocument();
+      expect(screen.getByTestId("search-tool-view")).toBeInTheDocument();
+      expect(searchToolViewMounts.count).toBe(1);
     });
 
     it("pushes search_tool when a tool ID is clicked and clears it on Back", async () => {

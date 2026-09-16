@@ -54,6 +54,8 @@ const manyPrompts = (count: number): PromptSpec[] =>
     updated_at: new Date(Date.UTC(2025, 0, 1 + index)).toISOString(),
   }));
 
+const crossOrderedPrompts: PromptSpec[] = [mockPrompts[0], { ...mockPrompts[1], updated_at: "2026-01-01T00:00:00Z" }];
+
 const firstRowPromptId = () =>
   within(screen.getAllByRole("row")[1]).getByRole("button", { name: /^prompt-/ }).textContent;
 
@@ -130,9 +132,20 @@ describe("PromptTable", () => {
   });
 
   describe("URL state", () => {
-    it("orders rows by the sort_by and sort_order in the URL", () => {
+    it.each([
+      ["prompt_id", "prompt-newer"],
+      ["created_at", "prompt-older"],
+      ["updated_at", "prompt-newer"],
+    ])("orders rows ascending by %s from the URL", (sortBy, expectedFirstId) => {
+      renderWithProviders(<PromptTable {...defaultProps} promptsList={crossOrderedPrompts} />, {
+        searchParams: { sort_by: sortBy, sort_order: "asc" },
+      });
+      expect(firstRowPromptId()).toBe(expectedFirstId);
+    });
+
+    it("orders rows descending by prompt_id from the URL", () => {
       renderWithProviders(<PromptTable {...defaultProps} />, {
-        searchParams: { sort_by: "created_at", sort_order: "asc" },
+        searchParams: { sort_by: "prompt_id", sort_order: "desc" },
       });
       expect(firstRowPromptId()).toBe("prompt-older");
     });

@@ -181,6 +181,37 @@ describe("MemoryTable", () => {
     expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
   });
 
+  it("clamps an out-of-range page once the server reports fewer rows", () => {
+    const onPaginationChange = vi.fn();
+    render(
+      <MemoryTable
+        {...baseProps}
+        data={[]}
+        rowCount={0}
+        pagination={{ pageIndex: 2, pageSize: 50 }}
+        onPaginationChange={onPaginationChange}
+      />,
+    );
+
+    expect(onPaginationChange).toHaveBeenCalledWith({ pageIndex: 0, pageSize: 50 });
+  });
+
+  it("keeps the requested page when the fetch failed instead of clamping it", () => {
+    const onPaginationChange = vi.fn();
+    render(
+      <MemoryTable
+        {...baseProps}
+        data={[]}
+        rowCount={0}
+        isError
+        pagination={{ pageIndex: 2, pageSize: 50 }}
+        onPaginationChange={onPaginationChange}
+      />,
+    );
+
+    expect(onPaginationChange).not.toHaveBeenCalled();
+  });
+
   it("renders secondary id and date cells for the row", () => {
     render(<MemoryTable {...baseProps} data={[makeMemory({ user_id: "user-42", team_id: "team-7" })]} />);
     const table = screen.getByRole("table");
