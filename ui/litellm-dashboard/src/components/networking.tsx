@@ -2349,7 +2349,7 @@ export const keyInfoCall = async (accessToken: string, keys: string[]) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      if (errorData.includes("Invalid proxy server token passed")) {
+      if (errorData.includes("token_not_found_in_db") || errorData.includes("Invalid proxy server token passed")) {
         throw new Error("Invalid proxy server token passed");
       }
       handleError(errorData);
