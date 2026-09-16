@@ -2675,7 +2675,7 @@ def declared_value_factory(model: str, custom_llm_provider: str | None, key: str
     """Return a string value the model map declares for *key*, or ``None`` when it says nothing.
 
     The string-valued sibling of :func:`_supports_factory` and
-    :func:`_is_explicitly_disabled_factory`, public where those two are not because it is read
+    :func:`is_explicitly_disabled_factory`, public like the latter because both are read
     from the provider configs rather than from this module, sharing their
     ``get_llm_provider`` -> ``_get_model_info_helper`` chain and their unprefixed-twin
     fallback (#20885), so a provider-prefixed entry that omits the key still answers
@@ -2711,7 +2711,7 @@ def declared_value_factory(model: str, custom_llm_provider: str | None, key: str
         return None
 
 
-def _is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None, key: str) -> bool:
+def is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None, key: str) -> bool:
     """Return True only when the model map explicitly sets *key* to ``False``.
 
     This is the opt-out mirror of :func:`_supports_factory`.  Where
@@ -2830,7 +2830,7 @@ def is_vision_explicitly_disabled(model: str, custom_llm_provider: str | None = 
     The opt-out mirror of :func:`supports_vision`: a missing declaration reads as not
     disabled, so unknown or newly added models stay eligible for image routing.
     """
-    return _is_explicitly_disabled_factory(model, custom_llm_provider, "supports_vision")
+    return is_explicitly_disabled_factory(model, custom_llm_provider, "supports_vision")
 
 
 def supports_vision(model: str, custom_llm_provider: str | None = None) -> bool:

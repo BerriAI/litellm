@@ -5,11 +5,14 @@ from copy import deepcopy
 from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion
+from litellm.llms.anthropic.experimental_pass_through.messages import handler as anthropic_messages_handler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -2683,7 +2686,7 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     [
         "gemini-3.7-flash",
         "vertex_ai/gemini-3.8-flash",
-        "gemini-3.8-flash-preview",
+        "gemini/gemini-3.8-flash",
     ],
 )
 @pytest.mark.parametrize(
@@ -2691,7 +2694,7 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     [("minimal", True), ("none", False), ("disable", False)],
 )
 def test_gemini_37_38_flash_floor_minimal_thinking_level(
-    model, reasoning_effort, include_thoughts
+    local_model_cost_map, model, reasoning_effort, include_thoughts
 ):
     result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
         reasoning_effort, model
@@ -2717,7 +2720,7 @@ def test_gemini_37_38_flash_floor_minimal_thinking_level(
     ],
 )
 def test_gemini_flash_minimal_thinking_support(
-    model, reasoning_effort, expected_level, include_thoughts
+    local_model_cost_map, model, reasoning_effort, expected_level, include_thoughts
 ):
     result = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
         reasoning_effort, model
@@ -2727,7 +2730,7 @@ def test_gemini_flash_minimal_thinking_support(
     assert result["includeThoughts"] is include_thoughts
 
 
-def test_gemini_38_flash_feature_flag_uses_low_thinking_level(monkeypatch):
+def test_gemini_38_flash_feature_flag_uses_low_thinking_level(local_model_cost_map, monkeypatch):
     monkeypatch.setattr(litellm, "enable_gemini_default_thinking_level_low", True)
     thinking_param = {"type": "enabled", "budget_tokens": 1024}
 
@@ -2742,7 +2745,7 @@ def test_gemini_38_flash_feature_flag_uses_low_thinking_level(monkeypatch):
     assert result_36["thinkingLevel"] == "minimal"
 
 
-def test_gemini_38_flash_public_reasoning_effort_none_uses_low():
+def test_gemini_38_flash_public_reasoning_effort_none_uses_low(local_model_cost_map):
     result = VertexGeminiConfig().map_openai_params(
         non_default_params={"reasoning_effort": "none"},
         optional_params={},
@@ -2751,6 +2754,40 @@ def test_gemini_38_flash_public_reasoning_effort_none_uses_low():
     )
 
     assert result["thinkingConfig"] == {
+        "thinkingLevel": "low",
+        "includeThoughts": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_gemini_38_flash_messages_bridge_thinking_disabled_sends_low_thinking_level(local_model_cost_map):
+    captured: dict[str, dict] = {}
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+            request=request,
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+
+    await anthropic_messages_handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="gemini/gemini-3.8-flash",
+        custom_llm_provider="gemini",
+        thinking={"type": "disabled"},
+        api_key="fake-gemini-key",
+        client=client,
+    )
+
+    assert captured["body"]["generationConfig"]["thinkingConfig"] == {
         "thinkingLevel": "low",
         "includeThoughts": False,
     }

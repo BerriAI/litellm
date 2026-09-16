@@ -79,6 +79,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     ModelResponse,
     is_base64_encoded,
+    is_explicitly_disabled_factory,
     supports_reasoning,
 )
 
@@ -110,7 +111,6 @@ else:
 
 
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
-GEMINI_FLASH_MODELS_WITHOUT_MINIMAL_THINKING: Final = ("gemini-3.7-flash", "gemini-3.8-flash")
 
 
 def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
@@ -865,7 +865,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _supports_minimal_thinking_level(model: str) -> bool:
         lowered: Final = model.lower()
         is_gemini3flash: Final = "gemini-3" in lowered and "flash" in lowered
-        return is_gemini3flash and not any(m in lowered for m in GEMINI_FLASH_MODELS_WITHOUT_MINIMAL_THINKING)
+        return is_gemini3flash and not is_explicitly_disabled_factory(
+            model=model, custom_llm_provider=None, key="supports_minimal_reasoning_effort"
+        )
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_level(
