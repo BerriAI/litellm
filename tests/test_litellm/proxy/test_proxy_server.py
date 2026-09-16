@@ -19,7 +19,7 @@ import fastapi.routing
 import httpx
 import pytest
 import yaml
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
@@ -31,10 +31,17 @@ from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._types import LitellmUserRoles, TokenCountRequest, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LitellmUserRoles,
+    ModelAccessDeniedProxyException,
+    ProxyErrorTypes,
+    ProxyException,
+    TokenCountRequest,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
-from litellm.proxy.proxy_server import app, initialize
+from litellm.proxy.proxy_server import app, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 example_embedding_result = {
@@ -7401,6 +7408,88 @@ async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins(
         assert ps.general_settings["apply_user_budget_to_team_keys"] is True
 
 
+@pytest.mark.asyncio
+async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to_db_ones():
+    """user_api_key_auth honours ``auth: false`` only for entries it finds in
+    general_settings["pass_through_endpoints"]. The DB overlay used to replace that
+    list wholesale, so once one endpoint existed in the DB the YAML-declared
+    auth-disabled route started answering 401 while staying registered."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    yaml_endpoint: Final = {"path": "/v1/cuopt/request", "target": "https://example.com/post", "auth": False}
+    db_endpoint: Final = {"id": "db-1", "path": "/v1/db-echo", "target": "https://example.com/post", "auth": True}
+
+    def request_without_key(path: str) -> MagicMock:
+        request: Final = MagicMock()
+        request.url.path = path
+        request.headers = {}
+        request.query_params = {}
+        return request
+
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    with settings, yaml_endpoints, initialize, master_key:
+        await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+
+        anonymous: Final = await user_api_key_auth(request=request_without_key("/v1/cuopt/request"), api_key=None)
+        assert anonymous.api_key is None
+
+        with pytest.raises(ProxyException) as still_protected:
+            await user_api_key_auth(request=request_without_key("/v1/db-echo"), api_key=None)
+        assert still_protected.value.code == "401"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("db_methods", "yaml_methods"),
+    [(None, None), (["POST"], ["GET"])],
+    ids=["all-methods", "disjoint-methods"],
+)
+async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_entry_on_the_same_path(
+    db_methods: list[str] | None, yaml_methods: list[str] | None
+):
+    """The auth check matches pass-through entries by path only and lets any
+    matching ``auth: false`` entry through, so a DB ``auth: true`` entry can only
+    lock down a YAML-declared path if the YAML entry is dropped from the merged
+    list, whatever ``methods`` either entry declares."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    yaml_endpoint: Final = {
+        "path": "/v1/cuopt/request",
+        "target": "https://example.com/post",
+        "auth": False,
+        "methods": yaml_methods,
+    }
+    db_endpoint: Final = {
+        "id": "db-1",
+        "path": "/v1/cuopt/request",
+        "target": "https://example.com/post",
+        "auth": True,
+        "methods": db_methods,
+    }
+
+    request: Final = MagicMock()
+    request.url.path = "/v1/cuopt/request"
+    request.method = "POST"
+    request.headers = {}
+    request.query_params = {}
+
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    with settings, yaml_endpoints, initialize, master_key:
+        await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+
+        with pytest.raises(ProxyException) as locked_down:
+            await user_api_key_auth(request=request, api_key=None)
+        assert locked_down.value.code == "401"
+
+
 def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
     for index in range(count):
         cache.set_cache(key=f"key-{index}", value={"token": f"key-{index}"}, local_only=True)
@@ -10003,6 +10092,7 @@ async def _lit6973_drive_realtime_session(
     backend_logged_failure: bool = False,
     phase_one_exit: str | None = None,
     websocket: MagicMock | None = None,
+    model_access_exception: ProxyException | None = None,
 ) -> MagicMock:
     """Drive realtime_websocket_endpoint through one of its reservation-settling exits.
 
@@ -10035,10 +10125,10 @@ async def _lit6973_drive_realtime_session(
         if backend_logged_failure:
             logging_obj.model_call_details[REALTIME_SESSION_FAILURE_LOGGED_KEY] = True
 
-    from litellm.proxy._types import ProxyException
-
     model_access_error: Final = (
-        ProxyException(message="key cannot access model", type="auth_error", param="model", code=401)
+        model_access_exception
+        if model_access_exception is not None
+        else ProxyException(message="key cannot access model", type="auth_error", param="model", code=401)
         if phase_one_exit == "model_access"
         else None
     )
@@ -10750,6 +10840,7 @@ def test_get_config_list_includes_anthropic_prompt_caching_fields(monkeypatch):
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
     monkeypatch.setattr(litellm, "anthropic_prompt_caching_ttl", "1h")
+    monkeypatch.setattr(litellm, "openai_system_messages_first", False)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
     )
@@ -10771,6 +10862,10 @@ def test_get_config_list_includes_anthropic_prompt_caching_fields(monkeypatch):
         assert fields["enable_anthropic_prompt_caching"]["field_tab"] == "prompt_caching"
         assert fields["anthropic_prompt_caching_ttl"]["field_tab"] == "prompt_caching"
         assert fields["budget_exceeded_throttle_percentage"]["field_tab"] is None
+
+        assert fields["openai_system_messages_first"]["field_type"] == "Boolean"
+        assert fields["openai_system_messages_first"]["field_value"] is False
+        assert fields["openai_system_messages_first"]["field_tab"] == "prompt_caching"
     finally:
         app.dependency_overrides.clear()
 
@@ -10860,6 +10955,74 @@ def test_validate_max_ui_session_budget_empty_restores_default(empty_value):
     assert _validate_general_settings_ui_litellm_value("max_ui_session_budget", empty_value) == 1.0
 
 
+def _model_access_denied_proxy_exception():
+    return ModelAccessDeniedProxyException(
+        message="The requested model 'gpt-5.6\r\nWARNING forged log line' is not available for this API key, "
+        "or the model name is invalid. Check the models available to you and try again.",
+        internal_message="key not allowed to access model. This key can only access models=['internal-models']. "
+        "Tried to access gpt-5.6\r\nWARNING forged log line",
+        type=ProxyErrorTypes.key_model_access_denied,
+        param="model",
+        code=403,
+    )
+
+
+def _http_request_scope():
+    return Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []})
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_logs_sanitized_model_access_denial(caplog):
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        response = await openai_exception_handler(_http_request_scope(), _model_access_denied_proxy_exception())
+
+    assert response.status_code == 403
+    body = json.loads(response.body)
+    assert "internal-models" not in body["error"]["message"]
+    denial_records = [r for r in caplog.records if "internal-models" in r.getMessage()]
+    assert len(denial_records) == 1
+    assert denial_records[0].levelname == "WARNING"
+    assert "\n" not in denial_records[0].getMessage()
+    assert "\r" not in denial_records[0].getMessage()
+    assert "gpt-5.6WARNING forged log line" in denial_records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_no_denial_log_for_plain_proxy_exception(caplog):
+    denial = ProxyException(
+        message="Authentication Error, Invalid proxy server token passed",
+        type=ProxyErrorTypes.auth_error,
+        param="None",
+        code=401,
+    )
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        response = await openai_exception_handler(_http_request_scope(), denial)
+
+    assert response.status_code == 401
+    assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+
+
+@pytest.mark.asyncio
+async def test_realtime_model_access_denial_logs_sanitized_internal_message(caplog):
+    reservation = {"reserved_cost": 0.0, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        ws = await _lit6973_drive_realtime_session(
+            reservation,
+            backend_logged_success=False,
+            phase_one_exit="model_access",
+            model_access_exception=_model_access_denied_proxy_exception(),
+        )
+
+    ws.close.assert_awaited_once()
+    assert "internal-models" not in ws.close.await_args.kwargs["reason"]
+    denial_records = [r for r in caplog.records if "internal-models" in r.getMessage()]
+    assert len(denial_records) == 1
+    assert "\n" not in denial_records[0].getMessage()
+    assert "gpt-5.6WARNING forged log line" in denial_records[0].getMessage()
+
+
 def test_general_settings_ui_defaults_unchanged_for_existing_fields():
     """The spec-default mechanism added for max_ui_session_budget must not change what
     clearing the pre-existing fields restores (None for Float/Select, False for Boolean)."""
@@ -10887,6 +11050,7 @@ def test_general_settings_ui_defaults_unchanged_for_existing_fields():
     [
         ("enable_anthropic_prompt_caching", True),
         ("anthropic_prompt_caching_ttl", "1h"),
+        ("openai_system_messages_first", True),
     ],
 )
 def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_name, db_value):
@@ -10945,6 +11109,8 @@ def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypa
         ("enable_anthropic_prompt_caching", False),
         ("anthropic_prompt_caching_ttl", "5m"),
         ("anthropic_prompt_caching_ttl", "1h"),
+        ("openai_system_messages_first", True),
+        ("openai_system_messages_first", False),
     ],
 )
 @pytest.mark.asyncio
@@ -10993,6 +11159,8 @@ async def test_update_config_field_prompt_caching_persists_to_litellm_settings(m
         ("anthropic_prompt_caching_ttl", "10m"),
         ("anthropic_prompt_caching_ttl", "1H"),
         ("anthropic_prompt_caching_ttl", 3600),
+        ("openai_system_messages_first", "yes"),
+        ("openai_system_messages_first", 1),
     ],
 )
 @pytest.mark.asyncio
@@ -11032,6 +11200,7 @@ async def test_update_config_field_prompt_caching_rejects_invalid(monkeypatch, f
     [
         ("enable_anthropic_prompt_caching", False),
         ("anthropic_prompt_caching_ttl", None),
+        ("openai_system_messages_first", False),
         ("budget_exceeded_throttle_percentage", None),
     ],
 )
@@ -13521,3 +13690,54 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
     assert response.tokenizer_type == "huggingface_tokenizer"
     assert response.total_tokens > 0
     assert_loop_stayed_free(took, lags)
+
+
+async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
+    from tokenizers import Tokenizer
+
+    from litellm import Router
+    from litellm.types.router import DeploymentTypedDict
+
+    claude_tokenizer: Final[Tokenizer] = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
+    from_pretrained: Final = MagicMock(return_value=claude_tokenizer)
+
+    def deployment(model_name: str, revision: str, auth_token: str | None) -> DeploymentTypedDict:
+        return {
+            "model_name": model_name,
+            "litellm_params": {"model": "openai/self-hosted-model", "api_base": "http://localhost:8080/v1"},
+            "model_info": {
+                "custom_tokenizer": {"identifier": "my-org/tokenizer", "revision": revision, "auth_token": auth_token}
+            },
+        }
+
+    monkeypatch.setattr(litellm.utils, "Tokenizer", MagicMock(from_pretrained=from_pretrained))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                deployment("self-hosted", "main", None),
+                deployment("self-hosted-pinned", "v2", None),
+                deployment("self-hosted-private", "main", "hf_test_token"),
+            ]
+        ),
+    )
+    litellm.utils._select_custom_tokenizer_helper.cache_clear()
+    try:
+        responses: Final = [
+            await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted", prompt="count me once"))
+            for _ in range(3)
+        ]
+        assert from_pretrained.call_args_list == [mock.call("my-org/tokenizer", revision="main", token=None)]
+        assert all(response.tokenizer_type == "huggingface_tokenizer" for response in responses)
+        assert len({response.total_tokens for response in responses}) == 1
+        assert responses[0].total_tokens > 0
+
+        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-pinned", prompt="count me once"))
+        await proxy_server_module.token_counter(TokenCountRequest(model="self-hosted-private", prompt="count me once"))
+        assert from_pretrained.call_args_list == [
+            mock.call("my-org/tokenizer", revision="main", token=None),
+            mock.call("my-org/tokenizer", revision="v2", token=None),
+            mock.call("my-org/tokenizer", revision="main", token="hf_test_token"),
+        ]
+    finally:
+        litellm.utils._select_custom_tokenizer_helper.cache_clear()

@@ -20,6 +20,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
@@ -1157,7 +1158,7 @@ async def apply_compact_20260112(
 
     # Phase B: threshold check.
     try:
-        current_tokens = _count_effective_tokens(
+        current_tokens = await asyncify(_count_effective_tokens)(
             model=model,
             effective_messages=effective_messages,
             # ``augmented_system`` already carries the prior compaction summary

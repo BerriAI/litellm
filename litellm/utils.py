@@ -846,6 +846,13 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
     return isinstance(result, CustomStreamWrapper)
 
 
+def _is_converted_stream_result(result: object) -> bool:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    return isinstance(result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator))
+
+
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 def function_setup(
     original_function: str,
@@ -1208,36 +1215,56 @@ def _dispatch_success_logging(
     is_litellm_internal_call: bool,
 ) -> None:
     if not is_litellm_internal_call:
-        if getattr(logging_obj, "_defer_async_logging", False):
-
-            def _enqueue_deferred_logging() -> None:
-                asyncio.create_task(
-                    _client_async_logging_helper(
-                        logging_obj=logging_obj,
-                        result=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        is_completion_with_fallbacks=is_completion_with_fallbacks,
-                    )
-                )
-
-            logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging
-        else:
-            asyncio.create_task(
-                _client_async_logging_helper(
-                    logging_obj=logging_obj,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    is_completion_with_fallbacks=is_completion_with_fallbacks,
-                )
-            )
+        _schedule_async_success_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            is_completion_with_fallbacks=is_completion_with_fallbacks,
+        )
 
     logging_obj.handle_sync_success_callbacks_for_async_calls(
         result=result,
         start_time=start_time,
         end_time=end_time,
     )
+
+
+def _schedule_async_success_logging(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    is_completion_with_fallbacks: bool,
+) -> None:
+    """Fire the async success log for ``result`` now, or park it on the logging object while
+    the proxy defers logging past its post-call guardrails.
+
+    Nested @client wrappers (Anthropic Messages over the chat adapter, chat over the Responses
+    bridge) each exit through here with the same logging object and their own shape of the same
+    response. The immediate path already logs one request once, since the first task marks
+    ``has_logged_async_success`` and the later ones skip. The deferred slot keeps the same
+    first-wins rule: the innermost wrapper's provider-shaped result is the one the spend log
+    reads usage from, and a later wrapper never swaps in its client-shaped translation.
+    """
+
+    def _enqueue_async_logging() -> None:
+        asyncio.create_task(
+            _client_async_logging_helper(
+                logging_obj=logging_obj,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                is_completion_with_fallbacks=is_completion_with_fallbacks,
+            )
+        )
+
+    if not getattr(logging_obj, "_defer_async_logging", False):
+        _enqueue_async_logging()
+        return
+    if getattr(logging_obj, "_enqueue_deferred_logging", None) is not None:
+        return
+    logging_obj._enqueue_deferred_logging = _enqueue_async_logging
 
 
 async def _client_async_logging_helper(
@@ -1869,6 +1896,9 @@ def client(original_function):
                     _caching_handler_response.cached_result is not None
                     and _caching_handler_response.final_embedding_cached_response is None
                 ):
+                    if _is_converted_stream_result(_caching_handler_response.cached_result):
+                        logging_obj.stream = True
+                        logging_obj.model_call_details["stream"] = True
                     return _caching_handler_response.cached_result
 
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
@@ -1926,10 +1956,9 @@ def client(original_function):
                 raise
             end_time = datetime.datetime.now()
 
-            if _is_streaming_request(
-                kwargs=kwargs,
-                call_type=call_type,
-            ):
+            if _is_streaming_request(kwargs=kwargs, call_type=call_type) or _is_converted_stream_result(result):
+                logging_obj.stream = True
+                logging_obj.model_call_details["stream"] = True
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
                     chunks: Final = []
                     for idx, chunk in enumerate(result):
@@ -2182,13 +2211,18 @@ def _is_streaming_request(
 
 def _select_tokenizer(model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None = None):
     if custom_tokenizer is not None:
-        _tokenizer: Final = create_pretrained_tokenizer(
+        return _select_custom_tokenizer_helper(
             identifier=custom_tokenizer["identifier"],
             revision=custom_tokenizer["revision"],
             auth_token=custom_tokenizer["auth_token"],
         )
-        return _tokenizer
     return _select_tokenizer_helper(model=model)
+
+
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _select_custom_tokenizer_helper(identifier: str, revision: str, auth_token: str | None) -> SelectTokenizerResponse:
+    verbose_logger.debug("Loading custom HuggingFace tokenizer %s (revision %s)", identifier, revision)
+    return create_pretrained_tokenizer(identifier=identifier, revision=revision, auth_token=auth_token)
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
@@ -8964,6 +8998,12 @@ class ProviderConfigManager:
             )
 
             return WatsonxPassthroughConfig()
+        elif LlmProviders.NVIDIA_NIM == provider:
+            from litellm.llms.nvidia_nim.passthrough.transformation import (
+                NvidiaNimPassthroughConfig,
+            )
+
+            return NvidiaNimPassthroughConfig()
         return None
 
     @staticmethod

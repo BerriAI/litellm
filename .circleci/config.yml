@@ -9,7 +9,7 @@ commands:
     parameters:
       category:
         type: enum
-        enum: ["backend", "client"]
+        enum: ["backend", "client", "provider-harness"]
         default: "backend"
     steps:
       - run:
@@ -2915,6 +2915,36 @@ jobs:
               exit 1
             fi
 
+  provider_replay_harness:
+    docker:
+      - *python312_image
+      - image: redis@sha256:e2debfb7956fa12c7ddc79d7e645c8cf26b30c99a6e9161ea9bf4171e1668a5f
+    working_directory: ~/project
+    resource_class: medium
+    environment:
+      E2E_CACHE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      E2E_PROVIDER_CACHE: "0"
+      E2E_FIXTURE_MODE: live
+    steps:
+      - checkout
+      - skip_if_unrelated_changes:
+          category: provider-harness
+      - setup_litellm_test_deps
+      - wait_for_service:
+          url: tcp://localhost:6379
+      - run:
+          name: Test provider capture and replay harness
+          command: |
+            mkdir -p test-results/provider-replay-harness
+            uv run --no-sync pytest -q --noconftest -o addopts= -o pythonpath=tests/e2e -p no:rerunfailures \
+              --junitxml=test-results/provider-replay-harness/junit.xml \
+              tests/e2e/test_provider_edge.py tests/e2e/test_fixture_bundle.py \
+              tests/e2e/test_fixture_canonical.py tests/e2e/test_fixture_mode.py \
+              tests/code_coverage_tests/test_provider_replay_harness.py \
+              tests/code_coverage_tests/test_provider_cache.py
+      - store_test_results:
+          path: test-results/provider-replay-harness
+
   integration_contracts:
     parameters:
       suite:
@@ -2967,6 +2997,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - provider_replay_harness
       - base_sdk_install:
           filters: *main_branches
       - local_testing_part1:
