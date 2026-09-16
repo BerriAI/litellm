@@ -4003,6 +4003,72 @@ def test_get_logging_payload_failed_request_without_standard_logging_payload_lea
     assert payload["custom_llm_provider"] == ""
 
 
+def _router_rejected_failure_payload(model_group: str, llm_router: litellm.Router | None) -> SpendLogsPayload:
+    return get_logging_payload(
+        kwargs={
+            "model": model_group,
+            "litellm_params": {
+                "metadata": {"user_api_key": "test-key", "model_group": model_group, "status": "failure"}
+            },
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+        llm_router=llm_router,
+    )
+
+
+def _openai_and_anthropic_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": "openai-group", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-a"}},
+            {"model_name": "openai-group", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-b"}},
+            {"model_name": "mixed-group", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-a"}},
+            {
+                "model_name": "mixed-group",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-c"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "model_group,expected_provider",
+    [("openai-group", "openai"), ("mixed-group", ""), ("not-in-router", "")],
+)
+def test_get_logging_payload_router_rejected_request_takes_provider_from_model_group(
+    model_group: str, expected_provider: str
+):
+    payload = _router_rejected_failure_payload(model_group, _openai_and_anthropic_router())
+
+    assert payload["model_group"] == model_group
+    assert payload["custom_llm_provider"] == expected_provider
+
+
+def test_get_logging_payload_router_rejected_request_without_router_leaves_provider_empty():
+    assert _router_rejected_failure_payload("openai-group", None)["custom_llm_provider"] == ""
+
+
+def test_get_logging_payload_logged_provider_wins_over_model_group_provider():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "openai-group",
+            "litellm_params": {"metadata": {"user_api_key": "test-key", "model_group": "openai-group"}},
+            "standard_logging_object": {
+                **_make_failed_request_standard_logging_payload(),
+                "model_group": "openai-group",
+                "custom_llm_provider": "azure",
+            },
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+        llm_router=_openai_and_anthropic_router(),
+    )
+
+    assert payload["custom_llm_provider"] == "azure"
+
+
 class _ModelRouterSpendLogKwargs(TypedDict):
     model: ReadOnly[str]
     litellm_params: ReadOnly[dict[str, dict[str, str]]]
