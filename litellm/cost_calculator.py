@@ -97,6 +97,7 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
@@ -813,6 +814,7 @@ def _select_model_name_for_cost_calc(
             if (
                 entry.get("input_cost_per_token") is not None
                 or entry.get("input_cost_per_second") is not None
+                or entry.get("input_cost_per_query") is not None
                 or entry.get("tiered_pricing") is not None
             ):
                 return_model = router_model_id
@@ -1201,6 +1203,24 @@ def _without_provider_stated_cost(usage: Usage | None) -> Usage | None:
     return usage.model_copy(update=MappingProxyType({"cost": None}))
 
 
+def _split_responses_ws_logging_object_by_service_tier(
+    completion_response: LiteLLMRealtimeStreamLoggingObject,
+) -> tuple[LiteLLMRealtimeStreamLoggingObject, ...] | None:
+    partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(
+        cast(Sequence[Mapping[str, object]], completion_response.results)
+    )
+    if len(partition) <= 1:
+        return None
+    return tuple(
+        LiteLLMRealtimeStreamLoggingObject(
+            results=cast(OpenAIRealtimeStreamList, list(group)),
+            usage=ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(group),
+            service_tier=tier,
+        )
+        for tier, group in partition.items()
+    )
+
+
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -1263,6 +1283,41 @@ def completion_cost(
     """
     try:
         call_type = _infer_call_type(call_type, completion_response) or "completion"
+
+        if call_type == CallTypes.aresponses_websocket.value and isinstance(
+            completion_response, LiteLLMRealtimeStreamLoggingObject
+        ):
+            ws_tier_parts: Final = _split_responses_ws_logging_object_by_service_tier(completion_response)
+            if ws_tier_parts is not None:
+                return sum(
+                    completion_cost(
+                        completion_response=part,
+                        model=model,
+                        prompt=prompt,
+                        messages=messages,
+                        completion=completion,
+                        total_time=total_time,
+                        call_type=call_type,
+                        custom_llm_provider=custom_llm_provider,
+                        region_name=region_name,
+                        size=size,
+                        quality=quality,
+                        n=n,
+                        custom_cost_per_token=custom_cost_per_token,
+                        custom_cost_per_second=custom_cost_per_second,
+                        optional_params=optional_params,
+                        custom_pricing=custom_pricing,
+                        base_model=base_model,
+                        standard_built_in_tools_params=standard_built_in_tools_params,
+                        litellm_model_name=litellm_model_name,
+                        router_model_id=router_model_id,
+                        litellm_logging_obj=litellm_logging_obj,
+                        service_tier=service_tier,
+                        data_residency=data_residency,
+                        vertex_location=vertex_location,
+                    )
+                    for part in ws_tier_parts
+                )
 
         if (
             (call_type == "aimage_generation" or call_type == "image_generation")
@@ -1464,12 +1519,15 @@ def completion_cost(
                             duration_seconds = usage_obj.get("duration_seconds", None)
                             _vr = usage_obj.get("video_resolution", None)
                             provider_reported_cost = usage_obj.get("provider_reported_cost_usd", None)
+                            _vc = usage_obj.get("video_count", None)
                         else:
                             duration_seconds = getattr(usage_obj, "duration_seconds", None)
                             _vr = getattr(usage_obj, "video_resolution", None)
                             provider_reported_cost = getattr(usage_obj, "provider_reported_cost_usd", None)
+                            _vc = getattr(usage_obj, "video_count", None)
                         if _vr is not None:
                             video_resolution = str(_vr).strip().lower()
+                        video_count = _vc if isinstance(_vc, int) and not isinstance(_vc, bool) and _vc > 1 else 1
 
                         if _video_model_info is None and provider_reported_cost is not None:
                             return float(provider_reported_cost)
@@ -1480,12 +1538,15 @@ def completion_cost(
                                 video_generation_cost,
                             )
 
-                            return video_generation_cost(
-                                model=model,
-                                duration_seconds=duration_seconds,
-                                custom_llm_provider=custom_llm_provider,
-                                model_info=_video_model_info,
-                                video_resolution=video_resolution,
+                            return (
+                                video_generation_cost(
+                                    model=model,
+                                    duration_seconds=duration_seconds,
+                                    custom_llm_provider=custom_llm_provider,
+                                    model_info=_video_model_info,
+                                    video_resolution=video_resolution,
+                                )
+                                * video_count
                             )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
@@ -2279,6 +2340,19 @@ def default_video_cost_calculator(
     return 0.0
 
 
+def _batch_rate(
+    model_info: ModelInfo,
+    key: Literal[
+        "input_cost_per_audio_token_batches",
+        "input_cost_per_image_token_batches",
+        "input_cost_per_video_token_batches",
+    ],
+    fallback: float,
+) -> float:
+    rate: Final = model_info.get(key)
+    return fallback if rate is None else rate
+
+
 def batch_cost_calculator(
     usage: Usage,
     model: str,
@@ -2338,7 +2412,29 @@ def batch_cost_calculator(
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
     if input_cost_per_token_batches is not None:
-        total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
+        batch_details: Final = parse_prompt_tokens_details(usage)
+        audio_tokens, image_tokens, video_tokens = (
+            batch_details["audio_tokens"],
+            batch_details["image_tokens"],
+            batch_details["video_tokens"],
+        )
+        modality_rates: Final = (
+            _batch_rate(model_info, "input_cost_per_audio_token_batches", input_cost_per_token_batches),
+            _batch_rate(model_info, "input_cost_per_image_token_batches", input_cost_per_token_batches),
+            _batch_rate(model_info, "input_cost_per_video_token_batches", input_cost_per_token_batches),
+        )
+        total_prompt_cost = sum(
+            tokens * rate
+            for tokens, rate in zip(
+                (
+                    max((usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens, 0),
+                    audio_tokens,
+                    image_tokens,
+                    video_tokens,
+                ),
+                (input_cost_per_token_batches, *modality_rates),
+            )
+        )
     elif input_cost_per_token:
         details: Final = parse_prompt_tokens_details(usage)
         cache_read_tokens: Final = details["cache_hit_tokens"]
@@ -2383,6 +2479,46 @@ def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> list[str]
     return [attr for attr in field_names if attr != "cache_creation_tokens"]
 
 
+def _combine_cached_tokens_details(
+    current: CachedTokensDetails | None, new: CachedTokensDetails
+) -> CachedTokensDetails:
+    def _sum_optional(current_value: int | None, new_value: int | None) -> int | None:
+        if current_value is None and new_value is None:
+            return None
+        return (current_value or 0) + (new_value or 0)
+
+    return CachedTokensDetails(
+        text_tokens=_sum_optional(current.text_tokens if current is not None else None, new.text_tokens),
+        audio_tokens=_sum_optional(current.audio_tokens if current is not None else None, new.audio_tokens),
+        image_tokens=_sum_optional(current.image_tokens if current is not None else None, new.image_tokens),
+    )
+
+
+def _combine_prompt_tokens_details(
+    current: PromptTokensDetailsWrapper | None, new: PromptTokensDetailsWrapper
+) -> PromptTokensDetailsWrapper:
+    base: Final = current if current is not None else PromptTokensDetailsWrapper()
+    base_values: Final = MappingProxyType(
+        {attr: getattr(base, attr) for attr in type(base).model_fields if hasattr(base, attr)}
+    )
+    summed: Final = MappingProxyType(
+        {
+            attr: (getattr(base, attr, 0) or 0) + (getattr(new, attr) or 0)
+            for attr in _summable_prompt_token_fields(new)
+            if hasattr(new, attr) and isinstance(getattr(new, attr) or 0, (int, float))
+        }
+    )
+    new_cached_tokens_details: Final = getattr(new, "cached_tokens_details", None)
+    cached_tokens_details: Final = (
+        _combine_cached_tokens_details(getattr(base, "cached_tokens_details", None), new_cached_tokens_details)
+        if isinstance(new_cached_tokens_details, CachedTokensDetails)
+        else getattr(base, "cached_tokens_details", None)
+    )
+    return PromptTokensDetailsWrapper(
+        **MappingProxyType({**base_values, **summed, "cached_tokens_details": cached_tokens_details})
+    )
+
+
 class BaseTokenUsageProcessor:
     @staticmethod
     def combine_usage_objects(usage_objects: list[Usage]) -> Usage:
@@ -2391,7 +2527,6 @@ class BaseTokenUsageProcessor:
         """
         from litellm.types.utils import (
             CompletionTokensDetailsWrapper,
-            PromptTokensDetailsWrapper,
             Usage,
         )
 
@@ -2410,27 +2545,10 @@ class BaseTokenUsageProcessor:
                         and isinstance(current_val, (int, float))
                     ):
                         setattr(combined, attr, current_val + new_val)
-            # Handle nested prompt_tokens_details
             if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
-                if not hasattr(combined, "prompt_tokens_details") or not combined.prompt_tokens_details:
-                    combined.prompt_tokens_details = PromptTokensDetailsWrapper()
-
-                # Check what keys exist in the model's prompt_tokens_details
-                # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-                for attr in _summable_prompt_token_fields(usage.prompt_tokens_details):
-                    if (
-                        hasattr(usage.prompt_tokens_details, attr)
-                        and not attr.startswith("_")
-                        and not callable(_attribute_value(usage.prompt_tokens_details, attr))
-                    ):
-                        current_val = getattr(combined.prompt_tokens_details, attr, 0) or 0
-                        new_val = getattr(usage.prompt_tokens_details, attr, 0) or 0
-                        if new_val is not None and isinstance(new_val, (int, float)):
-                            setattr(
-                                combined.prompt_tokens_details,
-                                attr,
-                                current_val + new_val,
-                            )
+                combined.prompt_tokens_details = _combine_prompt_tokens_details(
+                    getattr(combined, "prompt_tokens_details", None), usage.prompt_tokens_details
+                )
 
             # Handle nested completion_tokens_details
             if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
@@ -2501,6 +2619,7 @@ _RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "re
 
 class _ResponsesWsEventResponse(BaseModel):
     usage: Mapping[str, object] | None = None
+    service_tier: str | None = None
 
 
 class _ResponsesWsEvent(BaseModel):
@@ -2508,20 +2627,39 @@ class _ResponsesWsEvent(BaseModel):
     response: _ResponsesWsEventResponse | None = None
 
 
+def _billable_responses_ws_events(
+    results: Sequence[Mapping[str, object]],
+) -> tuple[tuple[Mapping[str, object], _ResponsesWsEventResponse], ...]:
+    return tuple(
+        (result, event.response)
+        for result in results
+        if (event := _ResponsesWsEvent.model_validate(result)).type in _RESPONSES_WS_BILLABLE_EVENT_TYPES
+        and event.response is not None
+        and event.response.usage is not None
+    )
+
+
 class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
     @staticmethod
     def collect_usage_from_responses_ws_results(
         results: Sequence[Mapping[str, object]],
     ) -> tuple[Usage, ...]:
-        events: Final = tuple(_ResponsesWsEvent.model_validate(result) for result in results)
         return tuple(
             ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the realtime processor uses
-                event.response.usage
+                response.usage
             )
-            for event in events
-            if event.type in _RESPONSES_WS_BILLABLE_EVENT_TYPES
-            and event.response is not None
-            and event.response.usage is not None
+            for _, response in _billable_responses_ws_events(results)
+            if response.usage is not None
+        )
+
+    @staticmethod
+    def partition_results_by_service_tier(
+        results: Sequence[Mapping[str, object]],
+    ) -> Mapping[str | None, tuple[Mapping[str, object], ...]]:
+        billable: Final = _billable_responses_ws_events(results)
+        tiers: Final = dict.fromkeys(response.service_tier for _, response in billable)
+        return MappingProxyType(
+            {tier: tuple(result for result, response in billable if response.service_tier == tier) for tier in tiers}
         )
 
     @staticmethod

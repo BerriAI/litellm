@@ -15,6 +15,7 @@ from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_c
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -146,6 +147,7 @@ class UpdateRouterConfig(BaseModel):
     context_window_fallbacks: list[dict] | None = None
     model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
+    weights: RouterWeights | None = None
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
 
@@ -180,6 +182,7 @@ class ModelInfo(MirroredPricingParams):
 
     # the model_name that can be used by the team when making LLM calls
     team_public_model_name: str | None = None
+    member_auto_router: bool = False
 
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: bool | None = None
@@ -645,6 +648,7 @@ class RouterErrors(enum.Enum):
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
     no_deployments_available = "No deployments available for selected model"
+    all_deployments_in_cooldown = "All deployments for selected model are in cooldown"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"
     no_deployments_with_provider_budget_routing = "No deployments available - crossed budget"
     no_healthy_deployments = "There are no healthy deployments for this model"
@@ -718,6 +722,7 @@ class ModelGroupInfo(BaseModel):
     supports_url_context: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
+    supports_fast_mode: bool = Field(default=False)
     supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
@@ -868,6 +873,11 @@ class RouterRateLimitErrorBasic(ValueError):
         super().__init__(_message)
 
 
+class RouterErrorTypes(str, enum.Enum):
+    rate_limit_error = "rate_limit_error"
+    all_deployments_in_cooldown = "all_deployments_in_cooldown"
+
+
 class RouterRateLimitError(ValueError):
     def __init__(
         self,
@@ -875,18 +885,39 @@ class RouterRateLimitError(ValueError):
         cooldown_time: float,
         enable_pre_call_checks: bool,
         cooldown_list: list,
+        model_ids: Sequence[str] = (),
     ) -> None:
         self.model = model
         self.cooldown_time = cooldown_time
         self.enable_pre_call_checks = enable_pre_call_checks
         self.cooldown_list = cooldown_list
-        _message = f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds. Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
+        self.all_deployments_in_cooldown = bool(model_ids) and frozenset(model_ids) <= frozenset(cooldown_list)
+        self.type = (
+            RouterErrorTypes.all_deployments_in_cooldown.value
+            if self.all_deployments_in_cooldown
+            else RouterErrorTypes.rate_limit_error.value
+        )
+        _reason: Final = (
+            f" {RouterErrors.all_deployments_in_cooldown.value}." if self.all_deployments_in_cooldown else ""
+        )
+        _message: Final = (
+            f"{RouterErrors.no_deployments_available.value}, Try again in {cooldown_time} seconds.{_reason} "
+            f"Passed model={model}. pre-call-checks={enable_pre_call_checks}, cooldown_list={cooldown_list}"
+        )
         super().__init__(_message)
 
 
 class RouterModelGroupAliasItem(TypedDict):
     model: str
     hidden: bool  # if 'True', don't return on `.get_model_list`
+
+
+class RetryAttemptRecord(TypedDict):
+    model_group: ReadOnly[str | None]
+    deployment_id: ReadOnly[str | None]
+    exception_type: ReadOnly[str]
+    exception_string: ReadOnly[str]
+    attempted_retries: ReadOnly[int | None]
 
 
 VALID_LITELLM_ENVIRONMENTS = [

@@ -42,6 +42,7 @@ import base64
 import difflib
 import functools
 import hashlib
+import os
 import re
 import threading
 from collections import deque
@@ -92,6 +93,9 @@ from fixture_mode import (
     current_test_key,
     parse_fixture_mode,
 )
+from fixture_profile import IneligibleRequest, MatchProfile, match_profile, strict_identity
+from provider_cache import CacheEdge
+from provider_cache_routing import LIVE_PROVIDER_REQUIRED
 from pydantic import JsonValue, TypeAdapter
 
 EDGE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
@@ -404,6 +408,12 @@ def _miss_message(test_key: str, slug: str, canonical: CanonicalRequest, bundle:
             f"under {slug}; re-record with E2E_FIXTURE_MODE=record"
         )
     closest, closest_file = _closest_recorded(canonical, recorded)
+    if bundle.manifest.match_profile == "stateless_v1":
+        expected: Final = _JSON.validate_json(closest.content)
+        actual: Final = _JSON.validate_json(canonical.content)
+        assert isinstance(expected, dict) and isinstance(actual, dict)
+        changed: Final = ", ".join(key for key in expected if expected[key] != actual.get(key))
+        return f"stateless_v1 replay mismatch: {changed or 'method/path'}; re-record with E2E_FIXTURE_MODE=record"
     diff: Final = "\n".join(
         islice(
             difflib.unified_diff(
@@ -499,7 +509,7 @@ class LiveEdge:
     pass
 
 
-type EdgeBackend = RecordEdge | ReplayEdge | LiveEdge
+type EdgeBackend = RecordEdge | ReplayEdge | LiveEdge | CacheEdge
 
 
 @dataclass(slots=True)
@@ -743,12 +753,16 @@ def _handle_record(
 
 
 def _handle_live(
-    method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float
+    method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float,
+    cache: CacheEdge | None = None,
 ) -> EdgeOutcome:
     forwarded: Final = {
         name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
     }
-    head: Final = forward_stream(method, url, headers=forwarded, body=body, timeout=timeout)
+    head: Final = (
+        forward_stream(method, url, headers=forwarded, body=body, timeout=timeout)
+        if cache is None else cache.forward(method, url, forwarded, body, timeout)
+    )
     match head:
         case NetworkError(message=message):
             return _recorded_outcome(_network_error_response(message))
@@ -785,13 +799,39 @@ def handle_edge_request(
     mount, _, upstream_path = split.path.lstrip("/").partition("/")
     upstream_base: Final = mounts.get(mount)
     if upstream_base is None:
-        return _text_reply(
-            404, f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(mounts))}"
+        return _text_reply(404, f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(mounts))}")
+    profile: Final = (
+        backend.recorder.profile
+        if isinstance(backend, RecordEdge)
+        else backend.source.bundle.manifest.match_profile
+        if isinstance(backend, ReplayEdge)
+        else "legacy"
+    )
+    identity: Final = (
+        strict_identity(
+            method=method,
+            path=split.path,
+            query=split.query,
+            headers=headers,
+            body=body,
+            mount=mount,
+            upstream_base=upstream_base,
         )
-    request: Final = edge_request(
-        method, split.path, split.query, body, _header_value(headers, "content-type")
+        if profile == "stateless_v1"
+        else None
+    )
+    if isinstance(identity, IneligibleRequest):
+        return _text_reply(REPLAY_MISS_STATUS, f"stateless_v1 eligibility error: {identity.reason}")
+    request: Final = (
+        RecordedRequest(method=method.lower(), path=split.path, headers={}, strict_identity=identity)
+        if identity is not None
+        else edge_request(method, split.path, split.query, body, _header_value(headers, "content-type"))
     )
     match backend:
+        case CacheEdge():
+            return _handle_live(
+                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout, backend,
+            )
         case LiveEdge():
             return _handle_live(
                 method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout
@@ -837,8 +877,24 @@ class _EdgeHandler(BaseHTTPRequestHandler):
         body: Final = self.rfile.read(length) if length else None
         if edge_server.observation is not None:
             edge_server.observation.observe(body)
+        strict: Final = (
+            isinstance(edge_server.backend, RecordEdge) and edge_server.backend.recorder.profile == "stateless_v1"
+            or isinstance(edge_server.backend, ReplayEdge)
+            and edge_server.backend.source.bundle.manifest.match_profile == "stateless_v1"
+        )
+        if strict and len({name.lower() for name in self.headers}) != len(self.headers):
+            self._write_reply(_text_reply(REPLAY_MISS_STATUS, "stateless_v1 eligibility error: duplicate headers"))
+            return
+        duplicate_headers: Final = len({name.lower() for name in self.headers}) != len(self.headers)
+        selected_backend: Final = (
+            LiveEdge() if isinstance(edge_server.backend, CacheEdge) and duplicate_headers else edge_server.backend
+        )
+        if isinstance(edge_server.backend, CacheEdge) and duplicate_headers:
+            edge_server.backend.counters.increment("duplicate_header_bypass")
+            if urlsplit(self.path).path.lstrip("/").partition("/")[0] in edge_server.mounts:
+                edge_server.backend.counters.increment("upstream_attempts")
         outcome: Final = handle_edge_request(
-            edge_server.backend,
+            selected_backend,
             edge_server.mounts,
             self.command,
             self.path,
@@ -871,12 +927,12 @@ class _EdgeHandler(BaseHTTPRequestHandler):
         shuts down write-side first: the proxy sees a graceful close mid-message,
         which is the incomplete chunked read a provider hanging up produces, and not
         the reset that could discard the chunks already in flight."""
-        self.send_response(stream.status_code)
-        for name, value in stream.headers.items():
-            self.send_header(name, value)
-        self.send_header("transfer-encoding", "chunked")
-        self.end_headers()
         with closing(stream.steps) as steps:
+            self.send_response(stream.status_code)
+            for name, value in stream.headers.items():
+                self.send_header(name, value)
+            self.send_header("transfer-encoding", "chunked")
+            self.end_headers()
             for step in steps:
                 match step:
                     case StreamChunk(data=data):
@@ -886,7 +942,7 @@ class _EdgeHandler(BaseHTTPRequestHandler):
                         return
                     case _:
                         assert_never(step)
-        self.wfile.write(b"0\r\n\r\n")
+            self.wfile.write(b"0\r\n\r\n")
 
     def log_message(self, format: str, *args: object) -> None:
         """Silence the per-request stderr line BaseHTTPRequestHandler emits."""
@@ -955,16 +1011,16 @@ def start_provider_edge(
 
 
 @functools.lru_cache(maxsize=8)
-def _shared_recorder(root: Path) -> BundleRecorder:
-    prepared = prepare_bundle(root)
+def _shared_recorder(root: Path, profile: MatchProfile = "legacy") -> BundleRecorder:
+    prepared = prepare_bundle(root, profile=profile)
     if isinstance(prepared, UnsafeBundleDir):
         raise ValueError(f"E2E_FIXTURE_DIR {prepared.path} {prepared.reason}")
     return prepared
 
 
 @functools.lru_cache(maxsize=8)
-def _shared_replay_source(root: Path) -> ReplaySource:
-    loaded = load_bundle(root)
+def _shared_replay_source(root: Path, profile: MatchProfile = "legacy") -> ReplaySource:
+    loaded = load_bundle(root, profile=profile)
     if isinstance(loaded, UnreadableBundle):
         raise ValueError(f"cannot replay from {root}: {loaded.reason}")
     return ReplaySource(bundle=loaded)
@@ -977,11 +1033,12 @@ def _shared_edge(
     bind_host: str,
     advertise_host: str,
     forward_timeout: float,
+    profile: MatchProfile,
 ) -> ProviderEdge:
     backend: Final[EdgeBackend] = (
-        RecordEdge(recorder=_shared_recorder(bundle_dir), lock=threading.Lock())
+        RecordEdge(recorder=_shared_recorder(bundle_dir, profile), lock=threading.Lock())
         if mode == "record"
-        else ReplayEdge(source=_shared_replay_source(bundle_dir))
+        else ReplayEdge(source=_shared_replay_source(bundle_dir, profile))
     )
     return start_provider_edge(
         backend,
@@ -998,7 +1055,7 @@ def replay_leftover_error(*, mode_raw: str, bundle_dir: Path, test_key: str) -> 
     recording it no longer matches. Inert in every other mode."""
     if parse_fixture_mode(mode_raw) != "replay":
         return None
-    return _shared_replay_source(bundle_dir).leftover_error(test_key)
+    return _shared_replay_source(bundle_dir, match_profile()).leftover_error(test_key)
 
 
 def provider_edge_api_base(
@@ -1018,13 +1075,15 @@ def provider_edge_api_base(
         case InvalidFixtureMode(value=value):
             raise ValueError(f"E2E_FIXTURE_MODE={value!r} is not one of {', '.join(FIXTURE_MODES)}")
         case "live":
+            if configured_cache_backend() is not None:
+                return _shared_cache_edge(bind_host, advertise_host, forward_timeout).api_base(mount)
             return None
         case "record" | "replay":
             if mount not in EDGE_MOUNTS:
-                raise ValueError(
-                    f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(EDGE_MOUNTS))}"
-                )
-            return _shared_edge(mode, bundle_dir, bind_host, advertise_host, forward_timeout).api_base(mount)
+                raise ValueError(f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(EDGE_MOUNTS))}")
+            return _shared_edge(mode, bundle_dir, bind_host, advertise_host, forward_timeout, match_profile()).api_base(
+                mount
+            )
         case _:
             assert_never(mode)
 
@@ -1035,13 +1094,31 @@ def _observed_backend(mode_raw: str, bundle_dir: Path) -> EdgeBackend:
         case InvalidFixtureMode(value=value):
             raise ValueError(f"E2E_FIXTURE_MODE={value!r} is not one of {', '.join(FIXTURE_MODES)}")
         case "live":
-            return LiveEdge()
+            return configured_cache_backend() or LiveEdge()
         case "record":
-            return RecordEdge(_shared_recorder(bundle_dir), threading.Lock())
+            return RecordEdge(_shared_recorder(bundle_dir, match_profile()), threading.Lock())
         case "replay":
-            return ReplayEdge(_shared_replay_source(bundle_dir))
+            return ReplayEdge(_shared_replay_source(bundle_dir, match_profile()))
         case _:
             assert_never(mode)
+
+
+def configured_cache_backend() -> CacheEdge | None:
+    if LIVE_PROVIDER_REQUIRED.get() or os.environ.get("E2E_PROVIDER_CACHE", "0") == "0":
+        return None
+    from provider_cache_redis import configured_cache
+
+    return configured_cache()
+
+
+@functools.lru_cache(maxsize=8)
+def _shared_cache_edge(bind_host: str, advertise_host: str, forward_timeout: float) -> ProviderEdge:
+    backend: Final = configured_cache_backend()
+    assert backend is not None
+    return start_provider_edge(
+        backend, mounts=EDGE_MOUNTS, bind_host=bind_host,
+        advertise_host=advertise_host, forward_timeout=forward_timeout,
+    ).edge
 
 
 @contextmanager

@@ -2,15 +2,19 @@ import asyncio
 import re
 from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
+    InteractionsUsageObjectTransformation,
+)
 from litellm.llms.vertex_ai.common_utils import (
     get_vertex_ai_lyria_generation_cost,
     get_vertex_location_from_url,
@@ -50,8 +54,73 @@ else:
 
 EndpointType = Any
 
+_VERTEX_INTERACTIONS_PATH: Final = re.compile(r"/projects/[^/]+/locations/[^/]+/interactions/?$")
+_INTERACTIONS_RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _interactions_model(
+    response_body: Mapping[str, object],
+    request_body: Mapping[str, object] | None,
+) -> str | None:
+    response_model: Final = response_body.get("model")
+    if isinstance(response_model, str) and response_model:
+        return response_model
+    request_model: Final = (request_body or {}).get("model")
+    if isinstance(request_model, str) and request_model:
+        return request_model
+    return None
+
 
 class VertexPassthroughLoggingHandler:
+    @staticmethod
+    def is_interactions_route(url_route: str) -> bool:
+        return urlparse(url_route).path.rstrip("/").endswith("/interactions")
+
+    @staticmethod
+    def is_vertex_interactions_route(url_route: str) -> bool:
+        return _VERTEX_INTERACTIONS_PATH.search(urlparse(url_route).path) is not None
+
+    @staticmethod
+    def interactions_passthrough_handler(
+        httpx_response: httpx.Response,
+        request_body: Mapping[str, object] | None,
+        logging_obj: LiteLLMLoggingObj,
+        kwargs: dict[str, object],
+        start_time: datetime,
+        end_time: datetime,
+        custom_llm_provider: Literal["vertex_ai", "gemini"],
+        vertex_location: str | None,
+    ) -> PassThroughEndpointLoggingTypedDict:
+        response_body: Final = _INTERACTIONS_RESPONSE_BODY.validate_python(httpx_response.json())
+        usage_object: Final = response_body.get("usage")
+        model: Final = _interactions_model(response_body, request_body)
+        if model is None or not InteractionsUsageObjectTransformation.is_interactions_usage_object(usage_object):
+            return {"result": None, "kwargs": kwargs}
+
+        litellm_model_response: Final = ModelResponse(
+            model=model,
+            usage=InteractionsUsageObjectTransformation.transform_interactions_usage_object(
+                cast(Mapping[str, Any], usage_object)
+            ),
+        )
+        logging_obj.custom_llm_provider = custom_llm_provider
+        logging_kwargs: Final = (
+            VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
+                litellm_model_response=litellm_model_response,
+                model=model,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                vertex_location=vertex_location,
+            )
+        )
+        return {
+            "result": litellm_model_response,
+            "kwargs": {**logging_kwargs, "custom_llm_provider": custom_llm_provider},
+        }
+
     @staticmethod
     def vertex_passthrough_handler(
         httpx_response: httpx.Response,
@@ -67,6 +136,17 @@ class VertexPassthroughLoggingHandler:
         vertex_location: Final = get_vertex_location_from_url(url_route)
         if vertex_location is not None:
             logging_obj.optional_params["vertex_location"] = vertex_location
+        if VertexPassthroughLoggingHandler.is_interactions_route(url_route):
+            return VertexPassthroughLoggingHandler.interactions_passthrough_handler(
+                httpx_response=httpx_response,
+                request_body=request_body,
+                logging_obj=logging_obj,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+                custom_llm_provider="vertex_ai",
+                vertex_location=vertex_location,
+            )
         if "predictLongRunning" in url_route:
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
