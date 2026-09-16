@@ -425,7 +425,7 @@ function useControllable<T>(
   return { value: internal, onChange: setInternal };
 }
 
-function useServerPageClamp(
+function usePageClamp(
   active: boolean,
   rowCount: number | undefined,
   pagination: { value: PaginationState; onChange: OnChangeFn<PaginationState> },
@@ -484,7 +484,6 @@ function useDataTableInstance<TData extends RowData, TValue>(
     pageIndex: 0,
     pageSize: pageSizeOptions[0] ?? 25,
   });
-  useServerPageClamp(paginationMode === "server" && !isLoading && !isError, rowCount, paginationState);
   const filterState = useControllable<ColumnFiltersState>(
     columnFilters,
     onColumnFiltersChange,
@@ -536,9 +535,38 @@ function useDataTableInstance<TData extends RowData, TValue>(
     ...(getRowId !== undefined ? { getRowId } : {}),
     ...(enableRowSelection !== undefined ? { enableRowSelection } : {}),
     ...(paginationMode === "server" && rowCount !== undefined ? { rowCount } : {}),
+    autoResetPageIndex: pagination === undefined && paginationMode !== "server",
   };
 
-  return useReactTable(tableOptions);
+  const table = useReactTable(tableOptions);
+  const clampOptions: SettledPageClampOptions = {
+    paginationMode,
+    controlled: pagination !== undefined,
+    settled: !isLoading && !isError,
+    rowCount,
+    pagination: paginationState,
+  };
+  useSettledPageClamp(table, clampOptions);
+  return table;
+}
+
+type SettledPageClampOptions = {
+  paginationMode: PaginationMode;
+  controlled: boolean;
+  settled: boolean;
+  rowCount: number | undefined;
+  pagination: { value: PaginationState; onChange: OnChangeFn<PaginationState> };
+};
+
+function useSettledPageClamp<TData extends RowData>(table: Table<TData>, options: SettledPageClampOptions): void {
+  const { paginationMode, controlled, settled, rowCount, pagination } = options;
+  const clientRowCount = paginationMode === "client" ? table.getPrePaginationRowModel().rows.length : 0;
+  const clientPageIsClampable = paginationMode === "client" && controlled && clientRowCount > 0;
+  usePageClamp(
+    settled && (paginationMode === "server" || clientPageIsClampable),
+    paginationMode === "server" ? rowCount : clientRowCount,
+    pagination,
+  );
 }
 
 export function DataTable<TData extends RowData, TValue>(props: DataTableProps<TData, TValue>) {
