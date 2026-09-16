@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator, Sequence
-from typing import Any, Final, TypeVar
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
 from pydantic import BaseModel
 
@@ -10,7 +10,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUs
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
 
 
-def _anthropic_stream_chunk_events(item: Any) -> list[dict]:
+def _anthropic_stream_chunk_events(item: object) -> list[dict]:
     if isinstance(item, dict):
         return [item]
     if isinstance(item, bytes):
@@ -38,7 +38,7 @@ def _anthropic_stream_chunk_events(item: Any) -> list[dict]:
     return events
 
 
-def _usage_from_anthropic_stream_chunks(original_response: list[Any]) -> AnthropicUsage | None:
+def _usage_from_anthropic_stream_chunks(original_response: Sequence[object]) -> AnthropicUsage | None:
     input_tokens = 0
     output_tokens = 0
     found_usage = False
@@ -81,7 +81,7 @@ def _usage_tokens(usage_obj: object, key: str, fallback_key: str) -> int:
     return int(getattr(usage_obj, key, getattr(usage_obj, fallback_key, 0)) or 0)
 
 
-def blocked_response_usage(original_response: Any | None) -> AnthropicUsage:
+def blocked_response_usage(original_response: object) -> AnthropicUsage:
     """
     Token usage for a synthetic guardrail-blocked response.
 
@@ -191,7 +191,7 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
     return blocked_responses_api_usage(completed)
 
 
-def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool:
+def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> bool:
     per: Final = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
     if per is not None:
         return bool(per)
@@ -200,7 +200,7 @@ def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool
     return bool(getattr(litellm, "skip_system_message_in_guardrail", False))
 
 
-def effective_skip_tool_message_for_guardrail(guardrail_to_apply: Any) -> bool:
+def effective_skip_tool_message_for_guardrail(guardrail_to_apply: object) -> bool:
     per: Final = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
     if per is not None:
         return bool(per)
@@ -364,3 +364,67 @@ def merge_guardrailed_scoped_messages(
                 yield from appended
 
     return list(_merged())
+
+
+def _content_part_text(part: object) -> str | None:
+    if not isinstance(part, Mapping):
+        return None
+    text: Final = part.get("text")
+    return text if isinstance(text, str) else None
+
+
+def message_slot_texts(message: Mapping[str, object]) -> tuple[str, ...]:
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return (content,)
+    if isinstance(content, list):
+        return tuple(text for part in content if (text := _content_part_text(part)) is not None)
+    return ()
+
+
+def message_text_slot_count(message: AllMessageValues) -> int:
+    return len(message_slot_texts(message))
+
+
+def _part_with_text(part: object, text: str) -> object:
+    if not isinstance(part, Mapping):
+        return part
+    return {**part, "text": text}  # mutable-ok: content parts stay JSON-plain dicts
+
+
+def _content_with_slot_texts(content: Sequence[object], texts: Sequence[str]) -> Sequence[object]:
+    remaining_texts: Final = iter(texts)
+    return [  # mutable-ok: message content stays a JSON list
+        _part_with_text(part, next(remaining_texts)) if _content_part_text(part) is not None else part
+        for part in content
+    ]
+
+
+def message_with_slot_texts(message: AllMessageValues, texts: Sequence[str]) -> AllMessageValues | None:
+    """Swap one rewritten text into each text slot of a chat row, in order.
+
+    A slot is a string ``content`` or one list part carrying a string ``text``;
+    images and other parts ride along untouched. Returns None unless the counts
+    line up exactly, so a rewrite never lands on the wrong slot.
+    """
+    if message_text_slot_count(message) != len(texts):
+        return None
+    content: Final = message.get("content")
+    if not isinstance(content, (str, list)):
+        return message
+    rewritten_content: Final = texts[0] if isinstance(content, str) else _content_with_slot_texts(content, texts)
+    rewritten: Final = {**message, "content": rewritten_content}  # mutable-ok: chat rows stay JSON-plain dicts
+    return cast("AllMessageValues", rewritten)  # cast-ok: the same row with only its text slots swapped
+
+
+class UnappliableRequestRewrite(Exception):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(
+            f"Guardrail '{guardrail_name}' rewrote the request in a way this endpoint cannot apply, "
+            "so the request was rejected rather than sent unrewritten"
+        )
+        self.guardrail_name: Final = guardrail_name
+
+
+def unappliable_request_rewrite(guardrail_name: str | None) -> UnappliableRequestRewrite:
+    return UnappliableRequestRewrite(guardrail_name or "unknown")

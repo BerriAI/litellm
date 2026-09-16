@@ -2198,6 +2198,147 @@ async def test_release_non_numeric_counter_reseeds_from_db(spend_counter_state):
     assert reservation["finalized"] is True
 
 
+class _ExpiringRedisCache:
+    def __init__(self) -> None:
+        self.store: dict[str, float] = {}
+
+    async def async_get_cache(self, key: str, *args: object, **kwargs: object) -> float | None:
+        return self.store.get(key)
+
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
+        self.store[key] = self.store.get(key, 0.0) + float(value)
+        return self.store[key]
+
+    async def async_set_max(self, key: str, value: float, **kwargs: object) -> float:
+        self.store[key] = max(self.store.get(key, float("-inf")), float(value))
+        return self.store[key]
+
+    async def async_set_cache(self, key: str, value: float, *args: object, **kwargs: object) -> bool:
+        self.store[key] = float(value)
+        return True
+
+    async def async_delete_cache(self, key: str, *args: object, **kwargs: object) -> None:
+        self.store.pop(key, None)
+
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        results = []
+        for op in increment_list:
+            results.append(await self.async_increment(op["key"], op["increment_value"]))
+        return results
+
+    def get_ttl(self, **kwargs) -> None:
+        return None
+
+
+class _TeamMembershipFloorDb:
+    """Stands in for `prisma_client.db`: only the team-membership row exists and its spend is the DB floor."""
+
+    def __init__(self, spend: float) -> None:
+        self.spend = spend
+
+    def __getattr__(self, table_name: str) -> SimpleNamespace:
+        row = SimpleNamespace(spend=self.spend) if table_name == "litellm_teammembership" else None
+        return SimpleNamespace(find_unique=AsyncMock(return_value=row))
+
+
+@pytest.mark.asyncio
+async def test_reconcile_after_redis_counter_expiry_keeps_request_cost_enforced(
+    spend_counter_state,
+):
+    """Redis key expired mid-stream while the pod's in-memory copy still holds the
+    reserved value: reconcile must reseed from the DB floor plus the settled cost
+    instead of applying ``actual - reserved`` to the empty key."""
+    import litellm.proxy.proxy_server as ps
+
+    counter_cache, _ = spend_counter_state
+    counter_key = "spend:team_member:user-expiry:team-expiry"
+    redis_cache = _ExpiringRedisCache()
+    counter_cache.redis_cache = redis_cache
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.6)
+
+    reservation = {
+        "reserved_cost": 0.6,
+        "entries": [
+            {
+                "counter_key": counter_key,
+                "entity_type": "TeamMember",
+                "entity_id": "user-expiry:team-expiry",
+                "reserved_cost": 0.6,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    with patch.object(  # test-quality-ok: the reseed reads the DB floor through a Prisma client the test has no seam for
+        ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.3)
+    ):
+        await ps.increment_spend_counters(
+            token="key-expiry",
+            team_id="team-expiry",
+            user_id="user-expiry",
+            response_cost=0.05,
+            budget_reservation=reservation,
+        )
+
+    assert redis_cache.store[counter_key] == pytest.approx(0.35)
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.35)
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_before_db_update_does_not_double_count_when_flush_lands_between_passes(
+    spend_counter_state,
+):
+    """The early reconcile (before the spend row is enqueued) reseeds from a DB
+    floor that cannot yet include this request. When the periodic flush commits
+    the row before increment_spend_counters runs its second reconcile, the
+    applied_adjustment early-return must keep the counter from adding the cost
+    a second time."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
+
+    counter_cache, _ = spend_counter_state
+    counter_key = "spend:team_member:user-flush:team-flush"
+    redis_cache = _ExpiringRedisCache()
+    counter_cache.redis_cache = redis_cache
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.6)
+    db_floor = _TeamMembershipFloorDb(spend=0.3)
+    ps.prisma_client = SimpleNamespace(db=db_floor)
+
+    reservation = {
+        "reserved_cost": 0.6,
+        "entries": [
+            {
+                "counter_key": counter_key,
+                "entity_type": "TeamMember",
+                "entity_id": "user-flush:team-flush",
+                "reserved_cost": 0.6,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    await reconcile_budget_reservation(budget_reservation=reservation, actual_cost=0.05, finalize=False)
+
+    assert redis_cache.store[counter_key] == pytest.approx(0.35)
+    assert reservation["entries"][0]["applied_adjustment"] == pytest.approx(-0.55)
+    assert reservation["finalized"] is False
+
+    db_floor.spend = 0.35
+    await ps.increment_spend_counters(
+        token="key-flush",
+        team_id="team-flush",
+        user_id="user-flush",
+        response_cost=0.05,
+        budget_reservation=reservation,
+    )
+
+    assert redis_cache.store[counter_key] == pytest.approx(0.35)
+    assert reservation["finalized"] is True
+
+
 @pytest.mark.asyncio
 async def test_should_invalidate_reserved_counters_after_persisted_spend_failure(
     spend_counter_state,

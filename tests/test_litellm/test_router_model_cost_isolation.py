@@ -1379,7 +1379,7 @@ def test_a_discarded_router_stops_contributing_to_later_reloads(monkeypatch):
         _invalidate_model_cost_lowercase_map()
 
 
-def test_a_reload_rebuilds_exactly_what_a_fresh_boot_registered():
+def test_a_reload_rebuilds_exactly_what_a_fresh_boot_registered() -> None:
     """
     The rebuild is only correct if it reproduces the entries the original
     registration wrote, including the pieces that are derived rather than stored:
@@ -1406,6 +1406,7 @@ def test_a_reload_rebuilds_exactly_what_a_fresh_boot_registered():
         at_boot = copy.deepcopy(litellm.model_cost["priced-id"])
         assert at_boot["input_cost_per_token"] == 0.000123
         assert at_boot["cache_read_input_token_cost"] is not None
+        assert "member_auto_router" not in litellm.model_cost["gpt-4o"]
 
         _simulate_price_data_reload(
             copy.deepcopy(fetched_catalog),
@@ -1416,9 +1417,11 @@ def test_a_reload_rebuilds_exactly_what_a_fresh_boot_registered():
             f"the rebuild changed or dropped a field the boot registration wrote: "
             f"{ {k: (v, rebuilt.get(k)) for k, v in at_boot.items() if rebuilt.get(k) != v} }"
         )
-        # The rebuild goes through the deployment stored in model_list, which also
-        # carries the router's own db_model flag; add_deployment already registers it.
-        assert set(rebuilt) - set(at_boot) <= {"db_model"}
+        assert {field: rebuilt[field] for field in set(rebuilt) - set(at_boot)} == {
+            "db_model": False,
+            "member_auto_router": False,
+        }
+        assert "member_auto_router" not in litellm.model_cost["gpt-4o"]
         assert router.model_list
     finally:
         litellm.model_cost = saved_catalog
@@ -2361,3 +2364,31 @@ def test_a_config_deployment_dropped_for_a_permanent_reason_is_not_retried_on_re
 
     assert router.get_model_names() == ["control-model"]
     assert router.deployment_names == names_after_boot
+
+
+def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(monkeypatch):
+    """
+    Budget reservation reads pricing through the router's lru-cached group and
+    deployment lookups. A reload swaps the catalog without touching model_list, so
+    unless the replay clears those caches the next reservation prices against the
+    old catalog until some unrelated model-list change happens to evict it.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "grp",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"},
+                "model_info": {"id": "dep-a"},
+            }
+        ]
+    )
+    old_price = router.cached_model_group_info("grp").input_cost_per_token
+    assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == old_price
+
+    new_price = old_price * 10
+    fresh_catalog = copy.deepcopy(litellm.model_cost)
+    fresh_catalog["gpt-4o"]["input_cost_per_token"] = new_price
+    _simulate_price_data_reload_with_provider_sets(monkeypatch, fresh_catalog)
+
+    assert router.cached_model_group_info("grp").input_cost_per_token == new_price
+    assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == new_price

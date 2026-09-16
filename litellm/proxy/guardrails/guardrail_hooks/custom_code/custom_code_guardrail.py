@@ -36,6 +36,7 @@ Example: block when response rejects the user (input_type response only):
 
 import asyncio
 import threading
+import time
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
@@ -55,6 +56,11 @@ from .sandbox import build_sandbox_globals, compile_sandboxed
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+def _metadata_bucket(request_data: Mapping[str, object], key: str) -> Mapping[str, object]:
+    bucket: Final = request_data.get(key)
+    return bucket if isinstance(bucket, Mapping) else {}
 
 
 class CustomCodeGuardrailError(Exception):
@@ -93,6 +99,7 @@ class CustomCodeGuardrail(CustomGuardrail):
     that returns one of:
     - allow() - let the request/response through
     - block(reason) - reject with a message
+    - flag(reason) - let it through but log a non-blocking violation
     - modify(texts=...) - transform the content
 
     Example:
@@ -227,6 +234,7 @@ class CustomCodeGuardrail(CustomGuardrail):
                 raise CustomCodeExecutionError(f"Custom code guardrail not compiled: {self._compile_error}")
             raise CustomCodeExecutionError("Custom code guardrail not compiled")
 
+        start_time: Final = time.time()
         try:
             # Prepare inputs dict for the function
 
@@ -245,6 +253,7 @@ class CustomCodeGuardrail(CustomGuardrail):
                 inputs=inputs,
                 request_data=request_data,
                 input_type=input_type,
+                start_time=start_time,
             )
 
         except HTTPException:
@@ -276,12 +285,16 @@ class CustomCodeGuardrail(CustomGuardrail):
         Returns:
             Safe subset of request data
         """
+        metadata: Final = {
+            **_metadata_bucket(request_data, "metadata"),
+            **_metadata_bucket(request_data, "litellm_metadata"),
+        }
         return {
             "model": request_data.get("model"),
-            "user_id": request_data.get("user_api_key_user_id"),
-            "team_id": request_data.get("user_api_key_team_id"),
-            "end_user_id": request_data.get("user_api_key_end_user_id"),
-            "metadata": request_data.get("metadata", {}),
+            "user_id": metadata.get("user_api_key_user_id"),
+            "team_id": metadata.get("user_api_key_team_id"),
+            "end_user_id": metadata.get("user_api_key_end_user_id"),
+            "metadata": metadata,
         }
 
     def _process_result(
@@ -290,6 +303,7 @@ class CustomCodeGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict[str, object],
         input_type: Literal["request", "response"],
+        start_time: float,
     ) -> GenericGuardrailAPIInputs:
         """
         Process the result from the custom code function.
@@ -299,6 +313,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             inputs: The original inputs
             request_data: The request data
             input_type: "request" or "response"
+            start_time: Unix timestamp of when the guardrail started running, used for the flagged log entry
 
         Returns:
             GenericGuardrailAPIInputs - possibly modified
@@ -347,6 +362,27 @@ class CustomCodeGuardrail(CustomGuardrail):
                     "detection_info": detection_info,
                 },
             )
+
+        elif action == "flag":
+            flag_reason: Final = result.get("reason", "Flagged by custom code guardrail")
+            verbose_proxy_logger.info(
+                "Custom code guardrail '%s': Flagging %s - %s", self.guardrail_name, input_type, flag_reason
+            )
+            end_time: Final = time.time()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response={  # mutable-ok: logging helper requires a dict
+                    "action": "flag",
+                    "reason": flag_reason,
+                    "input_type": input_type,
+                    "metadata": result.get("metadata") or {},  # mutable-ok: logging helper requires a dict
+                },
+                request_data=request_data,
+                guardrail_status="guardrail_flagged",
+                start_time=start_time,
+                end_time=end_time,
+                duration=end_time - start_time,
+            )
+            return inputs
 
         elif action == "modify":
             verbose_proxy_logger.debug("Custom code guardrail '%s': Modifying %s", self.guardrail_name, input_type)

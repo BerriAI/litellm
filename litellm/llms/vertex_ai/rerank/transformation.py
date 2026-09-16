@@ -4,6 +4,8 @@ Translates from Cohere's `/v1/rerank` input format to Vertex AI Discovery Engine
 Why separate file? Make it easy to see how transformation works
 """
 
+import math
+import uuid
 from collections.abc import Mapping
 from typing import Any, Final
 
@@ -31,6 +33,8 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
 
     Reference: https://cloud.google.com/generative-ai-app-builder/docs/ranking#rank_or_rerank_a_set_of_records_according_to_a_query
     """
+
+    MAX_RECORDS_PER_SEARCH_UNIT = 100
 
     def __init__(self) -> None:
         super().__init__()
@@ -208,10 +212,11 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
                 RerankResponseResult(index=result["index"], relevance_score=result["relevance_score"])
             )
 
-        # Create meta object
-        meta: Final = RerankResponseMeta(billed_units=RerankBilledUnits(search_units=len(records)))
+        input_record_count: Final = len(request_data.get("records", ()))
+        search_units: Final = math.ceil(input_record_count / self.MAX_RECORDS_PER_SEARCH_UNIT)
+        meta: Final = RerankResponseMeta(billed_units=RerankBilledUnits(search_units=search_units))
 
-        return RerankResponse(id=f"vertex_ai_rerank_{model}", results=rerank_results, meta=meta)
+        return RerankResponse(id=f"vertex_ai_rerank_{uuid.uuid4()}", results=rerank_results, meta=meta)
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return [

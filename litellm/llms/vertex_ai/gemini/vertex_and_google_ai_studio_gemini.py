@@ -23,6 +23,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _encode_tool_call_id_with_signature,
@@ -106,6 +107,27 @@ if TYPE_CHECKING:
 else:
     LoggingClass = Any
     StreamingChoices = Any
+
+
+SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
+
+
+def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
+    return UnsupportedParamsError(
+        message=(
+            f"Invalid `reasoning_effort`: {reasoning_effort!r}. "
+            f"Must be one of: {', '.join(repr(effort) for effort in SUPPORTED_REASONING_EFFORTS)}. "
+            "To drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` "
+            "in the request - https://docs.litellm.ai/docs/completion/drop_params"
+        ),
+        status_code=400,
+    )
+
+
+def _served_model_name(model_version: object) -> str | None:
+    if not isinstance(model_version, str) or not model_version:
+        return None
+    return model_version.split("@", 1)[0]
 
 
 class VertexAIBaseConfig:
@@ -842,7 +864,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "includeThoughts": False,
             }
         else:
-            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+            raise _unsupported_reasoning_effort(reasoning_effort)
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_level(
@@ -890,7 +912,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             else:
                 return {"thinkingLevel": "low", "includeThoughts": False}
         else:
-            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+            raise _unsupported_reasoning_effort(reasoning_effort)
 
     @staticmethod
     def _is_thinking_budget_zero(thinking_budget: int | None) -> bool:
@@ -1935,6 +1957,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _check_prompt_level_content_filter(
         processed_chunk: GenerateContentResponseBody,
         response_id: str | None,
+        model: str | None = None,
     ) -> Optional["ModelResponseStream"]:
         """
         Check if prompt is blocked due to content filtering at the prompt level.
@@ -1974,7 +1997,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 enhancements=None,
             )
 
-            model_response: Final = ModelResponseStream(choices=[choice], id=response_id)
+            model_response: Final = ModelResponseStream(choices=[choice], id=response_id, model=model)
             return model_response
 
         return None
@@ -2418,7 +2441,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_response = GenerateContentResponseBody(**completion_response)
 
         ## GET MODEL ##
-        model_response.model = model
+        served: Final = _served_model_name(completion_response.get("modelVersion"))
+        model_response.model = served if served is not None else model
 
         ## CHECK IF RESPONSE FLAGGED
         if "promptFeedback" in completion_response and "blockReason" in completion_response["promptFeedback"]:
@@ -3248,12 +3272,18 @@ class ModelResponseIterator:
 
             processed_chunk: Final = GenerateContentResponseBody(**chunk)
             response_id: Final = processed_chunk.get("responseId")
-            model_response = ModelResponseStream(choices=[], id=response_id)
+            served: Final = _served_model_name(processed_chunk.get("modelVersion"))
+            model_response = ModelResponseStream(
+                choices=[],
+                id=response_id,
+                model=served,
+            )
 
             # Check if prompt is blocked due to content filtering
             blocked_response: Final = VertexGeminiConfig._check_prompt_level_content_filter(
                 processed_chunk=processed_chunk,
                 response_id=response_id,
+                model=served,
             )
             if blocked_response is not None:
                 model_response = blocked_response

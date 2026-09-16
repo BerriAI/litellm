@@ -71,6 +71,7 @@ const renderWith = (results: DailyData[], overrides: Partial<DailyActivityRange>
         isFetchingMore: false,
         progress: { currentPage: 1, totalPages: 1 },
         cancelled: false,
+        failed: false,
         cancel: vi.fn(),
         ...overrides,
       }}

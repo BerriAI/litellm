@@ -13,6 +13,8 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Final
 
+import httpx
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -24,8 +26,10 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
+from ...base_llm.chat.transformation import BaseLLMException
+from ...bedrock.common_utils import BedrockError
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
-from ..common_utils import mantle_base_segment
+from ..common_utils import mantle_base_segment, split_mantle_region_prefix
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -45,6 +49,11 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
     def get_config(cls):
         return super().get_config()
 
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
+
     def _get_openai_compatible_provider_info(
         self,
         api_base: str | None,
@@ -52,8 +61,10 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         litellm_params: GenericLiteLLMParams | None = None,
         model: str | None = None,
     ) -> tuple[str | None, str | None]:
+        prefix_region, base_model = split_mantle_region_prefix(model) if model else (None, None)
         region: Final = (
             (litellm_params.aws_region_name if litellm_params else None)
+            or prefix_region
             or get_secret_str("BEDROCK_MANTLE_REGION")
             or get_secret_str("AWS_REGION_NAME")
             or get_secret_str("AWS_REGION")
@@ -66,7 +77,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         api_base = (
             api_base
             or get_secret_str("BEDROCK_MANTLE_API_BASE")
-            or f"https://bedrock-mantle.{region}.api.aws/{mantle_base_segment(model, litellm.model_cost)}"
+            or f"https://bedrock-mantle.{region}.api.aws/{mantle_base_segment(base_model, litellm.model_cost)}"
         )
         dynamic_api_key: Final = self._resolve_bearer_token(api_key)
         return api_base, dynamic_api_key

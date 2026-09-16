@@ -2,7 +2,11 @@
 For calculating cost of fireworks ai serverless inference models.
 """
 
-from typing import Final
+from datetime import datetime
+from typing import (
+    Final,
+    cast,  # noqa: TID251  # the fallback entry is a dict copy of a ReadOnly TypedDict; no cast-free way to retype it
+)
 
 from litellm.constants import (
     FIREWORKS_AI_4_B,
@@ -10,7 +14,8 @@ from litellm.constants import (
     FIREWORKS_AI_56_B_MOE,
     FIREWORKS_AI_176_B_MOE,
 )
-from litellm.types.utils import Usage
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
 
@@ -54,44 +59,54 @@ def get_base_model_for_pricing(model_name: str) -> str:
     return "fireworks-ai-default"
 
 
-def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
+def _resolve_model_info(model: str) -> ModelInfo:
+    try:
+        return get_model_info(model=model, custom_llm_provider="fireworks_ai")
+    except Exception:
+        base_model: Final = get_base_model_for_pricing(model_name=model)
+        return get_model_info(model=base_model, custom_llm_provider="fireworks_ai")
+
+
+def _with_cache_read_fallback(model_info: ModelInfo) -> ModelInfo:
+    """Entries without a cache-read rate keep the previous calculator's input-rate fallback for cached
+    reads (LIT-7845 tracks the documented discount); the shared map is never mutated, so a copy carries it."""
+    input_rate: Final = model_info.get("input_cost_per_token")
+    if model_info.get("cache_read_input_token_cost") is not None or input_rate is None:
+        return model_info
+    off_peak: Final = model_info.get("off_peak_pricing")
+    if off_peak is None or "cache_read_input_token_cost" in off_peak:
+        return cast(ModelInfo, {**model_info, "cache_read_input_token_cost": input_rate})
+    return cast(
+        ModelInfo,
+        {
+            **model_info,
+            "cache_read_input_token_cost": input_rate,
+            "off_peak_pricing": {
+                **off_peak,
+                "cache_read_input_token_cost": off_peak.get("input_cost_per_token", input_rate),
+            },
+        },
+    )
+
+
+def cost_per_token(model: str, usage: Usage, current_time: datetime | None = None) -> tuple[float, float]:
     """
-    Calculates the cost per token for a given model, prompt tokens, and completion tokens.
+    Calculates the cost per token for a given model, prompt tokens, and completion tokens,
+    swapping in the model's off_peak_pricing rates while one of its windows is open.
 
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
+        - current_time: the moment the request is billed at; defaults to now, UTC
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    ## check if model mapped, else use default pricing
-    try:
-        model_info = get_model_info(model=model, custom_llm_provider="fireworks_ai")
-    except Exception:
-        base_model: Final = get_base_model_for_pricing(model_name=model)
-
-        ## GET MODEL INFO
-        model_info = get_model_info(model=base_model, custom_llm_provider="fireworks_ai")
-
-    ## CALCULATE INPUT COST
-    prompt_tokens_details: Final = usage.prompt_tokens_details
-    cached_tokens: Final[int] = (
-        prompt_tokens_details.cached_tokens
-        if prompt_tokens_details is not None and prompt_tokens_details.cached_tokens is not None
-        else 0
+    model_info: Final = _with_cache_read_fallback(_resolve_model_info(model))
+    return generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="fireworks_ai",
+        model_info=model_info,
+        current_time=current_time,
     )
-    input_cost_per_token: Final[float] = model_info["input_cost_per_token"] or 0.0
-    cache_read_input_token_cost: Final = model_info.get("cache_read_input_token_cost")
-    cache_read_cost_per_token: Final[float] = (
-        cache_read_input_token_cost if cache_read_input_token_cost is not None else input_cost_per_token
-    )
-    non_cached_prompt_tokens: Final[int] = max(usage.prompt_tokens - cached_tokens, 0)
-
-    prompt_cost: float = non_cached_prompt_tokens * input_cost_per_token + cached_tokens * cache_read_cost_per_token
-
-    ## CALCULATE OUTPUT COST
-    output_cost_per_token: Final[float] = model_info["output_cost_per_token"] or 0.0
-    completion_cost: Final[float] = usage.completion_tokens * output_cost_per_token
-
-    return prompt_cost, completion_cost

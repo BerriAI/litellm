@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from typing import Final, Literal
+from urllib.parse import urlparse
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
@@ -8,6 +9,21 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
 AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-Subscription-Key"]
+
+
+def is_foundry_model_inference_base(api_base: str) -> bool:
+    parsed: Final = urlparse(api_base)
+    host: Final = parsed.hostname
+    if host is None or not host.endswith(".services.ai.azure.com"):
+        return False
+    return "/openai/deployments" not in parsed.path
+
+
+def api_key_header_for_base(api_base: str | None) -> AzureAIApiKeyHeader:
+    host: Final = urlparse(api_base).hostname if api_base else None
+    if host and (host.endswith(".services.ai.azure.com") or host.endswith(".openai.azure.com")):
+        return "api-key"
+    return "Authorization"
 
 
 def get_azure_ai_entra_token(litellm_params: Mapping[str, object] | None = None) -> str | None:
@@ -128,10 +144,13 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
     def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or litellm.api_key or get_secret_str("AZURE_AI_API_KEY")
 
+    @staticmethod
+    def get_api_version(api_version: str | None = None) -> str | None:
+        return api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+
     @property
-    def api_version(self, api_version: str | None = None) -> str | None:
-        api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
-        return api_version
+    def api_version(self) -> str | None:
+        return AzureFoundryModelInfo.get_api_version()
 
     def get_token_counter(self) -> BaseTokenCounter | None:
         """
