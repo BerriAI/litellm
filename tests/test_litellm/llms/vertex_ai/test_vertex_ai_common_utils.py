@@ -59,6 +59,20 @@ async def test_get_vertex_location_from_url():
     location = get_vertex_location_from_url(url)
     assert location is None
 
+    # Native GenAI short-form URLs carry no `/locations/` path segment; the location is
+    # encoded in the host instead, or absent entirely for the global endpoint
+    url = "https://aiplatform.googleapis.com/v1beta/models/gemini-flash:generateContent"
+    location = get_vertex_location_from_url(url)
+    assert location == "global"
+
+    url = "https://us-central1-aiplatform.googleapis.com/v1beta/models/gemini-flash:generateContent"
+    location = get_vertex_location_from_url(url)
+    assert location == "us-central1"
+
+    url = "https://aiplatform.us.rep.googleapis.com/v1beta/models/gemini-flash:generateContent"
+    location = get_vertex_location_from_url(url)
+    assert location == "us"
+
 
 def test_basic_anyof_conversion():
     """Test basic conversion of anyOf with 'null'."""
