@@ -82,6 +82,76 @@ def test_translate_chat_refusal_to_anthropic_response():
     }
 
 
+@pytest.mark.parametrize(
+    "openai_finish_reason,expected_stop_reason",
+    [
+        ("stop", "end_turn"),
+        ("length", "max_tokens"),
+        ("tool_calls", "tool_use"),
+        ("content_filter", "refusal"),
+        ("some_provider_specific_reason", "end_turn"),
+    ],
+)
+def test_translate_finish_reason_to_anthropic(openai_finish_reason, expected_stop_reason):
+    """`content_filter` must not fall through to `end_turn` (#40857).
+
+    A blocked turn that arrives as `end_turn` is indistinguishable from an ordinary completed one,
+    and `_FINISH_REASON_MAP` already maps Anthropic `refusal` the other way to `content_filter`, so
+    a refusal that round-trips through chat completions has to survive it.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    assert adapter._translate_openai_finish_reason_to_anthropic(openai_finish_reason) == expected_stop_reason
+
+
+def test_translate_content_filtered_turn_to_anthropic_response():
+    """A provider block with no OpenAI `refusal` string still reports the refusal (#40857).
+
+    This is the case the refusal-text branch cannot see: Gemini `SAFETY`, Cohere `ERROR_TOXIC`,
+    Bedrock `guardrail_intervened` and Azure `content_filtered` all normalize to `content_filter`
+    and carry no `refusal` field.
+    """
+    response = ModelResponse(
+        id="chatcmpl-content-filter",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="content_filter",
+                message=Message(content="partial answer", role="assistant"),
+            )
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == "refusal"
+    # No explanation is invented: the block carried no refusal text, and `type` is what a client
+    # branches on.
+    assert result.get("stop_details") == {"type": "refusal", "category": None, "explanation": None}
+    # The partial content the provider did emit is still delivered.
+    assert result["content"] == [{"type": "text", "text": "partial answer"}]
+
+
+def test_translate_streaming_content_filtered_turn_to_anthropic():
+    """Streaming loses it the same way: the final `message_delta` carries the stop reason (#40857)."""
+    chunk = ModelResponse(
+        id="chatcmpl-content-filter-stream",
+        model="openai-model",
+        object="chat.completion.chunk",
+        choices=[StreamingChoices(index=0, finish_reason="content_filter", delta=Delta(content=None))],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+        response=chunk, current_content_block_index=0
+    )
+
+    assert result["type"] == "message_delta"
+    assert result["delta"]["stop_reason"] == "refusal"
+
+
 def test_translate_chat_length_takes_precedence_over_refusal():
     response = ModelResponse(
         id="chatcmpl-partial-refusal",
