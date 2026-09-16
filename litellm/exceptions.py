@@ -1174,6 +1174,13 @@ class MidStreamFallbackError(ServiceUnavailableError):
         self.message = _saved_message
         self.args = (_saved_message,)
 
+        # Keep the provider headers (retry-after, x-request-id, ...) that exception_type()
+        # attached to the wrapped exception, so retry backoff, logging and the proxy error
+        # response still see them once the failure is wrapped for fallback
+        original_headers: Final = getattr(original_exception, "litellm_response_headers", None)
+        if original_headers is not None:
+            self.litellm_response_headers = original_headers
+
     def __str__(self):
         _message = self.message
         if self.num_retries:
