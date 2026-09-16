@@ -13,9 +13,7 @@ def test_bedrock_haiku_4_5_matches_sonnet_capabilities():
     (including computer_use, vision, tools, etc.)
     """
     # Load model configuration
-    json_path = os.path.join(
-        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
-    )
+    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
     with open(json_path) as f:
         model_data = json.load(f)
 
@@ -43,6 +41,6 @@ def test_bedrock_haiku_4_5_matches_sonnet_capabilities():
     ]
 
     for capability in shared_capabilities:
-        assert haiku_info.get(capability) == sonnet_info.get(
-            capability
-        ), f"Capability {capability} mismatch: Haiku={haiku_info.get(capability)}, Sonnet={sonnet_info.get(capability)}"
+        assert haiku_info.get(capability) == sonnet_info.get(capability), (
+            f"Capability {capability} mismatch: Haiku={haiku_info.get(capability)}, Sonnet={sonnet_info.get(capability)}"
+        )

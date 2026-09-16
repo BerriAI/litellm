@@ -7,6 +7,7 @@ export interface ModelGroup {
   model_group: string;
   mode?: string;
   supports_reasoning?: boolean;
+  supports_fast_mode?: boolean;
   supported_reasoning_efforts?: string[] | null;
 }
 
@@ -16,6 +17,7 @@ interface AvailableModel {
   id?: string | null;
   mode?: string | null;
   supports_reasoning?: boolean | null;
+  supports_fast_mode?: boolean | null;
   supported_reasoning_efforts?: string[] | null;
 }
 
@@ -25,6 +27,7 @@ const toModelGroup = (item: AvailableModel): ModelGroup => {
     model_group: groupName,
     ...(item.mode && { mode: item.mode }),
     ...(item.supports_reasoning === true && { supports_reasoning: true }),
+    ...(item.supports_fast_mode === true && { supports_fast_mode: true }),
     ...(item.supported_reasoning_efforts !== undefined && {
       supported_reasoning_efforts: item.supported_reasoning_efforts,
     }),

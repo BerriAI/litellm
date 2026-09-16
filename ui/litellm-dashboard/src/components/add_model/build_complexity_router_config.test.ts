@@ -48,6 +48,50 @@ const baseParams: BuildComplexityRouterConfigParams = {
 };
 
 describe("buildComplexityRouterConfig", () => {
+  it.each(["capability", "llm_v2", "heuristic"] as const)(
+    "disables the removed overrides only for forecast creates: %s",
+    (classifierType) => {
+      const forecast = classifierType !== "heuristic";
+      const params = {
+        ...baseParams,
+        classifierType,
+        adaptive: true,
+        enableContextWindowEscalation: true,
+        contextWindowEscalationBuffer: 0.9,
+      };
+      const config = buildComplexityRouterConfig(params);
+      expect(config.adaptive).toBe(!forecast);
+      expect(config.enable_context_window_escalation).toBe(!forecast);
+      expect(config.escalation_keywords).toEqual(forecast ? [] : ["LITELLM ESCALATE"]);
+      for (const key of [
+        "adaptive_weights",
+        "adaptive_eligible",
+        "tier_distance_penalty",
+        "context_window_escalation_buffer",
+      ]) {
+        expect(Object.hasOwn(config, key)).toBe(!forecast);
+      }
+      if (forecast) {
+        const untouched = buildComplexityRouterConfig({ ...baseParams, classifierType });
+        expect(untouched.enable_context_window_escalation).toBe(false);
+        expect(untouched.escalation_keywords).toEqual([]);
+      }
+    },
+  );
+
+  it("carries Fast and reasoning overrides independently into a new router payload", () => {
+    const params = { speed: "fast", reasoning_effort: "high", max_tokens: 1024 };
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tiers: { ...tiers, COMPLEX: ["primary"], REASONING: ["secondary"] },
+      tierModelParams: { COMPLEX: { primary: params }, REASONING: { secondary: { speed: "fast" } } },
+    });
+    expect(config.tier_model_configs).toEqual({
+      COMPLEX: [{ model_name: "primary", litellm_params: params }],
+      REASONING: [{ model_name: "secondary", litellm_params: { speed: "fast" } }],
+    });
+  });
+
   it("emits tiers, classifier_type, and escalation_keywords when nothing else is configured", () => {
     const config = buildComplexityRouterConfig(baseParams);
     const expected = {
