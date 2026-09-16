@@ -54,6 +54,7 @@ class BasetenConfig(OpenAIGPTConfig):
         return [
             "max_tokens",
             "max_completion_tokens",
+            "reasoning_effort",
             "response_format",
             "seed",
             "stop",
