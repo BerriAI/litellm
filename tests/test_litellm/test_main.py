@@ -4,6 +4,7 @@ from datetime import datetime
 import contextlib
 import copy
 import json
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -3850,3 +3851,27 @@ def test_bridged_responses_with_openai_http_handler_keeps_forwarded_headers_out_
     assert "extra_headers" not in body
     assert body["model"] == "gpt-5.4"
     assert {k: request.headers[k] for k in FORWARDED_CLIENT_HEADERS} == FORWARDED_CLIENT_HEADERS
+
+
+@pytest.mark.parametrize("http2_on", [True, False])
+def test_aiohttp_openai_warns_only_when_http2_enabled(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, http2_on: bool
+):
+    from litellm.main import base_llm_aiohttp_handler
+
+    monkeypatch.setattr(litellm, "http2", http2_on)
+    monkeypatch.delenv("LITELLM_HTTP2", raising=False)
+
+    handler_completion: Final = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr(base_llm_aiohttp_handler, "completion", handler_completion)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        litellm.completion(
+            model="aiohttp_openai/gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-test",
+        )
+
+    assert handler_completion.called
+    warned: Final = "aiohttp_openai/ always uses aiohttp" in caplog.text
+    assert warned is http2_on

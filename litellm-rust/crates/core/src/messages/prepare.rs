@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
+use crate::providers::custom_llm_provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
 use super::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
@@ -56,7 +56,6 @@ pub(super) fn prepare_provider_request(
     })
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn validate_environment(
     config: &dyn AnthropicMessagesProviderConfig,
     extra_headers: Option<Map<String, Value>>,
