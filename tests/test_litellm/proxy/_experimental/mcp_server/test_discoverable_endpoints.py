@@ -7569,6 +7569,36 @@ async def test_reload_active_user_by_id_permanent_engine_fault_is_faulted(proxy_
 
 
 @pytest.mark.asyncio
+async def test_load_active_user_by_id_reads_the_row_from_the_database_not_the_cache(proxy_globals):
+    """JWT auth caches the user it creates before it adds that user to the JWT's team, and adding a
+    member never evicts the cached row, so a credential minted off the cached row refused the very first
+    token exchange as not a member. The loader has to read the row from the database and leave the fresh
+    row in the cache for the requests the credential makes next."""
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import load_active_user_by_id
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="fresh-jwt-user", value=LiteLLM_UserTable(user_id="fresh-jwt-user", teams=[]), model_type=LiteLLM_UserTable
+    )
+    prisma = MagicMock()
+    prisma.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="fresh-jwt-user", teams=["team-a"])
+    )
+    proxy_globals.user_api_key_cache = cache
+    proxy_globals.prisma_client = prisma
+
+    loaded = await load_active_user_by_id("fresh-jwt-user")
+
+    assert not isinstance(loaded, str)
+    assert loaded.teams == ["team-a"]
+    cached = await cache.async_get_cache(key="fresh-jwt-user", model_type=LiteLLM_UserTable)
+    assert cached is not None
+    assert cached.teams == ["team-a"]
+
+
+@pytest.mark.asyncio
 async def test_token_endpoint_uses_client_secret_basic_when_configured():
     """LIT-4091: a server with token_endpoint_auth_method=client_secret_basic must send the
     credentials as an HTTP Basic Authorization header and omit client_secret from the body;
@@ -11866,13 +11896,17 @@ async def test_oauth_refresh_revalidates_the_same_active_user_rule(
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import _reload_active_user_by_id
 
     handler, _ = jwt_oauth_identity
-    handler.user_api_key_cache.set_cache(
-        "jwt-owner", LiteLLM_UserTable(user_id="jwt-owner", metadata={"scim_active": state != "inactive"})
-    )
+    user_id: Final = f"jwt-owner-{state}"
+    row: Final = LiteLLM_UserTable(user_id=user_id, metadata={"scim_active": state != "inactive"})
+    proxy_server.prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=row)
     if state == "missing_database":
         monkeypatch.setattr(proxy_server, "prisma_client", None)
     expected: Final = None if state == "active" else "no_active_key" if state == "inactive" else "unresolvable"
-    assert await _reload_active_user_by_id("jwt-owner") == expected
+    assert await _reload_active_user_by_id(user_id) == expected
+    if state != "missing_database":
+        cached: Final = handler.user_api_key_cache.get_cache(user_id, model_type=LiteLLM_UserTable)
+        assert cached is not None
+        assert cached.metadata == row.metadata
 
 
 @pytest.mark.asyncio
