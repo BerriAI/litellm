@@ -21,17 +21,21 @@ export const AGENT_CALL_TYPES = ["asend_message"];
 /** Call types that represent Batch API operations (creation and retrieval, sync and async). */
 export const BATCH_CALL_TYPES = ["acreate_batch", "create_batch", "aretrieve_batch", "retrieve_batch"];
 
+const LAST_24_HOURS = { id: "24h", label: "Last 24 Hours", value: 24, unit: "hours" } as const;
+
 export const QUICK_SELECT_OPTIONS = [
   { id: "1m", label: "Last Minute", value: 1, unit: "minutes" },
   { id: "15m", label: "Last 15 Minutes", value: 15, unit: "minutes" },
   { id: "1h", label: "Last Hour", value: 1, unit: "hours" },
   { id: "4h", label: "Last 4 Hours", value: 4, unit: "hours" },
-  { id: "24h", label: "Last 24 Hours", value: 24, unit: "hours" },
+  LAST_24_HOURS,
   { id: "7d", label: "Last 7 Days", value: 7, unit: "days" },
 ] as const;
 
-export type QuickSelectPresetId = (typeof QUICK_SELECT_OPTIONS)[number]["id"];
+export type QuickSelectOption = (typeof QUICK_SELECT_OPTIONS)[number];
+export type QuickSelectPresetId = QuickSelectOption["id"];
 
 export const QUICK_SELECT_PRESET_IDS: readonly QuickSelectPresetId[] = QUICK_SELECT_OPTIONS.map((option) => option.id);
 
-export const DEFAULT_QUICK_SELECT_PRESET: QuickSelectPresetId = "24h";
+export const DEFAULT_QUICK_SELECT_OPTION: QuickSelectOption = LAST_24_HOURS;
+export const DEFAULT_QUICK_SELECT_PRESET: QuickSelectPresetId = DEFAULT_QUICK_SELECT_OPTION.id;

@@ -38,7 +38,7 @@ export function LogsTableToolbar({
   onResetFilters,
 }: LogsTableToolbarProps) {
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
-  const { range, startTime, endTime } = timeRange;
+  const { range, startTime, endTime, startInput, endInput } = timeRange;
   const isCustomDate = range === CUSTOM_RANGE;
 
   const displayLabel = isCustomDate
@@ -85,7 +85,7 @@ export function LogsTableToolbar({
             type="datetime-local"
             className="w-auto"
             aria-label="Start time"
-            value={startTime}
+            value={startInput}
             onChange={(event) => onStartTimeChange(event.target.value)}
           />
           <span className="text-sm text-muted-foreground">to</span>
@@ -93,7 +93,7 @@ export function LogsTableToolbar({
             type="datetime-local"
             className="w-auto"
             aria-label="End time"
-            value={endTime}
+            value={endInput}
             onChange={(event) => onEndTimeChange(event.target.value)}
           />
         </div>

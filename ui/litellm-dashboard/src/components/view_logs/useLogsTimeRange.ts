@@ -3,6 +3,7 @@ import { createParser, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useCallback, useMemo, useState } from "react";
 
 import {
+  DEFAULT_QUICK_SELECT_OPTION,
   DEFAULT_QUICK_SELECT_PRESET,
   QUICK_SELECT_OPTIONS,
   QUICK_SELECT_PRESET_IDS,
@@ -38,6 +39,8 @@ export interface LogsTimeRange {
   range: LogsRange;
   startTime: string;
   endTime: string;
+  startInput: string;
+  endInput: string;
 }
 
 interface PresetWindow {
@@ -52,7 +55,7 @@ interface Anchor {
 }
 
 const presetWindow = (preset: QuickSelectPresetId): PresetWindow => {
-  const option = QUICK_SELECT_OPTIONS.find((candidate) => candidate.id === preset) ?? QUICK_SELECT_OPTIONS[0];
+  const option = QUICK_SELECT_OPTIONS.find((candidate) => candidate.id === preset) ?? DEFAULT_QUICK_SELECT_OPTION;
   const now = moment();
   return {
     preset,
@@ -82,9 +85,14 @@ export function useLogsTimeRange(onChange: () => void): LogsTimeRangeState {
 
   const isCustom = range === CUSTOM_RANGE;
   const lastPreset = anchor.window.preset;
-  const startTime = isCustom ? start ?? "" : anchor.window.startTime;
-  const endTime = isCustom ? end ?? "" : anchor.window.endTime;
-  const timeRange = useMemo<LogsTimeRange>(() => ({ range, startTime, endTime }), [range, startTime, endTime]);
+  const customStart = isCustom ? start : null;
+  const customEnd = isCustom ? end : null;
+  const startTime = customStart ?? anchor.window.startTime;
+  const endTime = customEnd ?? anchor.window.endTime;
+  const timeRange = useMemo<LogsTimeRange>(
+    () => ({ range, startTime, endTime, startInput: customStart ?? "", endInput: customEnd ?? "" }),
+    [range, startTime, endTime, customStart, customEnd],
+  );
 
   const selectPreset = useCallback(
     (preset: QuickSelectPresetId) => {
@@ -99,7 +107,7 @@ export function useLogsTimeRange(onChange: () => void): LogsTimeRangeState {
     void setParams(
       isCustom
         ? { range: lastPreset, start: null, end: null }
-        : { range: CUSTOM_RANGE, start: startTime || null, end: endTime || null },
+        : { range: CUSTOM_RANGE, start: startTime, end: endTime },
     );
     onChange();
   }, [setParams, isCustom, lastPreset, startTime, endTime, onChange]);

@@ -58,15 +58,17 @@ vi.mock("./LogDetailsDrawer", () => ({
 vi.mock("../templates/key_info_view", () => ({
   default: function KeyInfoViewMock({
     keyId,
+    keyData,
     onClose,
     backButtonText,
   }: {
     keyId: string;
+    keyData?: object;
     onClose: () => void;
     backButtonText: string;
   }) {
     return (
-      <div data-testid="key-info-view" data-key-id={keyId}>
+      <div data-testid="key-info-view" data-key-id={keyId} data-key-found={String(keyData !== undefined)}>
         <button type="button" onClick={onClose}>
           {backButtonText}
         </button>
@@ -84,7 +86,7 @@ vi.mock("@tanstack/react-pacer/debouncer", async (importOriginal) => ({
 
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
-import { uiSpendLogsCall } from "../networking";
+import { keyInfoV1Call, uiSpendLogsCall } from "../networking";
 
 const logEntry = (overrides: Partial<LogEntry>): LogEntry => ({
   request_id: "req-1",
@@ -530,6 +532,14 @@ describe("RequestLogsPanel", () => {
   });
 
   describe("time range", () => {
+    beforeEach(() => {
+      vi.stubEnv("TZ", "America/New_York");
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
     it("requests a ~15 minute window when Last 15 Minutes is picked", async () => {
       const user = userEvent.setup();
       renderPanel();
@@ -562,6 +572,7 @@ describe("RequestLogsPanel", () => {
 
     it("writes the picked preset to ?range= from page 1 and drops the key for the default preset", async () => {
       const user = userEvent.setup();
+      respondWithPages(2, 25, 80, SESSION_CURSOR);
       renderPanel("?page=2");
 
       await waitFor(() => expect(lastCall()?.page).toBe(2));
@@ -584,11 +595,40 @@ describe("RequestLogsPanel", () => {
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       expect(lastCall()?.start_date).toBe("2026-07-01 10:00:00");
       expect(lastCall()?.end_date).toBe("2026-07-02 10:30:00");
-      expect(screen.getByLabelText("Start time")).toHaveValue(moment("2026-07-01T10:00Z").format("YYYY-MM-DDTHH:mm"));
-      expect(screen.getByLabelText("End time")).toHaveValue(moment("2026-07-02T10:30Z").format("YYYY-MM-DDTHH:mm"));
+      expect(screen.getByLabelText("Start time")).toHaveValue("2026-07-01T06:00");
+      expect(screen.getByLabelText("End time")).toHaveValue("2026-07-02T06:30");
+    });
+
+    it("queries the default window instead of an invalid date when a custom bound is missing or unparsable", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-07T10:00:00Z"));
+      const sqlTimestamp = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+      renderPanel("?range=custom&start=not-a-date");
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.start_date).toBe("2026-07-06 10:00:00");
+      expect(lastCall()?.end_date).toBe("2026-07-07 10:00:00");
+      const sentDates = vi
+        .mocked(uiSpendLogsCall)
+        .mock.calls.flatMap(([options]) => [options.start_date, options.end_date]);
+      expect(sentDates.every((value) => sqlTimestamp.test(value ?? ""))).toBe(true);
+      expect(screen.getByLabelText("Start time")).toHaveValue("");
+      expect(screen.getByLabelText("End time")).toHaveValue("");
+    });
+
+    it("ignores ?start= and ?end= when the range is a preset", async () => {
+      renderPanel("?range=1h&start=2026-07-01T10:00Z&end=2026-07-02T10:30Z");
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(windowSeconds()).toBeGreaterThanOrEqual(60 * 60);
+      expect(windowSeconds()).toBeLessThanOrEqual(61 * 60);
+      expect(screen.getByRole("button", { name: /Last Hour/i })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Start time")).not.toBeInTheDocument();
     });
 
     it("toggling Custom Range writes ?range=custom with the current bounds and edits rewrite ?start= as UTC", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-07-07T10:00:00Z"));
       const user = userEvent.setup();
       renderPanel();
 
@@ -597,20 +637,14 @@ describe("RequestLogsPanel", () => {
       await user.click(await screen.findByRole("button", { name: "Custom Range" }));
 
       await waitFor(() => expect(urlParams().get("range")).toBe("custom"));
-      const start = urlParams().get("start");
-      const end = urlParams().get("end");
-      if (start === null || end === null) throw new Error("custom bounds were not written");
-      expect(moment.utc(end).diff(moment.utc(start), "hours")).toBe(24);
-      expect(screen.getByLabelText("Start time")).toHaveValue(moment.utc(start).local().format("YYYY-MM-DDTHH:mm"));
+      expect(urlParams().get("start")).toBe("2026-07-06T10:00Z");
+      expect(urlParams().get("end")).toBe("2026-07-07T10:00Z");
+      expect(screen.getByLabelText("Start time")).toHaveValue("2026-07-06T06:00");
 
       fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "2026-07-01T10:00" } });
 
-      await waitFor(() =>
-        expect(urlParams().get("start")).toBe(moment("2026-07-01T10:00").utc().format("YYYY-MM-DDTHH:mm[Z]")),
-      );
-      await waitFor(() =>
-        expect(lastCall()?.start_date).toBe(moment("2026-07-01T10:00").utc().format("YYYY-MM-DD HH:mm:ss")),
-      );
+      await waitFor(() => expect(urlParams().get("start")).toBe("2026-07-01T14:00Z"));
+      await waitFor(() => expect(lastCall()?.start_date).toBe("2026-07-01 14:00:00"));
       expect(lastCall()?.page).toBe(1);
     });
 
@@ -627,9 +661,7 @@ describe("RequestLogsPanel", () => {
       await user.click(await screen.findByRole("button", { name: "Custom Range" }));
       await waitFor(() => expect(urlParams().get("range")).toBe("custom"));
       fireEvent.change(screen.getByLabelText("Start time"), { target: { value: "2026-07-01T10:00" } });
-      await waitFor(() =>
-        expect(lastCall()?.start_date).toBe(moment("2026-07-01T10:00").utc().format("YYYY-MM-DD HH:mm:ss")),
-      );
+      await waitFor(() => expect(lastCall()?.start_date).toBe("2026-07-01 14:00:00"));
 
       vi.setSystemTime(new Date("2026-07-07T10:05:00Z"));
       await user.click(screen.getByRole("button", { name: "Custom Range" }));
@@ -644,7 +676,10 @@ describe("RequestLogsPanel", () => {
 
     it("Reset Filters clears the range, bounds and filters from the URL", async () => {
       const user = userEvent.setup();
-      renderPanel("?range=custom&start=2026-07-01T10:00Z&end=2026-07-02T10:30Z&filter_team=team-1&log_search=abc");
+      respondWithPages(2, 25, 80, SESSION_CURSOR);
+      renderPanel(
+        "?page=2&range=custom&start=2026-07-01T10:00Z&end=2026-07-02T10:30Z&filter_team=team-1&log_search=abc",
+      );
 
       await waitFor(() => expect(lastCall()?.params?.team_id).toBe("team-1"));
       await user.click(screen.getByRole("button", { name: "Reset Filters" }));
@@ -1023,9 +1058,22 @@ describe("RequestLogsPanel", () => {
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       expect(lastCall()?.params?.sort_by).toBe("startTime");
       expect(lastCall()?.params?.sort_order).toBe("asc");
+      expect(screen.getByTestId("sort-trigger-startTime").innerHTML).toContain('data-sort-indicator="asc"');
+    });
+
+    it("keeps a URL page when the fetch fails instead of clamping it back to page 1", async () => {
+      vi.mocked(uiSpendLogsCall).mockRejectedValue(new Error("boom"));
+      renderPanel("?page=3");
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      await waitFor(() => expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0));
+      await expect(waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), { timeout: 300 })).rejects.toThrow();
+      expect(vi.mocked(uiSpendLogsCall).mock.calls.map(([options]) => options.page)).toEqual([3]);
+      expect(onUrlUpdate).not.toHaveBeenCalled();
     });
 
     it("writes the search box to ?log_search= only and returns to the first page", async () => {
+      respondWithPages(2, 25, 80, SESSION_CURSOR);
       renderPanel("?page=2");
 
       await waitFor(() => expect(lastCall()?.page).toBe(2));
@@ -1116,6 +1164,61 @@ describe("RequestLogsPanel", () => {
     });
   });
 
+  describe("session cursors across browser history", () => {
+    it("does not send another filter's keyset cursor when Back restores an unfiltered page", async () => {
+      const user = userEvent.setup();
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ page = 1, params }) => {
+        const scope = params?.session_id ?? "all";
+        return {
+          data: fullPage(25, `${scope}-p${page}`),
+          total: 500,
+          page,
+          page_size: 25,
+          total_pages: 20,
+          next_session_cursor: `${scope}|${page}`,
+          has_more: true,
+        };
+      });
+      const { goBack } = renderPanelWithHistory();
+      const goToNextPage = async (scope: string, page: number) => {
+        fireEvent.click(screen.getByTestId("pagination-next"));
+        await waitFor(() => expect(row(`${scope}-p${page}-0`)).not.toBeNull());
+      };
+
+      await waitFor(() => expect(row("all-p1-0")).not.toBeNull());
+      await goToNextPage("all", 2);
+      await goToNextPage("all", 3);
+      expect(lastCall()?.params?.session_cursor).toBe("all|2");
+
+      await user.click(row("all-p3-0") as HTMLElement);
+      await waitFor(() => expect(urlParams().get("log_id")).toBe("all-p3-0"));
+      await user.click(screen.getByRole("button", { name: "close-drawer" }));
+      await waitFor(() => expect(urlParams().get("log_id")).toBeNull());
+
+      await user.click(screen.getByTestId("datatable-filters-trigger"));
+      await user.type(await screen.findByPlaceholderText("Enter session ID…"), "sess-b");
+      await user.click(screen.getByTestId("filter-drawer-apply"));
+      await waitFor(() => expect(row("sess-b-p1-0")).not.toBeNull());
+      await goToNextPage("sess-b", 2);
+      await goToNextPage("sess-b", 3);
+      expect(lastCall()?.params?.session_cursor).toBe("sess-b|2");
+
+      const callsBeforeBack = vi.mocked(uiSpendLogsCall).mock.calls.length;
+      goBack();
+
+      await waitFor(() => expect(row("all-p3-0")).not.toBeNull());
+      const unfilteredPageThreeCalls = vi
+        .mocked(uiSpendLogsCall)
+        .mock.calls.slice(callsBeforeBack)
+        .map(([options]) => options)
+        .filter((options) => options.page === 3 && options.page_size === 25 && !options.params?.session_id);
+      expect(unfilteredPageThreeCalls.length).toBeGreaterThan(0);
+      expect(unfilteredPageThreeCalls.map((options) => options.params?.session_cursor)).toEqual(
+        unfilteredPageThreeCalls.map(() => undefined),
+      );
+    });
+  });
+
   describe("key hash takeover (?key=)", () => {
     const keyInfoView = () => screen.getByTestId("key-info-view");
 
@@ -1139,6 +1242,30 @@ describe("RequestLogsPanel", () => {
       renderPanel("?key=sk-hash-9");
 
       await waitFor(() => expect(keyInfoView()).toHaveAttribute("data-key-id", "sk-hash-9"));
+      await user.click(screen.getByRole("button", { name: "Back to Logs" }));
+
+      await waitFor(() => expect(urlParams().get("key")).toBeNull());
+      expect(await screen.findByTestId("datatable-search")).toBeInTheDocument();
+    });
+
+    it("shows a loading state instead of the logs table while ?key= resolves", async () => {
+      vi.mocked(keyInfoV1Call).mockImplementationOnce(() => new Promise(() => {}));
+      renderPanel("?key=sk-hash-9");
+
+      expect(await screen.findByText("Loading key...")).toBeInTheDocument();
+      expect(screen.queryByTestId("datatable-search")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("key-info-view")).not.toBeInTheDocument();
+    });
+
+    it("shows KeyInfoView's not-found state when ?key= fails to load, and Back to Logs clears the key", async () => {
+      const user = userEvent.setup();
+      vi.mocked(keyInfoV1Call).mockRejectedValueOnce(new Error("key not found"));
+      renderPanel("?key=sk-bogus");
+
+      await waitFor(() => expect(keyInfoView()).toHaveAttribute("data-key-found", "false"));
+      expect(keyInfoView()).toHaveAttribute("data-key-id", "sk-bogus");
+      expect(screen.queryByTestId("datatable-search")).not.toBeInTheDocument();
+
       await user.click(screen.getByRole("button", { name: "Back to Logs" }));
 
       await waitFor(() => expect(urlParams().get("key")).toBeNull());
@@ -1171,6 +1298,17 @@ describe("RequestLogsPanel", () => {
       await user.click(screen.getByRole("button", { name: "Stop" }));
 
       expect(screen.queryByText("Auto-refreshing every 15 seconds")).not.toBeInTheDocument();
+      expect(sessionStorage.getItem("isLiveTail")).toBe("false");
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
+    it("stays off on load when it was stopped earlier in this browser tab", async () => {
+      sessionStorage.setItem("isLiveTail", "false");
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(screen.queryByText("Auto-refreshing every 15 seconds")).not.toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: "Live Tail" })).not.toBeChecked();
     });
   });
 });

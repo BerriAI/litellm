@@ -3,7 +3,7 @@ import moment from "moment";
 import { NuqsTestingAdapter, withNuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LOCAL_DATETIME_FORMAT, useLogsTimeRange, type LogsTimeRange } from "./useLogsTimeRange";
+import { LOCAL_DATETIME_FORMAT, useLogsTimeRange, type LogsRange, type LogsTimeRange } from "./useLogsTimeRange";
 
 const renderTimeRange = (searchParams = "") => {
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
@@ -16,30 +16,37 @@ const renderTimeRange = (searchParams = "") => {
 const lastParams = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
   onUrlUpdate.mock.calls.at(-1)?.[0].searchParams ?? new URLSearchParams();
 
+const expectedRange = (
+  range: LogsRange,
+  [startTime, endTime]: readonly [string, string],
+  [startInput, endInput]: readonly [string, string] = ["", ""],
+): LogsTimeRange => ({ range, startTime, endTime, startInput, endInput });
+
 const minutesBetween = (startTime: string, endTime: string) =>
   moment(endTime, LOCAL_DATETIME_FORMAT).diff(moment(startTime, LOCAL_DATETIME_FORMAT), "minutes");
 
 describe("useLogsTimeRange", () => {
   beforeEach(() => {
+    vi.stubEnv("TZ", "America/New_York");
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date("2026-07-07T10:00:00Z"));
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it("anchors a preset's bounds at mount time so the query window does not drift per render", () => {
     const { result, rerender } = renderTimeRange("?range=15m");
 
     const initial = result.current.timeRange;
-    expect(minutesBetween(initial.startTime, initial.endTime)).toBe(15);
-    expect(initial.endTime).toBe(moment().format(LOCAL_DATETIME_FORMAT));
+    expect(initial).toEqual(expectedRange("15m", ["2026-07-07T05:45", "2026-07-07T06:00"]));
 
     vi.setSystemTime(new Date("2026-07-07T10:05:00Z"));
     rerender();
 
-    expect(result.current.timeRange).toBe(initial);
+    expect(result.current.timeRange).toEqual(initial);
   });
 
   it("re-anchors from now when the same preset is picked again", async () => {
@@ -84,29 +91,46 @@ describe("useLogsTimeRange", () => {
   it("round-trips a custom range through UTC minute-precision ISO strings", async () => {
     const { result, onUrlUpdate } = renderTimeRange("?range=custom&start=2026-07-01T10:00Z&end=2026-07-02T10:30Z");
 
-    expect(result.current.timeRange).toEqual({
-      range: "custom",
-      startTime: moment("2026-07-01T10:00Z").format(LOCAL_DATETIME_FORMAT),
-      endTime: moment("2026-07-02T10:30Z").format(LOCAL_DATETIME_FORMAT),
-    });
+    const bounds = ["2026-07-01T06:00", "2026-07-02T06:30"] as const;
+    expect(result.current.timeRange).toEqual(expectedRange("custom", bounds, bounds));
 
     act(() => result.current.setEndTime("2026-07-03T08:15"));
 
-    await waitFor(() =>
-      expect(lastParams(onUrlUpdate).get("end")).toBe(moment("2026-07-03T08:15").utc().format("YYYY-MM-DDTHH:mm[Z]")),
-    );
+    await waitFor(() => expect(lastParams(onUrlUpdate).get("end")).toBe("2026-07-03T12:15Z"));
     expect(result.current.timeRange.endTime).toBe("2026-07-03T08:15");
+    expect(result.current.timeRange.endInput).toBe("2026-07-03T08:15");
   });
 
-  it("treats an unparsable or cleared custom bound as empty instead of inventing a date", async () => {
+  it("keeps an unparsable or cleared custom bound empty in the input but queries the default window for it", async () => {
     const { result, onUrlUpdate } = renderTimeRange("?range=custom&start=not-a-date&end=2026-07-02T10:30Z");
 
-    expect(result.current.timeRange.startTime).toBe("");
+    expect(result.current.timeRange).toEqual(
+      expectedRange("custom", ["2026-07-06T06:00", "2026-07-02T06:30"], ["", "2026-07-02T06:30"]),
+    );
 
     act(() => result.current.setEndTime(""));
 
     await waitFor(() => expect(lastParams(onUrlUpdate).has("end")).toBe(false));
-    expect(result.current.timeRange.endTime).toBe("");
+    expect(result.current.timeRange.endInput).toBe("");
+    expect(result.current.timeRange.endTime).toBe("2026-07-07T06:00");
+  });
+
+  it("ignores ?start= and ?end= unless the range is custom", () => {
+    const { result } = renderTimeRange("?range=1h&start=2026-07-01T10:00Z&end=2026-07-02T10:30Z");
+
+    expect(result.current.timeRange).toEqual(expectedRange("1h", ["2026-07-07T05:00", "2026-07-07T06:00"]));
+  });
+
+  it("picking a preset while in a custom range drops ?start= and ?end=", async () => {
+    const { result, onUrlUpdate } = renderTimeRange("?range=custom&start=2026-07-01T10:00Z&end=2026-07-02T10:30Z");
+
+    act(() => result.current.selectPreset("1h"));
+
+    await waitFor(() => expect(lastParams(onUrlUpdate).get("range")).toBe("1h"));
+    expect(lastParams(onUrlUpdate).has("start")).toBe(false);
+    expect(lastParams(onUrlUpdate).has("end")).toBe(false);
+    await waitFor(() => expect(result.current.timeRange.startTime).toBe("2026-07-07T05:00"));
+    expect(result.current.timeRange.endTime).toBe("2026-07-07T06:00");
   });
 
   it("carries the current preset bounds into ?start= and ?end= when Custom Range is toggled on", async () => {
@@ -116,13 +140,11 @@ describe("useLogsTimeRange", () => {
     act(() => result.current.toggleCustomRange());
 
     await waitFor(() => expect(lastParams(onUrlUpdate).get("range")).toBe("custom"));
-    expect(lastParams(onUrlUpdate).get("start")).toBe(
-      moment(startTime, LOCAL_DATETIME_FORMAT).utc().format("YYYY-MM-DDTHH:mm[Z]"),
-    );
-    expect(lastParams(onUrlUpdate).get("end")).toBe(
-      moment(endTime, LOCAL_DATETIME_FORMAT).utc().format("YYYY-MM-DDTHH:mm[Z]"),
-    );
-    expect(result.current.timeRange).toEqual({ range: "custom", startTime, endTime });
+    expect(lastParams(onUrlUpdate).get("start")).toBe("2026-07-07T06:00Z");
+    expect(lastParams(onUrlUpdate).get("end")).toBe("2026-07-07T10:00Z");
+    const bounds = ["2026-07-07T02:00", "2026-07-07T06:00"] as const;
+    expect([startTime, endTime]).toEqual(bounds);
+    expect(result.current.timeRange).toEqual(expectedRange("custom", bounds, bounds));
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
@@ -132,9 +154,7 @@ describe("useLogsTimeRange", () => {
     act(() => result.current.toggleCustomRange());
     await waitFor(() => expect(lastParams(onUrlUpdate).get("range")).toBe("custom"));
     act(() => result.current.setStartTime("2026-07-01T10:00"));
-    await waitFor(() =>
-      expect(lastParams(onUrlUpdate).get("start")).toBe(moment("2026-07-01T10:00").utc().format("YYYY-MM-DDTHH:mm[Z]")),
-    );
+    await waitFor(() => expect(lastParams(onUrlUpdate).get("start")).toBe("2026-07-01T14:00Z"));
     expect(result.current.timeRange.startTime).toBe("2026-07-01T10:00");
 
     vi.setSystemTime(new Date("2026-07-07T11:30:00Z"));

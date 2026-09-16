@@ -7,7 +7,6 @@ import {
   type ColumnFiltersState,
   type OnChangeFn,
   type PaginationState,
-  type SortingState,
 } from "@tanstack/react-table";
 import moment from "moment";
 import { parseAsBoolean, parseAsString, useQueryState } from "nuqs";
@@ -67,6 +66,18 @@ const searchFilterValue = (filters: ColumnFiltersState): string => {
   return typeof value === "string" ? value : "";
 };
 
+type SessionCursors = Readonly<Record<number, string>>;
+
+interface ScopedSessionCursors {
+  scope: string;
+  cursors: SessionCursors;
+}
+
+const NO_SESSION_CURSORS: SessionCursors = {};
+
+const cursorsInScope = (stored: ScopedSessionCursors, scope: string): SessionCursors =>
+  stored.scope === scope ? stored.cursors : NO_SESSION_CURSORS;
+
 const tableRowCount = (response: PaginatedResponse, { pageIndex, pageSize }: PaginationState): number => {
   const pageRows = response.data.length;
   if (pageRows === 0 && pageIndex > 0) return response.total;
@@ -94,7 +105,10 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     columnFilters: urlColumnFilters,
     onColumnFiltersChange,
   } = useUrlTableState(TABLE_STATE_OPTIONS);
-  const [sessionCursors, setSessionCursors] = useState<Record<number, string>>({});
+  const [storedSessionCursors, setStoredSessionCursors] = useState<ScopedSessionCursors>({
+    scope: "",
+    cursors: NO_SESSION_CURSORS,
+  });
   const [excludeInternalHealthChecks, setExcludeInternalHealthChecks] = useQueryState(
     "hide_health_checks",
     parseAsBoolean.withDefault(false),
@@ -103,7 +117,6 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
 
   const resetToFirstPage = useCallback(() => {
-    setSessionCursors({});
     onPaginationChange((previous) => ({ ...previous, pageIndex: 0 }));
   }, [onPaginationChange]);
 
@@ -143,6 +156,21 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     [urlColumnFilters, debouncedSearch],
   );
 
+  const sessionCursorScope = useMemo(
+    () =>
+      JSON.stringify([
+        queryColumnFilters,
+        sorting,
+        startTime,
+        endTime,
+        isCustomDate,
+        excludeInternalHealthChecks,
+        pagination.pageSize,
+      ]),
+    [queryColumnFilters, sorting, startTime, endTime, isCustomDate, excludeInternalHealthChecks, pagination.pageSize],
+  );
+  const sessionCursors = cursorsInScope(storedSessionCursors, sessionCursorScope);
+
   const { logsQuery, filteredLogs, allTeams, usesSessionCursor } = useLogFilterLogic({
     accessToken,
     token,
@@ -179,10 +207,10 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         api_key: selectedKeyId,
       };
     },
-    enabled: selectedKeyId !== null,
+    enabled: Boolean(selectedKeyId),
   };
 
-  const { data: selectedKeyInfo } = useQuery(keyInfoQueryOptions);
+  const { data: selectedKeyInfo, isError: selectedKeyLoadFailed } = useQuery(keyInfoQueryOptions);
 
   const urlLogQueryOptions: UseQueryOptions<LogEntry | null> = {
     queryKey: ["logs", "byId", urlLogId, accessToken],
@@ -224,29 +252,12 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const rows: LogEntry[] = filteredLogs.data;
   const rowCount = tableRowCount(filteredLogs, pagination);
 
-  const handleSearchChange = useCallback(
-    (value: string) => {
-      setSearch(value);
-      setSessionCursors({});
-    },
-    [setSearch],
-  );
-
-  const handleSortingChange = useCallback<OnChangeFn<SortingState>>(
-    (updaterOrValue) => {
-      onSortingChange(updaterOrValue);
-      setSessionCursors({});
-    },
-    [onSortingChange],
-  );
-
   const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>(
     (updaterOrValue) => {
       const next = functionalUpdate(updaterOrValue, columnFilters);
       onColumnFiltersChange(next.filter((filter) => filter.id !== LOG_FILTER_IDS.SEARCH));
       const nextSearch = searchFilterValue(next);
       if (nextSearch !== search) setSearch(nextSearch);
-      setSessionCursors({});
     },
     [columnFilters, onColumnFiltersChange, search, setSearch],
   );
@@ -259,7 +270,6 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         return;
       }
       if (requested.pageSize !== pagination.pageSize) {
-        setSessionCursors({});
         onPaginationChange({ ...requested, pageIndex: 0 });
         return;
       }
@@ -269,10 +279,20 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
       }
       const nextCursor = filteredLogs.next_session_cursor;
       if (!nextCursor || logsQuery.isPlaceholderData) return;
-      setSessionCursors((previous) => ({ ...previous, [requested.pageIndex]: nextCursor }));
+      setStoredSessionCursors((previous) => ({
+        scope: sessionCursorScope,
+        cursors: { ...cursorsInScope(previous, sessionCursorScope), [requested.pageIndex]: nextCursor },
+      }));
       onPaginationChange(requested);
     },
-    [usesSessionCursor, pagination, onPaginationChange, filteredLogs.next_session_cursor, logsQuery.isPlaceholderData],
+    [
+      usesSessionCursor,
+      pagination,
+      onPaginationChange,
+      filteredLogs.next_session_cursor,
+      logsQuery.isPlaceholderData,
+      sessionCursorScope,
+    ],
   );
 
   const handleExcludeInternalHealthChecksChange = useCallback(
@@ -325,11 +345,14 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     [setSelectedKeyId],
   );
 
-  if (selectedKeyInfo && selectedKeyId && selectedKeyInfo.api_key === selectedKeyId) {
+  if (selectedKeyId) {
+    if (!selectedKeyInfo && !selectedKeyLoadFailed) {
+      return <div className="p-4 text-sm text-muted-foreground">Loading key...</div>;
+    }
     return (
       <KeyInfoView
         keyId={selectedKeyId}
-        keyData={selectedKeyInfo}
+        keyData={selectedKeyInfo ?? undefined}
         teams={allTeams ?? []}
         onClose={() => void setSelectedKeyId(null)}
         backButtonText="Back to Logs"
@@ -354,11 +377,11 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         pagination={pagination}
         onPaginationChange={handlePaginationChange}
         sorting={sorting}
-        onSortingChange={handleSortingChange}
+        onSortingChange={onSortingChange}
         columnFilters={columnFilters}
         onColumnFiltersChange={handleColumnFiltersChange}
         searchValue={search}
-        onSearchChange={handleSearchChange}
+        onSearchChange={setSearch}
         onRefresh={() => void logsQuery.refetch()}
         onRowClick={handleRowClick}
         onKeyHashClick={handleKeyHashClick}
