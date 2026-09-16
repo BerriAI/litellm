@@ -1,5 +1,3 @@
-"""Shared by the Anthropic Managed Agents configs (beta managed-agents-2026-04-01)."""
-
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
