@@ -21,22 +21,18 @@ BEDROCK_EDGE_MODELS: Final = frozenset(
 ENV_REFERENCE_PREFIX: Final = "os.environ/"
 
 
-def bedrock_region(declared: str | None, model: str) -> str | None:
-    """The region whose edge mount a deployment belongs to, or None when the
-    harness cannot know it.
+def bedrock_region(declared: str | None) -> str:
+    """The region whose edge mount a deployment belongs to.
 
-    Most Bedrock deployments declare `os.environ/AWS_REGION`, which the proxy
-    resolves from its own environment. The run pod does not share that
-    environment, so the harness genuinely does not know the region. A `us.`
-    inference profile fans out across the US regions and is reachable from any
-    of them, so the default entry point is correct for those whatever the proxy
-    resolved; anything else keeps its direct path rather than being sent to a
-    region the model may not exist in."""
-    if declared is None:
+    Most Bedrock deployments declare `os.environ/AWS_REGION`, which only the
+    proxy can resolve from its own environment; the run pod does not share it.
+    Answering those with the default mount is correct because every model on the
+    edge allowlist is a `us.` inference profile, which fans out across the US
+    regions and is reachable from any of them. That invariant is enforced on the
+    allowlist itself rather than re-checked per call."""
+    if declared is None or declared.startswith(ENV_REFERENCE_PREFIX):
         return DEFAULT_BEDROCK_REGION
-    if not declared.startswith(ENV_REFERENCE_PREFIX):
-        return declared
-    return DEFAULT_BEDROCK_REGION if model.startswith(BEDROCK_CROSS_REGION_PREFIX) else None
+    return declared
 
 
 def bedrock_mount(params: LiteLLMParamsBody) -> str | None:
@@ -51,8 +47,7 @@ def bedrock_mount(params: LiteLLMParamsBody) -> str | None:
     model: Final = route.partition("/")[2] or route
     if model not in BEDROCK_EDGE_MODELS:
         return None
-    region: Final = bedrock_region(params.aws_region_name, model)
-    return None if region is None else f"bedrock/{region}"
+    return f"bedrock/{bedrock_region(params.aws_region_name)}"
 
 
 def route_bedrock(

@@ -33,7 +33,13 @@ from provider_cache import (
     successful_response,
 )
 from provider_cache_redis import PUBLISH, RedisCommands, RedisResponseStore, configured_cache, redis_store
-from provider_cache_routing import LIVE_PROVIDER_REQUIRED, route_cache_model
+from provider_cache_routing import (
+    BEDROCK_CROSS_REGION_PREFIX,
+    BEDROCK_EDGE_MODELS,
+    LIVE_PROVIDER_REQUIRED,
+    bedrock_region,
+    route_cache_model,
+)
 from fixture_mode import SESSION_TEST_KEY
 from provider_edge import EDGE_MOUNTS, configured_cache_backend, resolve_mount, start_provider_edge
 from provider_edge_bedrock import bedrock_signer
@@ -854,6 +860,31 @@ def test_bedrock_deployments_the_edge_must_not_touch_keep_their_direct_route(par
         params, lambda mount: None if mount not in EDGE_MOUNTS else f"http://edge.invalid/{mount}", enabled=True,
     )
     assert routed is params
+
+
+@pytest.mark.parametrize("declared,expected", [
+    (None, "us-east-1"),
+    ("us-west-2", "us-west-2"),
+    ("eu-west-1", "eu-west-1"),
+    ("os.environ/AWS_REGION", "us-east-1"),
+    ("os.environ/ANY_OTHER_NAME", "us-east-1"),
+])
+def test_a_region_only_the_proxy_can_resolve_falls_back_to_the_default_mount(
+    declared: str | None, expected: str,
+) -> None:
+    """A declared literal region is the one the deployment meant. A region the
+    proxy resolves from its own environment is one the run pod cannot see, and
+    the default mount answers it."""
+    assert bedrock_region(declared) == expected
+
+
+def test_every_model_on_the_edge_allowlist_is_a_cross_region_profile() -> None:
+    """Answering an env-referenced region with the default mount is only correct
+    for a profile that fans out across the US regions and is reachable from any
+    of them. A single-region model on this list would be sent to a region it may
+    not exist in, so the list is where that is caught."""
+    assert BEDROCK_EDGE_MODELS
+    assert all(model.startswith(BEDROCK_CROSS_REGION_PREFIX) for model in BEDROCK_EDGE_MODELS)
 
 
 @pytest.mark.parametrize("mode", ["batch", "realtime", "image_generation"])
