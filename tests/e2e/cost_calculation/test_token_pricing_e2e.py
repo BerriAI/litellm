@@ -16,15 +16,26 @@ from typing import Final
 from conftest import CostCalcClient, cost_rows, register_scenario_deployment
 from cost_matrix import (
     FRONTIER_MODELS,
+    IMAGE_INPUT_DATA_URL,
     Case,
     FrontierModel,
     cases_for,
     expected_cost,
     expected_token_columns,
+    recount_cost,
 )
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, ChatStreamOptions
+from models import (
+    ChatBody,
+    ChatMessage,
+    ChatStreamOptions,
+    ChatTool,
+    ChatToolFunction,
+    ImageContentPart,
+    ImageUrl,
+    TextContentPart,
+)
 
 pytestmark: Final = [pytest.mark.e2e, pytest.mark.cost_map_stack]  # mutable-ok: pytest only accepts a list for pytestmark
 
@@ -41,10 +52,37 @@ def _case_id(param: tuple[FrontierModel, Case]) -> str:
 def _chat_body(model_name: str, marker: str, case: Case) -> ChatBody:
     return ChatBody(
         model=model_name,
-        messages=(ChatMessage(role="user", content=f"{marker} scripted pricing call"),),
+        messages=(
+            ChatMessage(
+                role="user",
+                content=(
+                    [
+                        TextContentPart(text=f"{marker} scripted pricing call"),
+                        ImageContentPart(image_url=ImageUrl(url=IMAGE_INPUT_DATA_URL)),
+                    ]
+                    if case.image_input
+                    else f"{marker} scripted pricing call"
+                ),
+            ),
+        ),
         stream=case.stream,
         stream_options=ChatStreamOptions(include_usage=True) if case.stream else None,
         service_tier=case.service_tier,
+        tools=(
+            (
+                ChatTool(
+                    function=ChatToolFunction(
+                        name="get_weather",
+                        parameters={
+                            "type": "object",
+                            "properties": {"city": {"type": "string"}},
+                        },
+                    )
+                ),
+            )
+            if case.tool_call
+            else None
+        ),
     )
 
 
@@ -92,8 +130,23 @@ class TestTokenPricing:
 
         if not case.exact_spend:
             # stream_usage=absent: the provider reported no usage, so the row's
-            # token counts are the proxy's own recount; only assert a bill landed.
-            assert row.spend is not None and row.spend > 0, f"no-usage stream billed nothing: {row}"
+            # token counts are the proxy's own recount; assert the recount
+            # billed both directions at the case's rates.
+            assert row.prompt_tokens is not None and row.prompt_tokens > 0, (
+                f"no-usage stream counted no input tokens: {row}"
+            )
+            assert row.completion_tokens is not None and row.completion_tokens > 0, (
+                f"no-usage stream counted no output tokens: {row}"
+            )
+            if case.image_input:
+                assert row.prompt_tokens < 4000, (
+                    f"image data URL looks tokenized as text: prompt_tokens={row.prompt_tokens}"
+                )
+            assert row.spend is not None and cost_rows.approx_equal(
+                row.spend,
+                recount_cost(model, case, row.prompt_tokens, row.completion_tokens),
+            ), f"no-usage stream spend {row.spend} != recount at map rates: {row}"
+            cost_rows.assert_total_is_sum_of_components(row)
             return
 
         assert row.spend is not None and cost_rows.approx_equal(row.spend, expected), (
