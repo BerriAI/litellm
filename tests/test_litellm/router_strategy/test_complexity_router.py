@@ -8728,19 +8728,26 @@ class TestRecordRoutingDecision:
         Router._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
         assert request_kwargs == {}
 
-    def test_clearing_the_decision_takes_the_savings_facts_with_it(self):
+    def test_clearing_the_decision_takes_the_savings_facts_with_it(self) -> None:
         """A fallback to a plain model group re-enters the hook with the same
         `request_kwargs`. The baseline and the conversation shape ride inside the
         decision rather than beside it, so one clear cannot leave either behind and
         attribute an auto-router saving to a deployment that never routed."""
-        decision = {
+        from litellm.types.router import BaselineRouteStamp
+
+        decision: Final = {
             "router_model_name": "smart-router",
             "router_type": "complexity",
             "routed_model": "gpt-4o-mini",
             "savings_baseline_model": "anthropic/claude-opus-5",
+            "savings_baseline_deployment_id": "opus-deployment",
             "conversation_continuing": False,
         }
-        request_kwargs: Dict = {"litellm_metadata": {"routing_decision": decision}}
+        request_kwargs: Final[dict[str, dict[str, object]]] = {"litellm_metadata": {}}
+        Router._record_routing_decision(request_kwargs=request_kwargs, routing_decision=decision)
+        stamp: Final = request_kwargs["litellm_metadata"]["_autorouter_baseline_route"]
+        assert isinstance(stamp, BaselineRouteStamp)
+        assert stamp.baseline_deployment_id == "opus-deployment"
         Router._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
         assert request_kwargs["litellm_metadata"] == {}
 

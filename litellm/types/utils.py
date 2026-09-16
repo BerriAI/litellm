@@ -146,6 +146,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_assistant_prefill: bool | None
     supports_prompt_caching: bool | None
     supports_prompt_cache_breakpoint: ReadOnly[bool | None]
+    supports_thinking_cache_preservation: ReadOnly[bool | None]
     supports_computer_use: bool | None
     supports_audio_input: bool | None
     supports_embedding_image_input: bool | None
@@ -3436,7 +3437,9 @@ class StandardLoggingPayload(ClassifierAudit):
     stream: bool | None
     response_cost: float
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown
-    autorouter_savings: ReadOnly[float | None]  # None = not an auto-routed caller request; 0.0 is a real figure
+    autorouter_savings: ReadOnly[float | None]
+    autorouter_savings_estimate: ReadOnly[Mapping[str, JsonValue] | None]
+    autorouter_baseline_observation: ReadOnly[str | None]
     response_cost_failure_debug_info: StandardLoggingModelCostFailureDebugInformation | None
     status: StandardLoggingPayloadStatus
     status_fields: StandardLoggingPayloadStatusFields

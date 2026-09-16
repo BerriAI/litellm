@@ -11,6 +11,25 @@ Unlike the semantic `auto_router` which uses embedding-based matching, the `comp
 - **Predictable behavior** - rule-based scoring is deterministic
 - **Fully configurable** - weights, thresholds, and keyword lists can be customized
 
+## Savings estimates
+
+The Cost Optimization dashboard compares routed spend with an estimate of sending the same requests to the configured highest-tier baseline model. Actual spend includes recorded classifier costs. A negative estimate can reflect real cache-write costs when switching models, even when the selected model has cheaper token prices
+
+For supported native Anthropic `/v1/messages` requests, a baseline read requires a matching prefix that was available when the request started and remained inside its five-minute or one-hour TTL. Requests served by cheaper models advance the hypothetical baseline history too. An assistant message alone never establishes a cache hit
+
+Use a stable session ID and a configured proxy database. Accounting runs after inference, through the background spend pipeline. The primary database retains compact observations and replays them in request-start order. Late arrivals withdraw affected estimates until replay publishes corrected per-request, session and daily totals. Actual billed spend remains unchanged
+
+Before any recorded request diverges from the exact baseline deployment, complete observed usage establishes equal nonzero model costs and zero model savings, including overlapping requests. Recorded classifier cost contributes only to actual routed spend. After divergence, comparisons require modeled cache evidence even when routing returns to the baseline. Missing history, unsupported cache semantics and incomplete requests produce unavailable estimates
+
+The comparison holds recorded prompts, output usage, request-start times and first-token times fixed. It does not predict alternate model responses, provider evictions or unrecorded traffic. Legacy sessions do not acquire an initial observed estimate merely because the observation journal is empty. Session retention retires inactive comparisons and prunes their observations; retained retirement markers prevent a reused session from acquiring another initial estimate
+
+Baseline counting requires the same endpoint and API key as the served request. Configured Anthropic-compatible gateways must support native counting for every required prefix, including system/tools-only prefixes with empty `messages`. Missing counts remain unknown; local tokenizers, synthetic messages and partial counts cannot establish a cache hit
+
+Some Claude Code beta headers and `context_management` shapes remain unsupported for modeled cache accounting. Initial baseline-identical requests can still use complete observed usage. Support after a model switch depends on the actual request shape and available prefix counts
+
+Spend metadata records a versioned `autorouter_savings_estimate` with comparison identity, provenance, status, reason and both costs. The dashboard compares costs over the same estimated turns, including numeric zero savings, and shows coverage alongside total actual spend. Pending estimates contribute to neither comparison cost. Existing session-status clients receive no baseline total when coverage is partial
+
+
 ## How It Works
 
 The router scores each request across 7 dimensions:
