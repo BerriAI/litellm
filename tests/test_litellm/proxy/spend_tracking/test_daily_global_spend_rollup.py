@@ -43,7 +43,8 @@ class _FakeConfigTable:
 
 class _FakeDb:
     """Per-key rows are ``{date: updated_at}`` with a fake database clock that ticks per query,
-    so "rows written since the last scan" behaves like Postgres would."""
+    so "rows written since the last scan" behaves like Postgres would. The database's own
+    date decides which day is still open, never the pod's clock."""
 
     def __init__(self, prisma: "_FakePrisma") -> None:
         self._prisma = prisma
@@ -52,7 +53,7 @@ class _FakeDb:
     async def query_raw(self, sql: str, *params: str) -> list[dict[str, str]]:
         if sql.startswith("SELECT (NOW()"):
             self._prisma.clock += 1
-            return [{"now": f"clock-{self._prisma.clock:04d}"}]
+            return [{"now": f"clock-{self._prisma.clock:04d}", "today": self._prisma.today.isoformat()}]
         rows = self._prisma.user_rows
         if len(params) == 1:
             (last,) = params
@@ -73,8 +74,11 @@ class _FakeDb:
 class _FakePrisma:
     """Enough of PrismaClient for the reconcile: per-key dates, a config table, and execute_raw."""
 
-    def __init__(self, user_days: tuple[str, ...], failing_days: frozenset[str] = frozenset()) -> None:
+    def __init__(
+        self, user_days: tuple[str, ...], failing_days: frozenset[str] = frozenset(), today: date = TODAY
+    ) -> None:
         self.clock = 0
+        self.today = today
         self.user_rows: dict[str, str] = {d: "clock-0000" for d in user_days}
         self.failing_days = failing_days
         self.reconciled: list[str] = []
@@ -98,12 +102,14 @@ async def _fresh_marker_cache():
 
 
 @pytest.mark.asyncio
-async def test_first_run_rolls_up_every_closed_day_and_never_today():
+async def test_first_run_rolls_up_every_closed_day_and_never_the_database_s_today():
     """Before any marker exists every closed day with per-key rows is rolled up. Today is left
-    out: pods are still flushing it, so it is served live from the per-key table until it closes."""
+    out: pods are still flushing it, so it is served live from the per-key table until it closes.
+    The database clock says which day that is; a pod booting with its clock a day ahead must not
+    roll the open day up and mark it reconciled."""
     prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-03", "2026-09-14", "2026-09-15"))
 
-    result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
+    result = await run_daily_global_spend_reconcile(prisma)
 
     assert result.days_reconciled == ("2026-09-01", "2026-09-03", "2026-09-14")
     assert result.failed_day is None
@@ -114,11 +120,12 @@ async def test_first_run_rolls_up_every_closed_day_and_never_today():
 
 @pytest.mark.asyncio
 async def test_later_run_rolls_up_only_new_days_when_nothing_old_changed():
-    prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-12", "2026-09-13", "2026-09-14"))
-    await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
+    prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-12", "2026-09-13", "2026-09-14"), today=date(2026, 9, 14))
+    await run_daily_global_spend_reconcile(prisma)
     prisma.reconciled.clear()
+    prisma.today = TODAY
 
-    result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
+    result = await run_daily_global_spend_reconcile(prisma)
 
     assert result.days_reconciled == ("2026-09-14",)
     assert await reconciled_through(prisma) == "2026-09-14"
@@ -128,13 +135,14 @@ async def test_later_run_rolls_up_only_new_days_when_nothing_old_changed():
 async def test_spend_landing_on_an_old_rolled_up_day_is_folded_in_by_the_next_run():
     """Per-key rows carry the request start date, so a delayed flush or retry can add spend to a
     day far behind the marker. That day is rewritten, and the marker never moves back for it."""
-    prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-05", "2026-09-13"))
-    await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
+    prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-05", "2026-09-13"), today=date(2026, 9, 14))
+    await run_daily_global_spend_reconcile(prisma)
     prisma.reconciled.clear()
+    prisma.today = TODAY
     prisma.write_late_row("2026-09-01")
     prisma.write_late_row("2026-09-03")
 
-    result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
+    result = await run_daily_global_spend_reconcile(prisma)
 
     assert result.days_reconciled == ("2026-09-01", "2026-09-03")
     assert "2026-09-05" not in prisma.reconciled
@@ -145,15 +153,16 @@ async def test_spend_landing_on_an_old_rolled_up_day_is_folded_in_by_the_next_ru
 async def test_a_late_row_seen_by_a_failed_run_is_seen_again_by_the_next_one():
     """The scan time only advances when every pending day was rewritten, otherwise a late row
     found by the failed run would be counted as handled."""
-    prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-13"))
-    await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
+    prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-13"), today=date(2026, 9, 14))
+    await run_daily_global_spend_reconcile(prisma)
+    prisma.today = TODAY
     prisma.write_late_row("2026-09-01")
     prisma.failing_days = frozenset({"2026-09-01"})
-    failed = await run_daily_global_spend_reconcile(prisma, today=TODAY)
+    failed = await run_daily_global_spend_reconcile(prisma)
     prisma.failing_days = frozenset()
     prisma.reconciled.clear()
 
-    result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
+    result = await run_daily_global_spend_reconcile(prisma)
 
     assert failed.failed_day == "2026-09-01"
     assert failed.reconciled_through == "2026-09-13"
@@ -166,7 +175,7 @@ async def test_a_marker_without_a_scan_time_rolls_every_closed_day_up_again():
     prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-13"))
     prisma.db.litellm_config.rows[DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM] = '{"reconciled_through": "2026-09-13"}'
 
-    result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
+    result = await run_daily_global_spend_reconcile(prisma)
 
     assert result.days_reconciled == ("2026-09-01", "2026-09-13")
     marker = await read_marker(prisma)
@@ -175,11 +184,11 @@ async def test_a_marker_without_a_scan_time_rolls_every_closed_day_up_again():
 
 @pytest.mark.asyncio
 async def test_a_run_with_no_new_closed_days_keeps_the_marker():
-    prisma = _FakePrisma(user_days=("2026-09-13",))
-    await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
+    prisma = _FakePrisma(user_days=("2026-09-13",), today=date(2026, 9, 14))
+    await run_daily_global_spend_reconcile(prisma)
     prisma.reconciled.clear()
 
-    result = await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
+    result = await run_daily_global_spend_reconcile(prisma)
 
     assert result.days_reconciled == ()
     assert result.reconciled_through == "2026-09-13"
@@ -191,7 +200,7 @@ async def test_a_failing_day_stops_the_run_and_leaves_the_marker_on_the_last_goo
     a global table missing that day's spend."""
     prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-02", "2026-09-03"), failing_days=frozenset({"2026-09-02"}))
 
-    result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
+    result = await run_daily_global_spend_reconcile(prisma)
 
     assert result.days_reconciled == ("2026-09-01",)
     assert result.failed_day == "2026-09-02"
@@ -203,10 +212,10 @@ async def test_a_failing_day_stops_the_run_and_leaves_the_marker_on_the_last_goo
 @pytest.mark.asyncio
 async def test_the_next_run_resumes_from_the_failed_day():
     prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-02", "2026-09-03"), failing_days=frozenset({"2026-09-02"}))
-    await run_daily_global_spend_reconcile(prisma, today=TODAY)
+    await run_daily_global_spend_reconcile(prisma)
     prisma.failing_days = frozenset()
 
-    result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
+    result = await run_daily_global_spend_reconcile(prisma)
 
     assert result.days_reconciled == ("2026-09-01", "2026-09-02", "2026-09-03")
     assert await reconciled_through(prisma) == "2026-09-03"
@@ -215,13 +224,14 @@ async def test_the_next_run_resumes_from_the_failed_day():
 @pytest.mark.asyncio
 async def test_a_failure_with_nothing_done_reports_the_previous_marker_and_alerts():
     """When the rewrite of a late day fails the marker must stay put and the operator must hear about it."""
-    prisma = _FakePrisma(user_days=("2026-09-13",))
-    await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
+    prisma = _FakePrisma(user_days=("2026-09-13",), today=date(2026, 9, 14))
+    await run_daily_global_spend_reconcile(prisma)
+    prisma.today = TODAY
     prisma.write_late_row("2026-09-12")
     prisma.failing_days = frozenset({"2026-09-12"})
     alert = AsyncMock()
 
-    result = await run_scheduled_daily_global_spend_reconcile(prisma, pod_lock_manager=None, alert=alert, today=TODAY)
+    result = await run_scheduled_daily_global_spend_reconcile(prisma, pod_lock_manager=None, alert=alert)
 
     assert result is not None
     assert result.days_reconciled == ()
@@ -236,7 +246,7 @@ async def test_a_clean_run_does_not_alert():
     prisma = _FakePrisma(user_days=("2026-09-13",))
     alert = AsyncMock()
 
-    await run_scheduled_daily_global_spend_reconcile(prisma, pod_lock_manager=None, alert=alert, today=TODAY)
+    await run_scheduled_daily_global_spend_reconcile(prisma, pod_lock_manager=None, alert=alert)
 
     alert.assert_not_awaited()
 
@@ -256,7 +266,7 @@ async def test_scheduled_run_skips_when_another_pod_holds_the_lock():
     prisma = _FakePrisma(user_days=("2026-09-13",))
     lock = _pod_lock(acquired=False)
 
-    result = await run_scheduled_daily_global_spend_reconcile(prisma, pod_lock_manager=lock, today=TODAY)
+    result = await run_scheduled_daily_global_spend_reconcile(prisma, pod_lock_manager=lock)
 
     assert result is None
     assert prisma.reconciled == []
@@ -268,7 +278,7 @@ async def test_scheduled_run_runs_and_releases_the_lock_when_it_wins():
     prisma = _FakePrisma(user_days=("2026-09-13",))
     lock = _pod_lock(acquired=True)
 
-    result = await run_scheduled_daily_global_spend_reconcile(prisma, pod_lock_manager=lock, today=TODAY)
+    result = await run_scheduled_daily_global_spend_reconcile(prisma, pod_lock_manager=lock)
 
     assert result is not None and result.days_reconciled == ("2026-09-13",)
     lock.release_lock.assert_awaited_once()
@@ -282,7 +292,7 @@ async def test_scheduled_run_proceeds_when_the_lock_cannot_be_acquired_or_read()
     lock = _pod_lock(acquired=False)
     lock.redis_cache.async_get_cache = AsyncMock(side_effect=ConnectionError("redis down"))
 
-    result = await run_scheduled_daily_global_spend_reconcile(prisma, pod_lock_manager=lock, today=TODAY)
+    result = await run_scheduled_daily_global_spend_reconcile(prisma, pod_lock_manager=lock)
 
     assert result is not None and result.days_reconciled == ("2026-09-13",)
     lock.release_lock.assert_not_awaited()
