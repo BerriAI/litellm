@@ -20,6 +20,7 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPOpenApiUpstreamError,
     MCPUpstreamAuthError,
 )
+from litellm.proxy._experimental.mcp_server.utils import merge_openapi_headers
 
 # Tool names emitted from OpenAPI specs must work across all major LLM providers.
 # OpenAI/Anthropic/Bedrock all enforce a character class roughly equivalent to
@@ -415,26 +416,9 @@ def _merge_openapi_tool_request_headers(
     Header names are compared case-insensitively so different casing cannot
     bypass the precedence rules.
     """
-    request_extra: Final = _request_extra_headers.get() or {}
-    static: Final = static_headers or {}
-
-    static_lower_names: Final = {k.lower() for k in static}
-    effective_headers: dict[str, str] = {k: v for k, v in request_extra.items() if k.lower() not in static_lower_names}
-    effective_headers.update(static)
-
-    override_auth: Final = _request_auth_header.get()
-    if override_auth:
-        for existing in [k for k in effective_headers if k.lower() == "authorization"]:
-            del effective_headers[existing]
-        effective_headers["Authorization"] = override_auth
-
-    resolved_auth_headers: Final = _request_resolved_auth_headers.get() or {}
-    for name, value in resolved_auth_headers.items():
-        for existing in [k for k in effective_headers if k.lower() == name.lower()]:
-            del effective_headers[existing]
-        effective_headers[name] = value
-
-    return effective_headers
+    return merge_openapi_headers(
+        static_headers, _request_extra_headers.get(), _request_auth_header.get(), _request_resolved_auth_headers.get()
+    )
 
 
 def _raise_for_upstream_failure(

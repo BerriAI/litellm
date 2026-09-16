@@ -1391,6 +1391,7 @@ class TestOpenApiResolvedUpstreamAuth:
             mcp_auth_header="user-byok-key",
             user_api_key_auth=UserAPIKeyAuth(user_id="alice", api_key="sk-user"),
             forwarded_headers=None,
+            caller_authorization="ApiKey user-byok-key",
         )
 
         assert resolved is None

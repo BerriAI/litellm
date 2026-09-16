@@ -79,7 +79,7 @@ def to_server_spec(server: MCPServer) -> ServerSpec | None:
 
     BYOK is the per-user source of the ``api_key`` mode; its scheme rides on ``auth_type`` just
     like a shared key, but the value is per-user and not migrated yet, so a BYOK server defers
-    to v1 regardless of ``auth_type`` (this guard is the seam the BYOK arm replaces later).
+    to v1 for its static schemes. Declared OBO always stays with the exchange arm.
 
     Dispatches on the declared ``auth_type``. The match is exhaustive over ``MCPAuthType`` with
     an ``assert_never`` tail, so a newly added auth mode fails the type gate here until it is
@@ -90,8 +90,8 @@ def to_server_spec(server: MCPServer) -> ServerSpec | None:
     modes ``true_passthrough`` / ``oauth_delegate`` (``PassthroughConfig``); delegated/passthrough
     oauth2 and SigV4 return None and stay on v1.
     """
-    if server.is_byok:
-        return None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
+    if server.is_byok and server.auth_type != MCPAuth.oauth2_token_exchange:
+        return None  # per-user BYOK source not migrated yet -> defer to v1
     resource: Final = server.url or server.server_id
     auth_type: Final = server.auth_type
     match auth_type:
@@ -165,21 +165,9 @@ def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
     )
 
 
-def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec | None:
-    """Build a token_exchange (OBO) spec, or defer (None) when it is not OBO-configured.
-
-    An OBO server with ``client_id``/``client_secret`` is owned by the v2 arm even if the
-    ``token_exchange_endpoint``/``token_url`` is absent: a missing endpoint then fails closed (412) at
-    the exchanger rather than silently deferring to v1 and connecting unauthenticated, since the
-    gateway must not guess the IdP or fall back to a weaker source. Without client credentials there is
-    nothing to own, so the server stays on v1 (parity-safe). ``profile`` selects the wire dialect
-    (``rfc8693`` default, ``entra_obo`` for Microsoft Entra On-Behalf-Of); an unrecognized value
-    normalizes to ``rfc8693`` so a bad config value cannot crash spec-building. ``audience`` is
-    forwarded only when the operator set it; a missing one is omitted, not derived.
-    """
+def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec:
+    """Keep declared OBO owned by the resolver, including incomplete client configuration."""
     endpoint: Final = server.token_exchange_endpoint or server.effective_token_url
-    if not server.client_id or not server.client_secret:
-        return None
     profile: Final[Literal["rfc8693", "entra_obo"]] = (
         "entra_obo" if server.token_exchange_profile == "entra_obo" else "rfc8693"
     )
@@ -193,7 +181,7 @@ def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec | None:
             token_exchange_endpoint=endpoint,
             audience=server.audience,
             client_id=server.client_id,
-            client_secret=SecretStr(server.client_secret),
+            client_secret=SecretStr(server.client_secret) if server.client_secret else None,
             token_endpoint_auth_method=server.token_endpoint_auth_method,
             scopes=tuple(server.scopes or ()),
         ),

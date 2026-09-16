@@ -155,12 +155,6 @@ def test_oauth2_user_token_maps_to_authorization_code(oauth2_flow):
         _server(auth_type=MCPAuth.api_key),  # no token configured
         _server(auth_type=MCPAuth.bearer_token),  # no token configured
         _server(auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True),  # delegated upstream OAuth -> v1
-        _server(auth_type=MCPAuth.oauth2_token_exchange),  # no endpoint/client creds -> incomplete -> v1
-        _server(
-            auth_type=MCPAuth.oauth2_token_exchange,
-            token_exchange_endpoint="https://idp/token",
-            client_id="cid",
-        ),  # missing client_secret -> incomplete -> v1
         _server(auth_type=MCPAuth.aws_sigv4),
         _server(auth_type=None, oauth_passthrough=True, extra_headers=["Authorization"]),
     ],
@@ -802,3 +796,14 @@ def test_a_blank_header_name_means_unset_rather_than_an_error(blank):
     spec = to_server_spec(server)
     assert spec is not None
     assert spec.config.header_name == "Authorization"
+
+
+@pytest.mark.parametrize("client_secret", [None, ""])
+@pytest.mark.parametrize("is_byok", [False, True])
+def test_incomplete_obo_keeps_exchange_ownership(client_secret: str | None, is_byok: bool) -> None:
+    spec = to_server_spec(_server(auth_type=MCPAuth.oauth2_token_exchange, client_id="client",
+                                  client_secret=client_secret, is_byok=is_byok))
+    assert spec is not None
+    assert isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.client_id == "client"
+    assert spec.config.client_secret is None
