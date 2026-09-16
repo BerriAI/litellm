@@ -1108,3 +1108,67 @@ def test_get_optional_params_preserves_max_for_declared_levels_model():
     )
 
     assert optional_params["reasoning_effort"] == "max"
+
+
+def _together_chat_transport() -> tuple[HTTPHandler, list[httpx.Request]]:
+    captured_requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-together",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": TOOL_CALLING_MODEL,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello!"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    return client, captured_requests
+
+
+def test_only_the_provider_prefix_is_stripped_from_a_slashed_model_name():
+    client, captured_requests = _together_chat_transport()
+
+    litellm.completion(
+        model=f"together_ai/{TOOL_CALLING_MODEL}",
+        messages=[{"role": "user", "content": "Hello!"}],
+        api_key="fake-key",
+        client=client,
+    )
+
+    assert "/" in TOOL_CALLING_MODEL
+    assert str(captured_requests[0].url) == "https://api.together.ai/v1/chat/completions"
+    assert json.loads(captured_requests[0].content)["model"] == TOOL_CALLING_MODEL
+
+
+def test_custom_role_wrappers_never_reach_the_request():
+    client, captured_requests = _together_chat_transport()
+    messages = [{"role": "user", "content": "Hello!"}]
+
+    litellm.completion(
+        model=f"together_ai/{TOOL_CALLING_MODEL}",
+        messages=messages,
+        roles={
+            "system": {"pre_message": "<|im_start|>system\n", "post_message": "<|im_end|>"},
+            "assistant": {"pre_message": "<|im_start|>assistant\n", "post_message": "<|im_end|>"},
+            "user": {"pre_message": "<|im_start|>user\n", "post_message": "<|im_end|>"},
+        },
+        api_key="fake-key",
+        client=client,
+    )
+
+    request_body = json.loads(captured_requests[0].content)
+    assert request_body["messages"] == messages
+    assert "prompt" not in request_body
+    assert "roles" not in request_body

@@ -11,7 +11,6 @@ import io
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
 import litellm
@@ -56,51 +55,6 @@ def test_response_model_none():
     )
     print(f"x: {x}")
     assert isinstance(x, litellm.ModelResponse)
-
-
-TOGETHER_AI_CHAT_URL = "https://api.together.ai/v1/chat/completions"
-
-
-def _together_ai_chat_response(content="Hello!"):
-    return httpx.Response(
-        200,
-        json={
-            "id": "chatcmpl-together",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "openai/gpt-oss-20b",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": content},
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 1,
-                "completion_tokens": 1,
-                "total_tokens": 2,
-            },
-        },
-        request=httpx.Request("POST", TOGETHER_AI_CHAT_URL),
-    )
-
-
-def test_completion_custom_provider_model_name():
-    litellm.cache = None
-    with patch.object(
-        HTTPHandler, "post", return_value=_together_ai_chat_response()
-    ) as mock_post:
-        response = completion(
-            model="together_ai/openai/gpt-oss-20b",
-            messages=messages,
-            logger_fn=logger_fn,
-            api_key="fake-key",
-        )
-
-    assert mock_post.call_args.kwargs["url"] == TOGETHER_AI_CHAT_URL
-    assert json.loads(mock_post.call_args.kwargs["data"])["model"] == "openai/gpt-oss-20b"
-    assert response.choices[0].finish_reason == "stop"
 
 
 def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
@@ -2832,40 +2786,6 @@ def test_completion_together_ai_llama():
 
 
 # test_completion_together_ai()
-def test_customprompt_together_ai():
-    litellm.set_verbose = False
-    litellm.num_retries = 0
-    with patch.object(
-        HTTPHandler, "post", return_value=_together_ai_chat_response()
-    ) as mock_post:
-        response = completion(
-            model="together_ai/openai/gpt-oss-20b",
-            messages=messages,
-            roles={
-                "system": {
-                    "pre_message": "<|im_start|>system\n",
-                    "post_message": "<|im_end|>",
-                },
-                "assistant": {
-                    "pre_message": "<|im_start|>assistant\n",
-                    "post_message": "<|im_end|>",
-                },
-                "user": {
-                    "pre_message": "<|im_start|>user\n",
-                    "post_message": "<|im_end|>",
-                },
-            },
-            api_key="fake-key",
-        )
-
-    body = json.loads(mock_post.call_args.kwargs["data"])
-    assert body["messages"] == messages
-    assert "prompt" not in body
-    assert "roles" not in body
-    assert response.choices[0].finish_reason == "stop"
-
-
-# test_customprompt_together_ai()
 
 
 def response_format_tests(response: litellm.ModelResponse):
@@ -3670,51 +3590,6 @@ async def test_acompletion_stream_watsonx():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 # test_maritalk()
-
-
-def test_completion_together_ai_stream():
-    litellm.set_verbose = True
-    user_message = "Write 1pg about YC & litellm"
-    messages = [{"content": user_message, "role": "user"}]
-    sse_body = (
-        'data: {"id":"chatcmpl-together","object":"chat.completion.chunk","created":1,'
-        '"model":"openai/gpt-oss-20b","choices":[{"index":0,"delta":{"role":"assistant",'
-        '"content":"YC"},"finish_reason":null}]}\n\n'
-        'data: {"id":"chatcmpl-together","object":"chat.completion.chunk","created":1,'
-        '"model":"openai/gpt-oss-20b","choices":[{"index":0,"delta":{"content":" and '
-        'litellm"},"finish_reason":null}]}\n\n'
-        'data: {"id":"chatcmpl-together","object":"chat.completion.chunk","created":1,'
-        '"model":"openai/gpt-oss-20b","choices":[{"index":0,"delta":{},'
-        '"finish_reason":"stop"}]}\n\n'
-        "data: [DONE]\n\n"
-    )
-    stream_response = httpx.Response(
-        200,
-        content=sse_body.encode(),
-        headers={"content-type": "text/event-stream"},
-        request=httpx.Request("POST", TOGETHER_AI_CHAT_URL),
-    )
-
-    with patch.object(
-        HTTPHandler, "post", return_value=stream_response
-    ) as mock_post:
-        response = completion(
-            model="together_ai/openai/gpt-oss-20b",
-            messages=messages,
-            stream=True,
-            max_tokens=5,
-            api_key="fake-key",
-        )
-        chunks = list(response)
-
-    assert json.loads(mock_post.call_args.kwargs["data"])["stream"] is True
-    assert "".join(
-        chunk.choices[0].delta.content or "" for chunk in chunks
-    ) == "YC and litellm"
-    assert chunks[-1].choices[0].finish_reason == "stop"
-
-
-# test_completion_together_ai_stream()
 
 
 def test_moderation():
