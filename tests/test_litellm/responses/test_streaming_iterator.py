@@ -17,6 +17,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
+    _estimate_usage_from_text,
 )
 from litellm.types.llms.openai import (
     ResponseAPIUsage,
@@ -796,8 +797,13 @@ async def test_completed_event_without_usage_counts_multimodal_input_as_messages
 
 @pytest.mark.asyncio
 async def test_completed_event_survives_a_failing_usage_estimate():
-    """A raising token_counter must not break a stream that previously completed:
-    the estimate is best-effort and falls back to usage None."""
+    """A malformed request input that makes the message transformer raise must not
+    break a stream that previously completed: the estimate is best-effort and
+    falls back to usage None."""
+    malformed_input: Final = [{"type": "message", "role": "user", "content": 42}]
+    with pytest.raises(ValueError):
+        _estimate_usage_from_text("gpt-4o-mini", malformed_input, {"input": malformed_input}, "hello world")
+
     response = _responses_api_response_without_usage()
     iterator = _make_iterator(
         sse_events=[
@@ -806,13 +812,12 @@ async def test_completed_event_survives_a_failing_usage_estimate():
         ],
         logging_obj=_logging_obj_stub(),
         config=_mock_config_with_completed_response(response),
-        request_data={"input": "count these input tokens please"},
+        request_data={"input": malformed_input},
     )
 
-    with patch.object(litellm, "token_counter", side_effect=RuntimeError("tokenizer exploded")):
-        yielded: list = []
-        async for chunk in iterator:
-            yielded.append(chunk)
+    yielded: list = []
+    async for chunk in iterator:
+        yielded.append(chunk)
 
     assert yielded
     assert iterator.completed_response.response.usage is None
