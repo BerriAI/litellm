@@ -795,6 +795,9 @@ OPENAI_TRANSCRIPTION_PARAMS: Final = [
 
 OPENAI_EMBEDDING_PARAMS: Final = ["dimensions", "encoding_format", "user"]
 
+# excludes extra_query: it has no forwarding path outside extra_body yet
+OPENAI_SDK_TRANSPORT_PARAMS: Final = frozenset({"extra_headers", "timeout"})
+
 DEFAULT_EMBEDDING_PARAM_VALUES: Final = {
     **{k: None for k in OPENAI_EMBEDDING_PARAMS},
     "model": None,
