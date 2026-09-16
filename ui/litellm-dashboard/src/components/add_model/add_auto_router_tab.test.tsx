@@ -213,17 +213,24 @@ describe("AddAutoRouterTab", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled();
       await user.click(screen.getByRole("button", { name: "Advanced routing options" }));
-      if (capability) expect(screen.getByText("Advanced: Adaptive Routing")).toBeInTheDocument();
-      else expect(screen.queryByText("Advanced: Adaptive Routing")).not.toBeInTheDocument();
+      for (const label of ["Adaptive Routing", "Context Window Escalation", "Escalation Keywords"]) {
+        expect(screen.queryByText(`Advanced: ${label}`)).not.toBeInTheDocument();
+      }
+      expect(screen.getByText("Advanced: Stalled Task Escalation")).toBeInTheDocument();
+      expect(screen.getByText("Advanced: Response Format")).toBeInTheDocument();
       expect(screen.queryByText("Advanced: Classification Method")).not.toBeInTheDocument();
       expect(screen.getByText("Advanced: Affinity")).toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledTimes(1));
-      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject({
+      const expected = {
         classifier_type: capability ? "capability" : "llm_v2",
+        adaptive: false,
+        enable_context_window_escalation: false,
+        escalation_keywords: [],
         tiers: { SIMPLE: ["efficient"], REASONING: ["capable"] },
         classifier_llm_config: { model: "judge" },
-      });
+      };
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject(expected);
     },
   );
 
@@ -239,6 +246,9 @@ describe("AddAutoRouterTab", () => {
     expect(screen.getByTestId("template-selector")).toBeInTheDocument();
     expandDetailedConfiguration();
     expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
+    for (const label of ["Adaptive Routing", "Context Window Escalation", "Escalation Keywords"]) {
+      expect(screen.getByText(`Advanced: ${label}`)).toBeInTheDocument();
+    }
     await user.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.queryByRole("radio", { name: /^Capability/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: /^Fuse v2/ })).not.toBeInTheDocument();

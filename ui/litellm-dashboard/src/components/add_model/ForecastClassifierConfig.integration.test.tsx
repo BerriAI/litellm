@@ -105,7 +105,7 @@ describe("forecast classifier form", () => {
     expect(output).toHaveTextContent('"REASONING":["capable"]');
     expect(output).toHaveTextContent('"reasoning_effort":"low","speed":"fast","max_tokens":1024');
     expect(output).toHaveTextContent('"reasoning_effort":"high"');
-    expect(output).toHaveTextContent('"adaptive":true');
+    expect(output).toHaveTextContent('"adaptive":false');
     expect(output).not.toHaveTextContent("leftover-medium");
     expect(output).not.toHaveTextContent("leftover-complex");
     expect(output).not.toHaveTextContent('"plan_mode_min_tier"');
