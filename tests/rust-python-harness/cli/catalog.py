@@ -21,9 +21,7 @@ def _load_strategy_module(name: str, folder: Path, prefix: str | None) -> Module
     if prefix is not None:
         return importlib.import_module(f"{prefix}.{name}")
     module_name: Final = _synthetic_module_name(folder)
-    spec: Final = importlib.util.spec_from_file_location(
-        module_name, folder / "__init__.py"
-    )
+    spec: Final = importlib.util.spec_from_file_location(module_name, folder / "__init__.py")
     if spec is None or spec.loader is None:
         raise ValueError(f"{folder}: cannot load strategy package")
     module: Final = importlib.util.module_from_spec(spec)
@@ -59,9 +57,7 @@ def _load_strategy(name: str, folder: Path, prefix: str | None) -> Strategy:
     if duplicates:
         raise ValueError(f"{folder}: duplicate strategy cases: {duplicates}")
     expected: Final = frozenset(
-        (surface, function)
-        for surface in (definition.surfaces or (None,))
-        for function in SDK_FUNCTIONS
+        (surface, function) for surface in (definition.surfaces or (None,)) for function in SDK_FUNCTIONS
     )
     actual: Final = frozenset(keys)
     if actual != expected:
@@ -73,8 +69,7 @@ def _load_strategy(name: str, folder: Path, prefix: str | None) -> Strategy:
     incompatible: Final = tuple(
         (case.surface, case.sdk_function)
         for case in definition.cases
-        if case.spec.disposition is CaseDisposition.RUNNABLE
-        and not isinstance(case.spec, definition.runnable_spec)
+        if case.spec.disposition is CaseDisposition.RUNNABLE and not isinstance(case.spec, definition.runnable_spec)
     )
     if incompatible:
         raise ValueError(f"{folder}: runnable cases do not match {definition.runnable_spec.__name__}: {incompatible}")
@@ -102,14 +97,10 @@ def _load_strategy(name: str, folder: Path, prefix: str | None) -> Strategy:
 def load_catalog(root: Path | None = None) -> tuple[Strategy, ...]:
     resolved: Final = STRATEGIES_ROOT if root is None else root
     prefix: Final = _STRATEGIES_PACKAGE.__name__ if resolved == STRATEGIES_ROOT else None
-    folders: Final = tuple(
-        info.name for info in pkgutil.iter_modules([str(resolved)]) if info.ispkg
-    )
+    folders: Final = tuple(info.name for info in pkgutil.iter_modules([str(resolved)]) if info.ispkg)
     if not folders:
         raise ValueError(f"No strategy packages found below {resolved}")
-    strategies: Final = tuple(
-        _load_strategy(name, resolved / name, prefix) for name in sorted(folders)
-    )
+    strategies: Final = tuple(_load_strategy(name, resolved / name, prefix) for name in sorted(folders))
     ids: Final = [strategy.id for strategy in strategies]
     if len(set(ids)) != len(ids):
         raise ValueError(f"Duplicate strategy id in {resolved}")
