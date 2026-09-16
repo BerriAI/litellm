@@ -28,8 +28,6 @@ subtle.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-tungstenite.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
-tracing-subscriber = { workspace = true, optional = true }
 sha2.workspace = true
 url.workspace = true
 veil.workspace = true
@@ -50,8 +48,6 @@ bedrock-auth = [
     "dep:aws-types",
     "dep:aws-smithy-runtime-api",
 ]
-observability = ["dep:tracing-subscriber"]
 
 [dev-dependencies]
 rstest.workspace = true
-tracing-subscriber.workspace = true
