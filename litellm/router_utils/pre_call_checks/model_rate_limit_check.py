@@ -11,6 +11,8 @@ is logged the first time such a deployment is seen.
 """
 
 import contextlib
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -44,6 +46,9 @@ else:
 
 class RoutingArgs:
     ttl: int = 60  # 1min (RPM/TPM expire key)
+
+
+_NO_LITELLM_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
 class ModelRateLimitingCheck(CustomLogger):
@@ -304,6 +309,24 @@ class ModelRateLimitingCheck(CustomLogger):
             # Don't fail the request if rate limit check fails
             return deployment
 
+    @staticmethod
+    def _model_id_from_kwargs(kwargs: Mapping[str, Any]) -> str | None:
+        """Recover the deployment id when the logging payload is missing it.
+
+        On the streaming path the payload is built from a ``litellm_params``
+        snapshot taken at ``Logging`` init, before the router stamped
+        ``model_info`` in, so ``model_id`` comes back as "". The router does
+        stamp ``kwargs["model_info"]``, so prefer that before giving up.
+        """
+        litellm_params: Final = kwargs.get("litellm_params") or _NO_LITELLM_PARAMS
+        for source in (kwargs.get("model_info"), litellm_params.get("model_info")):
+            if isinstance(source, Mapping):
+                candidate = source.get("id")
+                if candidate:
+                    return str(candidate)
+        fallback: Final = litellm_params.get("model_id")
+        return str(fallback) if fallback else None
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
@@ -333,8 +356,13 @@ class ModelRateLimitingCheck(CustomLogger):
             if standard_logging_object is None:
                 return
 
-            model_id: Final = standard_logging_object.get("model_id")
-            if model_id is None:
+            model_id: Final = standard_logging_object.get("model_id") or self._model_id_from_kwargs(kwargs)
+            if not model_id:
+                # An empty string reaches here as readily as None: the standard
+                # logging payload defaults model_id to "" when metadata carries
+                # no model_info. Keying the counter on it buckets every such
+                # deployment under ":<model>:tpm:<minute>" while the real
+                # deployment's key stays at zero, so limits never trigger.
                 return
 
             total_tokens: Final = standard_logging_object.get("total_tokens", 0)
@@ -397,8 +425,13 @@ class ModelRateLimitingCheck(CustomLogger):
             if standard_logging_object is None:
                 return
 
-            model_id: Final = standard_logging_object.get("model_id")
-            if model_id is None:
+            model_id: Final = standard_logging_object.get("model_id") or self._model_id_from_kwargs(kwargs)
+            if not model_id:
+                # An empty string reaches here as readily as None: the standard
+                # logging payload defaults model_id to "" when metadata carries
+                # no model_info. Keying the counter on it buckets every such
+                # deployment under ":<model>:tpm:<minute>" while the real
+                # deployment's key stays at zero, so limits never trigger.
                 return
 
             total_tokens: Final = standard_logging_object.get("total_tokens", 0)
