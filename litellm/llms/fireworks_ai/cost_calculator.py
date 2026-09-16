@@ -2,9 +2,11 @@
 For calculating cost of fireworks ai serverless inference models.
 """
 
-from collections.abc import Mapping
 from datetime import datetime
-from typing import Final, cast
+from typing import (
+    Final,
+    cast,  # noqa: TID251  # the fallback entry is a dict copy of a ReadOnly TypedDict; no cast-free way to retype it
+)
 
 from litellm.constants import (
     FIREWORKS_AI_4_B,
@@ -78,14 +80,11 @@ def _with_cache_read_fallback(model_info: ModelInfo) -> ModelInfo:
         return model_info
     effective: Final[dict[str, object]] = dict(model_info)
     effective["cache_read_input_token_cost"] = input_rate
-    off_peak: Final = effective.get("off_peak_pricing")
-    if isinstance(off_peak, Mapping):
-        off_peak_map: Final[Mapping[str, object]] = cast(Mapping[str, object], off_peak)
-        if "cache_read_input_token_cost" not in off_peak_map:
-            effective["off_peak_pricing"] = {
-                **off_peak_map,
-                "cache_read_input_token_cost": off_peak_map.get("input_cost_per_token", input_rate),
-            }
+    off_peak: Final = model_info.get("off_peak_pricing")
+    if off_peak is not None and "cache_read_input_token_cost" not in off_peak:
+        off_peak_copy: Final[dict[str, object]] = dict(off_peak)
+        off_peak_copy["cache_read_input_token_cost"] = off_peak_copy.get("input_cost_per_token", input_rate)
+        effective["off_peak_pricing"] = off_peak_copy
     return cast(ModelInfo, effective)
 
 
