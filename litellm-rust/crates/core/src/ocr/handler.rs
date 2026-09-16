@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::OcrClient;
 use super::hooks::{OcrHooks, OcrLifecycleHooks, OcrPostCallRequest};
 use super::provider_config::OcrConfigKind;
-use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
+use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, PreparedOcrRequest};
 use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
 use crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig;
 use crate::llms::azure_ai::ocr::document_intelligence::transformation::AzureDocumentIntelligenceOCRConfig;
@@ -45,7 +45,7 @@ pub(crate) async fn perform_ocr_request(
 
 pub(crate) struct PreparedOcrCall {
     client: OcrClient,
-    request: LiteLLMOcrRequest,
+    request: PreparedOcrRequest,
     http: reqwest::Request,
 }
 
@@ -54,7 +54,7 @@ impl PreparedOcrCall {
         client: OcrClient,
         request: LiteLLMOcrRequest,
     ) -> Result<Self, super::Error> {
-        let request = super::prepare::resolve_connection_params(request);
+        let request = super::prepare::prepare_request(request);
         let http = match request.config {
             OcrConfigKind::Cohere => CohereParseConfig.prepare_request(&request, &client).await?,
             OcrConfigKind::Mistral => MistralOCRConfig.prepare_request(&request, &client).await?,

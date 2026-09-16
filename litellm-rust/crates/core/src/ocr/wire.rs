@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use super::types::{LiteLLMOcrRequest, OcrConnection, OcrDocument};
+use super::types::{LiteLLMOcrRequest, OcrDocument, OcrTransportConfig};
 use crate::call_arguments::{ArgumentSpec, CallArguments};
 use litellm_auth::InputSource;
 use serde::{
@@ -131,7 +131,7 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, crate::
             })
         })
         .transpose()?;
-    let defaults = OcrConnection::default();
+    let defaults = OcrTransportConfig::default();
     let max_response_bytes = wire
         .optional_params
         .get("max_response_bytes")
@@ -155,13 +155,15 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, crate::
             .filter(|(name, _)| name != "max_response_bytes")
             .collect(),
     )?;
-    let connection = OcrConnection {
-        api_key: nonblank(wire.api_key),
+    let credentials = super::types::OcrCredentialInputs {
+        api_key: nonblank(wire.api_key)
+            .map(|value| litellm_auth::Sourced::new(value, api_key_source)),
         dynamic_api_key: None,
-        api_key_source,
-        api_base: nonblank(wire.api_base),
+        api_base: nonblank(wire.api_base)
+            .map(|value| litellm_auth::Sourced::new(value, api_base_source)),
         dynamic_api_base: None,
-        api_base_source,
+    };
+    let transport = OcrTransportConfig {
         extra_headers: headers,
         extra_headers_source,
         timeout: timeout.unwrap_or(defaults.timeout),
@@ -170,7 +172,8 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, crate::
         poll_timeout: defaults.poll_timeout,
     };
     Ok(LiteLLMOcrRequest {
-        connection,
+        credentials,
+        transport,
         input_sources: wire.input_sources,
         ..request
     })

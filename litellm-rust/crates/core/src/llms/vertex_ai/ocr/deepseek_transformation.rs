@@ -8,8 +8,8 @@ use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContex
 use crate::ocr::OcrClient;
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{
-    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage,
-    OcrUsageInfo,
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage, OcrUsageInfo,
+    PreparedOcrRequest,
 };
 use crate::params::OpaqueParams;
 use crate::routing_utils::model::{ModelNamespace, ProviderModel, RoutedModel};
@@ -108,7 +108,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
 
     async fn validate_environment(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<Self::Environment, crate::ocr::Error> {
         BaseOcrConfig::validate_environment(&VertexAIOCRConfig, request, client).await
@@ -116,7 +116,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
 
     fn get_complete_url(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         _params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
@@ -188,7 +188,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
 impl VertexAIDeepSeekOCRConfig {
     pub(crate) async fn prepare_request(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
@@ -700,7 +700,10 @@ mod tests {
             "https://caller.example",
             json!({"vertex_project":"project-1"}),
         );
-        request.connection.api_base_source = InputSource::Request;
+        request.credentials.api_base = Some(litellm_auth::Sourced::new(
+            "https://caller.example".into(),
+            InputSource::Request,
+        ));
 
         let error = perform_ocr(request).await.unwrap_err();
         assert!(

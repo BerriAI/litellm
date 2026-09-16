@@ -6,7 +6,7 @@ use crate::llms::mistral::ocr::transformation::{MistralOCRConfig, MistralOcrRequ
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::prepare::{credential_env, transform_request_body};
-use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
+use crate::ocr::types::{LiteLLMOcrResponse, OcrConnection, OcrDocument, PreparedOcrRequest};
 use crate::params::OpaqueParams;
 use crate::url_utils::ApiUrl;
 
@@ -26,7 +26,7 @@ impl BaseOcrConfig for VertexAIOCRConfig {
 
     async fn validate_environment(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<Self::Environment, crate::ocr::Error> {
         let config = VertexConfig::from_sourced_optional_params(
@@ -39,7 +39,7 @@ impl BaseOcrConfig for VertexAIOCRConfig {
 
     fn get_complete_url(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         _params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
@@ -101,7 +101,7 @@ impl BaseOcrConfig for VertexAIOCRConfig {
 impl VertexAIOCRConfig {
     pub(crate) async fn prepare_request(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
@@ -286,8 +286,8 @@ mod tests {
             &base,
             json!({"vertex_project":"project-1"}),
         );
-        request.connection.api_key = None;
-        request.connection.extra_headers = vec![("authorization".into(), "Bearer supplied".into())];
+        request.credentials.api_key = None;
+        request.transport.extra_headers = vec![("authorization".into(), "Bearer supplied".into())];
 
         perform_ocr(request).await.unwrap();
         server.await.unwrap();
@@ -316,7 +316,10 @@ mod tests {
             "https://caller.example",
             json!({"vertex_project":"project-1"}),
         );
-        request.connection.api_base_source = InputSource::Request;
+        request.credentials.api_base = Some(litellm_auth::Sourced::new(
+            "https://caller.example".into(),
+            InputSource::Request,
+        ));
 
         let error = perform_ocr(request).await.unwrap_err();
         assert!(
@@ -349,6 +352,8 @@ mod tests {
             options.clone(),
         );
         let vertex = wire_request("vertex_ai/mistral-ocr-maas", "https://vertex.test", options);
+        let direct = crate::ocr::prepare::prepare_request(direct);
+        let vertex = crate::ocr::prepare::prepare_request(vertex);
         let direct_http = MistralOCRConfig
             .prepare_request(&direct, &client)
             .await

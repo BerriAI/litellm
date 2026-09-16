@@ -4,7 +4,7 @@ use crate::llms::mistral::ocr::transformation::{MistralOCRConfig, MistralOcrRequ
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::prepare::{credential_env, transform_request_body};
-use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
+use crate::ocr::types::{LiteLLMOcrResponse, OcrConnection, OcrDocument, PreparedOcrRequest};
 use crate::params::OpaqueParams;
 use crate::url_utils::ApiUrl;
 use litellm_auth::{InputSource, Sourced};
@@ -27,7 +27,7 @@ impl BaseOcrConfig for AzureAIOCRConfig {
 
     async fn validate_environment(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, crate::ocr::Error> {
         let config = AzureAuthInputs {
@@ -43,7 +43,7 @@ impl BaseOcrConfig for AzureAIOCRConfig {
 
     fn get_complete_url(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         _params: &Self::OcrParams,
         _environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
@@ -94,7 +94,7 @@ impl BaseOcrConfig for AzureAIOCRConfig {
 impl AzureAIOCRConfig {
     pub(crate) async fn prepare_request(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
@@ -308,8 +308,8 @@ mod tests {
             &base,
             json!({"include_image_base64":true}),
         );
-        request.connection.api_key = None;
-        request.connection.extra_headers = vec![(
+        request.credentials.api_key = None;
+        request.transport.extra_headers = vec![(
             "Authorization".into(),
             "Bearer python-prepared-token".into(),
         )];
@@ -345,7 +345,7 @@ mod tests {
             &base,
             json!({"azure_ad_token":"rust-owned-token"}),
         );
-        request.connection.api_key = None;
+        request.credentials.api_key = None;
 
         perform_ocr(request).await.unwrap();
         server.await.unwrap();

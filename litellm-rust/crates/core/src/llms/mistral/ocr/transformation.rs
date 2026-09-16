@@ -6,7 +6,7 @@ use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContex
 use crate::ocr::OcrClient;
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{
-    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrUsageInfo,
+    LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrUsageInfo, PreparedOcrRequest,
 };
 use crate::params::OpaqueParams;
 use crate::url_utils::ApiUrl;
@@ -48,7 +48,7 @@ impl BaseOcrConfig for MistralOCRConfig {
 
     async fn validate_environment(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, crate::ocr::Error> {
         self.validate_environment(&request.connection, &credential_env)
@@ -56,7 +56,7 @@ impl BaseOcrConfig for MistralOCRConfig {
 
     fn get_complete_url(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         _params: &Self::OcrParams,
         _environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
@@ -125,7 +125,7 @@ impl BaseOcrConfig for MistralOCRConfig {
 impl MistralOCRConfig {
     pub(crate) async fn prepare_request(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
