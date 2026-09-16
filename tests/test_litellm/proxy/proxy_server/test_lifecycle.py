@@ -285,7 +285,7 @@ async def test_await_logging_callbacks_on_shutdown_flushes_worker(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_await_logging_callbacks_on_shutdown_continues_after_timeout(monkeypatch):
+async def test_await_logging_callbacks_on_shutdown_continues_after_timeout(monkeypatch, caplog):
     async def _hang() -> None:
         await asyncio.sleep(60)
 
@@ -300,7 +300,13 @@ async def test_await_logging_callbacks_on_shutdown_continues_after_timeout(monke
     )
     monkeypatch.setattr("litellm.constants.MAX_TIME_TO_CLEAR_QUEUE", 0.01, raising=False)
 
-    await ps._await_logging_callbacks_on_shutdown()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        started = asyncio.get_running_loop().time()
+        await ps._await_logging_callbacks_on_shutdown()
+        elapsed = asyncio.get_running_loop().time() - started
+
+    assert elapsed < 5
+    assert "Timed out waiting for logging callbacks on shutdown" in caplog.text
 
 
 @pytest.mark.asyncio
