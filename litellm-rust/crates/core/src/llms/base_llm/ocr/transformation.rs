@@ -4,14 +4,14 @@ use std::sync::Arc;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use crate::ocr::OcrArguments;
 use crate::ocr::OcrClient;
 use crate::ocr::hooks::OcrHooks;
 use crate::ocr::types::{LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrResponseFormat};
-use crate::params::OpaqueParams;
 
 pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
     type OcrParams: DeserializeOwned + Send + Sync;
-    type ProviderRequest: Serialize + DeserializeOwned + Send;
+    type ProviderRequest: Serialize + Send;
     type ProviderResponse: DeserializeOwned + Send;
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
@@ -20,14 +20,20 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
 
     fn map_ocr_params(
         &self,
-        _non_default_params: &OpaqueParams,
-        optional_params: &OpaqueParams,
+        _non_default_params: &OcrArguments,
+        optional_params: &OcrArguments,
         _model: &str,
+    ) -> Result<OcrArguments, crate::ocr::Error> {
+        Ok(optional_params.clone())
+    }
+
+    fn parse_options(
+        &self,
+        arguments: &OcrArguments,
+        model: &str,
     ) -> Result<Self::OcrParams, crate::ocr::Error> {
-        crate::ocr::wire::decode_request_value(
-            serde_json::Value::Object(optional_params.clone().into()),
-            "optional_params",
-        )
+        self.map_ocr_params(arguments, &OcrArguments::default(), model)?
+            .parse()
     }
 
     fn async_transform_ocr_request(
@@ -45,6 +51,22 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
         response: Self::ProviderResponse,
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error>;
 
+    fn decode_and_normalize_response(
+        &self,
+        model: &str,
+        raw_response: &[u8],
+        request_format: OcrResponseFormat,
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
+        let decoded = crate::ocr::wire::decode_response::<Self::ProviderResponse>(
+            raw_response,
+            request_format == OcrResponseFormat::Native,
+        )?;
+        Ok(LiteLLMOcrResponse {
+            provider_native_response: decoded.native,
+            ..self.normalize_response(model, decoded.data)?
+        })
+    }
+
     fn async_transform_ocr_response(
         &self,
         model: &str,
@@ -58,14 +80,7 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
             )
             .await?;
             crate::ocr::handler::post_call(context.hooks, &bytes).await?;
-            let decoded = crate::ocr::wire::decode_response::<Self::ProviderResponse>(
-                &bytes,
-                context.request_format == OcrResponseFormat::Native,
-            )?;
-            Ok(LiteLLMOcrResponse {
-                provider_native_response: decoded.native,
-                ..self.normalize_response(model, decoded.data)?
-            })
+            self.decode_and_normalize_response(model, &bytes, context.request_format)
         }
     }
 }

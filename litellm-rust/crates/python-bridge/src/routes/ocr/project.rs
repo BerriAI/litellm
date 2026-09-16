@@ -124,8 +124,7 @@ pub(super) fn project_request(
     let api_key = arguments.api_key()?;
     let specs = consumed_optional_params(&model, custom_llm_provider.as_deref())
         .map_err(ocr_error_to_pyerr)?;
-    let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
-    let optional_params = project_optional_fields(kwargs, &names)?;
+    let optional_params = project_optional_fields(kwargs, &specs)?;
     let input_sources = request_input_sources(
         kwargs,
         optional_params

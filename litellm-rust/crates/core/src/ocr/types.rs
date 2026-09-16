@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
+use super::OcrArguments;
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
 use crate::constants::OCR_HTTP_TIMEOUT_SECS;
-use crate::params::OpaqueParams;
 use litellm_auth::{InputSource, TokenProviderHandle};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -97,7 +97,7 @@ pub struct LiteLLMOcrRequest {
     pub connection: OcrConnection,
     pub hooks: Arc<dyn OcrHooks>,
     pub litellm_call_id: Option<String>,
-    pub optional_params: OpaqueParams,
+    pub optional_params: OcrArguments,
     pub input_sources: BTreeMap<String, InputSource>,
     pub azure_ad_token_provider: Option<TokenProviderHandle>,
     pub(crate) config: OcrConfigKind,
@@ -108,7 +108,7 @@ impl LiteLLMOcrRequest {
         model: String,
         document: OcrDocument,
         custom_llm_provider: Option<&str>,
-        optional_params: OpaqueParams,
+        optional_params: OcrArguments,
     ) -> Result<Self, super::Error> {
         let (model, config) = resolve_provider_config(&model, custom_llm_provider)?;
 

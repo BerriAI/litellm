@@ -5,6 +5,7 @@ use serde_with::serde_as;
 
 use crate::constants::{COHERE_API_KEY_ENV, COHERE_PARSE_API_BASE};
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
+use crate::ocr::OcrArguments;
 use crate::ocr::OcrClient;
 use crate::ocr::document::InlineDocument;
 use crate::ocr::prepare::{credential_env, transform_request_body};
@@ -12,7 +13,6 @@ use crate::ocr::types::{
     LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrPageImage,
     OcrUsageInfo,
 };
-use crate::params::OpaqueParams;
 use crate::url_utils::ApiUrl;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
@@ -27,17 +27,13 @@ pub(crate) enum OutputFormat {
 pub(crate) struct CohereParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_format: Option<OutputFormat>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub req_format: Option<crate::ocr::types::OcrResponseFormat>,
-    #[serde(flatten)]
-    pub extra_fields: OpaqueParams,
 }
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct CohereRequest {
     pub model: String,
     pub document: CohereParseDocument,
-    pub output_format: OutputFormat,
+    pub output_format: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -119,25 +115,25 @@ impl BaseOcrConfig for CohereParseConfig {
 
     fn map_ocr_params(
         &self,
-        non_default_params: &OpaqueParams,
-        optional_params: &OpaqueParams,
+        non_default_params: &OcrArguments,
+        optional_params: &OcrArguments,
         _model: &str,
-    ) -> Result<CohereParams, crate::ocr::Error> {
-        if let Some(value) = non_default_params
-            .get("req_format")
-            .filter(|value| !value.is_null())
-        {
+    ) -> Result<OcrArguments, crate::ocr::Error> {
+        let overrides: OcrArguments = non_default_params
+            .select(&["output_format", "req_format"])
+            .into_iter()
+            .filter(|(_, value)| !value.is_null())
+            .collect();
+        overrides.parse::<CohereParams>()?;
+        if let Some(value) = overrides.get("req_format") {
             serde_json::from_value::<crate::ocr::types::OcrResponseFormat>(value.clone())
                 .map_err(|_| crate::ocr::Error::RequestFormat)?;
         }
-        let fields = optional_params
+        Ok(optional_params
             .iter()
-            .chain(non_default_params.iter().filter(|(name, value)| {
-                matches!(name.as_str(), "output_format" | "req_format") && !value.is_null()
-            }))
+            .chain(overrides.iter())
             .map(|(name, value)| (name.clone(), value.clone()))
-            .collect();
-        crate::ocr::wire::decode_request_value(Value::Object(fields), "optional_params")
+            .collect())
     }
 
     async fn async_transform_ocr_request(
@@ -166,11 +162,7 @@ impl CohereParseConfig {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(
-            &request.optional_params,
-            &OpaqueParams::default(),
-            &request.model,
-        )?;
+        let params = self.parse_options(&request.optional_params, &request.model)?;
         let headers = self.validate_environment(&request.connection, &credential_env)?;
         let url = self.get_complete_url(
             request
@@ -248,7 +240,11 @@ fn build_request(model: &str, image_url: String, params: &CohereParams) -> Coher
     CohereRequest {
         model: model.into(),
         document: CohereParseDocument::ImageUrl { image_url },
-        output_format: params.output_format.unwrap_or_default(),
+        output_format: match params.output_format.unwrap_or_default() {
+            OutputFormat::Markdown => "markdown",
+            OutputFormat::Blocks => "blocks",
+        }
+        .into(),
     }
 }
 
@@ -363,6 +359,45 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn mapping_merges_non_null_supported_overrides_and_preserves_supplied_options() {
+        let supplied = serde_json::from_value(json!({
+            "output_format":"blocks", "req_format":"native", "extension":false
+        }))
+        .unwrap();
+        let overrides = serde_json::from_value(json!({
+            "output_format":null, "req_format":null, "ignored":true
+        }))
+        .unwrap();
+        for config in [false, true] {
+            let mapped = if config {
+                crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig
+                    .map_ocr_params(&overrides, &supplied, "parse")
+            } else {
+                CohereParseConfig.map_ocr_params(&overrides, &supplied, "parse")
+            }
+            .unwrap();
+            assert_eq!(mapped, supplied);
+        }
+        for overrides in [
+            json!({"output_format":"html"}),
+            json!({"req_format":"invalid"}),
+        ] {
+            let overrides = serde_json::from_value(overrides).unwrap();
+            assert!(
+                CohereParseConfig
+                    .map_ocr_params(&overrides, &supplied, "parse")
+                    .is_err()
+            );
+        }
+        let overrides = serde_json::from_value(json!({"output_format":"markdown"})).unwrap();
+        let mapped = CohereParseConfig
+            .map_ocr_params(&overrides, &supplied, "parse")
+            .unwrap();
+        assert_eq!(mapped["output_format"], "markdown");
+        assert_eq!(mapped["extension"], false);
+    }
+
+    #[test]
     fn billed_pages_accept_integral_doubles_and_reject_fractional_counts() {
         let response = serde_json::from_str::<CohereResponse>(
             r#"{"pages":[],"meta":{"billed_units":{"pages":1.0}}}"#,
@@ -422,19 +457,17 @@ mod tests {
     }
 
     #[test]
-    fn parameter_mapping_merges_supplied_options_and_ignores_null_overrides() {
-        let supplied =
-            serde_json::from_value(json!({"output_format":"blocks", "extension":true})).unwrap();
-        let overrides = serde_json::from_value(
-            json!({"output_format":null,"req_format":"native","unknown":true}),
+    fn provider_options_exclude_response_controls_and_extensions() {
+        let arguments = serde_json::from_value(
+            json!({"output_format":"blocks","req_format":"native","unknown":true}),
         )
         .unwrap();
         let params = CohereParseConfig
-            .map_ocr_params(&overrides, &supplied, "parse")
+            .parse_options(&arguments, "parse")
             .unwrap();
         assert_eq!(
             serde_json::to_value(&params).unwrap(),
-            json!({"output_format":"blocks","req_format":"native","extension":true})
+            json!({"output_format":"blocks"})
         );
         let document = serde_json::from_value(
             json!({"type":"image_url","image_url":"https://example.com/a.png","ignored":"field"}),

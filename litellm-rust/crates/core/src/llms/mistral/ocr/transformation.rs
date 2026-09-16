@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::constants::MISTRAL_OCR_API_BASE;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
+use crate::ocr::OcrArguments;
 use crate::ocr::OcrClient;
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{
@@ -79,16 +80,13 @@ impl BaseOcrConfig for MistralOCRConfig {
 
     fn map_ocr_params(
         &self,
-        non_default_params: &OpaqueParams,
-        _optional_params: &OpaqueParams,
+        non_default_params: &OcrArguments,
+        _optional_params: &OcrArguments,
         model: &str,
-    ) -> Result<OpaqueParams, crate::ocr::Error> {
-        let supported = self.get_supported_ocr_params(model);
+    ) -> Result<OcrArguments, crate::ocr::Error> {
         Ok(non_default_params
-            .iter()
-            .filter(|(name, _)| supported.contains(&name.as_str()))
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect())
+            .select(self.get_supported_ocr_params(model))
+            .into())
     }
 
     async fn async_transform_ocr_request(
@@ -117,11 +115,7 @@ impl MistralOCRConfig {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(
-            &request.optional_params,
-            &OpaqueParams::default(),
-            &request.model,
-        )?;
+        let params = self.parse_options(&request.optional_params, &request.model)?;
         let headers = self.validate_environment(&request.connection, &credential_env)?;
         let url = self.get_complete_url(request.connection.api_base.as_deref())?;
         let body = self
@@ -285,7 +279,7 @@ mod tests {
         let input =
             serde_json::from_value(json!({"pages":null,"extract_header":false,"unknown":true}))
                 .unwrap();
-        let supplied = serde_json::from_value(json!({"pages":[1],"extract_footer":true})).unwrap();
+        let supplied = serde_json::from_value(json!({"pages":[9],"extension":true})).unwrap();
         let params = MistralOCRConfig
             .map_ocr_params(&input, &supplied, "model")
             .unwrap();
@@ -295,11 +289,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn request_transform_uses_already_mapped_params_without_filtering_again() {
+        let params = serde_json::from_value(json!({"extension":{"nested":null}})).unwrap();
+        let body = MistralOCRConfig
+            .transform_ocr_request("model", document(), &params, &[])
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(body).unwrap()["extension"],
+            json!({"nested":null})
+        );
+    }
+
+    #[test]
+    fn raw_response_transform_keeps_native_payload_separate_from_typed_normalization() {
+        let raw = br#"{"pages":[{"index":"2","markdown":"text"}],"provider_extension":false}"#;
+        let response = MistralOCRConfig
+            .decode_and_normalize_response(
+                "model",
+                raw,
+                crate::ocr::types::OcrResponseFormat::Native,
+            )
+            .unwrap();
+        assert_eq!(response.pages[0].index, 2);
+        let native = response.provider_native_response.unwrap();
+        assert_eq!(native["pages"][0]["index"], "2");
+        assert_eq!(native["provider_extension"], false);
+        assert!(response.extra_fields.is_empty());
+        assert!(
+            MistralOCRConfig
+                .decode_and_normalize_response(
+                    "model",
+                    br#"{"pages":[{"index":0}]}"#,
+                    crate::ocr::types::OcrResponseFormat::Litellm
+                )
+                .is_err()
+        );
+    }
+
     fn mapped_params(value: Value) -> Value {
-        let params = serde_json::from_value::<OpaqueParams>(value).unwrap();
+        let params = serde_json::from_value::<OcrArguments>(value).unwrap();
         serde_json::to_value(
             MistralOCRConfig
-                .map_ocr_params(&params, &OpaqueParams::default(), "model")
+                .map_ocr_params(&params, &OcrArguments::default(), "model")
                 .unwrap(),
         )
         .unwrap()

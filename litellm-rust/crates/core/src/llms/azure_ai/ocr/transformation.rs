@@ -2,6 +2,7 @@ use crate::constants::AZURE_AI_OCR_PATH;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::llms::mistral::ocr::MistralOcrResponse;
 use crate::llms::mistral::ocr::transformation::{MistralOCRConfig, MistralOcrRequest};
+use crate::ocr::OcrArguments;
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::prepare::{credential_env, transform_request_body};
@@ -28,10 +29,10 @@ impl BaseOcrConfig for AzureAIOCRConfig {
 
     fn map_ocr_params(
         &self,
-        non_default_params: &OpaqueParams,
-        optional_params: &OpaqueParams,
+        non_default_params: &OcrArguments,
+        optional_params: &OcrArguments,
         model: &str,
-    ) -> Result<OpaqueParams, crate::ocr::Error> {
+    ) -> Result<OcrArguments, crate::ocr::Error> {
         MistralOCRConfig.map_ocr_params(non_default_params, optional_params, model)
     }
 
@@ -67,11 +68,7 @@ impl AzureAIOCRConfig {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(
-            &request.optional_params,
-            &OpaqueParams::default(),
-            &request.model,
-        )?;
+        let params = self.parse_options(&request.optional_params, &request.model)?;
         let config = AzureAuthInputs {
             azure_ad_token_provider: request.azure_ad_token_provider.clone(),
             ..AzureAuthInputs::from_sourced_optional_params(
