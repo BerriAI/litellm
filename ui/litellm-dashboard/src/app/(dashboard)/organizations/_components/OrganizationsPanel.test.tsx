@@ -189,6 +189,20 @@ describe("OrganizationsPanel - org detail deep link (?org=)", () => {
     await expectQueryString("?org=org-plain");
   });
 
+  it("closing the org detail keeps the list's search, filter, sort and page in the URL", async () => {
+    renderPanel({
+      searchParams:
+        "?org_search=Acme&filter_org_id=org-7&sort_by=spend&sort_order=asc&page=2&org=org-x&org_tab=members",
+    });
+
+    act(() => mockOrgInfoView.mock.calls.at(-1)?.[0].onClose());
+
+    await expectQueryString("?org_search=Acme&filter_org_id=org-7&sort_by=spend&sort_order=asc&page=2");
+    expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+    expect(screen.getByPlaceholderText("Search by Organization Name")).toHaveValue("Acme");
+    expect(useOrganizationsSpy).toHaveBeenLastCalledWith({ org_id: "org-7", org_alias: "Acme" });
+  });
+
   it("closing the org detail drops ?org_tab= together with ?org=", async () => {
     renderPanel({ searchParams: "?org=org-from-url&org_tab=members" });
 

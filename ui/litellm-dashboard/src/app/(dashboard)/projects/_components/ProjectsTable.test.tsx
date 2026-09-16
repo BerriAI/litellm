@@ -73,7 +73,7 @@ describe("ProjectsTable pagination URL state", () => {
     expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 11-14 of 14");
   });
 
-  it("should write ?page=2 to the URL when the next page control is clicked", async () => {
+  it("should push ?page=2 onto history when the next page control is clicked", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     renderTable({ onUrlUpdate });
@@ -84,6 +84,7 @@ describe("ProjectsTable pagination URL state", () => {
     const [update] = onUrlUpdate.mock.calls[0];
     expect(update.searchParams.get("page")).toBe("2");
     expect(update.searchParams.has("page_size")).toBe(false);
+    expect(update.options.history).toBe("push");
     expect(firstDataRow().getByText("Project 11")).toBeInTheDocument();
   });
 
@@ -147,6 +148,7 @@ describe("ProjectsTable pagination URL state", () => {
     const lastUpdate = onUrlUpdate.mock.calls.at(-1)?.[0];
     expect(lastUpdate.searchParams.get("page")).toBeNull();
     expect(lastUpdate.searchParams.get("page_size")).toBe("25");
+    expect(lastUpdate.options.history).toBe("push");
   });
 
   it("should apply both params from a ?page=2&page_size=25 deep link so the restored view matches", () => {
