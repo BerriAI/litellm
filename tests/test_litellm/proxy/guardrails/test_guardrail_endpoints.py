@@ -1,7 +1,8 @@
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -1571,36 +1572,11 @@ async def test_apply_guardrail_blocked_by_guardrail_runs_failure_logging(mocker)
         request_data["metadata"]["standard_logging_guardrail_information"] = [guardrail_info]
         raise HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
 
-    mock_guardrail = mocker.Mock()
-    mock_guardrail.apply_guardrail = AsyncMock(side_effect=_block)
-    mock_registry = mocker.Mock()
-    mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
-    mocker.patch(
-        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
+    env = _patch_apply_guardrail_env(
+        mocker,
+        pre_call_data={"guardrail_name": "test-guardrail", "metadata": {"user_api_key_hash": "hash-1"}},
+        apply_guardrail_side_effect=_block,
     )
-
-    mock_logging_obj = mocker.Mock()
-    mock_logging_obj.async_failure_handler = AsyncMock()
-    mock_logging_obj.model_call_details = {}
-    mock_processor = mocker.Mock()
-    mock_processor.common_processing_pre_call_logic = AsyncMock(
-        return_value=(
-            {"guardrail_name": "test-guardrail", "metadata": {"user_api_key_hash": "hash-1"}},
-            mock_logging_obj,
-        )
-    )
-    mocker.patch(
-        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
-        return_value=mock_processor,
-    )
-    mock_proxy_logging = mocker.Mock()
-    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
-    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
-    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
-    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
-    mocker.patch("litellm.proxy.proxy_server.version", "test")
-    mock_executor = mocker.Mock()
-    mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor", mock_executor)
 
     with pytest.raises(ProxyException) as exc_info:
         await apply_guardrail(
@@ -1610,11 +1586,11 @@ async def test_apply_guardrail_blocked_by_guardrail_runs_failure_logging(mocker)
         )
 
     assert str(exc_info.value.code) == "400"
-    mock_logging_obj.async_failure_handler.assert_awaited_once()
-    assert isinstance(mock_logging_obj.async_failure_handler.await_args.kwargs["exception"], HTTPException)
-    mock_executor.submit.assert_called_once()
-    assert mock_executor.submit.call_args.args[0] is mock_logging_obj.failure_handler
-    hook_request_data = mock_proxy_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+    env.logging_obj.async_failure_handler.assert_awaited_once()
+    assert isinstance(env.logging_obj.async_failure_handler.await_args.kwargs["exception"], HTTPException)
+    env.executor.submit.assert_called_once()
+    assert env.executor.submit.call_args.args[0] is env.logging_obj.failure_handler
+    hook_request_data = env.proxy_logging.post_call_failure_hook.await_args.kwargs["request_data"]
     assert hook_request_data["metadata"]["standard_logging_guardrail_information"] == [guardrail_info]
     assert hook_request_data["metadata"]["user_api_key_hash"] == "hash-1"
 
@@ -1673,9 +1649,17 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     }
 
 
-def _patch_apply_guardrail_env(mocker, guardrail_result, pre_call_data=None):
+@dataclass(frozen=True, slots=True)
+class _ApplyGuardrailEnv:
+    guardrail: Mock
+    logging_obj: Mock
+    proxy_logging: Mock
+    executor: Mock
+
+
+def _patch_apply_guardrail_env(mocker, guardrail_result=None, pre_call_data=None, apply_guardrail_side_effect=None):
     mock_guardrail = mocker.Mock()
-    mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
+    mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result, side_effect=apply_guardrail_side_effect)
 
     mock_registry = mocker.Mock()
     mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
@@ -1685,6 +1669,7 @@ def _patch_apply_guardrail_env(mocker, guardrail_result, pre_call_data=None):
 
     mock_logging_obj = mocker.Mock()
     mock_logging_obj.async_success_handler = AsyncMock()
+    mock_logging_obj.async_failure_handler = AsyncMock()
     mock_logging_obj.model_call_details = {}
     mock_processor = mocker.Mock()
     mock_processor.common_processing_pre_call_logic = AsyncMock(
@@ -1700,20 +1685,26 @@ def _patch_apply_guardrail_env(mocker, guardrail_result, pre_call_data=None):
 
     mock_proxy_logging = mocker.Mock()
     mock_proxy_logging.post_call_success_hook = AsyncMock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
     mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
     mocker.patch("litellm.proxy.proxy_server.general_settings", {})
     mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
     mocker.patch("litellm.proxy.proxy_server.version", "test")
-    mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor")
+    mock_executor = mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor")
 
-    return mock_guardrail
+    return _ApplyGuardrailEnv(
+        guardrail=mock_guardrail,
+        logging_obj=mock_logging_obj,
+        proxy_logging=mock_proxy_logging,
+        executor=mock_executor,
+    )
 
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_forwards_metadata_to_guardrail(mocker):
     """Client-supplied metadata must reach apply_guardrail via request_data so
     parameterized custom guardrails can read per-request configuration."""
-    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]}).guardrail
 
     request = ApplyGuardrailRequest(
         guardrail_name="test-guardrail",
@@ -1737,7 +1728,7 @@ async def test_apply_guardrail_forwards_metadata_to_guardrail(mocker):
 async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
     """metadata and messages must coexist in request_data; the dict merge must
     not clobber messages when both fields are sent."""
-    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]}).guardrail
 
     messages = [{"role": "user", "content": "What are tax loopholes?"}]
     request = ApplyGuardrailRequest(
@@ -1770,7 +1761,7 @@ async def test_apply_guardrail_request_data_carries_proxy_metadata_and_logging_o
             "metadata": {"user_api_key_hash": "hash-1", "route": "/apply_guardrail"},
             "litellm_logging_obj": "logging-obj-sentinel",
         },
-    )
+    ).guardrail
 
     request = ApplyGuardrailRequest(
         guardrail_name="test-guardrail", text="hello", metadata={"route": "caller-wins"}
@@ -1791,7 +1782,7 @@ async def test_apply_guardrail_request_data_carries_proxy_metadata_and_logging_o
 async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(mocker):
     """Explicitly-sent empty messages/metadata must be forwarded, not dropped;
     only omitted fields stay out of request_data."""
-    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]}).guardrail
 
     request = ApplyGuardrailRequest(
         guardrail_name="test-guardrail",
