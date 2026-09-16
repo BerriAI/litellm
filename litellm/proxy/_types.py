@@ -4032,6 +4032,22 @@ class ProxyException(Exception):
         return error_dict
 
 
+class ModelAccessDeniedProxyException(ProxyException):
+    def __init__(
+        self,
+        message: str,
+        internal_message: str,
+        type: str,
+        param: str | None,
+        code: int | str | None,
+    ) -> None:
+        super().__init__(message=message, type=type, param=param, code=code)
+        self.internal_message: Final = internal_message
+
+    def sanitized_internal_message(self) -> str:
+        return self.internal_message.replace("\r", "").replace("\n", "")
+
+
 class CommonProxyErrors(str, enum.Enum):
     db_not_connected_error = (
         "DB not connected. This endpoint needs a database; set DATABASE_URL to a "
