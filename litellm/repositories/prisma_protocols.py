@@ -9,8 +9,6 @@ private ones per file.
 from collections.abc import Mapping, Sequence
 from typing import Protocol, TypeVar
 
-from typing_extensions import LiteralString
-
 RowT_co = TypeVar("RowT_co", covariant=True)
 
 
@@ -110,12 +108,6 @@ class PrismaRecord(Protocol):
     def dict(self) -> Mapping[str, object]: ...
 
 
-class RawQueryTransaction(Protocol):
-    """A prisma transaction handle that can run raw SQL, e.g. an advisory lock or a locked read."""
-
-    async def query_raw(self, query: LiteralString, *args: str) -> Sequence[Mapping[str, object]]: ...
-
-
 class ReadOnlyTable(Protocol):
     async def find_many(self, *, where: Mapping[str, object]) -> Sequence[PrismaRecord]: ...
 
@@ -130,8 +122,6 @@ class BatchTable(Protocol):
     def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
 
     def update_many(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
-
-    def upsert(self, *, where: Mapping[str, object], data: Mapping[str, Mapping[str, object]]) -> None: ...
 
 
 class PrismaBatch(Protocol):
