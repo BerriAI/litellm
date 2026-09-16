@@ -541,6 +541,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def supports_scan_only_tool_results(self) -> bool:
         return self.experimental_use_latest_role_message_only is not True
 
+    def supports_only_scan_new_messages(self) -> bool:
+        return True
+
     def _prepare_guardrail_messages_for_role(
         self,
         messages: list[AllMessageValues] | None,
@@ -3073,25 +3076,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         choice.text = masked_texts[masking_index]
                         masking_index += 1
                         verbose_proxy_logger.debug("Applied masking to choice text content")
-
-    @staticmethod
-    def _incremental_scan_cache() -> DualCache:
-        """Resolve the cache used to remember which segments a session already scanned.
-
-        Prefers the proxy's shared cache (``internal_usage_cache.dual_cache``), which is
-        backed by Redis when the deployment configures it, so incremental state is shared
-        across proxy instances. Falls back to a process-local ``DualCache`` singleton when
-        the proxy is not running (e.g. unit tests), where sharing does not apply.
-        """
-        from litellm.integrations.custom_guardrail import dc as fallback_cache
-
-        try:
-            from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging
-        except Exception:  # noqa: BLE001  # proxy not importable outside the server; use local fallback
-            return fallback_cache
-        if _proxy_logging is not None:
-            return _proxy_logging.internal_usage_cache.dual_cache
-        return fallback_cache
 
     def _bedrock_response_has_masked_output(self, response: BedrockGuardrailResponse) -> bool:
         """Return True if the guardrail rewrote (masked/anonymized) any scanned text.

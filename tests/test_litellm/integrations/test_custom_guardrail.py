@@ -2890,6 +2890,22 @@ class TestCustomGuardrailPostCallSuccessDeploymentHook:
         assert len(_guardrail_entries(request_data)) == 1
 
 
+class TestScannedTextsCacheKey:
+    def test_key_is_unchanged_without_a_policy_fingerprint(self):
+        guardrail = CustomGuardrail(guardrail_name="bedrock-shape")
+
+        assert guardrail._scanned_texts_cache_key("sess-1") == "guardrail_scanned_texts:bedrock-shape:sess-1"
+
+    def test_policy_fingerprint_namespaces_the_key(self):
+        class _FingerprintedGuardrail(CustomGuardrail):
+            def _incremental_scan_policy_fingerprint(self) -> str:
+                return "rules-v2"
+
+        guardrail = _FingerprintedGuardrail(guardrail_name="cf")
+
+        assert guardrail._scanned_texts_cache_key("sess-1") == "guardrail_scanned_texts:cf:rules-v2:sess-1"
+
+
 class _NativeLifecycleLoggingGuardrail(CustomGuardrail):
     """Native lifecycle guardrail that also implements apply_guardrail, like the azure guards."""
 
