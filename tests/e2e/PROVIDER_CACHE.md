@@ -20,6 +20,8 @@ An eligible miss calls the provider. A complete successful response is stored im
 
 Bedrock could not be mounted before because SigV4 signs the `Host` header, so a rewritten `api_base` failed signature verification at the provider. The edge now re-signs: it drops the proxy's signature headers, signs the upstream request with the run pod's own AWS identity from its EKS Pod Identity association, and forwards that. The signature headers are excluded from the key, since `x-amz-date` is a timestamp and keying on it would make every Bedrock call a permanent miss
 
+Almost every Bedrock deployment in the suite declares its region as `os.environ/AWS_REGION`, which only the proxy can resolve, and the run pod does not share that environment. A `us.` inference profile fans out across the US regions and is reachable from any of them, so those route to the default mount whatever the proxy resolved. A model that is not cross-region and declares its region that way keeps its direct path rather than being sent to a region it may not exist in.
+
 Only deployments that carry no AWS identity of their own route to the edge. A deployment with `aws_role_name`, `aws_access_key_id`, an `api_base` or an `aws_bedrock_runtime_endpoint` keeps its direct path, because re-signing it would quietly replace the very credential chain that test exists to prove. Only Anthropic models route, matching what the runner role is allowed to invoke and what the edge knows how to validate
 
 Vertex and Gemini are not mounted. litellm's `_check_custom_proxy` rewrites a path-prefixed Vertex `api_base` into `{api_base}:{endpoint}`, dropping project, location and model, so a mount under a path prefix cannot work without either a root-mounted edge on its own port or a change in litellm
