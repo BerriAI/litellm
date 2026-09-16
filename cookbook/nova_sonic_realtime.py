@@ -17,9 +17,10 @@ import asyncio
 import base64
 import json
 import os
+from typing import Optional
+
 import pyaudio
 import websockets
-from typing import Optional
 
 # Bounded queue size for audio chunks (configurable via env to avoid unbounded memory)
 AUDIO_QUEUE_MAXSIZE = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 10_000))

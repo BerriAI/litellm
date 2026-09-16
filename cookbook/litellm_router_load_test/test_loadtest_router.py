@@ -1,5 +1,6 @@
-import sys
 import os
+import sys
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -7,8 +8,9 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import asyncio
-from litellm import Router, Timeout
 import time
+
+from litellm import Router, Timeout
 
 ### Test calling router async
 

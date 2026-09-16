@@ -1,5 +1,6 @@
-import requests
 from concurrent.futures import ThreadPoolExecutor
+
+import requests
 
 # Replace the URL with your actual endpoint
 url = "http://localhost:8000/router_acompletion"

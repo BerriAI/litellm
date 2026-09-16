@@ -1,6 +1,6 @@
-import sys
 import filecmp
 import shutil
+import sys
 
 
 def main(argv=None):

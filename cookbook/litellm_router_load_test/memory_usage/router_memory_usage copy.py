@@ -1,17 +1,19 @@
 #### What this tests ####
 
-from memory_profiler import profile
-import sys
-import os
-import time
 import asyncio
+import os
+import sys
+import time
+
+from memory_profiler import profile
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from dotenv import load_dotenv
+
 import litellm
 from litellm import Router
-from dotenv import load_dotenv
 from litellm._uuid import uuid
 
 load_dotenv()
