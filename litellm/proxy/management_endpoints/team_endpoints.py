@@ -2461,19 +2461,13 @@ def _persistence_values_for_budget_duration(
     return {key: value for key, value in persistence_values.items() if key != "budget_duration"}
 
 
-def _budget_reset_persistence_fields(
-    data: UpdateTeamRequest, updated_kv: Mapping[str, object]
-) -> Mapping[str, object]:
+def _budget_reset_persistence_fields(data: UpdateTeamRequest, updated_kv: Mapping[str, object]) -> Mapping[str, object]:
     usable_budget_duration: Final = _usable_budget_duration(data.budget_duration)
     if usable_budget_duration is not None:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
-        return MappingProxyType(
-            {"budget_reset_at": get_budget_reset_time(budget_duration=usable_budget_duration)}
-        )
-    if data.budget_duration is not None or (
-        "budget_duration" in updated_kv and updated_kv["budget_duration"] is None
-    ):
+        return MappingProxyType({"budget_reset_at": get_budget_reset_time(budget_duration=usable_budget_duration)})
+    if data.budget_duration is not None or ("budget_duration" in updated_kv and updated_kv["budget_duration"] is None):
         return MappingProxyType({"budget_duration": None, "budget_reset_at": None})
     return MappingProxyType({})
 
