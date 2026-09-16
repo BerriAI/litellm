@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::error::Error;
+use super::Error;
 use crate::http_utils::{http_request, truncate_error_body};
 
 use super::client::http_client;
@@ -21,17 +21,17 @@ pub async fn execute_audio_transcription_provider_call(
     }
     let response = http_request(request_builder)
         .await
-        .map_err(|error| Error::Network(error.to_string()))?;
+        .map_err(|error| Error::Transport(crate::transport::Error::Network(error.to_string())))?;
     let status = response.status();
     let text = response
         .text()
         .await
-        .map_err(|error| Error::Network(error.to_string()))?;
+        .map_err(|error| Error::Transport(crate::transport::Error::Network(error.to_string())))?;
     if !status.is_success() {
-        return Err(Error::Http {
+        return Err(Error::Transport(crate::transport::Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
-        });
+        }));
     }
     let response_json = serde_json::from_str(&text)
         .map_err(|error| Error::InvalidResponse(format!("invalid audio response JSON: {error}")))?;
@@ -41,7 +41,6 @@ pub async fn execute_audio_transcription_provider_call(
         .into_json())
 }
 
-#[cfg(feature = "bedrock-auth")]
 async fn signed_headers(
     request: &ProviderAudioTranscriptionRequest,
     body: &[u8],
@@ -72,19 +71,4 @@ async fn signed_headers(
         SystemTime::now(),
     )?;
     Ok(unsigned.into_iter().chain(signature).collect())
-}
-
-#[cfg(not(feature = "bedrock-auth"))]
-async fn signed_headers(
-    request: &ProviderAudioTranscriptionRequest,
-    _body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
-    use crate::audio_transcription::transformation::AudioTranscriptionAuth;
-
-    match request.auth {
-        AudioTranscriptionAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
-            "AWS SigV4 requires the bedrock-auth feature",
-        )),
-        AudioTranscriptionAuth::Bearer => Ok(request.upstream_headers.clone()),
-    }
 }

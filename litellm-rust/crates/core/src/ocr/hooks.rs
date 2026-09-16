@@ -3,8 +3,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrDocument};
-use crate::Error;
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
+use crate::ocr::Error;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -80,6 +80,7 @@ pub(crate) struct OcrLifecycleHooks {
 impl CallLifecycleHooks<LiteLLMOcrRequest, LiteLLMOcrRequest, LiteLLMOcrResponse>
     for OcrLifecycleHooks
 {
+    type Error = crate::ocr::Error;
     type PreCallFuture<'a> = OcrHookFuture<'a, LiteLLMOcrRequest>;
     type DuringCallFuture<'a> = OcrHookFuture<'a, LiteLLMOcrRequest>;
     type SuccessFuture<'a> = OcrLogFuture<'a>;

@@ -1,4 +1,3 @@
-use crate::auth::error::AuthConfigurationError;
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -13,8 +12,8 @@ use azure_identity::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::AuthError;
-use crate::auth::{InputSource, ResolvedCredential, SecretValue, Sourced};
+use litellm_auth::Error;
+use litellm_auth::{InputSource, ResolvedCredential, SecretValue, Sourced};
 
 use super::credential_provider_cache::{
     AzureCredentialProviderCache, AzureCredentialProviderCacheKey,
@@ -62,7 +61,7 @@ pub(crate) struct ValidatedAzureRequest {
 }
 
 impl ValidatedAzureRequest {
-    pub(crate) fn new(request: NativeAzureRequest) -> Result<Self, AuthError> {
+    pub(crate) fn new(request: NativeAzureRequest) -> Result<Self, Error> {
         validate_authority(&request)?;
         let credential_source = validate_sources(&request)?;
         Ok(Self {
@@ -120,7 +119,7 @@ impl NativeAzureTokenAcquirer {
     pub(crate) async fn acquire(
         &self,
         request: ValidatedAzureRequest,
-    ) -> Result<ResolvedCredential, AuthError> {
+    ) -> Result<ResolvedCredential, Error> {
         let scope = request.request.scope().to_string();
         let key = request.request.cache_key();
         let transport = self.transport.clone();
@@ -134,7 +133,7 @@ impl NativeAzureTokenAcquirer {
         let token = credential
             .get_token(&[scope.as_str()], None)
             .await
-            .map_err(|error| AuthError::AzureTokenAcquisition(error.to_string()))?;
+            .map_err(|error| Error::AzureTokenAcquisition(error.to_string()))?;
         let expires_on = u64::try_from(token.expires_on.unix_timestamp())
             .ok()
             .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds));
@@ -239,7 +238,7 @@ impl NativeAzureRequest {
     }
 }
 
-fn validate_authority(request: &NativeAzureRequest) -> Result<(), AuthError> {
+fn validate_authority(request: &NativeAzureRequest) -> Result<(), Error> {
     let authority = match request {
         NativeAzureRequest::ClientSecret { authority, .. }
         | NativeAzureRequest::ClientAssertion { authority, .. }
@@ -251,8 +250,7 @@ fn validate_authority(request: &NativeAzureRequest) -> Result<(), AuthError> {
     let Some(authority) = authority else {
         return Ok(());
     };
-    let url = url::Url::parse(authority.value())
-        .map_err(|_| AuthError::Configuration(AuthConfigurationError::InvalidAzureAuthority))?;
+    let url = url::Url::parse(authority.value()).map_err(|_| Error::InvalidAzureAuthority)?;
     if url.scheme() != "https"
         || url.host_str().is_none()
         || !url.username().is_empty()
@@ -261,14 +259,12 @@ fn validate_authority(request: &NativeAzureRequest) -> Result<(), AuthError> {
         || url.fragment().is_some()
         || !matches!(url.path(), "" | "/")
     {
-        return Err(AuthError::Configuration(
-            AuthConfigurationError::InvalidAzureAuthority,
-        ));
+        return Err(Error::InvalidAzureAuthority);
     }
     Ok(())
 }
 
-fn validate_sources(request: &NativeAzureRequest) -> Result<InputSource, AuthError> {
+fn validate_sources(request: &NativeAzureRequest) -> Result<InputSource, Error> {
     match request {
         NativeAzureRequest::ClientSecret {
             tenant_id,
@@ -356,7 +352,7 @@ fn is_request_controlled<T>(value: &Sourced<T>, optional: Option<&Sourced<String
         || optional.is_some_and(|value| value.source() == InputSource::Request)
 }
 
-fn trusted_only(sources: &[InputSource]) -> Result<InputSource, AuthError> {
+fn trusted_only(sources: &[InputSource]) -> Result<InputSource, Error> {
     if sources.contains(&InputSource::Request) {
         return mixed_sources();
     }
@@ -371,16 +367,14 @@ fn trusted_source(sources: &[InputSource]) -> InputSource {
     }
 }
 
-fn mixed_sources<T>() -> Result<T, AuthError> {
-    Err(AuthError::Configuration(
-        AuthConfigurationError::MixedAzureCredentialSources,
-    ))
+fn mixed_sources<T>() -> Result<T, Error> {
+    Err(Error::MixedAzureCredentialSources)
 }
 
 fn build_credential(
     request: NativeAzureRequest,
     transport: Option<azure_core::http::Transport>,
-) -> Result<Arc<dyn TokenCredential>, AuthError> {
+) -> Result<Arc<dyn TokenCredential>, Error> {
     match request {
         NativeAzureRequest::ClientSecret {
             tenant_id,
@@ -439,11 +433,7 @@ fn build_credential(
         NativeAzureRequest::DeveloperTools { .. } => DeveloperToolsCredential::new(None)
             .map(|credential| credential as Arc<dyn TokenCredential>),
     }
-    .map_err(|error| {
-        AuthError::Configuration(AuthConfigurationError::AzureCredentialInitialization(
-            error.to_string(),
-        ))
-    })
+    .map_err(|error| Error::AzureCredentialInitialization(error.to_string()))
 }
 
 fn client_options(
@@ -494,7 +484,7 @@ mod tests {
     use azure_core::{Bytes, Result};
 
     use super::{NativeAzureRequest, NativeAzureTokenAcquirer, ValidatedAzureRequest};
-    use crate::auth::{InputSource, SecretValue, Sourced};
+    use litellm_auth::{InputSource, SecretValue, Sourced};
 
     fn deployment<T>(value: T) -> Sourced<T> {
         Sourced::new(value, InputSource::Deployment)
@@ -659,9 +649,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            crate::AuthError::Configuration(
-                crate::auth::error::AuthConfigurationError::MixedAzureCredentialSources
-            )
+            litellm_auth::Error::MixedAzureCredentialSources
         ));
     }
 
@@ -691,12 +679,7 @@ mod tests {
                 authority,
             ))
             .unwrap_err();
-            assert!(matches!(
-                error,
-                crate::AuthError::Configuration(
-                    crate::auth::error::AuthConfigurationError::InvalidAzureAuthority
-                )
-            ));
+            assert!(matches!(error, litellm_auth::Error::InvalidAzureAuthority));
         }
     }
 }
