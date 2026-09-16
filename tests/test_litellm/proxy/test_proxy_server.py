@@ -19,7 +19,7 @@ import fastapi.routing
 import httpx
 import pytest
 import yaml
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
@@ -31,10 +31,17 @@ from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._types import LitellmUserRoles, TokenCountRequest, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LitellmUserRoles,
+    ModelAccessDeniedProxyException,
+    ProxyErrorTypes,
+    ProxyException,
+    TokenCountRequest,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
-from litellm.proxy.proxy_server import app, initialize
+from litellm.proxy.proxy_server import app, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 example_embedding_result = {
@@ -10003,6 +10010,7 @@ async def _lit6973_drive_realtime_session(
     backend_logged_failure: bool = False,
     phase_one_exit: str | None = None,
     websocket: MagicMock | None = None,
+    model_access_exception: ProxyException | None = None,
 ) -> MagicMock:
     """Drive realtime_websocket_endpoint through one of its reservation-settling exits.
 
@@ -10035,10 +10043,10 @@ async def _lit6973_drive_realtime_session(
         if backend_logged_failure:
             logging_obj.model_call_details[REALTIME_SESSION_FAILURE_LOGGED_KEY] = True
 
-    from litellm.proxy._types import ProxyException
-
     model_access_error: Final = (
-        ProxyException(message="key cannot access model", type="auth_error", param="model", code=401)
+        model_access_exception
+        if model_access_exception is not None
+        else ProxyException(message="key cannot access model", type="auth_error", param="model", code=401)
         if phase_one_exit == "model_access"
         else None
     )
@@ -10914,6 +10922,95 @@ def test_validate_model_access_denied_message_empty_restores_detailed_default(em
     from litellm.proxy.proxy_server import _validate_general_settings_ui_litellm_value
 
     assert _validate_general_settings_ui_litellm_value("model_access_denied_message", empty_value) is None
+
+
+def _model_access_denied_proxy_exception():
+    return ModelAccessDeniedProxyException(
+        message="The model `gpt-5.6\r\nWARNING forged log line` is unavailable for this API key or does not exist.",
+        internal_message="key not allowed to access model. This key can only access models=['internal-models']. "
+        "Tried to access gpt-5.6\r\nWARNING forged log line",
+        type=ProxyErrorTypes.key_model_access_denied,
+        param="model",
+        code=403,
+    )
+
+
+def _http_request_scope():
+    return Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []})
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_logs_sanitized_model_access_denial(monkeypatch, caplog):
+    monkeypatch.setattr(
+        litellm, "model_access_denied_message", "The model `{model}` is unavailable for this API key or does not exist."
+    )
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        response = await openai_exception_handler(_http_request_scope(), _model_access_denied_proxy_exception())
+
+    assert response.status_code == 403
+    body = json.loads(response.body)
+    assert "internal-models" not in body["error"]["message"]
+    denial_records = [r for r in caplog.records if "internal-models" in r.getMessage()]
+    assert len(denial_records) == 1
+    assert denial_records[0].levelname == "WARNING"
+    assert "\n" not in denial_records[0].getMessage()
+    assert "\r" not in denial_records[0].getMessage()
+    assert "gpt-5.6WARNING forged log line" in denial_records[0].getMessage()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unset_value", [None, ""])
+async def test_openai_exception_handler_no_denial_log_when_message_not_configured(monkeypatch, unset_value, caplog):
+    monkeypatch.setattr(litellm, "model_access_denied_message", unset_value)
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        response = await openai_exception_handler(_http_request_scope(), _model_access_denied_proxy_exception())
+
+    assert response.status_code == 403
+    assert [r for r in caplog.records if r.levelname == "WARNING" and "internal-models" in r.getMessage()] == []
+
+
+@pytest.mark.asyncio
+async def test_openai_exception_handler_no_denial_log_for_plain_proxy_exception(monkeypatch, caplog):
+    monkeypatch.setattr(
+        litellm, "model_access_denied_message", "The model `{model}` is unavailable for this API key or does not exist."
+    )
+    denial = ProxyException(
+        message="Authentication Error, Invalid proxy server token passed",
+        type=ProxyErrorTypes.auth_error,
+        param="None",
+        code=401,
+    )
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        response = await openai_exception_handler(_http_request_scope(), denial)
+
+    assert response.status_code == 401
+    assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+
+
+@pytest.mark.asyncio
+async def test_realtime_model_access_denial_logs_sanitized_internal_message(monkeypatch, caplog):
+    monkeypatch.setattr(
+        litellm, "model_access_denied_message", "The model `{model}` is unavailable for this API key or does not exist."
+    )
+    reservation = {"reserved_cost": 0.0, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        ws = await _lit6973_drive_realtime_session(
+            reservation,
+            backend_logged_success=False,
+            phase_one_exit="model_access",
+            model_access_exception=_model_access_denied_proxy_exception(),
+        )
+
+    ws.close.assert_awaited_once()
+    assert "internal-models" not in ws.close.await_args.kwargs["reason"]
+    denial_records = [r for r in caplog.records if "internal-models" in r.getMessage()]
+    assert len(denial_records) == 1
+    assert "\n" not in denial_records[0].getMessage()
+    assert "gpt-5.6WARNING forged log line" in denial_records[0].getMessage()
 
 
 @pytest.mark.parametrize("empty_value", [None, ""])
