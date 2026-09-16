@@ -323,6 +323,7 @@ class LiteLLM:
     # the billed default) or reported alongside it (False) — without this a trace
     # consumer cannot tell whether adding the two double-counts.
     GUARDRAIL_COST_IN_SPEND: Final = "litellm.guardrail.cost_in_spend"
+    GUARDRAIL_PROMPT_SHIELD_COST: Final = "litellm.cost.guardrail.prompt_shield"
     SERVICE_NAME: Final = "litellm.service.name"
     SERVICE_CALL_TYPE: Final = "litellm.service.call_type"
     PREPROCESSING_MS: Final = "litellm.preprocessing.duration_ms"

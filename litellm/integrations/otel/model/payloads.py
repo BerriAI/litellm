@@ -29,6 +29,7 @@ from litellm.integrations.otel.model.utils import (
     as_str,
     as_str_tuple,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import prompt_shield_guardrail_cost
 
 # ``RequestIdentity`` and the request-metadata translation now live in
 # :mod:`metadata`; re-exported here so existing ``model.payloads`` imports keep
@@ -371,6 +372,7 @@ class LLMCallSpanData:
     identity: RequestIdentity
     is_streaming: bool | None = None
     cost: LLMCost = field(default_factory=LLMCost)
+    prompt_shield_cost: float | None = None
     tools: tuple[ToolDefinition, ...] = ()
     # Raw messages and response, needed by vendor mappers (OpenInference,
     # Langfuse, Weave) that stamp message-level attributes. ``messages_in`` is
@@ -427,6 +429,7 @@ class LLMCallSpanData:
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
             cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
+            prompt_shield_cost=prompt_shield_guardrail_cost(payload.get("guardrail_information")),
             server=ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
             is_streaming=as_bool(payload.get("stream")),

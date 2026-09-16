@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     cost_breakdown_with_guardrail,
     guardrail_cost_total,
     guardrail_information_cost,
+    prompt_shield_guardrail_cost,
 )
 
 
@@ -247,3 +248,32 @@ def test_guardrail_information_cost_skips_malformed_entry_keeps_siblings():
     ]
     assert guardrail_information_cost(entries) == pytest.approx(0.0003)
     assert guardrail_information_cost({"guardrail_cost": 0.5, "guardrail_cost_in_spend": "maybe"}) == 0.0
+
+
+def test_prompt_shield_guardrail_cost_sums_azure_entries_including_report_only():
+    entries = [
+        {"guardrail_provider": "azure", "guardrail_cost": 0.0015, "guardrail_cost_in_spend": False},
+        {"guardrail_provider": "azure", "guardrail_cost": 0.0005},
+        {"guardrail_provider": "bedrock", "guardrail_cost": 0.01},
+    ]
+    assert prompt_shield_guardrail_cost(entries) == pytest.approx(0.002)
+
+
+@pytest.mark.parametrize(
+    "guardrail_information",
+    [
+        [{"guardrail_provider": "bedrock", "guardrail_cost": 0.01}],
+        None,
+        {"guardrail_provider": "azure"},
+    ],
+)
+def test_prompt_shield_guardrail_cost_returns_none_without_azure_cost(guardrail_information):
+    assert prompt_shield_guardrail_cost(guardrail_information) is None
+
+
+def test_prompt_shield_guardrail_cost_skips_malformed_entry_keeps_siblings():
+    entries = [
+        {"guardrail_provider": "azure", "guardrail_cost": "abc"},
+        {"guardrail_provider": "azure", "guardrail_cost": 0.0012},
+    ]
+    assert prompt_shield_guardrail_cost(entries) == pytest.approx(0.0012)
