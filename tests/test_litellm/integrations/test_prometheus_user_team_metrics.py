@@ -929,6 +929,7 @@ def customer_metrics_enabled(monkeypatch):
 
     monkeypatch.setattr(litellm, "enable_end_user_cost_tracking_prometheus_only", True)
     monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", False)
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
 
 
 def _customer_sample(metric_name: str, end_user_id: str):
@@ -1150,6 +1151,114 @@ async def test_initialize_remaining_budget_metrics_includes_customers(prometheus
         await prometheus_logger._initialize_remaining_budget_metrics()
 
     assert _customer_sample("litellm_remaining_customer_budget_metric", "cust-startup") == pytest.approx(20.0)
+
+
+@pytest.mark.asyncio
+async def test_initialize_customer_budget_metrics_counts_once_across_pages(prometheus_logger, customer_metrics_enabled):
+    import sys
+
+    pages = [
+        [_mock_customer_row(f"cust-{i}", 1.0, 10.0, None) for i in range(50)],
+        [_mock_customer_row(f"cust-{i}", 1.0, 10.0, None) for i in range(50, 100)],
+        [_mock_customer_row("cust-100", 1.0, 10.0, None)],
+    ]
+    find_many = AsyncMock(side_effect=pages)
+    count = AsyncMock(return_value=101)
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = find_many
+    mock_prisma.db.litellm_endusertable.count = count
+    mock_proxy_server = MagicMock()
+    mock_proxy_server.prisma_client = mock_prisma
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+        await prometheus_logger._initialize_customer_budget_metrics()
+
+    assert find_many.await_count == 3
+    count.assert_awaited_once()
+    assert _customer_sample("litellm_remaining_customer_budget_metric", "cust-100") == pytest.approx(9.0)
+
+
+@pytest.mark.asyncio
+async def test_initialize_customer_budget_metrics_applies_default_budget_to_unbudgeted_customers(
+    prometheus_logger, customer_metrics_enabled, monkeypatch
+):
+    import sys
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "default-customer-budget")
+    reset_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
+    default_budget = MagicMock()
+    default_budget.max_budget = 10.0
+    default_budget.budget_reset_at = reset_at
+    explicit_row = _mock_customer_row("cust-explicit", 5.0, 100.0, None)
+    default_row = _mock_customer_row("cust-default", 2.0, None, None)
+    default_row.litellm_budget_table = None
+    find_many = AsyncMock(return_value=[explicit_row, default_row])
+    find_unique = AsyncMock(return_value=default_budget)
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = find_many
+    mock_prisma.db.litellm_endusertable.count = AsyncMock(return_value=2)
+    mock_prisma.db.litellm_budgettable.find_unique = find_unique
+    mock_proxy_server = MagicMock()
+    mock_proxy_server.prisma_client = mock_prisma
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+        await prometheus_logger._initialize_customer_budget_metrics()
+
+    assert find_unique.await_args.kwargs["where"] == {"budget_id": "default-customer-budget"}
+    assert find_many.await_args.kwargs["where"] is None
+    assert _customer_sample("litellm_remaining_customer_budget_metric", "cust-explicit") == pytest.approx(95.0)
+    assert _customer_sample("litellm_customer_max_budget_metric", "cust-explicit") == pytest.approx(100.0)
+    assert _customer_sample("litellm_remaining_customer_budget_metric", "cust-default") == pytest.approx(8.0)
+    assert _customer_sample("litellm_customer_max_budget_metric", "cust-default") == pytest.approx(10.0)
+    assert _customer_sample("litellm_customer_budget_remaining_hours_metric", "cust-default") > 0
+
+
+@pytest.mark.asyncio
+async def test_customer_max_budget_gauge_emitted_when_only_it_is_configured(customer_metrics_enabled, monkeypatch):
+    import sys
+
+    import litellm
+    from litellm.models.budget import LiteLLM_BudgetTable
+    from litellm.models.end_user import LiteLLM_EndUserTable
+    from litellm.types.integrations.prometheus import NoOpMetric
+
+    monkeypatch.setattr(
+        litellm,
+        "prometheus_metrics_config",
+        [{"group": "customer-max-only", "metrics": ["litellm_customer_max_budget_metric"]}],
+    )
+    logger = PrometheusLogger()
+    assert isinstance(logger.litellm_remaining_customer_budget_metric, NoOpMetric)
+    assert not isinstance(logger.litellm_customer_max_budget_metric, NoOpMetric)
+
+    end_user = LiteLLM_EndUserTable(
+        user_id="cust-max-only",
+        blocked=False,
+        spend=1.0,
+        budget_id="budget-1",
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-1", max_budget=40.0),
+    )
+    mock_proxy_server = MagicMock()
+    mock_proxy_server.prisma_client = MagicMock()
+    mock_proxy_server.user_api_key_cache = MagicMock()
+
+    with (
+        patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}),
+        patch("litellm.proxy.auth.auth_checks.get_end_user_object", AsyncMock(return_value=end_user)),  # test-quality-ok: [TQ008] logger resolves customers through the proxy auth lookup, no injection seam
+    ):
+        await logger._increment_remaining_budget_metrics(
+            user_api_team=None,
+            user_api_team_alias=None,
+            user_api_key=None,
+            user_api_key_alias=None,
+            litellm_params={"metadata": {}},
+            response_cost=1.0,
+            end_user_id="cust-max-only",
+        )
+
+    assert _customer_sample("litellm_customer_max_budget_metric", "cust-max-only") == pytest.approx(40.0)
 
 
 def test_default_latency_buckets(prometheus_logger):
