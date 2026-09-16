@@ -1674,6 +1674,7 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         route: str,
         org_alias: str | None = None,
+        user_id_upsert: bool | None = None,
     ) -> tuple[
         LiteLLM_UserTable | None,
         LiteLLM_OrganizationTable | None,
@@ -1737,7 +1738,11 @@ class JWTAuthManager:
                 user_id=user_id,
                 user_email=user_email,
                 sso_user_id=user_id,
-                upsert=jwt_handler.is_upsert_user_id(valid_user_email=valid_user_email),
+                upsert=(
+                    jwt_handler.is_upsert_user_id(valid_user_email=valid_user_email)
+                    if user_id_upsert is None
+                    else user_id_upsert
+                ),
             ),
             team_id=team_id,
         )
@@ -2209,8 +2214,14 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         request_headers: dict | None = None,
         request_method: str | None = None,
+        identity_only: bool = False,
     ) -> JWTAuthBuilderResult:
-        """Main authentication and authorization builder"""
+        """Build JWT authentication and authorization context.
+
+        Public OAuth endpoints use identity_only to resolve an existing credential owner
+        without authorizing the OAuth route or provisioning users/teams. The returned
+        identity does not grant permission to execute an MCP or model request.
+        """
         # Check if OIDC UserInfo endpoint is enabled, but fall back to standard
         # JWT auth if the token itself is a well-formed JWT (3-part structure).
         if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not jwt_handler.is_jwt(token=api_key):
@@ -2231,18 +2242,23 @@ class JWTAuthManager:
 
         # Check RBAC
         rbac_role: Final = jwt_handler.get_rbac_role(token=jwt_valid_token)
-        await JWTAuthManager.check_rbac_role(
-            jwt_handler,
-            jwt_valid_token,
-            general_settings,
-            request_data,
-            route,
-            rbac_role,
-        )
+        if not identity_only:
+            await JWTAuthManager.check_rbac_role(
+                jwt_handler,
+                jwt_valid_token,
+                general_settings,
+                request_data,
+                route,
+                rbac_role,
+            )
 
         # Check Scope Based Access
         scopes: Final = jwt_handler.get_scopes(token=jwt_valid_token)
-        if jwt_handler.litellm_jwtauth.enforce_scope_based_access and jwt_handler.litellm_jwtauth.scope_mappings:
+        if (
+            not identity_only
+            and jwt_handler.litellm_jwtauth.enforce_scope_based_access
+            and jwt_handler.litellm_jwtauth.scope_mappings
+        ):
             JWTAuthManager.check_scope_based_access(
                 scope_mappings=jwt_handler.litellm_jwtauth.scope_mappings,
                 scopes=scopes,
@@ -2267,6 +2283,39 @@ class JWTAuthManager:
                 team_id = object_id
             elif rbac_role == LitellmUserRoles.INTERNAL_USER:
                 user_id = object_id
+
+        if identity_only:
+            identity_user, _, _, _, identity_user_id = await JWTAuthManager.get_objects(
+                user_id=user_id,
+                user_email=user_email,
+                org_id=None,
+                end_user_id=None,
+                team_id=None,
+                valid_user_email=valid_user_email,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                route=route,
+                user_id_upsert=False,
+            )
+            return JWTAuthBuilderResult(
+                is_proxy_admin=False,
+                # Admin admission uses the claim ID; other callers use the canonical DB ID.
+                user_id=user_id if jwt_handler.is_admin(scopes=scopes) else identity_user_id,
+                user_email=identity_user.user_email if identity_user is not None else user_email,
+                user_object=identity_user,
+                team_id=None,
+                team_object=None,
+                org_id=None,
+                org_object=None,
+                end_user_id=None,
+                end_user_object=None,
+                team_membership=None,
+                token=api_key,
+                jwt_claims=jwt_valid_token,
+            )
 
         # Check admin access
         admin_result: Final = await JWTAuthManager.check_admin_access(

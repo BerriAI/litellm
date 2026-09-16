@@ -7127,12 +7127,12 @@ async def test_build_oauth_protected_resource_response_obo_end_to_end():
         global_mcp_server_manager.registry.clear()
 
 
-def _token_request(headers):
+def _token_request(headers, path="/token"):
     """A real Starlette request with case-insensitive headers (matches production)."""
     from starlette.requests import Request
 
     raw = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
-    return Request({"type": "http", "method": "POST", "path": "/token", "headers": raw, "query_string": b""})
+    return Request({"type": "http", "method": "POST", "path": path, "headers": raw, "query_string": b""})
 
 
 @pytest.fixture
@@ -11443,10 +11443,12 @@ def _oauth_identity_jwt(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("header", ["Authorization", "x-litellm-api-key"])
 @pytest.mark.parametrize("policy_allowed", [False, True])
+@pytest.mark.parametrize("admin", [False, True])
 async def test_oauth_exchange_stores_token_for_validated_jwt_user(
     jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
     header: str,
     policy_allowed: bool,
+    admin: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import httpx
@@ -11456,9 +11458,9 @@ async def test_oauth_exchange_stores_token_for_validated_jwt_user(
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     handler, signing_key = jwt_oauth_identity
-    handler.litellm_jwtauth.enforce_team_based_model_access = not policy_allowed
-    bearer: Final = _oauth_identity_jwt(signing_key)
-    request: Final = _token_request({header: f"Bearer {bearer}"})
+    handler.litellm_jwtauth.custom_validate = lambda claims: policy_allowed
+    bearer: Final = _oauth_identity_jwt(signing_key, scope="litellm_proxy_admin" if admin else "")
+    request: Final = _token_request({header: f"Bearer {bearer}"}, path="/jwt-oauth-server/token")
     server: Final = MCPServer(
         server_id="jwt-oauth-server",
         name="jwt-oauth-server",
@@ -11534,8 +11536,6 @@ async def test_oauth_exchange_stores_token_for_validated_jwt_user(
         "scim_inactive",
         "custom_validate",
         "missing_database",
-        "denied_route",
-        "required_team",
     ],
 )
 async def test_oauth_jwt_identity_rejects_untrusted_or_inactive_owner(
@@ -11548,7 +11548,6 @@ async def test_oauth_jwt_identity_rejects_untrusted_or_inactive_owner(
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
-    from litellm.proxy._types import LitellmUserRoles, RoleBasedPermissions
 
     handler, signing_key = jwt_oauth_identity
     key: Final = (
@@ -11573,18 +11572,6 @@ async def test_oauth_jwt_identity_rejects_untrusted_or_inactive_owner(
         )
     if rejection == "custom_validate":
         handler.litellm_jwtauth.custom_validate = lambda claims: False
-    if rejection == "denied_route":
-        handler.litellm_jwtauth.enforce_rbac = True
-        monkeypatch.setattr(
-            proxy_server,
-            "general_settings",
-            {
-                "enable_jwt_auth": True,
-                "role_permissions": [RoleBasedPermissions(role=LitellmUserRoles.INTERNAL_USER, routes=["/models"])],
-            },
-        )
-    if rejection == "required_team":
-        handler.litellm_jwtauth.enforce_team_based_model_access = True
     assert await _extract_user_id_from_request(_token_request({"Authorization": f"Bearer {bearer}"})) is None
 
 
@@ -11666,7 +11653,7 @@ async def test_oauth_jwt_respects_custom_validation_and_email_policy(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route_allowed", [False, True])
-async def test_oauth_jwt_uses_rbac_user_object_id(
+async def test_oauth_jwt_identity_preserves_separate_mcp_route_authorization(
     jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
     monkeypatch: pytest.MonkeyPatch,
     route_allowed: bool,
@@ -11674,6 +11661,7 @@ async def test_oauth_jwt_uses_rbac_user_object_id(
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
     from litellm.proxy._types import LitellmUserRoles, RoleBasedPermissions, RoleMapping
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
 
     handler, signing_key = jwt_oauth_identity
     handler.litellm_jwtauth.user_id_jwt_field = "sub"
@@ -11691,13 +11679,32 @@ async def test_oauth_jwt_uses_rbac_user_object_id(
             "role_permissions": [
                 RoleBasedPermissions(
                     role=LitellmUserRoles.INTERNAL_USER,
-                    routes=["/token"] if route_allowed else ["/models"],
+                    routes=["mcp_routes"] if route_allowed else ["/models"],
                 )
             ],
         },
     )
-    request: Final = _token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key)}"})
-    assert await _extract_user_id_from_request(request) == ("jwt-owner" if route_allowed else None)
+    bearer: Final = _oauth_identity_jwt(signing_key)
+    request: Final = _token_request({"Authorization": f"Bearer {bearer}"}, path="/example/token")
+    assert await _extract_user_id_from_request(request) == "jwt-owner"
+    admission: Final = JWTAuthManager.auth_builder(
+        api_key=bearer,
+        jwt_handler=handler,
+        request_data={},
+        general_settings=proxy_server.general_settings,
+        route="/mcp/example",
+        prisma_client=proxy_server.prisma_client,
+        user_api_key_cache=handler.user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+        request_method="POST",
+    )
+    if route_allowed:
+        assert (await admission)["user_id"] == "jwt-owner"
+    else:
+        with pytest.raises(HTTPException) as denial:
+            await admission
+        assert denial.value.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -11714,11 +11721,12 @@ async def test_oauth_jwt_resolves_canonical_owner_without_cached_identity(
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
 
     handler, signing_key = jwt_oauth_identity
     external_id: Final = f"external-{identity}-{inactive}-{admin}"
     handler.litellm_jwtauth.user_email_jwt_field = "email"
-    handler.litellm_jwtauth.admin_allowed_routes = ["/token"]
+    handler.litellm_jwtauth.admin_allowed_routes = ["mcp_routes"]
     owner: Final = LiteLLM_UserTable(
         user_id="canonical-oauth-owner",
         user_email="owner@example.test",
@@ -11727,7 +11735,7 @@ async def test_oauth_jwt_resolves_canonical_owner_without_cached_identity(
     )
     database: Final = MagicMock()
     table: Final = database.db.litellm_usertable
-    table.find_unique = AsyncMock(side_effect=[None, owner if identity == "sso" else None, owner])
+    table.find_unique = AsyncMock(side_effect=[None, owner if identity == "sso" else None])
     table.find_first = AsyncMock(return_value=owner)
     table.update = AsyncMock(return_value=owner)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
@@ -11735,9 +11743,67 @@ async def test_oauth_jwt_resolves_canonical_owner_without_cached_identity(
         signing_key, owner=external_id, scope="litellm_proxy_admin" if admin else ""
     )
     request: Final = _token_request({"Authorization": f"Bearer {bearer}"})
-    assert await _extract_user_id_from_request(request) == (None if inactive else "canonical-oauth-owner")
-    assert table.find_unique.await_count == (2 if admin else 3)
-    if not admin:
-        assert table.find_unique.call_args.kwargs["where"] == {"user_id": "canonical-oauth-owner"}
+    stored_owner: Final = await _extract_user_id_from_request(request)
+    assert stored_owner == (None if inactive else external_id if admin else "canonical-oauth-owner")
+    assert table.find_unique.await_count == 2
     if identity == "email":
         table.find_first.assert_awaited_once()
+    if not inactive:
+        admission: Final = await JWTAuthManager.auth_builder(
+            api_key=bearer,
+            jwt_handler=handler,
+            request_data={},
+            general_settings=proxy_server.general_settings,
+            route="/mcp/example",
+            prisma_client=database,
+            user_api_key_cache=handler.user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_server.proxy_logging_obj,
+        )
+        assert stored_owner == admission["user_id"]
+
+
+@pytest.mark.asyncio
+async def test_oauth_jwt_identity_does_not_provision_or_synchronize_teams(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+) -> None:
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _extract_user_id_from_request
+
+    handler, signing_key = jwt_oauth_identity
+    handler.litellm_jwtauth.enforce_team_based_model_access = True
+    handler.litellm_jwtauth.team_id_default = "new-team"
+    handler.litellm_jwtauth.team_id_upsert = True
+    handler.litellm_jwtauth.sync_user_role_and_teams = True
+    owner: Final = LiteLLM_UserTable(user_id="jwt-owner", teams=["existing-team"])
+    handler.user_api_key_cache.set_cache("jwt-owner", owner)
+    request: Final = _token_request(
+        {"Authorization": f"Bearer {_oauth_identity_jwt(signing_key)}"}, path="/example/token"
+    )
+    assert await _extract_user_id_from_request(request) == "jwt-owner"
+    assert owner.teams == ["existing-team"]
+    proxy_server.prisma_client.db.litellm_teamtable.find_unique.assert_not_called()
+    proxy_server.prisma_client.db.litellm_teamtable.upsert.assert_not_called()
+    proxy_server.prisma_client.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["active", "inactive", "missing_database"])
+async def test_oauth_refresh_revalidates_the_same_active_user_rule(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+) -> None:
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _reload_active_user_by_id
+
+    handler, _ = jwt_oauth_identity
+    handler.user_api_key_cache.set_cache(
+        "jwt-owner", LiteLLM_UserTable(user_id="jwt-owner", metadata={"scim_active": state != "inactive"})
+    )
+    if state == "missing_database":
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+    expected: Final = None if state == "active" else "no_active_key" if state == "inactive" else "unresolvable"
+    assert await _reload_active_user_by_id("jwt-owner") == expected

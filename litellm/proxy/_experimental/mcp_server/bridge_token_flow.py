@@ -198,9 +198,7 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
     return loaded if isinstance(loaded, str) else None
 
 
-async def load_active_user_by_id(
-    user_id: str, *, sso_user_id: str | None = None, user_email: str | None = None
-) -> "LiteLLM_UserTable | _KeyResolutionFailure":
+async def load_active_user_by_id(user_id: str) -> "LiteLLM_UserTable | _KeyResolutionFailure":
     """Load a live litellm user by id, returning the record when the user is active or a precise
     failure otherwise. The interactive DCR client authenticates via SSO, so its refresh envelope seals a
     user subject; renewing it must re-check the user is still live (present and not SCIM-deactivated) so a
@@ -234,8 +232,6 @@ async def load_active_user_by_id(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_id_upsert=False,
-            sso_user_id=sso_user_id,
-            user_email=user_email,
         )
     except (ProxyException, HTTPException):
         return "no_active_key"
@@ -247,6 +243,10 @@ async def load_active_user_by_id(
         return "no_active_key"
     if user_object is None:
         return "no_active_key"
+    return _active_user_record(user_object)
+
+
+def _active_user_record(user_object: "LiteLLM_UserTable") -> "LiteLLM_UserTable | Literal['no_active_key']":
     if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
         return "no_active_key"
     return user_object
@@ -336,7 +336,7 @@ async def _extract_jwt_user_id(request: Request, token: str) -> str | None:
         user_api_key_cache,
     )
 
-    if general_settings.get("enable_jwt_auth") is not True or premium_user is not True:
+    if general_settings.get("enable_jwt_auth") is not True or premium_user is not True or prisma_client is None:
         return None
     try:
         if jwt_handler.litellm_jwtauth.is_virtual_key_mapping_configured():
@@ -368,13 +368,13 @@ async def _extract_jwt_user_id(request: Request, token: str) -> str | None:
             proxy_logging_obj=proxy_logging_obj,
             request_headers=dict(request.headers),
             request_method=request.method,
+            identity_only=True,
         )
-        owner_id: Final = identity["user_id"]
-        if not owner_id:
+        resolved_user: Final = identity["user_object"]
+        if resolved_user is None:
             return None
-        # Admin JWTs can return before auth_builder loads the canonical database user.
-        owner: Final = await load_active_user_by_id(owner_id, sso_user_id=owner_id, user_email=identity["user_email"])
-        return None if isinstance(owner, str) else owner.user_id
+        owner: Final = _active_user_record(resolved_user)
+        return None if isinstance(owner, str) else identity["user_id"]
     except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated identities never write credentials
         verbose_logger.debug("OAuth JWT identity could not be validated (%s)", type(exc).__name__)
         return None

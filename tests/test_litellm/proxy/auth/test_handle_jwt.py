@@ -2,7 +2,7 @@ import asyncio
 import re
 import time
 from collections.abc import Mapping, Sequence
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
@@ -6786,3 +6786,72 @@ async def test_sync_user_role_and_teams_singular_claim_only_recognized_under_fla
     }
     assert mock_patch.call_args.kwargs["teams_ids_to_add_user_to"] == []
     assert user.teams == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity_only", [False, True])
+@pytest.mark.parametrize("existing_user", [False, True])
+@pytest.mark.parametrize("model_allowed", [False, True])
+async def test_auth_builder_identity_lookup_does_not_provision_users(
+    monkeypatch: pytest.MonkeyPatch, identity_only: bool, existing_user: bool, model_allowed: bool
+) -> None:
+    from litellm.proxy._types import ScopeMapping
+    from litellm.proxy.auth.auth_checks import UserNotFoundError
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    private_key, jwk = _get_rsa_key_and_jwk("identity-mode")
+    cache: Final = UserApiKeyCache()
+    cache.set_cache("litellm_jwt_auth_keys_https://identity.example/jwks", [jwk])
+    user_id: Final = f"identity-mode-{identity_only}-{existing_user}-{model_allowed}"
+    user: Final = LiteLLM_UserTable(user_id=user_id, organization_memberships=[])
+    if existing_user:
+        cache.set_cache(user_id, user)
+    database: Final = MagicMock()
+    users: Final = database.db.litellm_usertable
+    users.find_unique = AsyncMock(return_value=None)
+    users.find_first = AsyncMock(return_value=None)
+    users.create = AsyncMock(return_value=user)
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=database,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            user_id_jwt_field="sub",
+            user_id_upsert=True,
+            enforce_scope_based_access=True,
+            scope_mappings=[ScopeMapping(scope="allowed", models=["allowed-model"])],
+        ),
+    )
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://identity.example/jwks")
+    monkeypatch.setenv("JWT_ISSUER", "https://identity.example")
+    monkeypatch.setenv("JWT_AUDIENCE", "gateway")
+    token: Final = _encode_rsa_jwt(
+        private_key, "https://identity.example", "gateway", "identity-mode", {"sub": user_id, "scope": "allowed"}
+    )
+    pending: Final = JWTAuthManager.auth_builder(
+        api_key=token,
+        jwt_handler=handler,
+        request_data={"model": "allowed-model" if model_allowed else "forbidden-model"},
+        general_settings={},
+        route="/example/token" if identity_only else "/mcp/example",
+        prisma_client=database,
+        user_api_key_cache=cache,
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+        identity_only=identity_only,
+    )
+    if not identity_only and not model_allowed:
+        with pytest.raises(HTTPException) as denial:
+            await pending
+        assert denial.value.status_code == 403
+        users.create.assert_not_awaited()
+        return
+    if identity_only and not existing_user:
+        with pytest.raises(UserNotFoundError):
+            await pending
+    else:
+        result: Final = await pending
+        assert result["user_id"] == user_id
+        assert result["user_object"] is not None
+        assert result["user_object"].user_id == user_id
+    assert users.create.await_count == (0 if identity_only or existing_user else 1)
