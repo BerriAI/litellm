@@ -2,10 +2,11 @@
 Type definitions for RAG (Retrieval Augmented Generation) Ingest API.
 """
 
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.utils import ModelResponse
 
@@ -237,10 +238,11 @@ class RAGIngestRequest(BaseModel):
 class RAGRetrievalConfig(TypedDict, total=False):
     """Configuration for vector store retrieval."""
 
-    vector_store_id: str
-    custom_llm_provider: str
-    top_k: int  # max results from vector store
-    filters: dict[str, Any] | None  # optional - vector store filters
+    vector_store_id: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str]
+    top_k: ReadOnly[int]
+    filters: ReadOnly[Mapping[str, object] | None]
+    retrieval_filter: ReadOnly[Mapping[str, object] | None]
 
 
 class RAGRerankConfig(TypedDict, total=False):
