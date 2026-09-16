@@ -1458,3 +1458,21 @@ class TestBoundedOpenAPISpecLoading:
         else:
             assert await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=100) == {"paths": {}}
             assert destination.call_count == 1
+
+
+def test_openapi_generator_import_does_not_require_mcp_sdk() -> None:
+    import subprocess
+    import sys
+
+    script = """
+import builtins
+original_import = builtins.__import__
+def without_mcp(name, *args, **kwargs):
+    if name == 'mcp' or name.startswith('mcp.'):
+        raise ModuleNotFoundError('MCP SDK unavailable')
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = without_mcp
+import litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

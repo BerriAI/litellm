@@ -132,6 +132,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
+from litellm.proxy._experimental.mcp_server.upstream import prepare_mcp_client, validate_openapi_credentials
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
     MCPMissingUserEnvVarsError,
@@ -4229,16 +4230,19 @@ class MCPServerManager:
                 )
 
             record_auth_resolution(server.server_id, AuthResolution.not_applicable)
-            return MCPClient(
-                server_url="",  # Not used for stdio
-                transport_type=transport,
-                auth_type=resolved_server.auth_type,
-                auth_value=auth_value,
-                timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
-                stdio_config=stdio_config,
-                extra_headers=extra_headers,
-                sampling_callback=sampling_cb,
-                elicitation_callback=elicitation_cb,
+            return await prepare_mcp_client(
+                resolved_server,
+                MCPClient(
+                    server_url="",  # Not used for stdio
+                    transport_type=transport,
+                    auth_type=resolved_server.auth_type,
+                    auth_value=auth_value,
+                    timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
+                    stdio_config=stdio_config,
+                    extra_headers=extra_headers,
+                    sampling_callback=sampling_cb,
+                    elicitation_callback=elicitation_cb,
+                ),
             )
         else:
             # For HTTP/SSE transports
@@ -4259,15 +4263,20 @@ class MCPServerManager:
                     user_api_key_auth=user_api_key_auth,
                     extra_headers=extra_headers,
                 )
-                return MCPClient(
-                    server_url=server_url,
-                    transport_type=transport,
-                    auth_type=resolved_server.auth_type,
-                    timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
-                    extra_headers=extra_headers,
-                    resolved_auth=resolved_auth,
-                    sampling_callback=sampling_cb,
-                    elicitation_callback=elicitation_cb,
+                return await prepare_mcp_client(
+                    resolved_server,
+                    MCPClient(
+                        server_url=server_url,
+                        transport_type=transport,
+                        auth_type=resolved_server.auth_type,
+                        timeout=(
+                            resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT
+                        ),
+                        extra_headers=extra_headers,
+                        resolved_auth=resolved_auth,
+                        sampling_callback=sampling_cb,
+                        elicitation_callback=elicitation_cb,
+                    ),
                 )
 
             # Create SigV4 auth if configured
@@ -4297,17 +4306,20 @@ class MCPServerManager:
                 else AuthResolution.no_auth
             )
             record_auth_resolution(server.server_id, legacy_source)
-            return MCPClient(
-                server_url=server_url,
-                transport_type=transport,
-                auth_type=resolved_server.auth_type,
-                auth_value=auth_value,
-                auth_header_name=auth_header_name,
-                timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
-                extra_headers=extra_headers,
-                aws_auth=aws_auth,
-                sampling_callback=sampling_cb,
-                elicitation_callback=elicitation_cb,
+            return await prepare_mcp_client(
+                resolved_server,
+                MCPClient(
+                    server_url=server_url,
+                    transport_type=transport,
+                    auth_type=resolved_server.auth_type,
+                    auth_value=auth_value,
+                    auth_header_name=auth_header_name,
+                    timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
+                    extra_headers=extra_headers,
+                    aws_auth=aws_auth,
+                    sampling_callback=sampling_cb,
+                    elicitation_callback=elicitation_cb,
+                ),
             )
 
     async def _get_tools_from_server(
@@ -6188,6 +6200,7 @@ class MCPServerManager:
         mcp_auth_header: str | dict[str, str] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         forwarded_headers: dict[str, str] | None,
+        caller_authorization: str | None = None,
     ) -> tuple[dict[str, str] | None, dict[str, str] | None]:
         """Resolve the gateway-owned upstream credential for a spec_path (OpenAPI) tool call.
 
@@ -6211,9 +6224,12 @@ class MCPServerManager:
         """
         spec: Final = to_server_spec(mcp_server)
         if spec is None:
-            if oauth2_headers:
-                return None, forwarded_headers
-            stored_headers = await self._resolve_oauth2_headers_for_tool_call(mcp_server, None, user_api_key_auth)
+            stored_headers = (
+                None
+                if oauth2_headers
+                else await self._resolve_oauth2_headers_for_tool_call(mcp_server, None, user_api_key_auth)
+            )
+            validate_openapi_credentials(mcp_server, stored_headers, forwarded_headers, caller_authorization)
             return stored_headers, forwarded_headers
 
         subject_token: str | None = None
@@ -6232,7 +6248,9 @@ class MCPServerManager:
             user_api_key_auth=user_api_key_auth,
             extra_headers=forwarded_headers,
         )
-        return await _materialize_auth_headers(resolved_auth), forwarded_headers
+        resolved_headers: Final = await _materialize_auth_headers(resolved_auth)
+        validate_openapi_credentials(mcp_server, resolved_headers, forwarded_headers, caller_authorization)
+        return resolved_headers, forwarded_headers
 
     async def _gather_openapi_tool_tasks(
         self,
@@ -6358,6 +6376,7 @@ class MCPServerManager:
                 mcp_auth_header=upstream_credential,
                 user_api_key_auth=user_api_key_auth,
                 forwarded_headers=openapi_forwarded_headers,
+                caller_authorization=auth_header_value,
             )
 
             async def _call_openapi_via_handler():
