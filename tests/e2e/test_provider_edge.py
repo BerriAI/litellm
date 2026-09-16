@@ -1254,7 +1254,8 @@ class TestHandleEdgeRequestPure:
 
 
 class TestApiBaseSeam:
-    def test_live_mode_returns_none(self, tmp_path: Path) -> None:
+    def test_live_mode_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("E2E_PROVIDER_CACHE", raising=False)
         for mode_raw in ("live", ""):
             assert (
                 provider_edge_api_base(
