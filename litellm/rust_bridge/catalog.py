@@ -9,14 +9,14 @@ signals ``RustBridgeDeclined`` before any provider I/O.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum, StrEnum, auto
+from enum import Enum, auto
 from typing import Final, TypeAlias
 
 from litellm.rust_bridge.configuration import Decision, Rollout
 from litellm.rust_bridge.configuration import decision as _decision
 
 
-class Route(StrEnum):
+class Route(str, Enum):
     CHAT_COMPLETIONS = "chat_completions"
     MESSAGES = "messages"
     RESPONSES = "responses"
