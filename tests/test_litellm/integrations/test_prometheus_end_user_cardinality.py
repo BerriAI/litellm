@@ -179,3 +179,21 @@ def test_prometheus_end_user_not_tracked_by_default():
 
     prometheus_labels = prometheus_label_factory(labels, label_values)
     assert prometheus_labels["end_user"] is None
+
+
+def test_prometheus_customer_budget_series_are_capped_per_metric(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_end_user_cost_tracking_prometheus_only", True)
+    monkeypatch.setattr(litellm, "prometheus_end_user_metrics_max_series_per_metric", 2)
+    monkeypatch.setattr(litellm, "prometheus_end_user_metrics_ttl_seconds", None)
+    logger = PrometheusLogger()
+
+    for index in range(5):
+        logger._set_customer_budget_metrics(
+            end_user_id=f"customer-{index}",
+            spend=1.0,
+            max_budget=10.0,
+            budget_reset_at=None,
+        )
+
+    assert set(logger.litellm_remaining_customer_budget_metric._metrics) == {("customer-3",), ("customer-4",)}
+    assert set(logger.litellm_customer_max_budget_metric._metrics) == {("customer-3",), ("customer-4",)}
