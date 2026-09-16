@@ -693,6 +693,7 @@ def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
         "/anthropic/v1/count_tokens",
         "/gemini/v1/models",
         "/gemini/countTokens",
+        "/nvidia_nim/nim-page-elements/v1/infer",
     ],
 )
 def test_virtual_key_llm_api_route_includes_passthrough_prefix(route):
