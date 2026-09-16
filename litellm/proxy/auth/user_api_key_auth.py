@@ -304,6 +304,16 @@ class _UserModelBudgetLimiter(Protocol):
     ) -> bool: ...
 
 
+class _TeamModelBudgetLimiter(Protocol):
+    async def is_team_within_model_budget(
+        self,
+        team_id: str,
+        team_model_max_budget: Mapping[str, object],
+        key_model_max_budget: Mapping[str, object] | None,
+        model: str,
+    ) -> bool: ...
+
+
 class _TokenTeamModels(Protocol):
     @property
     def team_models(self) -> list[str]: ...
@@ -370,6 +380,25 @@ async def _check_user_model_budget(
         await model_max_budget_limiter.is_user_within_model_budget(
             user_id=valid_token.user_id,
             user_model_max_budget=user_model_max_budget,
+            model=model_name,
+        )
+
+
+async def _check_team_model_budget(
+    valid_token: UserAPIKeyAuth,
+    model_max_budget_limiter: _TeamModelBudgetLimiter,
+    models: list[str],
+) -> None:
+    """Enforce the team's `model_max_budget` for every requested model the key does not override."""
+    team_model_max_budget: Final = valid_token.team_model_max_budget
+    if valid_token.team_id is None or not team_model_max_budget:
+        return
+    key_model_max_budget: Final[Mapping[str, object] | None] = valid_token.model_max_budget
+    for model_name in models:
+        await model_max_budget_limiter.is_team_within_model_budget(
+            team_id=valid_token.team_id,
+            team_model_max_budget=team_model_max_budget,
+            key_model_max_budget=key_model_max_budget,
             model=model_name,
         )
 
@@ -2376,6 +2405,7 @@ async def _user_api_key_auth_builder(
                         team_id=valid_token.team_id,
                         max_budget=valid_token.team_max_budget,
                         soft_budget=valid_token.team_soft_budget,
+                        model_max_budget=valid_token.team_model_max_budget,
                         spend=valid_token.team_spend,
                         tpm_limit=valid_token.team_tpm_limit,
                         rpm_limit=valid_token.team_rpm_limit,
@@ -2530,6 +2560,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
         team_id=valid_token.team_id,
         max_budget=valid_token.team_max_budget,
         soft_budget=valid_token.team_soft_budget,
+        model_max_budget=valid_token.team_model_max_budget,
         spend=valid_token.team_spend,
         tpm_limit=valid_token.team_tpm_limit,
         rpm_limit=valid_token.team_rpm_limit,
@@ -2571,6 +2602,13 @@ def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseExc
     return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
 
 
+def is_no_auth_dev_mode(master_key: str | None, general_settings: Mapping[str, object]) -> bool:
+    return master_key is None and not any(
+        general_settings.get(flag, False)
+        for flag in ("enable_jwt_auth", "enable_oauth2_auth", "enable_oauth2_proxy_auth")
+    )
+
+
 @tracer.wrap()
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
@@ -2599,6 +2637,7 @@ async def _run_centralized_common_checks(
         litellm_proxy_admin_name,
         llm_router,
         master_key,
+        model_max_budget_limiter,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -2630,11 +2669,7 @@ async def _run_centralized_common_checks(
     # Running common_checks would block every admin route on these
     # deployments where that was previously not the contract. If any
     # authn is enabled (JWT, OAuth2, OAuth2-proxy), authz must run.
-    if master_key is None and not (
-        general_settings.get("enable_jwt_auth", False)
-        or general_settings.get("enable_oauth2_auth", False)
-        or general_settings.get("enable_oauth2_proxy_auth", False)
-    ):
+    if is_no_auth_dev_mode(master_key, general_settings):
         return
 
     if user_custom_auth is not None and not general_settings.get("custom_auth_run_common_checks", False):
@@ -2870,6 +2905,21 @@ async def _run_centralized_common_checks(
         )
     finally:
         release_spend_counter_batch()
+
+    if not skip_budget_checks:
+        await _check_team_model_budget(
+            valid_token=user_api_key_auth_obj,
+            model_max_budget_limiter=model_max_budget_limiter,
+            models=_get_model_names_for_budget_checks(
+                model=_get_model_from_request_context(
+                    request_data=request_data,
+                    route=route,
+                    request=request,
+                    llm_router=llm_router,
+                    team_id=user_api_key_auth_obj.team_id,
+                )
+            ),
+        )
 
     await _reserve_budget_after_common_checks(
         user_api_key_auth_obj=user_api_key_auth_obj,
