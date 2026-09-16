@@ -2618,8 +2618,9 @@ async def _run_post_mcp_call_guardrails(
             user_api_key_dict=post_auth,
         )
     from litellm.proxy.litellm_pre_call_utils import add_guardrails_from_auth_metadata
+    from litellm.proxy.utils import mcp_guardrail_gate_data
 
-    base_request_data: Final[Mapping[str, object]] = (
+    base_request_data: Final[Mapping[str, object]] = mcp_guardrail_gate_data(
         litellm_logging_obj.model_call_details if litellm_logging_obj is not None else request_data
     )
     request_metadata: Final[object | None] = base_request_data.get("metadata")
