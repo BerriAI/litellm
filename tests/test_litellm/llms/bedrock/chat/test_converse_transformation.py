@@ -139,6 +139,118 @@ def test_bedrock_converse_1h_cache_write_billed_at_1h_rate(monkeypatch):
     assert completion_cost == pytest.approx(4 * model_info["output_cost_per_token"])
 
 
+@pytest.mark.parametrize(
+    "usage, expected_prompt_tokens, expected_cached_tokens, expected_cache_creation_tokens",
+    [
+        pytest.param(
+            {
+                "inputTokens": 5,
+                "outputTokens": 3,
+                "totalTokens": 12270,
+                "cacheReadInputTokenCount": 12262,
+                "cacheWriteInputTokenCount": 0,
+            },
+            12267,
+            12262,
+            0,
+            id="invoke-model-cache-read",
+        ),
+        pytest.param(
+            {
+                "inputTokens": 5,
+                "outputTokens": 3,
+                "totalTokens": 12270,
+                "cacheReadInputTokenCount": 0,
+                "cacheWriteInputTokenCount": 12262,
+            },
+            12267,
+            0,
+            12262,
+            id="invoke-model-cache-write",
+        ),
+        pytest.param(
+            {
+                "inputTokens": 5,
+                "outputTokens": 3,
+                "cacheReadInputTokenCount": 12262,
+                "cacheWriteInputTokenCount": 0,
+            },
+            12267,
+            12262,
+            0,
+            id="invoke-model-streaming-metadata-without-totalTokens",
+        ),
+    ],
+)
+def test_transform_usage_reads_invoke_model_count_suffixed_cache_keys(
+    usage, expected_prompt_tokens, expected_cached_tokens, expected_cache_creation_tokens
+):
+    """InvokeModel Nova reports ``cacheReadInputTokenCount`` and ``cacheWriteInputTokenCount``
+    where Converse reports the un-suffixed keys, and ``inputTokens`` excludes both."""
+    openai_usage = AmazonConverseConfig().transform_usage(ConverseTokenUsageBlock(**usage))
+    assert openai_usage.prompt_tokens == expected_prompt_tokens
+    assert openai_usage.prompt_tokens_details.cached_tokens == expected_cached_tokens
+    assert openai_usage._cache_read_input_tokens == expected_cached_tokens
+    assert openai_usage._cache_creation_input_tokens == expected_cache_creation_tokens
+    assert openai_usage.completion_tokens == 3
+    assert openai_usage.total_tokens == 12270
+
+
+def test_bedrock_invoke_nova_cache_read_billed_at_discounted_rate(monkeypatch):
+    """Nova cache reads are billed at 25% of the input rate; without a
+    ``cache_read_input_token_cost`` entry the cached tokens were billed at nothing."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    usage = ConverseTokenUsageBlock(
+        **{
+            "inputTokens": 5,
+            "outputTokens": 3,
+            "totalTokens": 12270,
+            "cacheReadInputTokenCount": 12262,
+            "cacheWriteInputTokenCount": 0,
+        }
+    )
+    openai_usage = AmazonConverseConfig().transform_usage(usage)
+    model = "bedrock/invoke/us.amazon.nova-pro-v1:0"
+    prompt_cost, completion_cost = litellm.cost_calculator.cost_per_token(model=model, usage_object=openai_usage)
+    model_info = litellm.get_model_info(model=model)
+    assert model_info["cache_read_input_token_cost"] == pytest.approx(model_info["input_cost_per_token"] * 0.25)
+    assert prompt_cost == pytest.approx(
+        5 * model_info["input_cost_per_token"] + 12262 * model_info["cache_read_input_token_cost"]
+    )
+    assert prompt_cost > 5 * model_info["input_cost_per_token"]
+    assert completion_cost == pytest.approx(3 * model_info["output_cost_per_token"])
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "amazon.nova-micro-v1:0",
+        "amazon.nova-lite-v1:0",
+        "amazon.nova-pro-v1:0",
+        "us.amazon.nova-micro-v1:0",
+        "us.amazon.nova-lite-v1:0",
+        "us.amazon.nova-pro-v1:0",
+        "eu.amazon.nova-micro-v1:0",
+        "eu.amazon.nova-lite-v1:0",
+        "eu.amazon.nova-pro-v1:0",
+        "apac.amazon.nova-micro-v1:0",
+        "apac.amazon.nova-lite-v1:0",
+        "apac.amazon.nova-pro-v1:0",
+        "bedrock/us-gov-west-1/amazon.nova-micro-v1:0",
+        "bedrock/us-gov-west-1/amazon.nova-lite-v1:0",
+        "bedrock/us-gov-west-1/amazon.nova-pro-v1:0",
+        "bedrock/us-gov-east-1/amazon.nova-pro-v1:0",
+    ],
+)
+def test_nova_prompt_caching_models_price_cache_reads_at_a_quarter_of_input(model, monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    entry = litellm.model_cost[model]
+    assert entry["supports_prompt_caching"] is True
+    assert entry["cache_read_input_token_cost"] == pytest.approx(entry["input_cost_per_token"] * 0.25)
+
+
 def test_transform_usage_with_reasoning_content():
     """Test that completion_tokens_details correctly tracks reasoning vs text tokens."""
     usage = ConverseTokenUsageBlock(
