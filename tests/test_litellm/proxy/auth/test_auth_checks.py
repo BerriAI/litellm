@@ -5484,6 +5484,65 @@ async def test_common_checks_personal_user_budget_blocks_in_gather():
     assert "User=u1" in str(over.value)
 
 
+async def _common_checks_for_over_budget_personal_key(*, model: str) -> bool:
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _is_model_cost_zero, common_checks
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "free-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+            },
+        ]
+    )
+    user: Final = LiteLLM_UserTable(user_id="u1", spend=0.0, max_budget=1.0)
+    token: Final = UserAPIKeyAuth(token="k1", user_id="u1")
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 5.0 if counter_key == "spend:user:u1" else 0.0
+
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.get_current_spend", _spend_by_counter),
+    ):
+        result: Final = await common_checks(
+            request_body={"model": model, "messages": [{"role": "user", "content": "hi"}]},
+            team_object=None,
+            user_object=user,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/chat/completions",
+            llm_router=llm_router,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=token,
+            request=MagicMock(spec=Request),
+            skip_budget_checks=_is_model_cost_zero(model=model, llm_router=llm_router),
+        )
+        await asyncio.sleep(0)
+    return result
+
+
+@pytest.mark.asyncio
+async def test_common_checks_over_budget_user_can_still_call_zero_cost_model():
+    """LIT-7464: an exhausted personal budget must not block a model priced at 0/0,
+    while the same user is still rejected on a priced model."""
+    assert await _common_checks_for_over_budget_personal_key(model="free-model") is True
+
+    with pytest.raises(litellm.BudgetExceededError) as over:
+        await _common_checks_for_over_budget_personal_key(model="paid-model")
+    assert "ExceededBudget: User=u1" in str(over.value)
+
+
 async def _run_internal_user_budget_alert(
     *,
     spend: float,
