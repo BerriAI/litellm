@@ -6409,3 +6409,52 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
 
     assert "tools" in result
     assert "tool_choice" not in result
+
+
+def _input_transformations_response(**extra):
+    return {
+        "id": "msg_input_transformations",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-fable-5-1",
+        "content": [{"type": "text", "text": "4"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 1},
+        **extra,
+    }
+
+
+def _transform_parsed(completion_response):
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=ModelResponse(),
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_transformations",
+    [
+        [{"type": "thinking_dropped", "path": "messages.1.content.0", "reason": "prefix_binding_mismatch"}],
+        [],
+    ],
+)
+def test_transform_parsed_response_keeps_input_transformations(input_transformations):
+    """``input_transformations`` (thinking-binding beta) must reach the logged
+    response verbatim; ``[]`` is kept because it proves the header reached the
+    provider and nothing was dropped."""
+    result = _transform_parsed(_input_transformations_response(input_transformations=input_transformations))
+
+    assert result.choices[0].message.provider_specific_fields["input_transformations"] == input_transformations
+
+
+def test_transform_parsed_response_omits_input_transformations_when_absent():
+    result = _transform_parsed(_input_transformations_response())
+
+    assert "input_transformations" not in result.choices[0].message.provider_specific_fields
