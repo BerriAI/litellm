@@ -1,4 +1,3 @@
-use pyo3::exceptions::PyBaseException;
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -55,43 +54,4 @@ pub(super) fn is_internal_call(py: Python<'_>) -> PyResult<bool> {
         .getattr("is_internal_call")?
         .call_method0("get")?
         .extract()
-}
-
-pub(super) struct DeploymentHooks;
-
-impl DeploymentHooks {
-    pub(super) fn before_call(
-        py: Python<'_>,
-        kwargs: &Py<PyDict>,
-        call_type: &str,
-    ) -> PyResult<Py<PyAny>> {
-        py.import("litellm.utils")?
-            .getattr("async_pre_call_deployment_hook")?
-            .call1((kwargs, call_type))
-            .map(Bound::unbind)
-    }
-
-    pub(super) fn after_success(
-        py: Python<'_>,
-        kwargs: &Py<PyDict>,
-        response: &Option<Py<PyAny>>,
-        call_type: &str,
-    ) -> PyResult<Py<PyAny>> {
-        py.import("litellm.utils")?
-            .getattr("async_post_call_success_deployment_hook")?
-            .call1((kwargs, response, call_type))
-            .map(Bound::unbind)
-    }
-
-    pub(super) fn after_failure(
-        py: Python<'_>,
-        kwargs: &Py<PyDict>,
-        error: &Py<PyBaseException>,
-        call_type: &str,
-    ) -> PyResult<Py<PyAny>> {
-        py.import("litellm.utils")?
-            .getattr("async_post_call_failure_deployment_hook")?
-            .call1((kwargs, error, call_type))
-            .map(Bound::unbind)
-    }
 }

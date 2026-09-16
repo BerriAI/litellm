@@ -506,12 +506,42 @@ def legacy_orchestration_disabled(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     for name in FORBIDDEN_ORCHESTRATION:
         monkeypatch.setattr(Logging, name, forbid(name))
 
-    def forbidden_setup(*args, **kwargs):
-        reached.append("function_setup")
-        raise AssertionError("legacy orchestration reached: function_setup")
+    def forbid_utils(name: str):
+        async def hook(*args, **kwargs):
+            reached.append(name)
+            raise AssertionError(f"legacy orchestration reached: {name}")
 
-    monkeypatch.setattr(utils, "function_setup", forbidden_setup)
+        def setup(*args, **kwargs):
+            reached.append(name)
+            raise AssertionError(f"legacy orchestration reached: {name}")
+
+        return setup if name == "function_setup" else hook
+
+    for name in (
+        "function_setup",
+        "async_pre_call_deployment_hook",
+        "async_post_call_success_deployment_hook",
+        "async_post_call_failure_deployment_hook",
+    ):
+        monkeypatch.setattr(utils, name, forbid_utils(name))
     return reached
+
+
+class DeploymentRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.hooks: list[str] = []
+
+    async def async_pre_call_deployment_hook(self, kwargs, call_type):
+        self.hooks.append(f"pre:{call_type.value}")
+        return {**kwargs, "metadata": {**(kwargs.get("metadata") or {}), "deployment": "seen"}}
+
+    async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+        self.hooks.append(f"post:{request_data['metadata']['deployment']}")
+        return response
+
+    async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
+        self.hooks.append(f"failure:{type(exception).__name__}:{fallback_depth}")
 
 
 @pytest.mark.asyncio
@@ -520,6 +550,8 @@ async def test_native_ocr_success_runs_integrations_without_legacy_orchestration
     ocr_server: RecordingServer, legacy_orchestration_disabled: list[str], asynchronous: bool
 ) -> None:
     recorder: Final = RecordingLogger()
+    deployment: Final = DeploymentRecorder()
+    litellm.callbacks.append(deployment)
     arguments: Final = {"callbacks": [recorder]}
     response: Final = (
         await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
@@ -528,6 +560,7 @@ async def test_native_ocr_success_runs_integrations_without_legacy_orchestration
     success_event: Final = "async_log_success_event" if asynchronous else "log_success_event"
     events: Final = await recorder.wait_for_async(success_event)
     assert legacy_orchestration_disabled == []
+    assert deployment.hooks == (["pre:aocr", "post:seen"] if asynchronous else [])
     assert recorder.names.count("log_pre_api_call") == 1
     assert events[0].kwargs["standard_logging_object"]["status"] == "success"
     assert events[0].kwargs["response_cost"] is not None
@@ -541,10 +574,13 @@ async def test_native_ocr_failure_runs_integrations_without_legacy_orchestration
 ) -> None:
     ocr_server.enqueue(ResponseSpec(body={"message": "provider unavailable"}, status=500))
     recorder: Final = RecordingLogger()
+    deployment: Final = DeploymentRecorder()
+    litellm.callbacks.append(deployment)
     arguments: Final = {"callbacks": [recorder]}
     with pytest.raises(litellm.InternalServerError) as caught:
         await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
     assert legacy_orchestration_disabled == []
+    assert deployment.hooks == (["pre:aocr", "failure:InternalServerError:None"] if asynchronous else [])
     failures: Final = tuple(event for event in recorder.events if event.name.endswith("log_failure_event"))
     assert [event.name for event in failures] == (
         ["log_failure_event", "async_log_failure_event"] if asynchronous else ["log_failure_event"]

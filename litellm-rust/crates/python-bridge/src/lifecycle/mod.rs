@@ -26,7 +26,6 @@ mod setup;
 
 use crate::execution::{poll_async_value, run_async_value, run_sync_value};
 pub(crate) use arguments::{BoundArguments, Signature};
-use bindings::DeploymentHooks;
 pub(crate) use bindings::PythonLogger;
 use handle::{Execution, ExecutionBody, ExecutionStep};
 
@@ -324,30 +323,34 @@ impl PythonCallState {
         match phase {
             HostPhase::Setup => self.setup(py)?,
             HostPhase::DeploymentPreCall => {
-                return Ok(HostStep::Suspend(DeploymentHooks::before_call(
+                let copied = self.kwargs.bind(py).copy()?.into_any().unbind();
+                return Ok(HostStep::Suspend(self.deployment(
                     py,
-                    &self.kwargs,
-                    self.call_type,
+                    CallbackFamily::DeploymentPreCall,
+                    copied,
                 )?));
             }
             HostPhase::Prepare => self.prepare(py)?,
             HostPhase::DeploymentPostCall => {
-                return Ok(HostStep::Suspend(DeploymentHooks::after_success(
+                let response = self
+                    .response
+                    .as_ref()
+                    .map(|value| value.clone_ref(py))
+                    .unwrap_or_else(|| py.None());
+                return Ok(HostStep::Suspend(self.deployment(
                     py,
-                    &self.kwargs,
-                    &self.response,
-                    self.call_type,
+                    CallbackFamily::DeploymentPostCall,
+                    response,
                 )?));
             }
             HostPhase::Finalize => self.finalize(py)?,
             HostPhase::Success => self.dispatch_success(py)?,
             HostPhase::DeploymentFailure => {
-                if let Some(error) = &self.error {
-                    return Ok(HostStep::Suspend(DeploymentHooks::after_failure(
+                if self.error.is_some() {
+                    return Ok(HostStep::Suspend(self.deployment(
                         py,
-                        &self.kwargs,
-                        error,
-                        self.call_type,
+                        CallbackFamily::DeploymentFailure,
+                        py.None(),
                     )?));
                 }
             }
@@ -364,6 +367,24 @@ impl PythonCallState {
             | HostPhase::Complete => return Err(missing_state()),
         }
         Ok(HostStep::Ready(py.None()))
+    }
+
+    fn deployment(
+        &self,
+        py: Python<'_>,
+        family: CallbackFamily,
+        current: Py<PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        let body = dispatch::DeploymentBody::start(
+            py,
+            self.logger()?,
+            family,
+            self.call_type,
+            &self.kwargs,
+            current,
+            self.error.as_ref(),
+        )?;
+        dispatch::deployment_coroutine(py, body)
     }
 
     fn accept(&mut self, py: Python<'_>, phase: HostPhase, value: Py<PyAny>) -> PyResult<()> {

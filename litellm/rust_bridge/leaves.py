@@ -31,15 +31,15 @@ from litellm.integrations.custom_logger import CustomLogger
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import StandardCallbackDynamicParams
 
 TerminalFamily: TypeAlias = Literal["sync_success", "async_success", "sync_failure", "async_failure"]
-Family: TypeAlias = Literal["request", TerminalFamily]
+Family: TypeAlias = Literal["request", "deployment", TerminalFamily]
 Details: TypeAlias = dict[
     str, object
 ]  # mutable-ok: model_call_details is the shared mutable envelope callbacks write to
 Timestamp: TypeAlias = datetime.datetime
 LegacyCall: TypeAlias = Callable[..., object]
-LegacyAsyncCall: TypeAlias = Callable[..., Awaitable[None]]
 
 
 class LoggerView(Protocol):
@@ -51,7 +51,7 @@ class LoggerView(Protocol):
     completion_start_time: Timestamp | None
     model_call_details: Details
     log_raw_request_response: bool
-    standard_callback_dynamic_params: object
+    standard_callback_dynamic_params: StandardCallbackDynamicParams
     standard_built_in_tools_params: object
 
     def record_api_call_start_time(self) -> None: ...
@@ -176,26 +176,16 @@ def _integration(callback: CustomLogger) -> IntegrationView:
     return cast(IntegrationView, callback)  # cast-ok: legacy CustomLogger methods are untyped
 
 
-def _legacy_module() -> Mapping[str, object]:
+def _singleton(name: str) -> object:
     from litellm.litellm_core_utils import litellm_logging
 
-    return cast(  # cast-ok: module globals hold the legacy integration singletons
-        Mapping[str, object], vars(litellm_logging)
-    )
+    return getattr(litellm_logging, name, None)  # pyright: ignore[reportAny]  # legacy module globals are rebound at runtime
 
 
 def _print_verbose() -> LegacyCall:
     from litellm.litellm_core_utils import litellm_logging
 
     return cast(LegacyCall, litellm_logging.print_verbose)  # cast-ok: legacy debug printer is untyped
-
-
-def _method(target: object, name: str) -> LegacyCall:
-    return _call_of(_attribute(target, name))
-
-
-def _async_method(target: object, name: str) -> LegacyAsyncCall:
-    return cast(LegacyAsyncCall, _attribute(target, name))  # cast-ok: legacy integration singletons are untyped
 
 
 def _redact_string(value: str) -> str:
@@ -303,25 +293,27 @@ def log_post_api_call(logger: Logging, callback: CustomLogger) -> None:
 
 
 def dispatch_named_request(logger: Logging, name: str, event: Literal["pre_api_call", "post_api_call"]) -> None:
+    from litellm.integrations.supabase import Supabase
+
     view: Final = _logger(logger)
-    module: Final = _legacy_module()
-    if name == "supabase" and event == "pre_api_call" and (client := module.get("supabaseClient")) is not None:
-        details: Final = view.model_call_details
-        _method(client, "input_log_event")(
-            model=view.model,
-            messages=view.messages,
-            end_user=details.get("user", "default"),
-            litellm_call_id=details["litellm_call_id"],
-            print_verbose=_print_verbose(),
-        )
-    if name == "sentry" and (add_breadcrumb := module.get("add_breadcrumb")) is not None:
-        cast(LegacyCall, add_breadcrumb)(  # cast-ok: legacy sentry hook
-            category="litellm.llm_call", message=f"Model Call Details {event}: {view.model_call_details}", level="info"
-        )
+    details: Final = view.model_call_details
+    match name:
+        case "supabase" if event == "pre_api_call" and isinstance(client := _singleton("supabaseClient"), Supabase):
+            client.input_log_event(
+                model=view.model,
+                messages=view.messages,
+                end_user=details.get("user", "default"),
+                litellm_call_id=details["litellm_call_id"],
+                print_verbose=_print_verbose(),
+            )
+        case "sentry" if callable(add_breadcrumb := _singleton("add_breadcrumb")):
+            add_breadcrumb(category="litellm.llm_call", message=f"Model Call Details {event}: {details}", level="info")
+        case _:
+            return
 
 
 def dispatch_callable_request(logger: Logging, callback: LegacyCall) -> None:
-    custom: Final = _legacy_module().get("customLogger")
+    custom: Final = _singleton("customLogger")
     if not isinstance(custom, CustomLogger):
         return
     view: Final = _logger(logger)
@@ -334,6 +326,66 @@ def dispatch_callable_request(logger: Logging, callback: LegacyCall) -> None:
     )
 
 
+def _typed_call_type(call_type: str) -> object:
+    from litellm.types.utils import CallTypes
+
+    try:
+        return CallTypes(call_type)
+    except ValueError:
+        return None
+
+
+def _awaitable(value: object) -> Awaitable[object]:
+    return cast(Awaitable[object], value)  # cast-ok: legacy async hooks return coroutines
+
+
+def pre_call_deployment_hook(callback: CustomLogger, kwargs: Details, call_type: str) -> Awaitable[object]:
+    hook: Final = _call_of(_attribute(callback, "async_pre_call_deployment_hook"))
+    return _awaitable(hook(kwargs, _typed_call_type(call_type)))
+
+
+def post_call_success_deployment_hook(
+    callback: CustomLogger, kwargs: Details, response: object, call_type: str
+) -> Awaitable[object]:
+    hook: Final = _call_of(_attribute(callback, "async_post_call_success_deployment_hook"))
+    return _awaitable(hook(kwargs, response, _typed_call_type(call_type)))
+
+
+def failure_deployment_hook_view(
+    kwargs: Details, exception: BaseException
+) -> tuple[Mapping[str, object], BaseException, int | None]:
+    from litellm import utils
+
+    raw_depth: Final = kwargs.get("fallback_depth")
+    depth: Final = raw_depth if isinstance(raw_depth, int) else None
+    safe_request: Final = MappingProxyType({key: value for key, value in kwargs.items() if key != "attempted_targets"})
+    snapshot: Final = _call_of(utils._snapshot_exception_for_hook)(exception)  # pyright: ignore[reportPrivateUsage]  # legacy snapshot helper
+    return safe_request, cast(BaseException, snapshot), depth  # cast-ok: snapshot is a same-class copy of the exception
+
+
+def post_call_failure_deployment_hook(
+    callback: CustomLogger,
+    request: Mapping[str, object],
+    exception: BaseException,
+    call_type: str,
+    fallback_depth: int | None,
+) -> Awaitable[object]:
+    from litellm import utils
+
+    hook: Final = _call_of(_attribute(callback, "async_post_call_failure_deployment_hook"))
+    accepts_depth: Final = _call_of(utils._accepts_fallback_depth_kwarg_for_class)(type(callback))  # pyright: ignore[reportPrivateUsage]  # legacy signature probe
+    typed: Final = _typed_call_type(call_type)
+    if accepts_depth:
+        return _awaitable(hook(request, exception, typed, fallback_depth=fallback_depth))
+    return _awaitable(hook(request, exception, typed))
+
+
+def report_deployment_failure_hook_error(callback: object, error: BaseException) -> None:
+    from litellm._logging import verbose_logger
+
+    verbose_logger.debug("async_post_call_failure_deployment_hook error in %s: %s", type(callback).__name__, error)
+
+
 def report_target_failure(logger: Logging, callback: object, family: Family, error: BaseException) -> None:
     from litellm._logging import verbose_logger
 
@@ -343,10 +395,10 @@ def report_target_failure(logger: Logging, callback: object, family: Family, err
         callback,
         "".join(traceback.format_exception(error)),
     )
-    capture: Final = _legacy_module().get("capture_exception")
-    if capture is not None and family in ("request", "sync_success", "sync_failure"):
-        cast(LegacyCall, capture)(error)  # cast-ok: legacy sentry hook
-    if family not in ("request", "sync_failure"):
+    capture: Final = _singleton("capture_exception")
+    if callable(capture) and family in ("request", "sync_success", "sync_failure"):
+        capture(error)
+    if family not in ("request", "deployment", "sync_failure"):
         _logger(logger)._handle_callback_failure(callback=callback)  # pyright: ignore[reportPrivateUsage]  # legacy prometheus counter
 
 
@@ -524,7 +576,7 @@ def async_log_failure_event(
 def _custom_logger_singleton() -> IntegrationView:
     from litellm.litellm_core_utils import litellm_logging
 
-    existing: Final = _legacy_module().get("customLogger")
+    existing: Final = _singleton("customLogger")
     if isinstance(existing, CustomLogger):
         return _integration(existing)
     created: Final = CustomLogger()
@@ -564,63 +616,71 @@ def dispatch_callable(
             )
 
 
-_SUCCESS_SINGLETONS: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        "promptlayer": "promptLayerLogger",
-        "supabase": "supabaseClient",
-        "wandb": "weightsBiasesLogger",
-        "logfire": "logfireLogger",
-        "lunary": "lunaryLogger",
-        "helicone": "heliconeLogger",
-        "greenscale": "greenscaleLogger",
-        "athina": "athinaLogger",
-        "traceloop": "traceloopLogger",
-        "s3": "s3Logger",
-        "openmeter": "openMeterLogger",
-    }
-)
-
-
 def dispatch_named_success(
     logger: Logging, name: str, response: object, start_time: Timestamp, end_time: Timestamp
 ) -> Awaitable[None] | None:
+    from litellm.integrations.athina import AthinaLogger
+    from litellm.integrations.greenscale import GreenscaleLogger
+    from litellm.integrations.helicone import HeliconeLogger
+    from litellm.integrations.logfire_logger import LogfireLevel, LogfireLogger
+    from litellm.integrations.lunary import LunaryLogger
+    from litellm.integrations.openmeter import OpenMeterLogger
+    from litellm.integrations.prompt_layer import PromptLayerLogger
+    from litellm.integrations.s3 import S3Logger
+    from litellm.integrations.supabase import Supabase
+    from litellm.integrations.traceloop import TraceloopLogger
+    from litellm.integrations.weights_biases import WeightsBiasesLogger
+
     view: Final = _logger(logger)
     details: Final = view.model_call_details
     print_verbose: Final = _print_verbose()
-    integration: Final = _legacy_module().get(_SUCCESS_SINGLETONS.get(name, ""))
     without_response: Final = {  # mutable-ok: legacy integrations receive a private mutable copy
         key: value for key, value in details.items() if key != "original_response"
     }
     match name:
-        case "promptlayer" | "wandb" | "athina" if integration is not None:
-            _method(integration, "log_event")(
+        case "promptlayer" if isinstance(promptlayer := _singleton("promptLayerLogger"), PromptLayerLogger):
+            promptlayer.log_event(
                 kwargs=details,
                 response_obj=response,
                 start_time=start_time,
                 end_time=end_time,
                 print_verbose=print_verbose,
             )
-        case "logfire" if integration is not None:
-            from litellm.integrations.logfire_logger import LogfireLevel
-
-            _method(integration, "log_event")(
-                kwargs=without_response,
-                response_obj=response,
-                start_time=start_time,
-                end_time=end_time,
-                print_verbose=print_verbose,
-                level=LogfireLevel.INFO.value,
-            )
-        case "greenscale" if integration is not None:
-            _method(integration, "log_event")(
-                kwargs=without_response,
+        case "wandb" if isinstance(wandb := _singleton("weightsBiasesLogger"), WeightsBiasesLogger):
+            wandb.log_event(
+                kwargs=details,
                 response_obj=response,
                 start_time=start_time,
                 end_time=end_time,
                 print_verbose=print_verbose,
             )
-        case "supabase" if integration is not None:
-            _method(integration, "log_event")(
+        case "athina" if isinstance(athina := _singleton("athinaLogger"), AthinaLogger):
+            athina.log_event(
+                kwargs=details,
+                response_obj=response,
+                start_time=start_time,
+                end_time=end_time,
+                print_verbose=print_verbose,
+            )
+        case "logfire" if isinstance(logfire := _singleton("logfireLogger"), LogfireLogger):
+            logfire.log_event(
+                kwargs=without_response,
+                response_obj=response,
+                start_time=start_time,
+                end_time=end_time,
+                print_verbose=print_verbose,
+                level=LogfireLevel.INFO,
+            )
+        case "greenscale" if isinstance(greenscale := _singleton("greenscaleLogger"), GreenscaleLogger):
+            greenscale.log_event(
+                kwargs=without_response,
+                response_obj=response,
+                start_time=start_time,
+                end_time=end_time,
+                print_verbose=print_verbose,
+            )
+        case "supabase" if isinstance(supabase := _singleton("supabaseClient"), Supabase):
+            supabase.log_event(
                 model=view.model,
                 messages=view.messages,
                 end_user=details.get("user", "default"),
@@ -630,8 +690,8 @@ def dispatch_named_success(
                 litellm_call_id=details["litellm_call_id"],
                 print_verbose=print_verbose,
             )
-        case "lunary" if integration is not None:
-            _method(integration, "log_event")(
+        case "lunary" if isinstance(lunary := _singleton("lunaryLogger"), LunaryLogger):
+            lunary.log_event(
                 kwargs=details,
                 type="llm",
                 event="end",
@@ -644,8 +704,8 @@ def dispatch_named_success(
                 run_id=view.litellm_call_id,
                 print_verbose=print_verbose,
             )
-        case "helicone" if integration is not None:
-            _method(integration, "log_success")(
+        case "helicone" if isinstance(helicone := _singleton("heliconeLogger"), HeliconeLogger):
+            helicone.log_success(
                 model=view.model,
                 messages=view.messages,
                 response_obj=response,
@@ -658,8 +718,8 @@ def dispatch_named_success(
             _langfuse(
                 logger, response=response, start_time=start_time, end_time=end_time, level=None, status_message=None
             )
-        case "traceloop" if integration is not None:
-            _method(integration, "log_event")(
+        case "traceloop" if isinstance(traceloop := _singleton("traceloopLogger"), TraceloopLogger):
+            traceloop.log_event(
                 kwargs=details,
                 response_obj=response,
                 start_time=start_time,
@@ -667,16 +727,16 @@ def dispatch_named_success(
                 user_id=details.get("user", None),
                 print_verbose=print_verbose,
             )
-        case "s3" if integration is not None:
-            _method(integration, "log_event")(
+        case "s3" if isinstance(s3 := _singleton("s3Logger"), S3Logger):
+            s3.log_event(
                 kwargs=details,
                 response_obj=response,
                 start_time=start_time,
                 end_time=end_time,
                 print_verbose=print_verbose,
             )
-        case "openmeter" if integration is not None:
-            return _async_method(integration, "async_log_success_event")(
+        case "openmeter" if isinstance(openmeter := _singleton("openMeterLogger"), OpenMeterLogger):
+            return openmeter.async_log_success_event(
                 kwargs=details, response_obj=response, start_time=start_time, end_time=end_time
             )
         case "dynamodb":
@@ -692,10 +752,10 @@ def _dynamodb(
     from litellm.integrations.dynamodb import DyanmoDBLogger
     from litellm.litellm_core_utils import litellm_logging
 
-    existing: Final = _legacy_module().get("dynamoLogger")
+    existing: Final = _singleton("dynamoLogger")
     dynamo: Final = existing if isinstance(existing, DyanmoDBLogger) else DyanmoDBLogger()
     litellm_logging.dynamoLogger = dynamo  # pyright: ignore[reportAttributeAccessIssue]  # legacy module global
-    return _async_method(dynamo, "_async_log_event")(
+    return dynamo._async_log_event(  # pyright: ignore[reportPrivateUsage]  # legacy async entry point
         kwargs=details, response_obj=response, start_time=start_time, end_time=end_time, print_verbose=print_verbose
     )
 
@@ -709,39 +769,36 @@ def _langfuse(
     level: str | None,
     status_message: str | None,
 ) -> None:
-    from litellm.integrations.langfuse import langfuse_handler
+    from litellm.integrations.langfuse.langfuse import LangFuseLogger
+    from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.types.utils import ModelResponse
 
     view: Final = _logger(logger)
-    module: Final = _legacy_module()
     kwargs: Final = {  # mutable-ok: langfuse receives a private mutable copy
         key: value for key, value in view.model_call_details.items() if key != "original_response"
     }
-    select: Final = cast(  # cast-ok: legacy factory
-        LegacyCall, langfuse_handler.LangFuseHandler.get_langfuse_logger_for_request
-    )
-    handler: Final = select(
-        globalLangfuseLogger=module.get("langFuseLogger"),
+    global_logger: Final = _singleton("langFuseLogger")
+    handler: Final = LangFuseHandler.get_langfuse_logger_for_request(
+        globalLangfuseLogger=global_logger if isinstance(global_logger, LangFuseLogger) else None,
         standard_callback_dynamic_params=view.standard_callback_dynamic_params,
-        in_memory_dynamic_logger_cache=module["in_memory_dynamic_logger_cache"],
+        in_memory_dynamic_logger_cache=litellm_logging.in_memory_dynamic_logger_cache,
     )
-    if handler is None:
-        return
-    extra: Final[Mapping[str, object]] = (
-        MappingProxyType({"level": level, "status_message": status_message}) if level is not None else _EMPTY
-    )
-    result: Final = _method(handler, "log_event_on_langfuse")(
+    user: Final = kwargs.get("user")
+    result: Final = handler.log_event_on_langfuse(
         kwargs=kwargs,
-        response_obj=response,
+        response_obj=cast(
+            ModelResponse, response
+        ),  # cast-ok: OCR responses sit outside the legacy union langfuse names
         start_time=start_time,
         end_time=end_time,
-        user_id=kwargs.get("user", None),
-        **extra,
+        user_id=user if isinstance(user, str) else None,
+        level="DEFAULT" if level is None else level,
+        status_message=status_message,
     )
-    trace_id: Final = (
-        cast(Details, result).get("trace_id") if isinstance(result, dict) else None  # cast-ok: legacy response dict
-    )  # cast-ok: legacy response dict
-    if trace_id is not None:
-        _method(module["in_memory_trace_id_cache"], "set_cache")(
+    trace_id: Final = result.get("trace_id")
+    if isinstance(trace_id, str):
+        litellm_logging.in_memory_trace_id_cache.set_cache(
             litellm_call_id=view.litellm_call_id, service_name="langfuse", trace_id=trace_id
         )
 
@@ -754,16 +811,17 @@ def dispatch_named_failure(
     start_time: Timestamp,
     end_time: Timestamp,
 ) -> None:
+    from litellm.integrations.logfire_logger import LogfireLevel, LogfireLogger
+    from litellm.integrations.lunary import LunaryLogger
+    from litellm.integrations.supabase import Supabase
+    from litellm.integrations.traceloop import TraceloopLogger
+
     view: Final = _logger(logger)
-    module: Final = _legacy_module()
     details: Final = view.model_call_details
     print_verbose: Final = _print_verbose()
-    without_response: Final = MappingProxyType(
-        {key: value for key, value in details.items() if key != "original_response"}
-    )
     match name:
-        case "lunary" if (lunary := module.get("lunaryLogger")) is not None:
-            _method(lunary, "log_event")(
+        case "lunary" if isinstance(lunary := _singleton("lunaryLogger"), LunaryLogger):
+            lunary.log_event(
                 kwargs=details,
                 type="llm",
                 event="error",
@@ -776,10 +834,10 @@ def dispatch_named_failure(
                 end_time=end_time,
                 print_verbose=print_verbose,
             )
-        case "sentry" if (capture := module.get("capture_exception")) is not None:
-            cast(LegacyCall, capture)(exception)  # cast-ok: legacy sentry hook
-        case "supabase" if (supabase := module.get("supabaseClient")) is not None:
-            _method(supabase, "log_event")(
+        case "sentry" if callable(capture := _singleton("capture_exception")):
+            capture(exception)
+        case "supabase" if isinstance(supabase := _singleton("supabaseClient"), Supabase):
+            supabase.log_event(
                 model=view.model,
                 messages=view.messages,
                 end_user=details.get("user", "default"),
@@ -798,8 +856,8 @@ def dispatch_named_failure(
                 level="ERROR",
                 status_message=str(exception),
             )
-        case "traceloop" if (traceloop := module.get("traceloopLogger")) is not None:
-            _method(traceloop, "log_event")(
+        case "traceloop" if isinstance(traceloop := _singleton("traceloopLogger"), TraceloopLogger):
+            traceloop.log_event(
                 start_time=start_time,
                 end_time=end_time,
                 response_obj=None,
@@ -809,18 +867,16 @@ def dispatch_named_failure(
                 level="ERROR",
                 kwargs=details,
             )
-        case "logfire" if (logfire := module.get("logfireLogger")) is not None:
-            from litellm.integrations.logfire_logger import LogfireLevel
-
-            _method(logfire, "log_event")(
+        case "logfire" if isinstance(logfire := _singleton("logfireLogger"), LogfireLogger):
+            logfire.log_event(
                 kwargs={  # mutable-ok: logfire receives a private mutable copy
-                    **without_response,
-                    "exception": exception,
-                },
+                    key: value for key, value in details.items() if key != "original_response"
+                }
+                | {"exception": exception},
                 response_obj=None,
                 start_time=start_time,
                 end_time=end_time,
-                level=LogfireLevel.ERROR.value,
+                level=LogfireLevel.ERROR,
                 print_verbose=print_verbose,
             )
         case _:

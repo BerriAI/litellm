@@ -340,7 +340,6 @@ impl Runner {
         let logger = self.job.logger.object(py);
         let target = self.job.targets.object(py, invocation.target);
         let kind = self.job.targets.kind(invocation.target);
-        let awaits = matches!(invocation.delivery, Delivery::Await | Delivery::Background);
         let value = match (invocation.method, kind) {
             (CallbackMethod::LoggingHook, CallbackKind::CustomLogger) => {
                 let replaced =
@@ -402,10 +401,19 @@ impl Runner {
             ))?,
             _ => return Ok(None),
         };
-        if awaits && !value.is_none() {
-            return Ok(Some(value.unbind()));
+        match invocation.delivery {
+            Delivery::Inline | Delivery::Worker => Ok(None),
+            Delivery::Await | Delivery::Background if value.is_none() => Ok(None),
+            Delivery::Await | Delivery::Background if value.hasattr("__await__")? => {
+                Ok(Some(value.unbind()))
+            }
+            Delivery::Await | Delivery::Background => Err(PyRuntimeError::new_err(format!(
+                "{:?} leaf for {:?} returned a non-awaitable {}",
+                invocation.method,
+                self.job.family,
+                value.get_type().name()?
+            ))),
         }
-        Ok(None)
     }
 
     fn accept(
@@ -646,6 +654,188 @@ pub(super) fn family_targets(
         dynamic.is_some().then_some(dynamic_ids.unwrap_or(&[])),
     );
     Ok((targets, ordered))
+}
+
+pub(super) enum DeploymentEvent {
+    PreCall,
+    PostCall,
+    Failure {
+        request: Py<PyAny>,
+        exception: Py<PyBaseException>,
+        fallback_depth: Py<PyAny>,
+    },
+}
+
+pub(super) struct DeploymentBody {
+    logger: PythonLogger,
+    targets: Targets,
+    cursor: DispatchCursor,
+    event: DeploymentEvent,
+    call_type: &'static str,
+    current: Py<PyAny>,
+    kwargs: Py<pyo3::types::PyDict>,
+    pending: Option<CallbackId>,
+}
+
+impl DeploymentBody {
+    pub(super) fn start(
+        py: Python<'_>,
+        logger: &PythonLogger,
+        family: CallbackFamily,
+        call_type: &'static str,
+        kwargs: &Py<pyo3::types::PyDict>,
+        current: Py<PyAny>,
+        error: Option<&Py<PyBaseException>>,
+    ) -> PyResult<Self> {
+        let (targets, ids) = family_targets(py, logger, family)?;
+        let event = match family {
+            CallbackFamily::DeploymentPreCall => DeploymentEvent::PreCall,
+            CallbackFamily::DeploymentPostCall => DeploymentEvent::PostCall,
+            CallbackFamily::DeploymentFailure => {
+                let exception = error.ok_or_else(super::missing_state)?;
+                let view = leaves(py)?
+                    .getattr("failure_deployment_hook_view")?
+                    .call1((kwargs, exception))?;
+                let (request, snapshot, fallback_depth): (Py<PyAny>, Py<PyAny>, Py<PyAny>) =
+                    view.extract()?;
+                DeploymentEvent::Failure {
+                    request,
+                    exception: snapshot
+                        .into_bound(py)
+                        .cast_into::<PyBaseException>()?
+                        .unbind(),
+                    fallback_depth,
+                }
+            }
+            _ => return Err(super::missing_state()),
+        };
+        Ok(Self {
+            logger: logger.clone_ref(py),
+            targets,
+            cursor: DispatchCursor::start(family, ids, false, false),
+            event,
+            call_type,
+            current,
+            kwargs: kwargs.clone_ref(py),
+            pending: None,
+        })
+    }
+
+    fn invoke(&self, py: Python<'_>, target: CallbackId) -> PyResult<Py<PyAny>> {
+        let leaves = leaves(py)?;
+        let object = self.targets.object(py, target);
+        let awaitable = match &self.event {
+            DeploymentEvent::PreCall => leaves.getattr("pre_call_deployment_hook")?.call1((
+                object,
+                &self.current,
+                self.call_type,
+            ))?,
+            DeploymentEvent::PostCall => leaves
+                .getattr("post_call_success_deployment_hook")?
+                .call1((object, &self.kwargs, &self.current, self.call_type))?,
+            DeploymentEvent::Failure {
+                request,
+                exception,
+                fallback_depth,
+            } => leaves
+                .getattr("post_call_failure_deployment_hook")?
+                .call1((object, request, exception, self.call_type, fallback_depth))?,
+        };
+        Ok(awaitable.unbind())
+    }
+
+    fn accept(
+        &mut self,
+        py: Python<'_>,
+        target: CallbackId,
+        result: PyResult<Py<PyAny>>,
+    ) -> PyResult<()> {
+        match result {
+            Ok(value) => {
+                if !value.is_none(py) && !matches!(self.event, DeploymentEvent::Failure { .. }) {
+                    self.current = value;
+                }
+                self.cursor.accept(InvocationOutcome::Completed);
+                Ok(())
+            }
+            Err(error)
+                if matches!(self.event, DeploymentEvent::Failure { .. })
+                    && error.is_instance_of::<PyException>(py) =>
+            {
+                let object = self.targets.object(py, target);
+                leaves(py)?
+                    .getattr("report_deployment_failure_hook_error")?
+                    .call1((object, error.value(py)))?;
+                self.cursor.accept(InvocationOutcome::Failed);
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl super::handle::ExecutionBody for DeploymentBody {
+    fn resume(
+        &mut self,
+        result: Option<PyResult<Py<PyAny>>>,
+    ) -> PyResult<super::handle::ExecutionStep> {
+        Python::attach(|py| {
+            if let Some(result) = result {
+                let target = self.pending.take().ok_or_else(super::missing_state)?;
+                self.accept(py, target, result)?;
+            }
+            let mut facts = DeploymentEligibility(&self.targets);
+            loop {
+                match self.cursor.next(&mut facts) {
+                    DispatchStep::Invoke(invocation) => {
+                        let awaitable = self.invoke(py, invocation.target)?;
+                        self.pending = Some(invocation.target);
+                        return Ok(super::handle::ExecutionStep::Await(awaitable));
+                    }
+                    DispatchStep::Complete { .. } => {
+                        return Ok(super::handle::ExecutionStep::Return(
+                            self.current.clone_ref(py),
+                        ));
+                    }
+                    DispatchStep::PrepareLogging | DispatchStep::MarkLogged(_) => {}
+                }
+            }
+        })
+    }
+
+    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        self.logger.traverse(visit)?;
+        self.targets.traverse(visit)?;
+        visit.call(&self.current)?;
+        visit.call(&self.kwargs)?;
+        if let DeploymentEvent::Failure {
+            request,
+            exception,
+            fallback_depth,
+        } = &self.event
+        {
+            visit.call(request)?;
+            visit.call(exception)?;
+            visit.call(fallback_depth)?;
+        }
+        Ok(())
+    }
+}
+
+struct DeploymentEligibility<'a>(&'a Targets);
+
+impl DispatchFacts for DeploymentEligibility<'_> {
+    fn eligible(&mut self, target: CallbackId, _: CallbackMethod) -> bool {
+        self.0.kind(target) == CallbackKind::CustomLogger
+    }
+}
+
+pub(super) fn deployment_coroutine(py: Python<'_>, body: DeploymentBody) -> PyResult<Py<PyAny>> {
+    let execution = Py::new(py, super::handle::Execution::new(body))?;
+    py.import("litellm.rust_bridge.lifecycle")?
+        .getattr("drive")?
+        .call1((execution,))
+        .map(Bound::unbind)
 }
 
 #[cfg(test)]
