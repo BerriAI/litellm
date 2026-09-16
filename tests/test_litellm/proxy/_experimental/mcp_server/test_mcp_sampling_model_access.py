@@ -138,6 +138,24 @@ class TestCheckModelAccess:
         assert "claude-3-opus-20240229" in result.message
 
     @pytest.mark.asyncio
+    async def test_should_log_internal_denial_reason_when_client_message_is_configured(self, monkeypatch, caplog):
+        import litellm
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        monkeypatch.setattr(litellm, "model_access_denied_message", "The model `{model}` is unavailable for this API key.")
+        auth = UserAPIKeyAuth(api_key="sk-test-key", models=["gpt-3.5-turbo"])
+
+        with caplog.at_level("WARNING", logger="LiteLLM"):
+            result = await _check_model_access("gpt-4o\r\nforged", user_api_key_auth=auth)
+
+        assert result is not None
+        assert "gpt-4o\r\nforged" in result.message
+        assert "gpt-3.5-turbo" not in result.message
+        denial_records = [r for r in caplog.records if "gpt-3.5-turbo" in r.getMessage()]
+        assert len(denial_records) == 1
+        assert "Tried to access gpt-4oforged" in denial_records[0].getMessage()
+
+    @pytest.mark.asyncio
     async def test_should_deny_empty_oauth_passthrough_placeholder(self):
         """Regression: process_mcp_request() returns an empty UserAPIKeyAuth()
         for OAuth2 upstream-token passthrough.  The None check alone is not

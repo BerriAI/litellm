@@ -4042,6 +4042,9 @@ class ModelAccessDeniedProxyException(ProxyException):
         super().__init__(message=message, type=type, param=param, code=code)
         self.internal_message: Final = internal_message
 
+    def sanitized_internal_message(self) -> str:
+        return self.internal_message.replace("\r", "").replace("\n", "")
+
 
 class CommonProxyErrors(str, enum.Enum):
     db_not_connected_error = (
