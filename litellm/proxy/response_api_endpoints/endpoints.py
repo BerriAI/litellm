@@ -245,6 +245,12 @@ async def responses_api(
 
     data = await _read_request_body(request=request)
 
+    if data.get("background") is True:
+        from litellm.proxy.memory.gateway import gateway_memory_store
+
+        if await gateway_memory_store(user_api_key_dict) is not None:
+            raise HTTPException(status_code=400, detail="Gateway memory requires a foreground response")
+
     # Check if polling via cache should be used for this request
     from litellm.proxy.response_polling.polling_handler import (
         should_use_polling_for_request,

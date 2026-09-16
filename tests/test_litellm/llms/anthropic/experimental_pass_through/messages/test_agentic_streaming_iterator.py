@@ -4,11 +4,10 @@ Tests for AgenticAnthropicStreamingIterator and SSE rebuild helpers.
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Final, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
@@ -21,7 +20,6 @@ from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming
     _handle_message_start,
     _parse_sse_events,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers to build SSE byte payloads
@@ -455,6 +453,22 @@ class TestHandleMessageDelta:
 
 
 class TestRebuildAnthropicResponse:
+    @pytest.mark.parametrize("block", (
+        {"type": "text", "text": "Already present at block start"},
+        {"type": "thinking", "thinking": "Already signed", "signature": "provider-signature"},
+        {"type": "tool_use", "id": "call-1", "name": "Read", "input": {"path": "README.md"}},
+    ))
+    def test_preserves_content_supplied_at_block_start(self, block: Dict[str, object]) -> None:
+        frames: Final = [
+            _sse_event("message_start", {"type": "message_start", "message": {"id": "msg_initial", "content": [], "usage": {}}}),
+            _sse_event("content_block_start", {"type": "content_block_start", "index": 0, "content_block": block}),
+            _sse_event("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            _sse_event("message_stop", {"type": "message_stop"}),
+        ]
+        result: Final = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(frames)
+        assert result is not None
+        assert result["content"] == [block]
+
     def test_should_rebuild_simple_text_response(self):
         raw_bytes = _build_simple_text_stream()
         result = AgenticAnthropicStreamingIterator._rebuild_anthropic_response_from_sse(

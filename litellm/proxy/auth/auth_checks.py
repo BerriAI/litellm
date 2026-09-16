@@ -790,6 +790,19 @@ def _guardrail_modification_check(request_body: Mapping[str, object], team_objec
         )
 
 
+def effective_tool_allowlist(valid_token: UserAPIKeyAuth) -> frozenset[str] | None:
+    key_meta: Final = valid_token.metadata if isinstance(valid_token.metadata, dict) else MappingProxyType({})
+    team_meta: Final = (
+        valid_token.team_metadata if isinstance(valid_token.team_metadata, dict) else MappingProxyType({})
+    )
+    key_allowed: Final = key_meta.get("allowed_tools")
+    team_allowed: Final = team_meta.get("allowed_tools")
+    effective: Final = key_allowed if (isinstance(key_allowed, list) and len(key_allowed) > 0) else team_allowed
+    if not isinstance(effective, list) or len(effective) == 0:
+        return None
+    return frozenset(str(t) for t in effective)
+
+
 async def check_tools_allowlist(
     request_body: dict,
     valid_token: UserAPIKeyAuth | None,
@@ -813,14 +826,9 @@ async def check_tools_allowlist(
     tool_names: Final = extract_request_tool_names(route, request_body)
     if not tool_names:
         return
-    key_meta: Final = (valid_token.metadata or {}) if isinstance(valid_token.metadata, dict) else {}
-    team_meta: Final = (valid_token.team_metadata or {}) if isinstance(valid_token.team_metadata, dict) else {}
-    key_allowed: Final = key_meta.get("allowed_tools")
-    team_allowed: Final = team_meta.get("allowed_tools")
-    effective: Final = key_allowed if (isinstance(key_allowed, list) and len(key_allowed) > 0) else team_allowed
-    if not isinstance(effective, list) or len(effective) == 0:
+    allowed_set: Final = effective_tool_allowlist(valid_token)
+    if allowed_set is None:
         return
-    allowed_set: Final = {str(t) for t in effective}
     disallowed: Final = [n for n in tool_names if n not in allowed_set]
     if disallowed:
         raise ProxyException(

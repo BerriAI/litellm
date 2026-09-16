@@ -14,7 +14,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 
 import litellm
@@ -730,18 +730,18 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
 
     def __init__(
         self,
-        content: AsyncGenerator[str, None],
+        content: AsyncGenerator[str | bytes, None],
         *,
         media_type: str | None = None,
         headers: Mapping[str, str] | None = None,
         status_code: int = status.HTTP_200_OK,
-        upstream_generator: AsyncGenerator[str, None] | None = None,
+        upstream_generator: AsyncGenerator[str | bytes, None] | None = None,
     ) -> None:
         super().__init__(content, status_code=status_code, headers=headers, media_type=media_type)
         self._upstream_generator = upstream_generator
 
     @property
-    def upstream_generator(self) -> AsyncGenerator[str, None] | None:
+    def upstream_generator(self) -> AsyncGenerator[str | bytes, None] | None:
         """The upstream LLM stream, for a caller that has to run this response's cleanup itself."""
         return self._upstream_generator
 
@@ -1016,7 +1016,9 @@ _TTFT_KEEPALIVE_HEADERS: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def ttft_keepalive_interval(request_data: Mapping[str, object], llm_router: Router | None = None) -> float | None:
+def ttft_keepalive_interval(
+    request_data: Mapping[str, object], llm_router: Router | None = None, *, default_interval: float | None = None
+) -> float | None:
     """The operator's keepalive interval, but only for a request that asked to stream.
 
     Resolved through the deployments the request could land on, so a deployment's
@@ -1031,7 +1033,8 @@ def ttft_keepalive_interval(request_data: Mapping[str, object], llm_router: Rout
         if llm_router is not None and isinstance(requested_model, str)
         else ()
     )
-    return resolve_ttft_keepalive_interval(deployments, litellm.sse_keepalive_ping_interval_seconds)
+    configured: Final = litellm.sse_keepalive_ping_interval_seconds
+    return resolve_ttft_keepalive_interval(deployments, default_interval if configured is None else configured)
 
 
 async def _aclose_late_response(produced: Response) -> None:
@@ -2359,6 +2362,79 @@ class ProxyBaseLLMRequestProcessing:
                     "Ensure common_processing_pre_call_logic was called before using this parameter."
                 )
         else:
+            from litellm.proxy.memory.gateway import process_gateway_memory
+
+            async def memory_model_call(
+                inner_request: Request, body: dict[str, object], auth: UserAPIKeyAuth
+            ) -> Response:
+                from litellm.proxy.auth.user_api_key_auth import (
+                    _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # Reuse the authenticated admission and budget checks.
+                    _run_post_custom_auth_checks,  # pyright: ignore[reportPrivateUsage]  # Reuse expiry and model-budget checks on the already authenticated identity.
+                    _should_skip_budget_checks,  # pyright: ignore[reportPrivateUsage]  # Preserve free-model budget exemptions.
+                )
+
+                processor: Final = ProxyBaseLLMRequestProcessing(data=body)
+                headers: Final = Response()
+                try:
+                    from litellm.proxy.auth.auth_checks import (
+                        _virtual_key_max_budget_check,  # pyright: ignore[reportPrivateUsage]  # Reuse key-budget enforcement for every billed round.
+                    )
+
+                    await _run_post_custom_auth_checks(
+                        auth, inner_request, body, inner_request.url.path, auth.parent_otel_span
+                    )
+                    if not _should_skip_budget_checks(
+                        body, inner_request.url.path, inner_request, llm_router, auth.team_id
+                    ):
+                        await _virtual_key_max_budget_check(auth, proxy_logging_obj)
+                    await _run_centralized_common_checks(auth, inner_request, body, inner_request.url.path)
+                    result: Final = await processor._process_llm_request(
+                        request=inner_request,
+                        fastapi_response=headers,
+                        user_api_key_dict=auth,
+                        route_type=route_type,
+                        proxy_logging_obj=proxy_logging_obj,
+                        general_settings=general_settings,
+                        proxy_config=proxy_config,
+                        select_data_generator=select_data_generator,
+                        llm_router=llm_router,
+                        model=model,
+                        user_model=user_model,
+                        user_temperature=user_temperature,
+                        user_request_timeout=user_request_timeout,
+                        user_max_tokens=user_max_tokens,
+                        user_api_base=user_api_base,
+                        version=version,
+                        is_streaming_request=body.get("stream") is True,
+                        contents=contents,
+                    )
+                    if isinstance(result, Response):
+                        return result
+                    return JSONResponse(
+                        TypeAdapter(dict[str, object]).validate_python(
+                            result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+                        ),
+                        headers=headers.headers,
+                    )
+                except asyncio.CancelledError:
+                    from litellm.proxy.spend_tracking.budget_reservation import release_budget_reservation_on_cancel
+
+                    await release_budget_reservation_on_cancel(auth.budget_reservation)
+                    await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(auth)
+                    raise
+                except Exception as exc:
+                    replacement: Final = await proxy_logging_obj.post_call_failure_hook(
+                        user_api_key_dict=auth, original_exception=exc, request_data=processor.data
+                    )
+                    if replacement is not None:
+                        raise replacement
+                    raise
+
+            memory_response: Final = await process_gateway_memory(
+                self.data, request, user_api_key_dict, route_type, memory_model_call
+            )
+            if memory_response is not None:
+                return memory_response
             self.data, logging_obj = await self._pre_call_with_fallbacks(
                 request=request,
                 general_settings=general_settings,
@@ -2375,6 +2451,16 @@ class ProxyBaseLLMRequestProcessing:
                 route_type=route_type,
                 llm_router=llm_router,
             )
+
+        from litellm.proxy.memory.transport import begin_gateway_accounting, in_gateway_round
+
+        if in_gateway_round() and route_type in ("acompletion", "aresponses", "anthropic_messages"):
+            begin_gateway_accounting(logging_obj.litellm_call_id)
+            self.data["caching"] = False
+            self.data["cache"] = {  # mutable-ok: The existing inference pipeline consumes native cache controls.
+                "no-cache": True,
+                "no-store": True,
+            }
 
         # Defer async logging when post-call guardrails are configured so the
         # StandardLoggingPayload is built after guardrails write to metadata.

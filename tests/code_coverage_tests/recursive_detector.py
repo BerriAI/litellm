@@ -2,6 +2,8 @@ import ast
 import os
 
 IGNORE_FUNCTIONS = [
+    "_canonical",  # Memory transcript JSON walk raises at depth 64; excessive nesting is tested.
+    "combined_usage",  # Server tool usage JSON walk raises at depth 16; cycles and excessive nesting are tested.
     "_format_type",
     "_remove_additional_properties",
     "_remove_strict_from_schema",

@@ -1439,11 +1439,14 @@ model LiteLLM_ClaudeCodePluginTable {
 // participate in the unique constraint.
 model LiteLLM_MemoryTable {
   memory_id   String   @id @default(uuid())
+  namespace   String?
   key         String   @unique
   value       String
   metadata    Json?
   user_id     String?
   team_id     String?
+  organization_id String?
+  owner_key_id String?
   created_at  DateTime @default(now())
   created_by  String?
   updated_at  DateTime @default(now()) @updatedAt
@@ -1451,6 +1454,21 @@ model LiteLLM_MemoryTable {
 
   @@index([user_id])
   @@index([team_id])
+  @@index([namespace, updated_at])
+  @@index([organization_id, user_id, updated_at])
+  @@index([team_id, updated_at])
+  @@index([owner_key_id])
+}
+
+model LiteLLM_MemoryContinuation {
+  id         String   @id
+  namespace  String
+  key_id     String
+  payload    Json
+  expires_at DateTime
+
+  @@index([namespace, key_id, expires_at])
+  @@index([expires_at])
 }
 
 // Per-(router, request_type, model) Beta posterior for the adaptive router.

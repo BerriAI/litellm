@@ -4302,7 +4302,7 @@ class TestDisconnectGatherCleanup:
             await processing_obj.base_process_llm_request(
                 request=self._disconnect_request(),
                 fastapi_response=MagicMock(),
-                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                user_api_key_dict=ProxyUserAPIKeyAuth(),
                 proxy_logging_obj=mock_proxy_logging,
                 general_settings={"cancel_on_disconnect": True},
                 proxy_config=MagicMock(spec=ProxyConfig),
@@ -7844,18 +7844,23 @@ async def test_ttft_keepalive_cancels_the_in_flight_call_when_the_client_gives_u
 
 
 @pytest.mark.parametrize(
-    "request_data, global_interval, expected",
+    "request_data, global_interval, default_interval, expected",
     [
-        ({"stream": True}, 30.0, 30.0),
-        ({"stream": True}, None, None),
-        ({"stream": False}, 30.0, None),
-        ({}, 30.0, None),
-        ({"stream": "true"}, 30.0, None),
+        ({"stream": True}, 30.0, None, 30.0),
+        ({"stream": True}, None, None, None),
+        ({"stream": True}, None, 5.0, 5.0),
+        ({"stream": True}, 0, 5.0, None),
+        ({"stream": True}, 30.0, 5.0, 30.0),
+        ({"stream": False}, 30.0, 5.0, None),
+        ({}, 30.0, 5.0, None),
+        ({"stream": "true"}, 30.0, 5.0, None),
     ],
 )
-def test_ttft_keepalive_interval_only_arms_for_a_streaming_request(request_data, global_interval, expected):
+def test_ttft_keepalive_interval_only_arms_for_a_streaming_request(
+    request_data, global_interval, default_interval, expected
+):
     with patch.object(litellm, "sse_keepalive_ping_interval_seconds", global_interval):
-        assert ttft_keepalive_interval(request_data) == expected
+        assert ttft_keepalive_interval(request_data, default_interval=default_interval) == expected
 
 
 @pytest.mark.asyncio

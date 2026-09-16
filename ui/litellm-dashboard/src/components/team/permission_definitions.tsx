@@ -24,6 +24,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   "/key/access_group_assignment": "Member can assign access groups to virtual keys for this team",
   "/team/daily/activity": "Member can view all team usage data (not just their own)",
   "/spend/logs": "Member can view spend logs for the entire team (not just their own)",
+  "/memory/v2/entries": "Member can view memories for the entire team (not just their own)",
 };
 
 /**
@@ -34,7 +35,8 @@ export const getMethodForEndpoint = (endpoint: string): string => {
     endpoint.includes("/info") ||
     endpoint.includes("/list") ||
     endpoint.includes("/activity") ||
-    endpoint === "/spend/logs"
+    endpoint === "/spend/logs" ||
+    endpoint === "/memory/v2/entries"
   ) {
     return "GET";
   }

@@ -74,13 +74,18 @@ def _is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
+class _LegacyMemoryVisibility(TypedDict):
+    namespace: ReadOnly[None]
+    OR: ReadOnly[object]
+
+
 def _visibility_filter(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object] | None:
     """
     Prisma `where` fragment restricting rows to those the caller can see.
-    Returns None for admins (no restriction).
+    Administrators can access every V1 row, independently of user/team ownership.
     """
     if user_api_key_has_admin_view(user_api_key_dict):
-        return None
+        return {"namespace": None}  # mutable-ok: Prisma requires a native JSON filter for V1 visibility.
     ors: Final = [
         {field: value}
         for field, value in (("user_id", user_api_key_dict.user_id), ("team_id", user_api_key_dict.team_id))
@@ -89,7 +94,8 @@ def _visibility_filter(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object
     if not ors:
         # Caller has neither user_id nor team_id — match nothing.
         return {"memory_id": "__no_match__"}
-    return {"OR": ors}
+    visibility: Final[_LegacyMemoryVisibility] = {"namespace": None, "OR": ors}
+    return visibility
 
 
 class _StartsWith(TypedDict):
@@ -137,7 +143,7 @@ def _row_to_model(row: "prisma_models.LiteLLM_MemoryTable") -> LiteLLM_MemoryRow
     )
 
 
-def _require_prisma() -> "PrismaClient":
+def require_memory_prisma() -> "PrismaClient":
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -214,7 +220,11 @@ async def _is_team_admin_for(prisma_client: "PrismaClient", user_api_key_dict: U
     try:
         team_obj: Final = await TeamRepository(prisma_client).find_by_id(team_id, id_field="team_id")
     except Exception as e:
-        verbose_proxy_logger.exception("Error loading team for write-auth check (team_id=%s): %s", team_id, e)
+        verbose_proxy_logger.error(
+            "Error loading team for write-auth check (team_id=%s): %s",
+            team_id.replace("\r", "").replace("\n", ""),
+            str(e).replace("\r", "").replace("\n", ""),
+        )
         return False
     if team_obj is None:
         return False
@@ -230,7 +240,11 @@ async def _is_team_admin_for(prisma_client: "PrismaClient", user_api_key_dict: U
         if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
             return True
     except Exception as e:
-        verbose_proxy_logger.debug("Org-admin check skipped during write-auth (team_id=%s): %s", team_id, e)
+        verbose_proxy_logger.debug(
+            "Org-admin check skipped during write-auth (team_id=%s): %s",
+            team_id.replace("\r", "").replace("\n", ""),
+            str(e).replace("\r", "").replace("\n", ""),
+        )
     return False
 
 
@@ -574,3 +588,6 @@ async def delete_memory(
     if deleted is None:
         raise HTTPException(status_code=404, detail=f"Memory with key '{key}' not found")
     return MemoryDeleteResponse(key=key, deleted=True)
+
+
+_require_prisma = require_memory_prisma

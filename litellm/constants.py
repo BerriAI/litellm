@@ -2057,3 +2057,7 @@ BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
 EMPTY_MAPPING: Final = MappingProxyType({})
+
+DEFAULT_MEMORY_CAPTURE_INSTRUCTIONS: Final = (
+    "Save durable new facts, decisions or corrections when useful, without waiting for an explicit request to remember."
+)

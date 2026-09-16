@@ -384,7 +384,7 @@ describe("Sidebar (leftnav)", () => {
     });
   });
 
-  // Workflow Runs, Memory and Guardrails Monitor render a shell and then 401
+  // Workflow Runs and Guardrails Monitor render a shell and then 401
   // for every non-proxy-admin role, because their page-load routes sit outside
   // internal_user_routes / self_managed_routes. Cost Optimization does not:
   // its primary call is /user/daily/activity, which every role may make, so
@@ -406,7 +406,7 @@ describe("Sidebar (leftnav)", () => {
       mockUseAuthorized.mockReset();
     });
 
-    it("hides Workflow Runs and Memory from an internal user under Agentic", async () => {
+    it("shows self-service Memory and hides Workflow Runs from internal users", async () => {
       mockUseAuthorized.mockReturnValue(authFor("internal"));
       renderWithProviders(<Sidebar {...defaultProps} />);
 
@@ -419,7 +419,7 @@ describe("Sidebar (leftnav)", () => {
         expect(screen.getByText("Agents")).toBeInTheDocument();
       });
       expect(screen.queryByText("Workflow Runs")).not.toBeInTheDocument();
-      expect(screen.queryByText("Memory")).not.toBeInTheDocument();
+      expect(screen.getByText("Memory")).toBeInTheDocument();
     });
 
     // An org admin's session role is "Org Admin", which no capability list

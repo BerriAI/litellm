@@ -303,6 +303,7 @@ class KeyManagementRoutes(str, enum.Enum):
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
     SPEND_LOGS_V2 = "/spend/logs/v2"
+    MEMORY_READ = "/memory/v2/entries"
 
 
 class LiteLLMRoutes(enum.Enum):
@@ -650,6 +651,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.SPEND_LOGS_V2.value,
+        KeyManagementRoutes.MEMORY_READ.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
         KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value,
@@ -842,6 +844,10 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        "/memory/v2/settings",
+        "/memory/v2/status",
+        "/memory/v2/entries",
+        "/memory/v2/entries/{memory_id}",
         "/team/member_add",
         "/team/member_delete",
         "/management/v1/teams/{team_id}/members/bulk_delete",

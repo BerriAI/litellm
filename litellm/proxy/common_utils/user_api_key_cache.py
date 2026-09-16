@@ -188,8 +188,7 @@ class UserApiKeyCache(DualCache):
         decoded: Final = CacheCodec.deserialize(cached, model_type=model_type)
         if decoded is None:
             verbose_proxy_logger.error(
-                "UserApiKeyCache.async_get_cache failed to deserialize cached value for key=%r model_type=%s",
-                key,
+                "UserApiKeyCache.async_get_cache failed to deserialize cached value for model_type=%s",
                 getattr(model_type, "__name__", str(model_type)),
             )
             return None
