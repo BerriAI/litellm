@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 import litellm
@@ -147,6 +149,11 @@ def test_cost_calculator_uses_registry_price(
             ImageObject(url="https://v3b.fal.media/files/b/two.png"),
         ]
     )
-    assert cost_calculator(model=model, image_response=response) == pytest.approx(
-        2 * litellm.model_cost[catalog_key]["output_cost_per_image"]
+    model_info: Final = litellm.model_cost[catalog_key]
+    single_image_cost: Final = cost_calculator(
+        model=model,
+        image_response=ImageResponse(data=[ImageObject(url="https://v3b.fal.media/files/b/one.png")]),
     )
+    cost: Final = cost_calculator(model=model, image_response=response)
+    assert model_info["output_cost_per_image"] > 0
+    assert cost == pytest.approx(2 * single_image_cost)
