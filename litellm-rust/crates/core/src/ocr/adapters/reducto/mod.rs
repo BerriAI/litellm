@@ -93,7 +93,7 @@ pub(super) async fn prepare_document(
         .map_err(crate::error::TransportError::from)?;
     let uploaded = crate::ocr::client::read_json_response::<
         crate::ocr::codecs::reducto::ReductoUploadResponse,
-    >(response, false)
+    >(response, false, connection.max_response_bytes)
     .await?
     .data;
     let file_id = uploaded

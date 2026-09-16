@@ -592,35 +592,35 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   };
 
   const changeOrganization = (write: FieldWrite) => (orgId: string | null) => {
-    write(orgId ?? undefined);
+    write(orgId);
     setSelectedOrganizationId(orgId);
     // Clear team and project when org changes
     setSelectedCreateKeyTeam(null);
     setSelectedProjectId(null);
-    form.setValue("team_id", undefined);
-    form.setValue("project_id", undefined);
+    form.setValue("team_id", null);
+    form.setValue("project_id", null);
   };
 
   const selectTeam = (team: Team | null) => {
     setSelectedCreateKeyTeam(team);
     setSelectedProjectId(null);
-    form.setValue("project_id", undefined);
+    form.setValue("project_id", null);
     // Auto-populate org from team for non-admin users
     if (team?.organization_id) {
       setSelectedOrganizationId(team.organization_id);
       form.setValue("organization_id", team.organization_id);
     } else if (!team) {
       setSelectedOrganizationId(null);
-      form.setValue("organization_id", undefined);
+      form.setValue("organization_id", null);
     }
   };
 
-  const changeProject = (write: FieldWrite) => (projectId: string) => {
+  const changeProject = (write: FieldWrite) => (projectId: string | null) => {
     write(projectId);
     if (!projectId) {
       setSelectedProjectId(null);
       setSelectedCreateKeyTeam(null);
-      form.setValue("team_id", undefined);
+      form.setValue("team_id", null);
       return;
     }
     setSelectedProjectId(projectId);
@@ -756,8 +756,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       inputId="create-key-agent"
                       placeholder="Select an agent"
                       emptyText="No agents found"
-                      value={selectedAgentId ?? undefined}
-                      onValueChange={(value) => setSelectedAgentId(value === "" ? null : value)}
+                      value={selectedAgentId}
+                      onValueChange={setSelectedAgentId}
                       options={agentsList.map((a) => ({
                         label: a.agent_name || a.agent_id,
                         value: a.agent_id,
@@ -783,7 +783,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   {(control) => (
                     <OrganizationDropdown
                       id={control.id}
-                      value={control.value as string | undefined}
+                      value={typeof control.value === "string" ? control.value : null}
                       organizations={organizations}
                       loading={isOrganizationsLoading}
                       disabled={userRole !== "Admin"}
@@ -809,7 +809,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   {(control) => (
                     <TeamDropdown
                       id={control.id}
-                      value={control.value as string | undefined}
+                      value={typeof control.value === "string" ? control.value : null}
                       onChange={control.onChange}
                       disabled={selectedProjectId !== null}
                       organizationId={selectedOrganizationId}
@@ -833,7 +833,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     {(control) => (
                       <ProjectDropdown
                         id={control.id}
-                        value={control.value as string | undefined}
+                        value={typeof control.value === "string" ? control.value : null}
                         projects={projects}
                         teamId={selectedCreateKeyTeam?.team_id}
                         loading={isProjectsLoading || !teams}
@@ -1021,7 +1021,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             value={control.value as string | null | undefined}
                             showNeverResets
                             placeholder="Not set"
-                            onChange={control.onChange}
+                            onChange={(next) => control.onChange(next ?? undefined)}
                           />
                         )}
                       </MountedFormField>
@@ -1147,6 +1147,32 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             onChange={control.onChange}
                             aria-invalid={control["aria-invalid"] ? true : undefined}
                             aria-describedby={control["aria-describedby"]}
+                          />
+                        )}
+                      </MountedFormField>
+                      <MountedFormField
+                        className="mt-4"
+                        label={
+                          <span>
+                            Tokens per day Limit (TPD){" "}
+                            <SimpleTooltip content="Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the key's TPM/RPM limits. Online requests keep using TPM/RPM.">
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                            </SimpleTooltip>
+                          </span>
+                        }
+                        name="tpd_limit"
+                        help={`TPD cannot exceed team TPD limit: ${team?.tpd_limit !== null && team?.tpd_limit !== undefined ? team?.tpd_limit : "unlimited"}`}
+                        rules={ceilingRule(
+                          team?.tpd_limit,
+                          (limit) => `TPD limit cannot exceed team TPD limit: ${limit}`,
+                        )}
+                      >
+                        {(control) => (
+                          <NumericalInput
+                            {...control}
+                            value={control.value as number | string | undefined}
+                            step={1}
+                            width={400}
                           />
                         )}
                       </MountedFormField>
@@ -1760,6 +1786,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               "budget_duration",
                               "tpm_limit",
                               "rpm_limit",
+                              "tpd_limit",
                               ...(disableCustomApiKeys ? ["key"] : []),
                             ]}
                           />

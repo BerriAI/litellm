@@ -36,7 +36,7 @@ class CoroutineChecker:
         target = callback
         if not inspect.isfunction(target) and not inspect.ismethod(target):
             try:
-                call_attr: Final = getattr(target, "__call__", None)
+                call_attr: Final = getattr(target, "__call__", None)  # noqa: B004  # value unwrap so iscoroutinefunction sees through functors
                 if call_attr is not None:
                     target = call_attr
             except Exception:

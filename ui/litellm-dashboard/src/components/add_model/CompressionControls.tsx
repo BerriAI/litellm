@@ -20,8 +20,7 @@ const NONE_OPTION: SearchSelectOption = { label: "None (no compression)", value:
 
 const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChange }) => {
   const { routing, sameAsRouting, model } = value;
-  const onRoutingChange = (newRouting: string | undefined) =>
-    onChange({ ...value, routing: newRouting, sameAsRouting: newRouting === undefined ? true : sameAsRouting });
+  const onRoutingChange = (newRouting: string | undefined) => onChange({ ...value, routing: newRouting });
   const onSameAsRoutingChange = (newSameAsRouting: boolean) => onChange({ ...value, sameAsRouting: newSameAsRouting });
   const onModelChange = (newModel: string | undefined) => onChange({ ...value, model: newModel });
 
@@ -42,8 +41,8 @@ const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChan
         </div>
         <SearchSelect
           options={options}
-          value={routing ?? ""}
-          onValueChange={(value) => onRoutingChange(value === "" ? undefined : value)}
+          value={routing}
+          onValueChange={(value) => onRoutingChange(value ?? undefined)}
           placeholder="Inherit from the request's own compression guardrails"
           emptyText="No compression guardrails found"
           aria-label="Routing decision compression"
@@ -74,8 +73,8 @@ const CompressionControls: React.FC<CompressionControlsProps> = ({ value, onChan
             <div className="mt-3">
               <SearchSelect
                 options={options}
-                value={model ?? ""}
-                onValueChange={(value) => onModelChange(value === "" ? undefined : value)}
+                value={model}
+                onValueChange={(value) => onModelChange(value ?? undefined)}
                 placeholder="None (no compression)"
                 emptyText="No compression guardrails found"
                 aria-label="Model call compression"

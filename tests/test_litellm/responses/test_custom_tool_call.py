@@ -55,6 +55,24 @@ class TestCustomToolUtilities:
         names = extract_custom_tool_names(tools)
         assert names == set()
 
+    def test_extract_custom_tool_names_walks_namespace_tools(self):
+        tools = [
+            {"type": "function", "name": "regular_tool"},
+            {
+                "type": "namespace",
+                "name": "functions",
+                "tools": [
+                    {"type": "custom", "name": "exec"},
+                    {"type": "function", "name": "wait"},
+                    "ignored",
+                ],
+            },
+            {"type": "namespace", "name": "empty", "tools": "not-a-list"},
+        ]
+
+        names = extract_custom_tool_names(tools)
+        assert names == {"exec"}
+
     def test_extract_custom_tool_names_none(self):
         """Test extraction with None input."""
         names = extract_custom_tool_names(None)
@@ -374,6 +392,8 @@ class TestTransformationCustomTools:
             "srvtoolu_01ServerCall",
             "toolu_01CustomCall",
         ]
+        assert result[1].type == "function_call"
+        assert result[1].name == "web_search"
 
     def test_transform_mixed_tool_calls(self):
         """Test transformation with both custom and regular tool calls."""

@@ -49,6 +49,20 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
 @pytest.mark.parametrize(
     "category,changed,expected",
     [
+        ("provider-harness", ["tests/e2e/provider_cache.py"], "run"),
+        ("provider-harness", ["tests/e2e/conftest.py"], "run"),
+        ("provider-harness", ["tests/e2e/e2e_http.py"], "run"),
+        ("provider-harness", ["tests/code_coverage_tests/test_provider_cache.py"], "run"),
+        ("provider-harness", ["tests/code_coverage_tests/test_provider_replay_harness.py"], "run"),
+        ("provider-harness", [".circleci/config.yml"], "run"),
+        ("provider-harness", [".circleci/scripts/classify_changes.sh"], "run"),
+        ("provider-harness", ["pyproject.toml"], "run"),
+        ("provider-harness", ["uv.lock"], "run"),
+        ("provider-harness", ["tests/e2e/PROVIDER_CACHE.md"], "skip"),
+        ("provider-harness", ["tests/e2e/ui/test_example.py"], "skip"),
+        ("provider-harness", ["tests/e2e/quota_management/test_quota.py"], "skip"),
+        ("provider-harness", ["litellm/main.py"], "skip"),
+        ("provider-harness", ["ui/litellm-dashboard/src/App.tsx"], "skip"),
         # docs-only: skip everything
         ("backend", DOCS, "skip"),
         ("client", DOCS, "skip"),

@@ -42,6 +42,10 @@ DROP_UNFITTING_REASONING_EFFORT_WARNING: Final = (
 )
 
 
+def _messages_carry_output_config(messages: Sequence[object]) -> bool:
+    return any(isinstance(message, Mapping) and "output_config" in message for message in messages)
+
+
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     @property
     def custom_llm_provider(self) -> str | None:
@@ -331,6 +335,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers = self._update_headers_with_anthropic_beta(
             headers=headers,
             optional_params=optional_params,
+            messages=messages,
         )
 
         return headers, api_base
@@ -664,6 +669,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers: dict,
         optional_params: dict,
         custom_llm_provider: str = "anthropic",
+        messages: Sequence[object] = (),
     ) -> dict:
         """
         Auto-inject anthropic-beta headers based on features used.
@@ -673,24 +679,30 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         - tool_search: adds provider-specific tool search header
         - output_format: adds 'structured-outputs-2025-11-13'
         - speed: adds 'fast-mode-2026-02-01'
+        - a message carrying output_config: adds 'per-turn-control-2026-07-01'
 
         Args:
             headers: Request headers dict
             optional_params: Optional parameters including tools, context_management, output_format, speed
             custom_llm_provider: Provider name for looking up correct tool search header
+            messages: Request messages, scanned for per-message output_config
         """
         beta_values: Final[set] = set()
 
-        # Get existing beta headers if any
-        existing_beta: Final = headers.get("anthropic-beta")
-        if existing_beta:
-            beta_values.update(b.strip() for b in existing_beta.split(","))
+        existing_beta: Final = tuple(
+            piece.strip()
+            for key, value in headers.items()
+            if key.lower() == "anthropic-beta"
+            for piece in value.split(",")
+            if piece.strip()
+        )
+        beta_values.update(existing_beta)
 
         # Check for context management
         context_management_param: Final = optional_params.get("context_management")
         if context_management_param is not None:
             # Check edits array for compact_20260112 type
-            edits: Final = context_management_param.get("edits", [])
+            edits: Final = context_management_param.get("edits", ())
             has_compact = False
             has_other = False
 
@@ -722,24 +734,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if optional_params.get("speed") == "fast":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
-        # Check for advisor tool
-        tools = optional_params.get("tools")
-        if tools:
-            for tool in tools:
-                if isinstance(tool, dict) and tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE:
-                    beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.ADVISOR_TOOL_2026_03_01.value)
-                    break
+        if _messages_carry_output_config(messages):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
 
-        # Check for tool search tools
-        tools = optional_params.get("tools")
-        if tools:
-            anthropic_model_info: Final = AnthropicModelInfo()
-            if anthropic_model_info.is_tool_search_used(tools):
-                # Use provider-specific tool search header
-                tool_search_header: Final = get_tool_search_beta_header(custom_llm_provider)
-                beta_values.add(tool_search_header)
+        tools: Final = optional_params.get("tools")
+        if any(isinstance(tool, dict) and tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for tool in tools or ()):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.ADVISOR_TOOL_2026_03_01.value)
 
-        if beta_values:
-            headers["anthropic-beta"] = ",".join(sorted(beta_values))
+        if AnthropicModelInfo().is_tool_search_used(tools):
+            beta_values.add(get_tool_search_beta_header(custom_llm_provider))
 
-        return headers
+        if not beta_values:
+            return headers
+        merged: Final = {key: value for key, value in headers.items() if key.lower() != "anthropic-beta"}
+        merged["anthropic-beta"] = ",".join(sorted(beta_values))
+        return merged

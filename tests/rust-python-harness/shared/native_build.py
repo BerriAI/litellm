@@ -16,6 +16,11 @@ _RUST_ROOT: Final = "litellm-rust"
 _LOCKFILE: Final = "Cargo.lock"
 _SOURCE_SUFFIXES: Final = frozenset({".rs", ".toml"})
 _FAILURE_OUTPUT_LINES: Final = 15
+_TRACE_CHECK: Final = (
+    "from litellm.rust_bridge import get_native_bridge; "
+    "bridge = get_native_bridge(); "
+    "raise SystemExit(0 if bridge is not None and getattr(bridge, '_trace', None) is not None else 1)"
+)
 
 
 def needs_rebuild(native_mtime: float | None, newest_source_mtime: float | None) -> bool:
@@ -73,6 +78,17 @@ def _rebuild(repo_root: Path) -> tuple[bool, str]:
     return completed.returncode == 0, "\n".join(lines[-_FAILURE_OUTPUT_LINES:])
 
 
+def _installed_bridge_has_trace(repo_root: Path) -> bool:
+    completed: Final = subprocess.run(
+        (sys.executable, "-c", _TRACE_CHECK),
+        cwd=repo_root,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
 def trace_bridge_error() -> str | None:
     bridge: Final = get_native_bridge()
     if bridge is None:
@@ -85,7 +101,10 @@ def trace_bridge_error() -> str | None:
 def ensure_trace_bridge(repo_root: Path) -> str | None:
     native_path: Final = _native_module_path()
     native_mtime: Final = native_path.stat().st_mtime if native_path is not None and native_path.exists() else None
-    if needs_rebuild(native_mtime, _newest_source_mtime(repo_root)):
+    rebuild_required: Final = needs_rebuild(
+        native_mtime, _newest_source_mtime(repo_root)
+    ) or not _installed_bridge_has_trace(repo_root)
+    if rebuild_required:
         print(f"Rebuilding native Rust bridge ({BRIDGE_FEATURE} feature)...", flush=True)
         succeeded: Final
         output: Final

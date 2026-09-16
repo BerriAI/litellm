@@ -47,6 +47,10 @@ After: the same request comes back with real token counts, so the dashboard show
 
 <!-- e.g., "Fixes #000" -->
 
+## Affected release
+
+<!-- Only for a fix to a regression in a released or rc version (perf, memory, crash, or behavior): name the version it regressed in, e.g. "regression in v1.100.0" or "since v1.101.0-rc.1", and add the `backport-stable` label so the fix is cherry-picked onto the rc line before the stable is tagged. Leave the section blank otherwise -->
+
 ## Linear ticket
 
 <!-- if you are an internal contributor, add "Resolves " followed by the Linear ticket e.g., "Resolves LIT-1234" to link the Linear ticket to the GitHub PR. If you don't have one, leave the section blank rather than guessing -->
@@ -97,7 +101,8 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      For bug fixes: Before shows the reproduction, After shows the same steps passing
      For new features: Before shows the capability missing, After shows it working end-to-end
      If the change applies to all three LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), make each endpoint its own case, not just one
-     For UI changes: before/after screenshots under the same headings -->
+     For UI changes: before/after screenshots under the same headings
+     If the main use case runs through a coding tool like Claude Code or Codex, drive that tool interactively the way the user does (never `claude -p`, `codex exec`, or curl on its own) and embed before/after screenshots of its pane under the same headings; curl replays and headless runs can follow as extra cases, never as the only proof -->
 
 ## Type
 
@@ -154,3 +159,4 @@ Example checklists:
 ## Final Attestation
 
 - [ ] The tests check the right things, including the edge cases, and regressions in the respective real-world customer use-cases are not possible after this PR
+

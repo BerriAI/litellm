@@ -157,9 +157,10 @@ def _get_spend_logs_metadata(
             user_api_key_team_alias=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
+            user_agent=None,
             additional_usage_values=None,
             applied_guardrails=None,
-            status=None or "success",
+            status="success",
             error_information=None,
             proxy_server_request=None,
             batch_models=None,
@@ -621,6 +622,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             status=_get_status_for_spend_log(
                 metadata=metadata,
             ),
+            litellm_call_id=litellm_call_id,
         )
 
         verbose_proxy_logger.debug(
@@ -1167,6 +1169,7 @@ def _redact_prompt_fields_in_guardrail_entry(
 
 def _sanitize_error_information_for_spend_logs(
     error_information: StandardLoggingPayloadErrorInformation | None,
+    original_exception: BaseException | None = None,
 ) -> StandardLoggingPayloadErrorInformation | None:
     """
     Sanitize ``error_information`` before it lands in ``LiteLLM_SpendLogs.metadata``.
@@ -1188,7 +1191,12 @@ def _sanitize_error_information_for_spend_logs(
     if error_information is None:
         return None
 
-    sanitized = cast(dict, {**error_information})
+    persisted: Final = (
+        {**error_information, "error_message": original_exception.spend_log_error_message}
+        if isinstance(original_exception, ProxyModelNotFoundError)
+        else error_information
+    )
+    sanitized = cast(dict, {**persisted})
 
     if not should_store_prompts_and_responses_in_spend_logs():
         for field in ("error_message", "traceback"):

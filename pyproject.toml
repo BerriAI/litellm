@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.102.0"
+version = "1.103.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -67,18 +67,19 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.28.1,<2.0",
-    "litellm-proxy-extras==0.4.96",
-    "litellm-enterprise==0.1.66",
+    "litellm-proxy-extras==0.4.98",
+    "litellm-enterprise==0.1.68",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
+    "tomlkit>=0.13.3,<1.0",
     "polars>=1.38.1,<2.0",
     "soundfile>=0.12.1,<1.0",
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
     "expression>=5.6.0,<6.0",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
-# imports are all guarded, so it runs on the base SDK plus just these five, and
+# imports are all guarded, so it runs on the base SDK plus these packages, and
 # none of the server runtime in `proxy` is pulled in. On Linux,
 # keyring reaches the Secret Service through secretstorage, which brings
 # cryptography with it.
@@ -88,6 +89,7 @@ cli = [
     "requests>=2.32.0,<3.0",
     "InquirerPy>=0.3.4,<1.0",
     "keyring>=25.6.0,<26.0",
+    "tomlkit>=0.13.3,<1.0",
 ]
 extra_proxy = [
     "prisma>=0.11.0,<1.0",
@@ -179,6 +181,7 @@ dev = [
     "hypothesis==6.165.10",
     "reportlab==5.0.1",
     "basedpyright==1.39.7",
+    "mypy==1.20.1",
     "keyring==25.7.0",
     "pytest==9.0.3",
     "tomli==2.4.1; python_version < '3.11'",
@@ -287,6 +290,7 @@ editable-profile = "dev"
 include = [
     "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
+    "litellm/proxy/client/cli/commands/codex_base_instructions.md",
 ]
 exclude = [
     "litellm/proxy/enterprise",
@@ -328,7 +332,7 @@ members = ["enterprise", "litellm-proxy-extras"]
 profile = "black"
 
 [tool.commitizen]
-version = "1.102.0"
+version = "1.103.0"
 version_files = [
     "pyproject.toml:^version",
 ]

@@ -264,6 +264,7 @@ export interface TeamData {
     metadata: Record<string, any>;
     tpm_limit: number | null;
     rpm_limit: number | null;
+    tpd_limit?: number | null;
     max_budget: number | null;
     soft_budget?: number | null;
     budget_duration: string | null;
@@ -330,10 +331,14 @@ const teamUpdateFieldsSchema = z.object({
   budget_duration: z.string().nullish(),
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
+  tpd_limit: numericInputSchema,
   modelLimits: z
     .array(
       z.object({
-        model: z.string().min(1, "Missing model"),
+        model: z
+          .string()
+          .nullable()
+          .refine((model) => Boolean(model), "Missing model"),
         tpm: z.number().nullish(),
         rpm: z.number().nullish(),
       }),
@@ -408,6 +413,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   budget_duration: undefined,
   tpm_limit: undefined,
   rpm_limit: undefined,
+  tpd_limit: undefined,
   modelLimits: [],
   default_estimated_output_tokens: undefined,
   default_estimated_output_tokens_per_model: "",
@@ -457,6 +463,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   budget_duration: info.budget_duration,
   tpm_limit: info.tpm_limit,
   rpm_limit: info.rpm_limit,
+  tpd_limit: info.tpd_limit,
   modelLimits: Array.from(
     new Set([
       ...Object.keys(info.metadata?.model_tpm_limit ?? {}),
@@ -915,6 +922,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         models: normalizeTeamModelSelection(values.models),
         tpm_limit: sanitizeNumeric(values.tpm_limit),
         rpm_limit: sanitizeNumeric(values.rpm_limit),
+        tpd_limit: sanitizeNumeric(values.tpd_limit),
         model_tpm_limit: modelTpmLimit,
         model_rpm_limit: modelRpmLimit,
         max_budget: values.max_budget,
@@ -1165,6 +1173,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <div className="mt-2">
               <p>TPM: {info.tpm_limit ?? "Unlimited"}</p>
               <p>RPM: {info.rpm_limit ?? "Unlimited"}</p>
+              <p>TPD (batch): {info.tpd_limit ?? "Unlimited"}</p>
               {info.max_parallel_requests && <p>Max Parallel Requests: {info.max_parallel_requests}</p>}
               {(() => {
                 const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
@@ -1464,7 +1473,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                               showNeverResets
                               placeholder="Inherit team reset period"
                               value={value === null ? NEVER_RESETS_BUDGET_DURATION : value}
-                              onChange={(next) => onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next)}
+                              onChange={(next) =>
+                                onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next ?? undefined)
+                              }
                             />
                           )}
                         </FormField>
@@ -1530,6 +1541,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </FormField>
 
                   <FormField control={form.control} name="rpm_limit" label="Requests per minute Limit (RPM)">
+                    {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="tpd_limit"
+                    label={labelWithHint(
+                      "Tokens per day Limit (TPD)",
+                      "Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the team's TPM/RPM limits. Online requests keep using TPM/RPM.",
+                    )}
+                  >
                     {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
                   </FormField>
 
@@ -1879,7 +1901,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <SearchSelect
                         inputId={id}
                         value={value ?? ""}
-                        onValueChange={(next) => onChange(next === "" ? null : next)}
+                        onValueChange={onChange}
                         options={userOrganizations.map((org) => ({
                           value: org.organization_id ?? "",
                           label: org.organization_alias || org.organization_id || "",
@@ -1992,6 +2014,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <p className="font-medium">Rate Limits</p>
                 <div>TPM: {info.tpm_limit ?? "Unlimited"}</div>
                 <div>RPM: {info.rpm_limit ?? "Unlimited"}</div>
+                <div>TPD (batch): {info.tpd_limit ?? "Unlimited"}</div>
                 {(() => {
                   const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
                   const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;

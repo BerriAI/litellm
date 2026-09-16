@@ -32,6 +32,9 @@ from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
     _prepare_bridge_mint,
     _prepare_bridge_refresh,
     _reload_active_user_by_id,
+    authorize_oauth_credential_request,
+    can_store_oauth_credential,
+    oauth_authorization_uses_gateway_credential,
 )
 from litellm.proxy._experimental.mcp_server.faults import (
     CallerRejected,
@@ -836,16 +839,30 @@ async def _user_can_reach_mcp_server(user_id: str, server_id: str) -> bool:
     return server_id in await global_mcp_server_manager.get_allowed_mcp_servers(admitted)
 
 
-async def _bridge_authorize_access_denial(
-    litellm_user_id: str,
+async def _resolve_oauth_authorization_user(
+    request: Request,
     mcp_server: MCPServer,
     redirect_uri: str,
     state: str,
-) -> RedirectResponse | None:
-    """The denial redirect for a signed-in user who cannot reach the target server, or None to proceed."""
-    if await _user_can_reach_mcp_server(litellm_user_id, mcp_server.server_id):
-        return None
-    return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
+    enforce_binding: bool,
+) -> str | RedirectResponse:
+    """Resolve the authorization subject without replacing denied credentials with cookie grants."""
+    from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # proxy import cycle
+        _user_id_from_session_cookie,
+    )
+
+    use_gateway_credential: Final = enforce_binding and await oauth_authorization_uses_gateway_credential(request)
+    request_user_id: Final = (
+        await authorize_oauth_credential_request(request, mcp_server.server_id) if use_gateway_credential else None
+    )
+    if use_gateway_credential and request_user_id is None:
+        return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
+    user_id: Final = request_user_id or _user_id_from_session_cookie(request)
+    if user_id is None:
+        return _redirect_to_litellm_login(request)
+    if not await _user_can_reach_mcp_server(user_id, mcp_server.server_id):
+        return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
+    return user_id
 
 
 async def authorize_with_server(
@@ -911,23 +928,12 @@ async def authorize_with_server(
     # Seal the authenticated caller into state so the token exchange cannot select another credential owner.
     litellm_user_id: str | None = None
     if enforce_binding or (resolved_server.is_dcr_bridge and resolved_server.is_oauth_delegate):
-        from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # inline import avoids a module-load circular import
-            _user_id_from_session_cookie,
+        subject: Final = await _resolve_oauth_authorization_user(
+            request, resolved_server, redirect_uri, state, enforce_binding
         )
-
-        litellm_user_id = (
-            await _extract_user_id_from_request(request) if enforce_binding else None
-        ) or _user_id_from_session_cookie(request)
-        if litellm_user_id is None:
-            return _redirect_to_litellm_login(request)
-        denial: Final = await _bridge_authorize_access_denial(
-            litellm_user_id=litellm_user_id,
-            mcp_server=resolved_server,
-            redirect_uri=redirect_uri,
-            state=state,
-        )
-        if denial is not None:
-            return denial
+        if isinstance(subject, RedirectResponse):
+            return subject
+        litellm_user_id = subject
 
     oauth_nonce: Final = secrets.token_urlsafe(32) if enforce_binding else None
     encoded_state: Final = encode_state_with_base_url(
@@ -1218,12 +1224,32 @@ async def exchange_token_with_server(
         user_id: Final = resolved_user_id
         if user_id:
             try:
-                await _store_per_user_token_server_side(
-                    server=resolved_server,
-                    user_id=user_id,
-                    token_response=token_response,
-                    identity_binding_proof=binding_proof,
+                # Identity binding above must retain the verified caller even when a write is
+                # denied. Authorize persistence separately, immediately before its side effect.
+                from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+                # A sealed code delegates a verified user for this authorized server. Raw
+                # request credentials retain their own JWT/key restrictions during resolution.
+                can_store: Final = (
+                    await can_store_oauth_credential(
+                        request, await MCPRequestHandler.reload_admitted_user(user_id), resolved_server.server_id
+                    )
+                    if bridge_identity is not None
+                    else await authorize_oauth_credential_request(request, resolved_server.server_id) == user_id
                 )
+                if can_store:
+                    await _store_per_user_token_server_side(
+                        server=resolved_server,
+                        user_id=user_id,
+                        token_response=token_response,
+                        identity_binding_proof=binding_proof,
+                    )
+                else:
+                    verbose_logger.warning(
+                        "OAuth credential storage not authorized for user=%s server=%s",
+                        user_id,
+                        resolved_server.server_id,
+                    )
             except Exception as exc:
                 verbose_logger.warning(
                     "exchange_token_with_server: server-side storage failed for user=%s server=%s: %s",
@@ -1236,8 +1262,9 @@ async def exchange_token_with_server(
                 "exchange_token_with_server: could not resolve a LiteLLM user_id for the request, "
                 "so the per-user token for server=%s was NOT stored. The authorization_code egress "
                 "requires the stored token, so the client will be challenged with 401 on reconnect. "
-                "Ensure the request carries a valid LiteLLM key (x-litellm-api-key or Authorization), "
-                "or store it via POST /mcp/server/{id}/oauth-user-credential.",
+                "Ensure the request carries a valid LiteLLM key or enabled JWT identity "
+                "(x-litellm-api-key or Authorization), "
+                "or store it via POST /v1/mcp/server/{id}/oauth-user-credential.",
                 resolved_server.server_id,
             )
 
@@ -1842,6 +1869,30 @@ async def register_client_with_server(
     return JSONResponse(token_response)
 
 
+@router.get("/authorize/mcp-session")
+async def authorize_mcp_session(
+    request: Request,
+    redirect_uri: str,
+    client_id: str,
+    state: str = "",
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
+    response_type: str | None = None,
+    resource: str | None = None,
+) -> Response:
+    return aggregate_authorize(
+        request=request,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        state=state,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
+        response_type=response_type,
+        session_user_id=_session_cookie_user_id(request),
+        resource=resource,
+    )
+
+
 @router.get("/{mcp_server_name}/authorize")
 @router.get("/authorize")
 async def authorize(
@@ -2393,8 +2444,7 @@ async def _build_oauth_protected_resource_response(
     per-server URL completes the same sign-in flow the aggregate ``/mcp`` endpoint
     supports and is admitted with a gateway session bearer. The per-server relay
     authorize/token endpoints stay registered for the keyed interactive flow (which
-    is challenged with an explicit ``authorization_uri``), and the root-resolved
-    (unnamed) legacy shape keeps the relay authorization server.
+    is challenged with an explicit ``authorization_uri``).
 
     Args:
         request: FastAPI Request object
@@ -2405,15 +2455,11 @@ async def _build_oauth_protected_resource_response(
     Returns:
         OAuth protected resource metadata dict
     """
+    if mcp_server_name is None:
+        return oauth_protected_resource_root(request)
+
     request_base_url: Final = get_request_base_url(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
-    explicitly_named: Final = mcp_server_name is not None
-
-    # When no server name provided, try to resolve the single OAuth2 server
-    if mcp_server_name is None:
-        resolved: Final = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
-        if resolved:
-            mcp_server_name = resolved.server_name or resolved.name
 
     mcp_server: MCPServer | None = None
     if mcp_server_name:
@@ -2478,7 +2524,7 @@ async def _build_oauth_protected_resource_response(
     if obo_response is not None:
         return obo_response
 
-    if explicitly_named and mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
+    if mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
         return {
             "authorization_servers": [f"{request_base_url}/mcp"],
             "resource": resource_url,
@@ -2542,6 +2588,17 @@ def _jwt_auth_issuers() -> list:
     return issuers
 
 
+@router.get("/.well-known/oauth-protected-resource")
+def oauth_protected_resource_root(request: Request) -> dict[str, str | tuple[str, ...]]:
+    request_base_url: Final = get_request_base_url(request)
+    parsed: Final = urlparse(request_base_url)
+    return {
+        "resource": f"{parsed.scheme}://{parsed.netloc}",
+        "authorization_servers": (f"{request_base_url}/mcp",),
+        "scopes_supported": (),
+    }
+
+
 def _build_aggregate_protected_resource_response(request: Request) -> dict:
     """RFC 9728 metadata for the aggregate /mcp resource: the gateway itself is
     the authorization server. No per-server names or scopes leak here; access
@@ -2568,14 +2625,14 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
     The issuer is ``{base}/mcp`` and must stay equal to the value the
     aggregate protected-resource document advertises: spec clients verify the
     issuer in the metadata matches the one that derived the well-known URL.
-    Advertises the root /authorize, /token, and /register endpoints and
+    Advertises the MCP session authorize endpoint, root /token and /register endpoints, and
     ``token_endpoint_auth_methods_supported: ["none", ...]`` because DCR
     clients (Claude Desktop, MCP Inspector) register as public clients; PKCE
     S256 is mandatory in the gateway's authorize flow."""
     request_base_url: Final = get_request_base_url(request)
     return {
         "issuer": f"{request_base_url}/mcp",
-        "authorization_endpoint": f"{request_base_url}/authorize",
+        "authorization_endpoint": f"{request_base_url}/authorize/mcp-session",
         "token_endpoint": f"{request_base_url}/token",
         "introspection_endpoint": f"{request_base_url}/introspect",
         "registration_endpoint": f"{request_base_url}/register",
@@ -2645,7 +2702,6 @@ async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_nam
 # LiteLLM legacy pattern: /.well-known/oauth-protected-resource/{server_name}/mcp
 # Kept for backward compatibility with existing deployments
 @router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
-@router.get("/.well-known/oauth-protected-resource")
 async def oauth_protected_resource_mcp(request: Request, mcp_server_name: str | None = None):
     """
     OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.
@@ -2666,6 +2722,8 @@ async def oauth_protected_resource_mcp(request: Request, mcp_server_name: str | 
 def _build_oauth_authorization_server_response(
     request: Request,
     mcp_server_name: str | None,
+    *,
+    issuer_path: str | None = None,
 ) -> dict:
     """Build OAuth authorization server metadata response (gateway-as-AS shape).
 
@@ -2694,7 +2752,13 @@ def _build_oauth_authorization_server_response(
 
     _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
-    issuer: Final = f"{request_base_url}/{mcp_server_name}" if explicitly_named else request_base_url
+    issuer: Final = (
+        f"{request_base_url}/{issuer_path}"
+        if issuer_path is not None
+        else f"{request_base_url}/{mcp_server_name}"
+        if explicitly_named
+        else request_base_url
+    )
 
     return {
         "issuer": issuer,
@@ -2724,6 +2788,7 @@ async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_n
     return _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
+        issuer_path=f"mcp/{mcp_server_name}",
     )
 
 
@@ -2802,7 +2867,7 @@ async def jwks_json(request: Request):
 
 
 # Additional legacy pattern support
-@router.get("/.well-known/oauth-authorization-server/{mcp_server_name}/mcp")
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
 async def oauth_authorization_server_legacy(request: Request, mcp_server_name: str):
     """
     OAuth authorization server discovery for legacy /{server_name}/mcp pattern.
@@ -2810,6 +2875,7 @@ async def oauth_authorization_server_legacy(request: Request, mcp_server_name: s
     return _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
+        issuer_path=f"{mcp_server_name}/mcp",
     )
 
 
