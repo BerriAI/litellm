@@ -10,11 +10,16 @@ ServerToolRoute: TypeAlias = Literal["acompletion", "aresponses", "anthropic_mes
 _LIST: Final = TypeAdapter(tuple[object, ...])
 _OBJECT: Final = TypeAdapter(dict[str, object])
 _OUTPUT_FIELDS: Final = frozenset(("response_format", "text", "output_format", "output_config"))
-_FINAL_FIELDS: Final = _OUTPUT_FIELDS | frozenset(("tools", "tool_choice", "stream_options"))
+_TOKEN_LIMITS: Final = frozenset(("max_tokens", "max_completion_tokens", "max_output_tokens"))
+_TOOL_OUTPUT_BUDGET: Final = 4096
+_FINAL_FIELDS: Final = _OUTPUT_FIELDS | _TOKEN_LIMITS | frozenset(("tools", "tool_choice", "stream_options"))
 
 
 def has_server_output_constraint(data: Mapping[str, object]) -> bool:
     return any(
+        isinstance(limit := data.get(field), int) and not isinstance(limit, bool) and 0 < limit < _TOOL_OUTPUT_BUDGET
+        for field in _TOKEN_LIMITS
+    ) or any(
         isinstance(value := data.get(field), dict)
         and isinstance(
             nested := _OBJECT.validate_python(value).get("format") if field in ("text", "output_config") else value,
@@ -25,9 +30,24 @@ def has_server_output_constraint(data: Mapping[str, object]) -> bool:
     )
 
 
-def prepare_server_tool_context(data: Mapping[str, object], server_names: frozenset[str]) -> Mapping[str, object]:
+def prepare_server_tool_context(
+    data: Mapping[str, object], server_names: frozenset[str], route: ServerToolRoute
+) -> Mapping[str, object]:
+    limit_field: Final = (
+        "max_output_tokens"
+        if route == "aresponses"
+        else "max_completion_tokens"
+        if "max_completion_tokens" in data
+        else "max_tokens"
+    )
+    client_limit: Final = data.get(limit_field)
     return {  # mutable-ok: Provider wire format requires native JSON containers.
-        **{key: value for key, value in data.items() if key not in _OUTPUT_FIELDS and key != "stream_options"},
+        **{
+            key: value
+            for key, value in data.items()
+            if key not in _OUTPUT_FIELDS | _TOKEN_LIMITS and key != "stream_options"
+        },
+        limit_field: max(_TOOL_OUTPUT_BUDGET, client_limit if isinstance(client_limit, int) else 0),
         **{
             key: remainder
             for key in ("text", "output_config")

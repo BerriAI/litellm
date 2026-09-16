@@ -1161,10 +1161,19 @@ async def test_previous_response_replays_complete_history_and_pending_client_too
 
 
 @pytest.mark.asyncio
-async def test_legacy_response_without_history_fails_before_calling_provider(prisma_edge: MagicMock) -> None:
+@pytest.mark.parametrize(
+    "history",
+    (
+        None,
+        ({"type": "function_call", "name": "litellm_memory_capture", "call_id": "partial", "arguments": '{"key":'},),
+    ),
+)
+async def test_unusable_response_history_fails_before_calling_provider(prisma_edge: MagicMock, history: object) -> None:
     prisma_edge.db.litellm_memorycontinuation.find_first.return_value = SimpleNamespace(
         payload=MemoryContinuation(
-            permission_revision=access_for().continuation_revision, upstream_ids=("native-last",)
+            permission_revision=access_for().continuation_revision,
+            upstream_ids=("native-last",),
+            input=history,
         ).model_dump()
     )
     execute = AsyncMock()
@@ -1181,6 +1190,79 @@ async def test_legacy_response_without_history_fails_before_calling_provider(pri
     assert error.value.status_code == 409
     assert "start a new conversation" in error.value.detail
     execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route,limit_field",
+    (
+        ("acompletion", "max_tokens"),
+        ("acompletion", "max_completion_tokens"),
+        ("anthropic_messages", "max_tokens"),
+        ("aresponses", "max_output_tokens"),
+    ),
+)
+@pytest.mark.parametrize("streaming", (False, True))
+async def test_private_tools_have_room_but_final_answer_keeps_client_token_cap(
+    prisma_edge: MagicMock, route: ServerToolRoute, limit_field: str, streaming: bool
+) -> None:
+    observed = []
+    prisma_edge.db.litellm_memorytable.find_first.return_value = row()
+    call = {"id": "read-entry", "name": "litellm_memory_read", "arguments": {"id": "entry"}}
+
+    async def execute(inner: Request, body: dict[str, object], auth: UserAPIKeyAuth) -> Response:
+        observed.append(body)
+        reply = provider_response(route, "ok" if len(observed) == 3 else "", (call,) if len(observed) == 1 else ())
+        return wire_response(reply, route, body.get("stream") is True)
+
+    loop = GatewayMemoryLoop(
+        execute,
+        request(),
+        {
+            "input": "Recall the port and reply ok",
+            "messages": [{"role": "user", "content": "Recall the port and reply ok"}],
+            limit_field: 40,
+            "stream": streaming,
+        },
+        route,
+        store(prisma_edge),
+        UserAPIKeyAuth(),
+    )
+    chunks = b"".join([chunk async for chunk in loop.run()])
+    assert [body[limit_field] for body in observed] == [4096, 4096, 40]
+    assert "litellm_memory_read" not in json.dumps(observed[-1].get("tools", []))
+    assert "ok" in json.dumps(loop.stream.response())
+    if streaming:
+        assert b"ok" in chunks and b"litellm_memory_read" not in chunks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", (False, True))
+@pytest.mark.parametrize("tool_name", ("litellm_memory_capture", "read_file"))
+async def test_truncated_tool_response_is_not_saved_as_a_resumable_conversation(
+    prisma_edge: MagicMock, streaming: bool, tool_name: str
+) -> None:
+    call = {"id": "partial", "name": tool_name, "arguments": {"key": "unfinished"}}
+    execute = AsyncMock(
+        return_value=wire_response(
+            provider_response("aresponses", "", (call,), truncated=True), "aresponses", streaming
+        )
+    )
+    loop = GatewayMemoryLoop(
+        execute,
+        request(),
+        {"input": "Remember this", "stream": streaming},
+        "aresponses",
+        store(prisma_edge),
+        UserAPIKeyAuth(),
+    )
+    chunks = b"".join([chunk async for chunk in loop.run()])
+    assert loop.stream.response()["status"] == "incomplete"
+    assert loop.stream.response()["store"] is False
+    prisma_edge.db.litellm_memorycontinuation.upsert.assert_not_awaited()
+    prisma_edge.db.litellm_memorytable.create.assert_not_awaited()
+    if streaming:
+        assert b'"store": false' in chunks
 
 
 @pytest.mark.asyncio

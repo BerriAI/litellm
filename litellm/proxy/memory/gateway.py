@@ -101,7 +101,7 @@ class GatewayMemoryLoop:
         )
         if isinstance(previous, str) and previous.startswith("resp_litellm_memory_") and previous_patch is None:
             raise HTTPException(status_code=404, detail="Memory response not found or expired")
-        if previous_patch is not None and previous_patch.input is None:
+        if previous_patch is not None and not previous_patch.can_resume(MEMORY_TOOL_NAMES):
             raise HTTPException(status_code=409, detail="Memory response history unavailable; start a new conversation")
         field: Final = "input" if self.route == "aresponses" else "messages"
         functions: Final = memory_functions(self.store.access)
@@ -134,11 +134,11 @@ class GatewayMemoryLoop:
         self.data = injected
         if self.preparing_output:
             self.data = append_server_reference(
-                prepare_server_tool_context(self.data, MEMORY_TOOL_NAMES),
+                prepare_server_tool_context(self.data, MEMORY_TOOL_NAMES, self.route),
                 self.route,
                 "If needed, use the available memory tools for this request. "
                 "The final response will be generated separately with the client's output "
-                "format and application tools. Do not call application tools during this preparation.",
+                "requirements and application tools. Do not call application tools during this preparation.",
             )
 
         self.prepared = True
@@ -264,21 +264,19 @@ class GatewayMemoryLoop:
             return
         response: Final = self.stream.response()
         root_response: Final = self.data.get("previous_response_id")
+        continuation: Final = MemoryContinuation(
+            response=response,
+            upstream_ids=self.upstream_ids,
+            input=transcript_items(self.data, self.route),
+            previous_response_id=root_response if isinstance(root_response, str) else None,
+        )
         try:
-            await self.continuations.save(
-                str(response["id"]),
-                MemoryContinuation(
-                    response=response,
-                    upstream_ids=self.upstream_ids,
-                    input=transcript_items(self.data, self.route),
-                    previous_response_id=root_response if isinstance(root_response, str) else None,
-                ),
-            )
+            if continuation.can_resume(MEMORY_TOOL_NAMES):
+                await self.continuations.save(str(response["id"]), continuation)
+                return
         except Exception:
             verbose_proxy_logger.warning("Memory response retention unavailable; returning the completed answer")
-            self.stream.client_response_fields = MappingProxyType(
-                {**self.stream.client_response_fields, "store": False}
-            )
+        self.stream.client_response_fields = MappingProxyType({**self.stream.client_response_fields, "store": False})
 
     def response_headers(self) -> Mapping[str, str]:
         cost_header: Final = (
@@ -331,7 +329,7 @@ class GatewayMemoryLoop:
             }
         if client_calls or not memory_calls:
             return True
-        if round_index + 2 >= _MAX_ROUNDS:
+        if not self.preparing_output and round_index + 2 >= _MAX_ROUNDS:
             self.data = restore_client_output(self.data, self.original)
         return False
 

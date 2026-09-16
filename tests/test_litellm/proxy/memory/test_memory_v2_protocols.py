@@ -36,6 +36,7 @@ def test_structured_output_restores_provider_json_enforcement_after_memory_prepa
             "Search memory before answering",
         ),
         frozenset(("memory_search",)),
+        "acompletion",
     )
     provider: Final = get_optional_params(
         model="claude-sonnet-5",

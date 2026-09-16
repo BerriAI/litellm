@@ -7,6 +7,7 @@ from typing import Final
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict
 
+from litellm.litellm_core_utils.prompt_templates.server_tool_responses import response_has_client_tools
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.memory.policy import memory_digest, memory_primary_client
 from litellm.proxy.memory.store import MemoryStore
@@ -51,6 +52,25 @@ class MemoryContinuation(BaseModel):
     input: tuple[Mapping[str, object], ...] | None = None
     previous_response_id: str | None = None
     permission_revision: str | None = None
+
+    def can_resume(self, server_names: frozenset[str]) -> bool:
+        if self.input is None:
+            return False
+        if (
+            self.response
+            and self.response.get("status") == "incomplete"
+            and response_has_client_tools(self.response, "aresponses", frozenset())
+        ):
+            return False
+        completed: Final = frozenset(
+            item.get("call_id") for item in self.input if item.get("type") == "function_call_output"
+        )
+        return not any(
+            item.get("type") == "function_call"
+            and item.get("name") in server_names
+            and item.get("call_id") not in completed
+            for item in self.input
+        )
 
 
 class MemoryContinuations:
