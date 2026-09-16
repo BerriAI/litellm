@@ -222,7 +222,7 @@ def _as_token_details(value: object, wrapper: type[_TokenDetails]) -> _TokenDeta
         return wrapper(**value)
     model_dump = getattr(value, "model_dump", None)
     if callable(model_dump):
-        return wrapper(**{key: val for key, val in model_dump().items() if val is not None})
+        return wrapper(**model_dump())
     return None
 
 
