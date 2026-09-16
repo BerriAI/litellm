@@ -15,7 +15,7 @@ const buildSkill = (source: Plugin["source"]): Plugin => ({
 describe("SkillDetail source", () => {
   it("links a github source to the repository", () => {
     render(<SkillDetail skill={buildSkill({ source: "github", repo: "org/repo" })} onBack={vi.fn()} />);
-    expect(screen.getByRole("link", { name: /github.com\/org\/repo/ })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "github.com/org/repo" })).toHaveAttribute(
       "href",
       "https://github.com/org/repo",
     );
@@ -26,7 +26,7 @@ describe("SkillDetail source", () => {
       <SkillDetail skill={buildSkill({ source: "url", url: "git@ghe.example.com:org/repo.git" })} onBack={vi.fn()} />,
     );
     expect(screen.getByText("git@ghe.example.com:org/repo.git")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /ghe.example.com/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("renders an ssh git-subdir source as plain text without a tree path", () => {
@@ -37,6 +37,6 @@ describe("SkillDetail source", () => {
       />,
     );
     expect(screen.getByText("git@ghe.example.com:org/repo.git @ plugins/x")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /ghe.example.com/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 });
