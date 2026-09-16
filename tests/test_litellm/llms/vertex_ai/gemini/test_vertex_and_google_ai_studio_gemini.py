@@ -5836,3 +5836,65 @@ def test_supported_reasoning_efforts_still_map(model):
             drop_params=False,
         )
         assert "thinkingConfig" in result
+
+
+def _generate_content_body() -> dict:
+    return {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "hi"}]},
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 5,
+            "candidatesTokenCount": 7,
+            "totalTokenCount": 12,
+        },
+    }
+
+
+def test_generate_content_transform_uses_reported_model_version():
+    """The served modelVersion must win over the requested name so downstream
+    pricing sees what actually ran."""
+    import httpx
+
+    body = {**_generate_content_body(), "modelVersion": "gemini-x-served"}
+    response: Final = VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
+        completion_response=body,
+        model_response=ModelResponse(),
+        model="gemini-x",
+        logging_obj=MagicMock(),
+        raw_response=httpx.Response(200, headers={}),
+    )
+
+    assert response.model == "gemini-x-served"
+
+
+def test_generate_content_transform_falls_back_to_requested_model():
+    import httpx
+
+    response: Final = VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
+        completion_response=_generate_content_body(),
+        model_response=ModelResponse(),
+        model="gemini-x",
+        logging_obj=MagicMock(),
+        raw_response=httpx.Response(200, headers={}),
+    )
+
+    assert response.model == "gemini-x"
+
+
+def test_streaming_chunk_carries_model_version():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    chunk = {**_generate_content_body(), "modelVersion": "gemini-x-served"}
+    iterator: Final = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+    )
+    streaming_chunk: Final = iterator.chunk_parser(chunk)
+
+    assert streaming_chunk.model == "gemini-x-served"
