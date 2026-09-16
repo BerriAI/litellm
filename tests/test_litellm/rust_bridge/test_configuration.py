@@ -33,12 +33,14 @@ Decision: Final = configuration.Decision
         (Rollout.RUST_REQUIRED, False, False, Decision.RUST_REQUIRED),
         (Rollout.RUST_OPT_IN, None, None, Decision.PYTHON),
         (Rollout.RUST_OPT_IN, None, True, Decision.RUST_WITH_FALLBACK),
-        (Rollout.RUST_OPT_IN, True, False, Decision.RUST_WITH_FALLBACK),
-        (Rollout.RUST_OPT_IN, False, True, Decision.PYTHON),
+        (Rollout.RUST_OPT_IN, True, None, Decision.RUST_WITH_FALLBACK),
+        (Rollout.RUST_OPT_IN, True, False, Decision.PYTHON),
+        (Rollout.RUST_OPT_IN, False, True, Decision.RUST_WITH_FALLBACK),
         (Rollout.RUST_OPT_OUT, None, None, Decision.RUST_WITH_FALLBACK),
         (Rollout.RUST_OPT_OUT, None, False, Decision.PYTHON),
-        (Rollout.RUST_OPT_OUT, False, True, Decision.PYTHON),
-        (Rollout.RUST_OPT_OUT, True, False, Decision.RUST_WITH_FALLBACK),
+        (Rollout.RUST_OPT_OUT, False, None, Decision.PYTHON),
+        (Rollout.RUST_OPT_OUT, False, True, Decision.RUST_WITH_FALLBACK),
+        (Rollout.RUST_OPT_OUT, True, False, Decision.PYTHON),
     ),
 )
 def test_decide_precedence(
@@ -68,48 +70,51 @@ def test_opt_out_route_configuration(
 
     expected: Final = (
         Decision.RUST_WITH_FALLBACK
-        if process is True or (process is None and environment not in frozenset({"0", "off"}))
+        if environment == "1" or (environment is None and process is not False)
         else Decision.PYTHON
     )
     assert configuration.decision(Rollout.RUST_OPT_OUT) is expected
 
 
-def test_process_override_wins_over_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "0")
+@pytest.mark.parametrize(
+    ("environment", "process", "expected"),
+    (
+        *((value, True, False) for value in ("0", "false", "False", "no", "off", "f", "n", " 0 ")),
+        *((value, False, True) for value in ("1", "true", "TRUE", "yes", "on", "t", "y", " 1 ")),
+    ),
+)
+def test_environment_wins_over_process_override(
+    monkeypatch: pytest.MonkeyPatch, environment: str, process: bool, expected: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", environment)
+    configuration.rust(process)
+
+    assert configuration.rust_enabled() is expected
+
+
+def test_process_override_applies_when_environment_is_unset() -> None:
     configuration.rust(True)
 
     assert configuration.rust_enabled() is True
-
-
-def test_global_environment_accepts_explicit_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "off")
-
-    assert configuration.rust_enabled() is False
 
 
 @pytest.mark.parametrize("value", ("", " ", "sometimes", "2"))
-def test_invalid_environment_value_disables_rust(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+def test_invalid_environment_value_is_ignored(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv("LITELLM_RUST", value)
 
     assert configuration.rust_enabled() is False
-
-
-def test_process_override_and_reset_apply_to_existing_threads(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "1")
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        assert executor.submit(configuration.rust_enabled).result() is True
-        configuration.rust(False)
-        assert executor.submit(configuration.rust_enabled).result() is False
-        configuration.reset_rust_configuration()
-        assert executor.submit(configuration.rust_enabled).result() is True
-
-
-def test_explicit_override_precedes_invalid_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "sometimes")
-
+    assert configuration.decision(Rollout.RUST_OPT_OUT) is Decision.RUST_WITH_FALLBACK
     configuration.rust(True)
     assert configuration.rust_enabled() is True
+
+
+def test_process_override_and_reset_apply_to_existing_threads() -> None:
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        assert executor.submit(configuration.rust_enabled).result() is False
+        configuration.rust(True)
+        assert executor.submit(configuration.rust_enabled).result() is True
+        configuration.reset_rust_configuration()
+        assert executor.submit(configuration.rust_enabled).result() is False
 
 
 @pytest.mark.parametrize(("value", "expected"), (("1", "True"), ("0", "False")))

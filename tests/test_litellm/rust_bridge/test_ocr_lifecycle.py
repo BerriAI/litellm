@@ -143,7 +143,7 @@ def test_public_missing_required_argument_error_does_not_depend_on_native_select
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("enabled", [False, None])
+@pytest.mark.parametrize("enabled", [False, True, None])
 async def test_environment_opt_out_never_loads_native(
     monkeypatch: pytest.MonkeyPatch, asynchronous: bool, enabled: bool | None
 ) -> None:

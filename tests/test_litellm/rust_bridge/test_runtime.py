@@ -114,6 +114,32 @@ def test_environment_switch_enables_opt_in_route(monkeypatch: pytest.MonkeyPatch
     assert calls.calls == (RUST,)
 
 
+@pytest.mark.parametrize(
+    ("rollout", "environment", "switch", "expected"),
+    (
+        (Rollout.RUST_OPT_IN, "0", True, (PYTHON,)),
+        (Rollout.RUST_OPT_OUT, "0", True, (PYTHON,)),
+        (Rollout.RUST_OPT_IN, "1", False, (RUST,)),
+        (Rollout.RUST_OPT_OUT, "1", False, (RUST,)),
+        (Rollout.RUST_REQUIRED, "0", False, (RUST,)),
+        (Rollout.PYTHON_ONLY, "1", True, (PYTHON,)),
+    ),
+)
+def test_environment_switch_wins_over_process_switch(
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: Rollout,
+    environment: str,
+    switch: bool,
+    expected: tuple[str, ...],
+) -> None:
+    calls: Final = recorder()
+    monkeypatch.setenv("LITELLM_RUST", environment)
+    configuration.rust(switch)
+
+    assert run(rollout, calls) == expected[-1]
+    assert calls.calls == expected
+
+
 def test_context_outside_rule_stays_on_python() -> None:
     calls: Final = recorder()
     configuration.rust(True)
