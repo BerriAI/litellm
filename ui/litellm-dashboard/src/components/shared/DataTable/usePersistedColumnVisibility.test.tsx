@@ -109,8 +109,9 @@ describe("usePersistedColumnVisibility", () => {
   });
 
   it("applies new defaults passed after mount", () => {
+    const initialProps: { defaults: VisibilityState } = { defaults: { spend: false } };
     const { result, rerender } = renderHook(({ defaults }) => usePersistedColumnVisibility("keys", defaults), {
-      initialProps: { defaults: { spend: false } },
+      initialProps,
     });
 
     rerender({ defaults: { name: false } });
@@ -144,6 +145,35 @@ describe("usePersistedColumnVisibility", () => {
     act(() => result.current.onColumnVisibilityChange({ name: false }));
     expect(result.current.columnVisibility).toEqual({ name: false });
     expect(stored("full")).toEqual({ name: false });
+  });
+
+  it("shows another tab's save over a toggle this tab could not save", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(Storage.prototype, "setItem").mockImplementationOnce(() => {
+      throw new Error("QuotaExceededError");
+    });
+    const { result } = renderHook(() => usePersistedColumnVisibility("shadowed"));
+    act(() => result.current.onColumnVisibilityChange({ email: false }));
+
+    act(() => {
+      localStorage.setItem(keyFor("shadowed"), JSON.stringify({ name: false }));
+      window.dispatchEvent(new StorageEvent("storage", { key: keyFor("shadowed") }));
+    });
+
+    expect(result.current.columnVisibility).toEqual({ name: false });
+  });
+
+  it("drops a toggle this tab could not save once another tab clears storage", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(Storage.prototype, "setItem").mockImplementationOnce(() => {
+      throw new Error("QuotaExceededError");
+    });
+    const { result } = renderHook(() => usePersistedColumnVisibility("cleared", { spend: false }));
+    act(() => result.current.onColumnVisibilityChange({ email: false }));
+
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key: null })));
+
+    expect(result.current.columnVisibility).toEqual({ spend: false });
   });
 
   it("returns the defaults without throwing when storage is unavailable", () => {

@@ -18,11 +18,23 @@ function storageKey(tableId: string): string {
   return `${STORAGE_KEY_PREFIX}${tableId}`;
 }
 
+function forgetUnsavedWrite(event: StorageEvent): void {
+  if (event.key === null) {
+    unsavedWrites.clear();
+    return;
+  }
+  unsavedWrites.delete(event.key);
+}
+
 function subscribe(onChange: () => void): () => void {
-  window.addEventListener("storage", onChange);
+  const onStorage = (event: StorageEvent): void => {
+    forgetUnsavedWrite(event);
+    onChange();
+  };
+  window.addEventListener("storage", onStorage);
   window.addEventListener(LOCAL_STORAGE_EVENT, onChange);
   return () => {
-    window.removeEventListener("storage", onChange);
+    window.removeEventListener("storage", onStorage);
     window.removeEventListener(LOCAL_STORAGE_EVENT, onChange);
   };
 }
