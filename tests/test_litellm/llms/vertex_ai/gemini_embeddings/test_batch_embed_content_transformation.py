@@ -10,6 +10,7 @@ Covers:
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
@@ -306,6 +307,26 @@ class TestProcessEmbedContentResponseUsage:
     """
 
     MODEL = "gemini-embedding-2"
+
+    @pytest.fixture(autouse=True)
+    def _pin_local_model_cost(self, monkeypatch):
+        """Bill against the pricing schema this branch's transformation emits.
+
+        litellm.model_cost is fetched from upstream main at import time. When main
+        rewrites gemini-embedding-2 pricing (e.g. per-token vs per-second) ahead of
+        this branch, the transformation's per-image / per-second usage fields fall
+        off the cost map and these dollar assertions fail. Pin the local backup so
+        the tests only fail when litellm code changes on this branch.
+        """
+        original_model_cost = litellm.model_cost
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.get_model_info.cache_clear()
+        try:
+            yield
+        finally:
+            litellm.model_cost = original_model_cost
+            litellm.get_model_info.cache_clear()
 
     def test_multimodal_image_preserves_usage_metadata(self):
         response_json = {
