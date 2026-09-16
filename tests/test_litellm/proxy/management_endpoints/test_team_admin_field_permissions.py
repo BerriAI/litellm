@@ -7,9 +7,9 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TeamAdminEditingDisabled,
     TeamAdminFieldNotPermitted,
     changed_team_fields,
-    raise_for_team_admin_edit_verdict,
     resolve_team_admin_editable_fields,
     team_admin_edit_verdict,
+    team_admin_request_or_raise,
 )
 
 _SUPPORTED = frozenset({"tpm_limit", "rpm_limit", "team_alias"})
@@ -96,10 +96,22 @@ class TestTeamAdminEditVerdict:
         verdict = team_admin_edit_verdict(UpdateTeamRequest(team_id="team-1"), _team(), frozenset())
         assert verdict == TeamAdminEditingDisabled()
 
-    def test_changes_within_permitted_fields_are_allowed(self):
-        data = UpdateTeamRequest(team_id="team-1", tpm_limit=6, team_alias="alpha")
-        verdict = team_admin_edit_verdict(data, _team(team_alias="alpha"), frozenset({"tpm_limit"}))
-        assert verdict == TeamAdminEditAllowed()
+    def test_allowed_request_keeps_only_the_changed_fields(self):
+        data = UpdateTeamRequest(team_id="team-1", tpm_limit=6, team_alias="alpha", budget_duration="30d")
+        existing = _team(team_alias="alpha", budget_duration="30d")
+        verdict = team_admin_edit_verdict(data, existing, frozenset({"tpm_limit"}))
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "tpm_limit": 6}
+
+    def test_permitted_field_changed_inside_metadata_keeps_the_metadata(self):
+        data = UpdateTeamRequest(team_id="team-1", metadata={"guardrails": ["b"]}, team_alias="alpha")
+        existing = _team(team_alias="alpha", metadata={"guardrails": ["a"]})
+        verdict = team_admin_edit_verdict(data, existing, frozenset({"guardrails"}))
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {
+            "team_id": "team-1",
+            "metadata": {"guardrails": ["b"]},
+        }
 
     def test_first_blocked_field_in_sorted_order_is_reported(self):
         data = UpdateTeamRequest(team_id="team-1", tpm_limit=6, rpm_limit=6, blocked=True)
@@ -107,19 +119,20 @@ class TestTeamAdminEditVerdict:
         assert verdict == TeamAdminFieldNotPermitted(field="blocked")
 
 
-class TestRaiseForTeamAdminEditVerdict:
-    def test_allowed_does_not_raise(self):
-        assert raise_for_team_admin_edit_verdict(TeamAdminEditAllowed()) is None
+class TestTeamAdminRequestOrRaise:
+    def test_allowed_hands_back_its_request(self):
+        request = UpdateTeamRequest(team_id="team-1", tpm_limit=6)
+        assert team_admin_request_or_raise(TeamAdminEditAllowed(request=request)) is request
 
     def test_disabled_is_a_403_pointing_at_the_proxy_admin(self):
         with pytest.raises(HTTPException) as exc:
-            raise_for_team_admin_edit_verdict(TeamAdminEditingDisabled())
+            team_admin_request_or_raise(TeamAdminEditingDisabled())
         assert exc.value.status_code == 403
         assert "cannot edit team settings" in exc.value.detail
         assert "Settings > UI > Team admin editable fields" in exc.value.detail
 
     def test_field_not_permitted_is_a_403_naming_the_field(self):
         with pytest.raises(HTTPException) as exc:
-            raise_for_team_admin_edit_verdict(TeamAdminFieldNotPermitted(field="blocked"))
+            team_admin_request_or_raise(TeamAdminFieldNotPermitted(field="blocked"))
         assert exc.value.status_code == 403
         assert "'blocked'" in exc.value.detail

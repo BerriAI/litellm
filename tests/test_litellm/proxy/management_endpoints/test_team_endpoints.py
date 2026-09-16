@@ -15079,6 +15079,42 @@ async def test_update_team_team_admin_changes_tpm_limit_once_a_proxy_admin_enabl
 
 
 @pytest.mark.asyncio
+async def test_update_team_team_admin_resending_budget_settings_does_not_push_back_budget_resets(
+    disable_audit_logging_for_mocked_team,
+):
+    """A resent budget_duration or budget_limits would otherwise recompute the reset timestamps from now."""
+    import contextlib
+
+    stored_windows = [{"budget_duration": "7d", "max_budget": 5.0, "reset_at": "2026-09-20T00:00:00Z"}]
+    budgeted_team = MagicMock()
+    budgeted_team.metadata = {}
+    budgeted_team.model_dump.return_value = {
+        "team_id": "test_team_id",
+        "team_alias": "test_team",
+        "metadata": {},
+        "budget_duration": "30d",
+        "budget_limits": stored_windows,
+        "members_with_roles": [{"user_id": "team-admin", "role": "admin"}],
+    }
+
+    with contextlib.ExitStack() as stack:
+        prisma = _wire_update_team(stack, {})
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=budgeted_team)
+        stack.enter_context(_team_admin_may_edit("tpm_limit"))
+        await update_team(
+            data=UpdateTeamRequest(
+                team_id="test_team_id", tpm_limit=5000, budget_duration="30d", budget_limits=stored_windows
+            ),
+            http_request=_update_request_stub(),
+            user_api_key_dict=_TEAM_ADMIN_CALLER,
+        )
+
+    written = prisma.db.litellm_teamtable.update.call_args.kwargs["data"]
+    assert written["tpm_limit"] == 5000
+    assert not {"budget_duration", "budget_reset_at", "budget_limits"} & written.keys()
+
+
+@pytest.mark.asyncio
 async def test_update_team_holds_a_team_admin_to_the_org_tpm_limit(disable_audit_logging_for_mocked_team):
     """The org ceiling lives on the org's budget row, so /team/update must load it to enforce the cap."""
     import contextlib
