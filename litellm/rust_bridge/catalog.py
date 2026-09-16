@@ -1,4 +1,4 @@
-"""Declarative Rust/Python selection matrix for every public LiteLLM route.
+"""Declarative Rust/Python selection for routes with Rust integration.
 
 Rules are static data matched top to bottom; the first match wins and a
 context with no matching rule stays on Python. Whether the Rust core can serve
@@ -20,13 +20,7 @@ class Route(str, Enum):
     CHAT_COMPLETIONS = "chat_completions"
     MESSAGES = "messages"
     RESPONSES = "responses"
-    EMBEDDING = "embedding"
-    RERANK = "rerank"
-    IMAGE_GENERATION = "image_generation"
-    IMAGE_EDIT = "image_edit"
-    SPEECH = "speech"
     TRANSCRIPTION = "transcription"
-    MODERATION = "moderation"
     OCR = "ocr"
 
 
@@ -66,16 +60,6 @@ Rules: TypeAlias = tuple[Rule, ...]
 RULES: Final[Rules] = (
     Rule(Route.OCR, Rollout.RUST_OPT_OUT),
     Rule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
-    Rule(Route.TRANSCRIPTION, Rollout.PYTHON_ONLY),
-    Rule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
-    Rule(Route.MESSAGES, Rollout.PYTHON_ONLY),
-    Rule(Route.RESPONSES, Rollout.PYTHON_ONLY),
-    Rule(Route.EMBEDDING, Rollout.PYTHON_ONLY),
-    Rule(Route.RERANK, Rollout.PYTHON_ONLY),
-    Rule(Route.IMAGE_GENERATION, Rollout.PYTHON_ONLY),
-    Rule(Route.IMAGE_EDIT, Rollout.PYTHON_ONLY),
-    Rule(Route.SPEECH, Rollout.PYTHON_ONLY),
-    Rule(Route.MODERATION, Rollout.PYTHON_ONLY),
 )
 
 

@@ -1,55 +1,83 @@
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import Final
 
 import pytest
 
-from litellm.rust_bridge import catalog
+from litellm.rust_bridge import catalog, configuration
 from litellm.rust_bridge.catalog import Context, Delivery, Route, Rule
-from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.configuration import Decision, Rollout
 
 
-def test_every_route_has_an_explicit_default_rule() -> None:
-    declared: Final = frozenset(
-        rule.route for rule in catalog.RULES if rule.providers is None and rule.deliveries is None
-    )
-    assert declared == frozenset(Route)
+@pytest.fixture(autouse=True)
+def isolated_configuration(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    monkeypatch.delenv("LITELLM_RUST", raising=False)
+    configuration.reset_rust_configuration()
+    yield
+    configuration.reset_rust_configuration()
+
+
+@pytest.mark.parametrize("route", tuple(Route))
+@pytest.mark.parametrize("provider", (None, "bedrock", "mistral", "anthropic", "openai", "azure_ai", "unknown"))
+@pytest.mark.parametrize("delivery", tuple(Delivery))
+@pytest.mark.parametrize("process", (None, False, True))
+@pytest.mark.parametrize("environment", (None, "0", "1"))
+def test_shipped_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+    route: Route,
+    provider: str | None,
+    delivery: Delivery,
+    process: bool | None,
+    environment: str | None,
+) -> None:
+    configuration.rust(process)
+    if environment is not None:
+        monkeypatch.setenv("LITELLM_RUST", environment)
+    context: Final = Context(route, provider=provider, model="test-model", delivery=delivery)
+
+    if route is Route.OCR:
+        enabled: Final = environment == "1" if environment is not None else process is not False
+        assert catalog.rollout(context) is Rollout.RUST_OPT_OUT
+        assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if enabled else Decision.PYTHON)
+    elif route is Route.TRANSCRIPTION and provider == "bedrock":
+        assert catalog.rollout(context) is Rollout.RUST_REQUIRED
+        assert catalog.decision(context) is Decision.RUST_REQUIRED
+    else:
+        assert catalog.rollout(context) is Rollout.PYTHON_ONLY
+        assert catalog.decision(context) is Decision.PYTHON
+
+
+@pytest.mark.parametrize("route", tuple(Route))
+def test_missing_rule_stays_on_python_even_when_rust_is_enabled(monkeypatch: pytest.MonkeyPatch, route: Route) -> None:
+    configuration.rust(True)
+    monkeypatch.setenv("LITELLM_RUST", "1")
+
+    assert catalog.rollout(Context(route), rules=()) is Rollout.PYTHON_ONLY
+    assert catalog.decision(Context(route), rules=()) is Decision.PYTHON
 
 
 @pytest.mark.parametrize(
     ("context", "expected"),
     (
-        (Context(Route.OCR), Rollout.RUST_OPT_OUT),
-        (Context(Route.OCR, provider="mistral", model="mistral-ocr-latest"), Rollout.RUST_OPT_OUT),
-        (Context(Route.TRANSCRIPTION, provider="bedrock"), Rollout.RUST_REQUIRED),
-        (Context(Route.TRANSCRIPTION, provider="openai"), Rollout.PYTHON_ONLY),
-        (Context(Route.TRANSCRIPTION), Rollout.PYTHON_ONLY),
-        (Context(Route.CHAT_COMPLETIONS, provider="anthropic"), Rollout.PYTHON_ONLY),
-        (Context(Route.CHAT_COMPLETIONS, provider="bedrock"), Rollout.PYTHON_ONLY),
-        (Context(Route.MESSAGES, provider="anthropic"), Rollout.PYTHON_ONLY),
-        (Context(Route.MESSAGES, provider="azure_ai"), Rollout.PYTHON_ONLY),
-        (Context(Route.RESPONSES, provider="openai", delivery=Delivery.WEBSOCKET), Rollout.PYTHON_ONLY),
+        (Context(Route.RESPONSES, provider="openai", model="m", delivery=Delivery.WEBSOCKET), Decision.RUST_REQUIRED),
+        (Context(Route.RESPONSES, provider="openai", model="m"), Decision.PYTHON),
+        (Context(Route.RESPONSES, provider="openai", model="m", delivery=Delivery.STREAMING), Decision.PYTHON),
+        (Context(Route.RESPONSES, provider="openai", model="other", delivery=Delivery.WEBSOCKET), Decision.PYTHON),
+        (Context(Route.RESPONSES, provider="anthropic", model="m", delivery=Delivery.WEBSOCKET), Decision.PYTHON),
+        (Context(Route.MESSAGES, provider="openai", model="m", delivery=Delivery.WEBSOCKET), Decision.PYTHON),
     ),
 )
-def test_shipped_rules(context: Context, expected: Rollout) -> None:
-    assert catalog.rollout(context) is expected
-
-
-def test_only_ocr_and_bedrock_transcription_can_reach_rust() -> None:
-    rust_capable: Final = frozenset(
-        (rule.route, rule.providers) for rule in catalog.RULES if rule.rollout is not Rollout.PYTHON_ONLY
-    )
-    assert rust_capable == frozenset({(Route.OCR, None), (Route.TRANSCRIPTION, frozenset({"bedrock"}))})
-
-
-def test_first_matching_rule_wins() -> None:
+def test_first_matching_rule_respects_every_constraint(context: Context, expected: Decision) -> None:
     rules: Final = (
-        Rule(Route.EMBEDDING, Rollout.RUST_REQUIRED, providers=frozenset({"openai"}), models=frozenset({"m"})),
-        Rule(Route.EMBEDDING, Rollout.RUST_OPT_IN, providers=frozenset({"openai"})),
-        Rule(Route.EMBEDDING, Rollout.PYTHON_ONLY),
+        Rule(
+            Route.RESPONSES,
+            Rollout.RUST_REQUIRED,
+            providers=frozenset({"openai"}),
+            models=frozenset({"m"}),
+            deliveries=frozenset({Delivery.WEBSOCKET}),
+        ),
+        Rule(Route.RESPONSES, Rollout.PYTHON_ONLY),
     )
 
-    assert catalog.rollout(Context(Route.EMBEDDING, provider="openai", model="m"), rules) is Rollout.RUST_REQUIRED
-    assert catalog.rollout(Context(Route.EMBEDDING, provider="openai", model="other"), rules) is Rollout.RUST_OPT_IN
-    assert catalog.rollout(Context(Route.EMBEDDING, provider="cohere", model="m"), rules) is Rollout.PYTHON_ONLY
-    assert catalog.rollout(Context(Route.RERANK, provider="openai", model="m"), rules) is Rollout.PYTHON_ONLY
+    assert catalog.decision(context, rules) is expected
