@@ -137,10 +137,14 @@ def _int_setting(settings: Mapping[str, object], key: str, default: int) -> int:
 
 
 def _parse_address(client_ip: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """The address as it is limited and counted: an IPv4-mapped IPv6 address is its IPv4 address."""
     try:
-        return ipaddress.ip_address(client_ip)
+        address: Final = ipaddress.ip_address(client_ip)
     except ValueError:
         return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
 
 
 def _parse_network(raw_range: str) -> _Network | None:
@@ -183,9 +187,6 @@ def source_group(client_ip: str) -> str:
     if address is None:
         return client_ip
     if isinstance(address, ipaddress.IPv6Address):
-        mapped: Final = address.ipv4_mapped
-        if mapped is not None:
-            return str(mapped)
         return str(ipaddress.ip_network((address, IPV6_SOURCE_PREFIX_LENGTH), strict=False))
     return str(address)
 
