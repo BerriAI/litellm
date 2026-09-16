@@ -13388,6 +13388,44 @@ async def test_load_config_router_authorizes_fallback_targets_against_the_callin
 
 
 @pytest.mark.asyncio
+async def test_load_config_router_budget_checks_fallback_targets_against_the_calling_key(tmp_path, monkeypatch):
+    """A config-loaded router refuses a paid fallback target for an over-budget caller."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump({"model_list": [{"model_name": "m", "litellm_params": {"model": "openai/m", "api_key": "k"}}]})
+    )
+
+    router, _, _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    over_budget = {
+        "metadata": {
+            "user_api_key_auth": UserAPIKeyAuth(
+                api_key="hashed", token="hashed", user_id="u1", user_spend=99.0, user_max_budget=1.0
+            )
+        }
+    }
+    under_budget = {
+        "metadata": {
+            "user_api_key_auth": UserAPIKeyAuth(
+                api_key="hashed", token="hashed", user_id="u1", user_spend=0.0, user_max_budget=100.0
+            )
+        }
+    }
+
+    # off by default: the paid fallback is still attempted for an over-budget caller
+    monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
+    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, llm_router=router) is True
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"enforce_fallback_budget": True}, raising=False)
+    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, llm_router=router) is False
+    assert await router.fallback_budget_check(model="m", request_kwargs=under_budget, llm_router=router) is True
+
+
+@pytest.mark.asyncio
 async def test_load_config_user_api_key_cache_max_size_keeps_more_than_200_entries(tmp_path, monkeypatch):
     """The auth cache used to be pinned at InMemoryCache's 200 entry default, so a
     deployment with more keys than that evicted constantly and every request
