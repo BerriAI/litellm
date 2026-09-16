@@ -13639,7 +13639,7 @@ class TestProtectedCredentialPreparation:
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("header", ["Basic", "Basic @@@", "Other abc", "Basic QmFzaWM="])
+    @pytest.mark.parametrize("header", ["Basic", "Basic @@@", "Other abc", "Basic QmFzaWM=", "Basic bm8tY29sb24="])
     async def test_basic_headers_without_usable_credentials_reject(self, header: str) -> None:
         server = MCPServer(server_id="bad-basic", name="bad-basic", url="https://upstream.example/mcp",
                            transport=MCPTransport.http, auth_type=MCPAuth.basic)
@@ -13724,3 +13724,66 @@ class TestProtectedCredentialPreparation:
         with pytest.raises(HTTPException) as exc:
             await MCPServerManager()._create_mcp_client(server, mcp_auth_header={"Authorization": value})
         assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["no-colon", "Basic bm8tY29sb24="])
+    @pytest.mark.parametrize("source", ["configured", "caller"])
+    async def test_basic_requires_a_username_password_separator(self, value: str, source: str) -> None:
+        server: Final = MCPServer(
+            server_id="basic-pair", name="basic-pair", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.basic,
+            authentication_token=value if source == "configured" else None,
+        )
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["user:pass", "user:", ":pass", ":"])
+    async def test_basic_preserves_username_password_pairs(self, value: str) -> None:
+        import base64
+
+        server: Final = MCPServer(
+            server_id="basic-valid", name="basic-valid", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.basic, authentication_token=value,
+        )
+        client: Final = await MCPServerManager()._create_mcp_client(server)
+        request: Final = await client.prepare_request_auth()
+        scheme, encoded = request.headers["Authorization"].split(" ", 1)
+        assert scheme == "Basic"
+        assert base64.b64decode(encoded) == value.encode()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type,value", [
+        (MCPAuth.bearer_token, "Bearer"), (MCPAuth.bearer_token, "Bearer "), (MCPAuth.bearer_token, "bearer"),
+        (MCPAuth.token, "token"), (MCPAuth.token, "token "), (MCPAuth.token, "TOKEN"),
+    ])
+    @pytest.mark.parametrize("source", ["configured", "caller"])
+    async def test_static_scheme_only_input_cannot_hide_behind_rendered_prefix(
+        self, auth_type: MCPAuthType, value: str, source: str
+    ) -> None:
+        server: Final = MCPServer(
+            server_id="empty-scheme", name="empty-scheme", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=auth_type,
+            authentication_token=value if source == "configured" else None,
+        )
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type,value,expected", [
+        (MCPAuth.bearer_token, "token", "Bearer token"),
+        (MCPAuth.bearer_token, "Bearertoken", "Bearer Bearertoken"),
+        (MCPAuth.token, "tokenish", "token tokenish"),
+    ])
+    async def test_static_credentials_that_resemble_schemes_remain_usable(
+        self, auth_type: MCPAuthType, value: str, expected: str
+    ) -> None:
+        server: Final = MCPServer(
+            server_id="real-token", name="real-token", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=auth_type, authentication_token=value,
+        )
+        client: Final = await MCPServerManager()._create_mcp_client(server)
+        request: Final = await client.prepare_request_auth()
+        assert request.headers["Authorization"] == expected

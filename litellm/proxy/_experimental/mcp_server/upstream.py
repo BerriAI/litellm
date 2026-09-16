@@ -4,7 +4,7 @@ import base64
 from collections.abc import Mapping
 from typing import Final
 
-from litellm.experimental_mcp_client.client import MCPClient
+from litellm.experimental_mcp_client.client import MCPClient, strip_auth_scheme
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import raise_public
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
@@ -24,13 +24,17 @@ def _usable_credential_value(auth_type: MCPAuthType, name: str, value: str) -> b
         return True
     if value.lower() in ("bearer", "basic", "token", "apikey"):
         return False
+    if auth_type in (MCPAuth.bearer_token, MCPAuth.token):
+        scheme: Final = "Bearer" if auth_type == MCPAuth.bearer_token else "token"
+        credential: Final = strip_auth_scheme(value, scheme).strip()
+        return bool(credential) and credential.lower() != scheme.lower()
     if auth_type == MCPAuth.basic:
         parts: Final = value.split(None, 1)
         if len(parts) != 2 or parts[0].lower() != "basic":
             return False
         try:
             decoded: Final = base64.b64decode(parts[1], validate=True).strip()
-            return bool(decoded) and decoded.lower() != b"basic"
+            return b":" in decoded
         except ValueError:
             return False
     return True
