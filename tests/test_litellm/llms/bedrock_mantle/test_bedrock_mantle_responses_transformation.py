@@ -369,6 +369,29 @@ class TestBedrockMantleResponsesTools:
         assert "file_search" in str(mock_warning.call_args)
 
 
+class TestBedrockMantleSamplingParams:
+    """Mantle rejects top_p on its gpt-5 reasoning models and non-default temperature
+    while reasoning is active, the same rule the OpenAI Responses surface applies, so
+    drop_params must strip both before the request leaves."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "openai.gpt-5.4",
+            "openai.gpt-5.5",
+            "openai.gpt-5.6-luna",
+        ],
+    )
+    def test_map_openai_params_drops_top_p_and_temperature(self, local_cost_map, model):
+        params = BedrockMantleResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"top_p": 0.9, "temperature": 0.2},
+            model=model,
+            drop_params=True,
+        )
+        assert "top_p" not in params
+        assert "temperature" not in params
+
+
 class TestBedrockMantleResponsesWebSearch:
     """Web Search on Amazon Bedrock is a server-side built-in tool that Mantle runs
     itself when the caller passes {"type": "web_search"} on the Responses path, so

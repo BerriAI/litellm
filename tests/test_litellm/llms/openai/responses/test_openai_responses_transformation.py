@@ -1835,6 +1835,46 @@ class TestResponsesSurfaceSharesTheEffortRule:
         )
         assert ("temperature" in mapped) is temperature_survives
 
+    @pytest.mark.parametrize(
+        "model, effort, top_p_survives",
+        [
+            ("gpt-5.1", None, True),
+            ("gpt-5.4", None, True),
+            ("gpt-5.5", None, False),
+            ("gpt-5.6-terra", None, False),
+            ("gpt-5.6-sol", None, False),
+            ("gpt-5.6-terra", "none", True),
+            ("gpt-5.6-terra", "medium", False),
+            ("gpt-6-astra", None, False),
+            ("gpt-6-astra", "low", False),
+        ],
+    )
+    def test_top_p_follows_the_resolved_effort(self, local_model_cost_map, model, effort, top_p_survives):
+        params = {"top_p": 0.9}
+        if effort is not None:
+            params["reasoning"] = {"effort": effort}
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=params,
+            model=model,
+            drop_params=True,
+        )
+        assert ("top_p" in mapped) is top_p_survives
+
+    def test_top_p_raises_without_drop_params(self, local_model_cost_map):
+        with pytest.raises(litellm.UnsupportedParamsError):
+            OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"top_p": 0.9},
+                model="gpt-5.5",
+                drop_params=False,
+            )
+
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"top_p": 0.9, "reasoning": {"effort": "none"}},
+            model="gpt-5.6-terra",
+            drop_params=False,
+        )
+        assert mapped["top_p"] == 0.9
+
 
 class TestFlattenToolSchemaCombinatorsWiring:
     """Regression tests for MCP tools with a top-level anyOf schema (Codex Desktop).
