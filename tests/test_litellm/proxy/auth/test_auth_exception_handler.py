@@ -36,7 +36,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler, _as_proxy_exception
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 
 
@@ -1051,6 +1051,21 @@ async def test_handle_authentication_error_keeps_internal_message_on_model_acces
     assert "internal-models" not in str(exc_info.value.message)
     assert exc_info.value.internal_message == denial.internal_message
     assert [r for r in caplog.records if r.levelname == "WARNING" and "internal-models" in r.getMessage()] == []
+
+
+def test_as_proxy_exception_keeps_jwt_scope_denial_message_shape():
+    detail = {"error": "The model `gpt-5.6` is unavailable for this API key or does not exist."}
+    denial = ModelAccessDeniedHTTPException(
+        internal_message="model=gpt-5.6 not allowed. Allowed_models=['internal-models']",
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=detail,
+    )
+    plain = _as_proxy_exception(HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail))
+
+    converted = _as_proxy_exception(denial)
+
+    assert converted.to_dict() == plain.to_dict()
+    assert converted.internal_message == denial.internal_message
 
 
 @pytest.mark.asyncio
