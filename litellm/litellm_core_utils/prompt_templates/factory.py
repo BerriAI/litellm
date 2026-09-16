@@ -1984,15 +1984,9 @@ def _sanitize_empty_text_content(
 
     content: Final = message.get("content")
 
-    if message.get("role") == "user" and (content is None or content == []):
-        message = cast(AllMessageValues, dict(message))
-        message["content"] = _EMPTY_TEXT_PLACEHOLDER
-        verbose_logger.debug(
-            "_sanitize_empty_text_content: Replaced empty text content in %s message", message.get("role")
-        )
-        return message
-
-    if isinstance(content, str):
+    if (
+        message.get("role") == "user" and (content is None or (isinstance(content, list) and not content))
+    ) or isinstance(content, str):
         if not content or not content.strip():
             message = cast(AllMessageValues, dict(message))  # Make a copy
             message["content"] = _EMPTY_TEXT_PLACEHOLDER
