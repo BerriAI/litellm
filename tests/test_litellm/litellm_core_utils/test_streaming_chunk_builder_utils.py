@@ -1603,3 +1603,53 @@ def test_calculate_usage_falls_back_to_prompt_counter_when_mock_stream_has_no_ad
     )
 
     assert usage.prompt_tokens == 77
+
+
+def test_usage_chunk_helper_reads_an_openai_sdk_usage_object() -> None:
+    """An OpenAI-compatible upstream reaches the aggregator as an SDK object.
+
+    ``CompletionUsage`` is not a litellm ``Usage``: it answers neither ``in`` nor
+    ``get``, and its token details are the SDK's own models. Reading it with the
+    Mapping protocol yielded zero tokens and no details, so the aggregator fell
+    back to counting the prompt itself and reported ``cached_tokens`` as absent
+    on every streamed request against such a provider.
+    """
+    from openai.types.completion_usage import CompletionUsage
+    from openai.types.completion_usage import (
+        CompletionTokensDetails as SDKCompletionTokensDetails,
+    )
+    from openai.types.completion_usage import PromptTokensDetails as SDKPromptTokensDetails
+
+    usage_chunk: Final = CompletionUsage(
+        prompt_tokens=5234,
+        completion_tokens=125,
+        total_tokens=5359,
+        prompt_tokens_details=SDKPromptTokensDetails(cached_tokens=4992),
+        completion_tokens_details=SDKCompletionTokensDetails(reasoning_tokens=103),
+    )
+
+    summary: Final = ChunkProcessor.__new__(ChunkProcessor)._usage_chunk_calculation_helper(usage_chunk)
+
+    assert summary["prompt_tokens"] == 5234
+    assert summary["completion_tokens"] == 125
+    assert summary["prompt_tokens_details"] is not None
+    assert summary["prompt_tokens_details"].cached_tokens == 4992
+    assert summary["completion_tokens_details"] is not None
+    assert summary["completion_tokens_details"].reasoning_tokens == 103
+
+
+def test_usage_chunk_helper_still_reads_a_litellm_usage_object() -> None:
+    """The shape that already worked has to keep working."""
+    usage_chunk: Final = Usage(
+        prompt_tokens=100,
+        completion_tokens=20,
+        total_tokens=120,
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=64),
+    )
+
+    summary: Final = ChunkProcessor.__new__(ChunkProcessor)._usage_chunk_calculation_helper(usage_chunk)
+
+    assert summary["prompt_tokens"] == 100
+    assert summary["completion_tokens"] == 20
+    assert summary["prompt_tokens_details"] is not None
+    assert summary["prompt_tokens_details"].cached_tokens == 64
