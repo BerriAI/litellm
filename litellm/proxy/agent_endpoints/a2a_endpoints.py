@@ -162,14 +162,7 @@ async def _resolve_backend_auth_header(
     litellm_params: dict[str, object],
     custom_llm_provider: object,
 ) -> Mapping[str, str] | None:
-    """
-    Mint the bearer the agent's backend requires, when the agent is configured for one.
-
-    Databricks Apps take a short-lived OAuth M2M token from a ``databricks_oauth`` block. Microsoft
-    Foundry agents take an Entra ID token from the agent's own Entra credentials, but only when the
-    proxy speaks A2A to that URL itself: for completion-bridge agents (``custom_llm_provider`` set)
-    those same fields belong to the model provider and travel with the completion call instead.
-    """
+    """Entra credentials only authenticate the A2A hop; completion-bridge agents pass them to the model provider instead."""
     if litellm_params.get(DATABRICKS_OAUTH_PARAM):
         return await resolve_databricks_app_auth_header(litellm_params)
     if not custom_llm_provider and has_azure_entra_params(litellm_params):
