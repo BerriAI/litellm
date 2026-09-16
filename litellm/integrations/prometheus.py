@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
+from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.proxy._types import (
     LiteLLM_DeletedVerificationToken,
     LiteLLM_TeamTable,
@@ -4209,29 +4210,25 @@ class PrometheusLogger(CustomLogger):
         if not end_user_id:
             return
 
-        from litellm.proxy.auth.auth_checks import get_end_user_object
-        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
-
-        if prisma_client is None:
-            return
+        from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
+        from litellm.proxy.proxy_server import user_api_key_cache
 
         try:
-            end_user_object: Final = await get_end_user_object(
-                end_user_id=end_user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
+            cached_customer: Final = await user_api_key_cache.async_get_cache(
+                key=end_user_cache_key(end_user_id),
+                model_type=LiteLLM_EndUserTable,
             )
         except Exception as e:
             verbose_logger.debug("[Non-Blocking] Prometheus: Error getting customer info: %s", e)
             return
 
-        if end_user_object is None:
+        if cached_customer is None:
             return
 
-        budget_table: Final = end_user_object.litellm_budget_table
+        budget_table: Final = cached_customer.litellm_budget_table
         self._set_customer_budget_metrics(
             end_user_id=end_user_id,
-            spend=end_user_object.spend + response_cost,
+            spend=cached_customer.spend + response_cost,
             max_budget=budget_table.max_budget if budget_table is not None else None,
             budget_reset_at=None,
         )
