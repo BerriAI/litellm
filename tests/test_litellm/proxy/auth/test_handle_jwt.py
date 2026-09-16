@@ -6792,10 +6792,11 @@ async def test_sync_user_role_and_teams_singular_claim_only_recognized_under_fla
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("identity_only", [False, True])
+@pytest.mark.parametrize("allow_provisioning", [False, True])
 @pytest.mark.parametrize("existing_user", [False, True])
 @pytest.mark.parametrize("model_allowed", [False, True])
 async def test_auth_builder_identity_lookup_does_not_provision_users(
-    monkeypatch: pytest.MonkeyPatch, identity_only: bool, existing_user: bool, model_allowed: bool
+    monkeypatch: pytest.MonkeyPatch, identity_only: bool, allow_provisioning: bool, existing_user: bool, model_allowed: bool
 ) -> None:
     from litellm.proxy._types import ScopeMapping
     from litellm.proxy.auth.auth_checks import UserNotFoundError
@@ -6841,6 +6842,7 @@ async def test_auth_builder_identity_lookup_does_not_provision_users(
         parent_otel_span=None,
         proxy_logging_obj=MagicMock(),
         identity_only=identity_only,
+        allow_provisioning=allow_provisioning,
     )
     if not identity_only and not model_allowed:
         with pytest.raises(HTTPException) as denial:
@@ -6848,7 +6850,7 @@ async def test_auth_builder_identity_lookup_does_not_provision_users(
         assert denial.value.status_code == 403
         users.create.assert_not_awaited()
         return
-    if identity_only and not existing_user:
+    if (identity_only or not allow_provisioning) and not existing_user:
         with pytest.raises(UserNotFoundError):
             await pending
     else:
@@ -6856,7 +6858,7 @@ async def test_auth_builder_identity_lookup_does_not_provision_users(
         assert result["user_id"] == user_id
         assert result["user_object"] is not None
         assert result["user_object"].user_id == user_id
-    assert users.create.await_count == (0 if identity_only or existing_user else 1)
+    assert users.create.await_count == (0 if identity_only or not allow_provisioning or existing_user else 1)
 
 
 def _entra_agent_registry() -> AgentRegistry:
