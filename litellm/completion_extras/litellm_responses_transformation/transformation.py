@@ -526,9 +526,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _merge_text(
         responses_api_request: "ResponsesAPIOptionalRequestParams", update: Mapping[str, object]
     ) -> "ResponseText":
-        existing: Final = cast(
-            "dict[str, object]", responses_api_request["text"] if "text" in responses_api_request else {}
-        )
+        existing: Final = cast("dict[str, object]", dict(responses_api_request).get("text") or {})
         return cast("ResponseText", {**existing, **update})
 
     def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
