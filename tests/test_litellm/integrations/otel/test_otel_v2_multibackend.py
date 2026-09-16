@@ -1,9 +1,9 @@
-"""Multi-backend fan-out: one TracerProvider, *N* SpanProcessors.
+"""Multi-backend fan-out within one callback: one TracerProvider, *N* SpanProcessors.
 
-V1 needed a separate ``TracerProvider`` per integration to avoid stepping on
-the global. V2 attaches a ``SpanProcessor`` per exporter to the *same*
-provider, so the same trace ID lights up every backend — no duplicate spans,
-no per-integration provider caches.
+A single ``OpenTelemetryV2Config`` may list several exporters (say two ``OTEL_*``
+collectors), and its provider attaches one ``SpanProcessor`` per exporter so the same
+span reaches each of them. Which exporters a config lists is decided per callback: a
+preset only lists the destination it owns, see ``TestDestinationOwnership``.
 """
 
 import pytest

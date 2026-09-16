@@ -1,6 +1,9 @@
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
+from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.trace import Span
+
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.mappers.langfuse import (
@@ -19,14 +22,21 @@ if TYPE_CHECKING:
 
 class LangfuseOpenTelemetryV2(OpenTelemetryV2):
     """Names the trace from the request. Langfuse reads ``langfuse.trace.name`` off the root observation,
-    and the proxy's root span is still recording when the LLM call starts."""
+    and the proxy's root span is still recording when the LLM call starts. Only a root created by this
+    logger's own provider is stamped; any other root is exported to destinations that are not Langfuse."""
 
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
-        root: Final = request_root_span()
+        root: Final = self._owned_recording_root()
         name: Final = caller_trace_name(kwargs)
-        if root is not None and root.is_recording() and name is not None:
+        if root is not None and name is not None:
             root.set_attribute(LANGFUSE_TRACE_NAME, name)
         super().log_pre_api_call(model, messages, kwargs)
+
+    def _owned_recording_root(self) -> Span | None:
+        root: Final = request_root_span()
+        if root is None or not root.is_recording() or not isinstance(root, ReadableSpan):
+            return None
+        return root if root.resource is self.tracer_provider.resource else None
 
 
 class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):
@@ -59,8 +69,8 @@ class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):
         self._stamp_root_io(request_data, lambda: stream_output(tuple(relayed), request_data))
 
     def _stamp_root_io(self, data: Mapping[str, object], render_output: Callable[[], str | None]) -> None:
-        root: Final = request_root_span()
-        if root is None or not root.is_recording():
+        root: Final = self._owned_recording_root()
+        if root is None:
             return
         try:
             output: Final = render_output()

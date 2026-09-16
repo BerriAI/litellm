@@ -374,6 +374,53 @@ def test_unnamed_request_leaves_the_trace_name_off_both_spans():
     assert TRACE_NAME_ATTR not in root_attrs and TRACE_NAME_ATTR not in generation_attrs
 
 
+def test_a_root_owned_by_another_loggers_provider_is_never_stamped_with_langfuse_vocabulary():
+    """``callbacks: [otel, langfuse_otel]``: the request root belongs to the ``otel`` logger and exports to the
+    operator's collector, so Langfuse's trace name and root input/output must not be written on it."""
+    generic, generic_exporter = _logger(mappers=("genai",))
+    langfuse, langfuse_exporter = _logger()
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
+    named: Final = {"proxy_server_request": {"headers": {"langfuse_trace_name": "private-name"}}}
+
+    root = _start_root(generic)
+    asyncio.run(langfuse.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), CHAT_DATA, "acompletion"))
+    langfuse.log_pre_api_call(
+        model="gpt-5.4-mini", messages=[], kwargs={"litellm_call_id": "c1", "litellm_params": named}
+    )
+    asyncio.run(
+        langfuse.async_post_call_success_hook(data=CHAT_DATA, user_api_key_dict=UserAPIKeyAuth(), response=response)
+    )
+    root.end()
+
+    root_attrs = _root_attrs(generic_exporter)
+    assert not any(key.startswith("langfuse.") for key in root_attrs)
+    assert all(span.name != LITELLM_PROXY_REQUEST_SPAN_NAME for span in langfuse_exporter.get_finished_spans())
+
+
+def test_a_root_owned_by_the_langfuse_provider_is_still_named_and_given_its_io_next_to_another_logger():
+    """``callbacks: [langfuse_otel]`` with a second v2 logger alongside: the root was created by the Langfuse
+    provider, so the ownership check must not stop the trace name and root input/output from reaching Langfuse."""
+    _logger(mappers=("genai",))
+    langfuse, langfuse_exporter = _logger()
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
+    named: Final = {"proxy_server_request": {"headers": {"langfuse_trace_name": "private-name"}}}
+
+    root = _start_root(langfuse)
+    asyncio.run(langfuse.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), CHAT_DATA, "acompletion"))
+    langfuse.log_pre_api_call(
+        model="gpt-5.4-mini", messages=[], kwargs={"litellm_call_id": "c1", "litellm_params": named}
+    )
+    asyncio.run(
+        langfuse.async_post_call_success_hook(data=CHAT_DATA, user_api_key_dict=UserAPIKeyAuth(), response=response)
+    )
+    root.end()
+
+    root_attrs = _root_attrs(langfuse_exporter)
+    assert root_attrs[TRACE_NAME_ATTR] == "private-name"
+    assert json.loads(root_attrs[INPUT_ATTR]) == CHAT_DATA["messages"]
+    assert "pong" in root_attrs[OUTPUT_ATTR]
+
+
 @pytest.mark.parametrize(
     ("capture", "mappers"),
     [("no_content", ("genai", "langfuse")), ("span_only", ("genai",))],

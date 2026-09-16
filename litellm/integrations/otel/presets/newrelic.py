@@ -54,7 +54,6 @@ def newrelic_preset(
     return base.model_copy(
         update={
             "exporters": [
-                *base.exporters,
                 ExporterSpec(
                     kind="otlp_http",
                     endpoint=endpoint,
