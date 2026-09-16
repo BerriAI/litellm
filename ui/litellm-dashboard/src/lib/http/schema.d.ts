@@ -26504,6 +26504,16 @@ export interface components {
              */
             enforce_fallback_model_access?: boolean | null;
             /**
+             * Failed Login Block Seconds
+             * @description How long a blocked source address, or source address and username, stays blocked. The block is soft: a correct password still signs in, but each attempt from a blocked key takes one of 5 held slots per worker and a wrong password is held for 30 seconds before it is refused with 429. Set under `general_settings` in config.yaml. Defaults to 300
+             */
+            failed_login_block_seconds?: number | null;
+            /**
+             * Failed Login Window Seconds
+             * @description Fixed window in seconds over which failed Admin UI sign-in attempts are counted. The window starts at the first failure and is not extended by later ones. Set under `general_settings` in config.yaml. Defaults to 60
+             */
+            failed_login_window_seconds?: number | null;
+            /**
              * Forward Client Headers To Llm Api
              * @description If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.
              */
@@ -26547,6 +26557,23 @@ export interface components {
              * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
              */
             max_batch_file_size_mb?: number | null;
+            /**
+             * Max Failed Login Attempts Per Source
+             * @description Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Only enforced when `trusted_proxy_ranges` is set, since otherwise every client behind an ingress shares one address. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10
+             */
+            max_failed_login_attempts_per_source?: number | null;
+            /**
+             * Max Failed Login Attempts Per Source Overrides
+             * @description Per-address overrides of `max_failed_login_attempts_per_source`, keyed by IP address or CIDR range, e.g. {'1.2.3.4': 200, '5.6.0.0/24': 500}. The most specific matching range wins. Set under `general_settings` in config.yaml
+             */
+            max_failed_login_attempts_per_source_overrides?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Max Failed Login Attempts Per User
+             * @description Failed Admin UI sign-in attempts allowed from one source address for one username within `failed_login_window_seconds`. One more blocks that address for that username for `failed_login_block_seconds`, and its further failures stop counting against `max_failed_login_attempts_per_source`, so a script stuck on one account does not block everyone behind the same address. Set under `general_settings` in config.yaml. Defaults to 5
+             */
+            max_failed_login_attempts_per_user?: number | null;
             /**
              * Max File Size Mb
              * @description max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider
