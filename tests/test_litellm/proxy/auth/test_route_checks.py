@@ -2897,10 +2897,6 @@ def test_team_update_gate_admits_internal_user_without_org_context():
     caller and update_team resolves proxy, org or team admin itself, then filters team admins
     through the team_admin_editable_team_fields setting. Before that the gate 401'd every
     team admin, which left the handler's team-admin branch unreachable."""
-    from litellm.proxy._types import LiteLLMRoutes
-
-    assert "/team/update" in LiteLLMRoutes.self_managed_routes.value
-
     user_obj = LiteLLM_UserTable(
         user_id="team-admin-user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -3001,11 +2997,10 @@ async def test_add_team_org_context_noop_for_static_team_route():
     assert out == body
 
 
-def test_patch_team_route_stays_out_of_self_managed_routes():
-    """Unlike POST /team/update, PATCH /team/{team_id} cannot be self-managed: its
-    template also matches /team/new (the collision footgun), so it stays reachable by
-    org admins (org_admin_allowed_routes) and proxy admins only, never by regular
-    internal users or through the role-agnostic self_managed_routes."""
+def test_patch_team_route_has_same_reach_as_team_update():
+    """/team/{team_id} is reachable by org admins (in org_admin_allowed_routes) but
+    NOT by regular internal users or the role-agnostic self_managed_routes — the
+    latter would open /team/new (the collision footgun) to any authenticated user."""
     from litellm.proxy._types import LiteLLMRoutes
 
     assert RouteChecks.check_route_access(

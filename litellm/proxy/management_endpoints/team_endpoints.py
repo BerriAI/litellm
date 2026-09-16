@@ -504,9 +504,9 @@ _GENERAL_SETTINGS: Final = TypeAdapter(dict[str, object])
 
 
 def _general_settings() -> Mapping[str, object]:
-    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import general_settings
 
-    return _GENERAL_SETTINGS.validate_python(cast(object, proxy_server.general_settings))
+    return _GENERAL_SETTINGS.validate_python(general_settings)
 
 
 def _caller_edit_access(role: TeamAccessRole | None, general_settings: Mapping[str, object]) -> TeamEditAccess:
