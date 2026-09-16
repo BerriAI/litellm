@@ -14,7 +14,7 @@ import copy
 import json
 import math
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -61,6 +61,7 @@ from litellm.proxy._types import (
     SpecialProxyStrings,
     TeamAccessGroupModelGrant,
     TeamAddMemberResponse,
+    TeamInfoMember,
     TeamInfoResponseObject,
     TeamInfoResponseObjectTeamTable,
     TeamListResponseObject,
@@ -1902,6 +1903,39 @@ def validate_team_org_change(
     return True
 
 
+def _member_user_ids(members_with_roles: Sequence[dict[str, object]]) -> tuple[str, ...]:
+    """Extract the string ``user_id`` of each team member, dropping rows without one.
+
+    ``members_with_roles`` is a Prisma-deserialized JSON column, so its ``user_id`` is typed
+    ``object``; the ``isinstance`` narrows it to the ``str`` ``invalidate_team_member_spend_state`` needs.
+    """
+    return tuple(user_id for member in members_with_roles if isinstance((user_id := member.get("user_id")), str))
+
+
+async def _evict_created_membership_caches(
+    user_ids: Iterable[str],
+    team_id: str,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Evict the ``get_team_membership`` negative-cache sentinel for members whose row was just created.
+
+    A session-token request caches ``NO_TEAM_MEMBERSHIP_SENTINEL`` for a member with no
+    ``LiteLLM_TeamMembership`` row. When a create path (``/team/member_add`` or the ``/team/update``
+    budget backfill) later writes that row with a per-member budget, the stale sentinel keeps the
+    member's budget unenforced until the membership cache TTL expires, so it must be evicted here.
+    """
+    await asyncio.gather(
+        *(
+            invalidate_team_member_spend_state(
+                user_id=user_id,
+                team_id=team_id,
+                user_api_key_cache=user_api_key_cache,
+            )
+            for user_id in user_ids
+        )
+    )
+
+
 @router.post("/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
 async def update_team(
@@ -2237,6 +2271,11 @@ async def update_team(
                     members_with_roles=existing_team_row.members_with_roles,
                     team_member_budget_id=_backfill_budget_id,
                     prisma_client=prisma_client,
+                )
+                await _evict_created_membership_caches(
+                    user_ids=_member_user_ids(existing_team_row.members_with_roles),
+                    team_id=data.team_id,
+                    user_api_key_cache=user_api_key_cache,
                 )
         elif _team_member_fields_in_request:
             updated_kv = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
@@ -3188,6 +3227,12 @@ async def team_member_add(
         prisma_client=prisma_client,
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
+    )
+
+    await _evict_created_membership_caches(
+        user_ids=(tm.user_id for tm in updated_team_memberships),
+        team_id=data.team_id,
+        user_api_key_cache=user_api_key_cache,
     )
 
     _emit_team_members_metric(complete_team_data)
@@ -4292,37 +4337,35 @@ async def _add_team_member_budget_table(
     return team_info_response_object
 
 
-async def _hydrate_member_emails(
+async def _hydrate_member_user_details(
     prisma_client: PrismaClient,
     members: Sequence[Member],
-) -> tuple[Member, ...]:
-    """Fill in ``user_email`` for roster entries that were stored without one.
-
-    ``members_with_roles`` is a denormalized snapshot written at add-time, so an entry
-    stored with ``user_email=None`` keeps that null even once the user row has an email.
-    Look the missing ones up in ``LiteLLM_UserTable`` (one indexed query) and fill them
-    in. A stored email is never overwritten - the snapshot stays the source of truth
-    wherever it has a value.
-    """
-    missing_user_ids: Final = frozenset(m.user_id for m in members if not m.user_email and m.user_id is not None)
-    if not missing_user_ids:
-        return tuple(members)
-
-    user_rows: Final[Sequence[prisma_models.LiteLLM_UserTable]] = await _user_db(prisma_client).find_many(
-        where={  # mutable-ok: Prisma query filters are dict-shaped
-            "user_id": {  # mutable-ok: Prisma query filters are dict-shaped
-                "in": sorted(missing_user_ids)
+) -> tuple[TeamInfoMember, ...]:
+    """Attach ``user_alias`` and fill in a missing ``user_email`` from ``LiteLLM_UserTable`` in one query."""
+    user_ids: Final = frozenset(m.user_id for m in members if m.user_id is not None)
+    user_rows: Final[Sequence[prisma_models.LiteLLM_UserTable]] = (
+        await _user_db(prisma_client).find_many(
+            where={  # mutable-ok: Prisma query filters are dict-shaped
+                "user_id": {  # mutable-ok: Prisma query filters are dict-shaped
+                    "in": sorted(user_ids)
+                }
             }
-        }
+        )
+        if user_ids
+        else ()
     )
-    email_by_user_id: Final = MappingProxyType({u.user_id: u.user_email for u in user_rows if u.user_email})
+    user_by_id: Final = MappingProxyType({u.user_id: u for u in user_rows})
 
-    return tuple(
-        m.model_copy(update={"user_email": email_by_user_id[m.user_id]})  # mutable-ok: pydantic update payload
-        if not m.user_email and m.user_id is not None and m.user_id in email_by_user_id
-        else m
-        for m in members
-    )
+    def hydrate(m: Member) -> TeamInfoMember:
+        user_row: Final = user_by_id.get(m.user_id) if m.user_id is not None else None
+        return TeamInfoMember(
+            role=m.role,
+            user_id=m.user_id,
+            user_email=m.user_email or (user_row.user_email if user_row is not None else None),
+            user_alias=user_row.user_alias if user_row is not None else None,
+        )
+
+    return tuple(hydrate(m) for m in members)
 
 
 async def _resolve_team_access_group_resources(
@@ -4462,17 +4505,12 @@ async def team_info(
         # Resolve resources inherited from access groups
         resolved_team_info: Final = await _resolve_team_access_group_resources(_team_info)
 
-        # Fill in emails the add-time roster snapshot never captured
-        hydrated_members: Final = await _hydrate_member_emails(
+        hydrated_members: Final = await _hydrate_member_user_details(
             prisma_client=prisma_client,
             members=resolved_team_info.members_with_roles,
         )
         hydrated_team_info: Final = resolved_team_info.model_copy(
-            update={  # mutable-ok: pydantic update payload
-                # list(), not the tuple: model_copy skips validation, so the field has
-                # to be handed the list[Member] the response model declares.
-                "members_with_roles": list(hydrated_members)  # mutable-ok: declared list[Member]
-            }
+            update={"members_with_roles": hydrated_members}  # mutable-ok: pydantic update payload
         )
 
         response_object: Final = TeamInfoResponseObject(

@@ -1842,6 +1842,30 @@ async def register_client_with_server(
     return JSONResponse(token_response)
 
 
+@router.get("/authorize/mcp-session")
+async def authorize_mcp_session(
+    request: Request,
+    redirect_uri: str,
+    client_id: str,
+    state: str = "",
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
+    response_type: str | None = None,
+    resource: str | None = None,
+) -> Response:
+    return aggregate_authorize(
+        request=request,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        state=state,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
+        response_type=response_type,
+        session_user_id=_session_cookie_user_id(request),
+        resource=resource,
+    )
+
+
 @router.get("/{mcp_server_name}/authorize")
 @router.get("/authorize")
 async def authorize(
@@ -2393,8 +2417,7 @@ async def _build_oauth_protected_resource_response(
     per-server URL completes the same sign-in flow the aggregate ``/mcp`` endpoint
     supports and is admitted with a gateway session bearer. The per-server relay
     authorize/token endpoints stay registered for the keyed interactive flow (which
-    is challenged with an explicit ``authorization_uri``), and the root-resolved
-    (unnamed) legacy shape keeps the relay authorization server.
+    is challenged with an explicit ``authorization_uri``).
 
     Args:
         request: FastAPI Request object
@@ -2405,15 +2428,11 @@ async def _build_oauth_protected_resource_response(
     Returns:
         OAuth protected resource metadata dict
     """
+    if mcp_server_name is None:
+        return oauth_protected_resource_root(request)
+
     request_base_url: Final = get_request_base_url(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
-    explicitly_named: Final = mcp_server_name is not None
-
-    # When no server name provided, try to resolve the single OAuth2 server
-    if mcp_server_name is None:
-        resolved: Final = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
-        if resolved:
-            mcp_server_name = resolved.server_name or resolved.name
 
     mcp_server: MCPServer | None = None
     if mcp_server_name:
@@ -2478,7 +2497,7 @@ async def _build_oauth_protected_resource_response(
     if obo_response is not None:
         return obo_response
 
-    if explicitly_named and mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
+    if mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
         return {
             "authorization_servers": [f"{request_base_url}/mcp"],
             "resource": resource_url,
@@ -2542,6 +2561,17 @@ def _jwt_auth_issuers() -> list:
     return issuers
 
 
+@router.get("/.well-known/oauth-protected-resource")
+def oauth_protected_resource_root(request: Request) -> dict[str, str | tuple[str, ...]]:
+    request_base_url: Final = get_request_base_url(request)
+    parsed: Final = urlparse(request_base_url)
+    return {
+        "resource": f"{parsed.scheme}://{parsed.netloc}",
+        "authorization_servers": (f"{request_base_url}/mcp",),
+        "scopes_supported": (),
+    }
+
+
 def _build_aggregate_protected_resource_response(request: Request) -> dict:
     """RFC 9728 metadata for the aggregate /mcp resource: the gateway itself is
     the authorization server. No per-server names or scopes leak here; access
@@ -2568,14 +2598,14 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
     The issuer is ``{base}/mcp`` and must stay equal to the value the
     aggregate protected-resource document advertises: spec clients verify the
     issuer in the metadata matches the one that derived the well-known URL.
-    Advertises the root /authorize, /token, and /register endpoints and
+    Advertises the MCP session authorize endpoint, root /token and /register endpoints, and
     ``token_endpoint_auth_methods_supported: ["none", ...]`` because DCR
     clients (Claude Desktop, MCP Inspector) register as public clients; PKCE
     S256 is mandatory in the gateway's authorize flow."""
     request_base_url: Final = get_request_base_url(request)
     return {
         "issuer": f"{request_base_url}/mcp",
-        "authorization_endpoint": f"{request_base_url}/authorize",
+        "authorization_endpoint": f"{request_base_url}/authorize/mcp-session",
         "token_endpoint": f"{request_base_url}/token",
         "introspection_endpoint": f"{request_base_url}/introspect",
         "registration_endpoint": f"{request_base_url}/register",
@@ -2645,7 +2675,6 @@ async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_nam
 # LiteLLM legacy pattern: /.well-known/oauth-protected-resource/{server_name}/mcp
 # Kept for backward compatibility with existing deployments
 @router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
-@router.get("/.well-known/oauth-protected-resource")
 async def oauth_protected_resource_mcp(request: Request, mcp_server_name: str | None = None):
     """
     OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.
@@ -2666,6 +2695,8 @@ async def oauth_protected_resource_mcp(request: Request, mcp_server_name: str | 
 def _build_oauth_authorization_server_response(
     request: Request,
     mcp_server_name: str | None,
+    *,
+    issuer_path: str | None = None,
 ) -> dict:
     """Build OAuth authorization server metadata response (gateway-as-AS shape).
 
@@ -2694,7 +2725,13 @@ def _build_oauth_authorization_server_response(
 
     _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
-    issuer: Final = f"{request_base_url}/{mcp_server_name}" if explicitly_named else request_base_url
+    issuer: Final = (
+        f"{request_base_url}/{issuer_path}"
+        if issuer_path is not None
+        else f"{request_base_url}/{mcp_server_name}"
+        if explicitly_named
+        else request_base_url
+    )
 
     return {
         "issuer": issuer,
@@ -2724,6 +2761,7 @@ async def oauth_authorization_server_mcp_standard(request: Request, mcp_server_n
     return _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
+        issuer_path=f"mcp/{mcp_server_name}",
     )
 
 
@@ -2802,7 +2840,7 @@ async def jwks_json(request: Request):
 
 
 # Additional legacy pattern support
-@router.get("/.well-known/oauth-authorization-server/{mcp_server_name}/mcp")
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
 async def oauth_authorization_server_legacy(request: Request, mcp_server_name: str):
     """
     OAuth authorization server discovery for legacy /{server_name}/mcp pattern.
@@ -2810,6 +2848,7 @@ async def oauth_authorization_server_legacy(request: Request, mcp_server_name: s
     return _build_oauth_authorization_server_response(
         request=request,
         mcp_server_name=mcp_server_name,
+        issuer_path=f"{mcp_server_name}/mcp",
     )
 
 

@@ -381,7 +381,7 @@ class _MessageCountParams:
         from litellm.utils import print_verbose
 
         actual_model: Final = _fix_model_name(model)
-        if actual_model == "gpt-3.5-turbo-0301":
+        if uses_legacy_message_accounting(model):
             self.tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
             self.tokens_per_name = -1  # if there's a name, the role is omitted
         elif actual_model in litellm.open_ai_chat_completion_models or actual_model in litellm.azure_llms:
@@ -615,7 +615,7 @@ def _get_exact_count_function(
 ) -> TokenCounterFunction:
     """
     Get the function to count tokens based on the model and custom tokenizer."""
-    from litellm.utils import _select_tokenizer, print_verbose
+    from litellm.utils import _select_tokenizer
 
     if model is not None or custom_tokenizer is not None:
         tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
@@ -627,15 +627,7 @@ def _get_exact_count_function(
 
             return count_tokens
         elif tokenizer_json["type"] == "openai_tokenizer":
-            model_to_use: Final = _fix_model_name(model)
-            try:
-                if "gpt-4o" in model_to_use:
-                    encoding = tiktoken.get_encoding("o200k_base")
-                else:
-                    encoding = tiktoken.encoding_for_model(model_to_use)
-            except KeyError:
-                print_verbose("Warning: model not found. Using cl100k_base encoding.")
-                encoding = tiktoken.get_encoding("cl100k_base")
+            encoding: Final = openai_tokenizer_encoding(model)
 
             def encode_length(text: str) -> int:
                 return len(encoding.encode(text, disallowed_special=()))
@@ -649,6 +641,25 @@ def _get_exact_count_function(
             return len(default_encoding.encode(text, disallowed_special=()))
 
         return _get_tiktoken_count_function(encode_length)
+
+
+def openai_tokenizer_encoding(model: str) -> tiktoken.Encoding:
+    """The tiktoken encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
+    from litellm.utils import print_verbose
+
+    model_to_use: Final = _fix_model_name(model)
+    if "gpt-4o" in model_to_use:
+        return tiktoken.get_encoding("o200k_base")
+    try:
+        return tiktoken.encoding_for_model(model_to_use)
+    except KeyError:
+        print_verbose("Warning: model not found. Using cl100k_base encoding.")
+        return tiktoken.get_encoding("cl100k_base")
+
+
+def uses_legacy_message_accounting(model: str) -> bool:
+    """Whether `token_counter` prices messages with the `gpt-3.5-turbo-0301` constants (4 per message, -1 per name)."""
+    return _fix_model_name(model) == "gpt-3.5-turbo-0301"
 
 
 def _fix_model_name(model: str) -> str:

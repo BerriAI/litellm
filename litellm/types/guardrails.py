@@ -141,6 +141,7 @@ class SupportedGuardrailIntegrations(Enum):
     COMPRESR = "compresr"
     STRAIKER = "straiker"
     ALICE = "alice"
+    CONDUCT = "conduct"
 
 
 class Role(Enum):
