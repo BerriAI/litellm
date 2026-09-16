@@ -956,7 +956,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         buffer_until_moderated: bool = _streaming_flag(
             "streaming_buffer_until_moderated", buffer_until_moderated_default
         )
-        release_on_scan: bool = _streaming_flag("streaming_buffer_release_on_scan", False)
+        release_on_scan: Final[bool] = _streaming_flag("streaming_buffer_release_on_scan", False)
 
         if (
             buffer_until_moderated
