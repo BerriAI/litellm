@@ -14,7 +14,6 @@ pub(crate) struct ParsedProviderParams<T> {
     pub extra_params: Map<String, Value>,
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(crate) fn _prepare_ocr_request<T: DeserializeOwned>(
     request: &LiteLLMOcrRequest,
 ) -> Result<ParsedProviderParams<T>, OcrRequestError> {

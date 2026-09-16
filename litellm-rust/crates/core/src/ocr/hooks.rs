@@ -125,12 +125,6 @@ impl CallLifecycleHooks<LiteLLMOcrRequest, LiteLLMOcrRequest, LiteLLMOcrResponse
         Box::pin(async move { Ok(request) })
     }
 
-    #[tracing::instrument(
-        name = "success_callback",
-        target = "litellm::function_trace",
-        level = "trace",
-        skip_all
-    )]
     fn async_log_success_event<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
@@ -140,12 +134,6 @@ impl CallLifecycleHooks<LiteLLMOcrRequest, LiteLLMOcrRequest, LiteLLMOcrResponse
         self.hooks.success(context, response, timing)
     }
 
-    #[tracing::instrument(
-        name = "failure_callback",
-        target = "litellm::function_trace",
-        level = "trace",
-        skip_all
-    )]
     fn async_log_failure_event<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
