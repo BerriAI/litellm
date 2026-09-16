@@ -6491,10 +6491,27 @@ class ProxyConfig:
         router_model_ids: Final = llm_router.get_model_ids()
         # Check for model IDs in llm_router not present in combined_id_list and delete them
 
+        kept_config_ids: Final[frozenset[str]] = (
+            frozenset(
+                model_id
+                for model_id in router_model_ids
+                if (deployment := llm_router.get_deployment(model_id=model_id)) is not None
+                and deployment.model_info.db_model is False
+            )
+            if not model_list
+            else frozenset()
+        )
+        if kept_config_ids:
+            verbose_proxy_logger.warning(
+                "Config read in _delete_deployment returned no model_list. "
+                "Keeping %d config-defined deployments to avoid removing valid models.",
+                len(kept_config_ids),
+            )
+
         for model_id in router_model_ids:
-            if model_id not in combined_id_list:
+            if model_id not in combined_id_list and model_id not in kept_config_ids:
                 llm_router.delete_deployment(id=model_id)
-        return frozenset(combined_id_list)
+        return frozenset(combined_id_list) | kept_config_ids
 
     def _resolve_db_litellm_param(self, key: str, value: object) -> object:
         if not isinstance(value, str):
