@@ -2302,18 +2302,24 @@ def sanitize_messages_for_tool_calling(
 def _is_unsignable_thinking_block(block: object) -> bool:
     """A thinking block that Anthropic cannot accept on input.
 
-    Anthropic verifies the thinking signature cryptographically, so a block whose
-    signature is null, empty, or missing (e.g. from an open-source reasoning model)
-    is rejected with a 400 and must be dropped rather than blanked or repaired, and
-    so is a block whose signature or data carries another provider's encrypted
-    reasoning. A `redacted_thinking` block Anthropic minted is always kept.
+    Anthropic verifies the signature cryptographically, so a block with a null,
+    empty, or missing signature (e.g. from an open-source reasoning model) is
+    rejected with a 400, and so is a block whose signature or data carries
+    another provider's encrypted reasoning. It also rejects a `thinking` block
+    whose text is empty or whitespace-only ("each thinking block must contain
+    thinking"), regardless of signature, e.g. when a `thinking_blocks` history
+    item from a non-Anthropic reasoning provider is replayed through this path.
+    `redacted_thinking` blocks carry no signature and are always kept.
     """
     if is_encrypted_reasoning_block(block):
         return True
     if not isinstance(block, dict) or block.get("type") != "thinking":
         return False
     signature: Final = block.get("signature")
-    return not (isinstance(signature, str) and len(signature) > 0)
+    if not (isinstance(signature, str) and len(signature) > 0):
+        return True
+    thinking_text: Final = block.get("thinking")
+    return not (isinstance(thinking_text, str) and len(thinking_text.strip()) > 0)
 
 
 def _drop_unsignable_thinking_blocks(
