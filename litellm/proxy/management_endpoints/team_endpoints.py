@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, NoReturn, Protoc
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -38,6 +38,7 @@ from litellm.proxy._types import (
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
     LiteLLM_DeletedTeamTable,
+    Litellm_EntityType,
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
@@ -95,6 +96,10 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.hooks.model_max_budget_limiter import (
+    build_model_max_budget_usage,
+    resolve_model_budget,
+)
 from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
 )
@@ -108,6 +113,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _upsert_budget_and_membership,
     _user_has_admin_view,
     validate_budget_duration,
+    validate_team_model_max_budget,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
@@ -177,6 +183,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamUserSpendRow,
     UpdateTeamMemberPermissionsRequest,
 )
+from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -1170,6 +1177,62 @@ def _check_team_budget_update_authority(
         )
 
 
+def _existing_model_cap(raw_budget_config: object) -> BudgetConfig | None:
+    try:
+        return BudgetConfig.model_validate(raw_budget_config)
+    except ValidationError:
+        return None
+
+
+def _check_team_model_budget_update_authority(
+    data: UpdateTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_model_max_budget: Mapping[str, object] | None,
+) -> None:
+    """Like `_check_team_budget_update_authority`: only a proxy admin may raise, re-window or drop a per-model cap."""
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    if "model_max_budget" not in data.model_fields_set or not existing_model_max_budget:
+        return
+    requested: Final[Mapping[str, BudgetConfig]] = data.model_max_budget or {}
+    for model_name, raw_existing in existing_model_max_budget.items():
+        existing = _existing_model_cap(raw_existing)
+        if existing is None or existing.max_budget is None or model_name in requested:
+            continue
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": (
+                    f"Only a proxy admin can remove a team's model_max_budget for {model_name!r}. "
+                    f"Current max_budget={existing.max_budget}."
+                )
+            },
+        )
+    for model_name, proposed in requested.items():
+        governing = resolve_model_budget(model=model_name, model_max_budget=existing_model_max_budget)
+        if governing is None:
+            continue
+        cap = governing.budget_config
+        if cap.max_budget is None:
+            continue
+        if (
+            proposed.max_budget is None
+            or proposed.max_budget > cap.max_budget
+            or proposed.budget_duration != cap.budget_duration
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        f"Only a proxy admin can raise a team's model_max_budget for {model_name!r} or change its "
+                        f"budget_duration. Current max_budget={cap.max_budget} per {cap.budget_duration} "
+                        f"(entry {governing.budget_model!r}), requested={proposed.max_budget} per "
+                        f"{proposed.budget_duration}."
+                    )
+                },
+            )
+
+
 def _should_auto_add_team_creator(
     user_api_key_dict: UserAPIKeyAuth,
     general_settings: Mapping[str, object],
@@ -1230,6 +1293,7 @@ async def new_team(
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
+    - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
@@ -1291,6 +1355,7 @@ async def new_team(
             general_settings,
             litellm_proxy_admin_name,
             llm_router,
+            premium_user,
             prisma_client,
             user_api_key_cache,
         )
@@ -1321,6 +1386,7 @@ async def new_team(
 
         validate_budget_duration(data.budget_duration)
         validate_budget_duration(data.team_member_budget_duration)
+        validate_team_model_max_budget(model_max_budget=data.model_max_budget, premium_user=premium_user)
 
         if data.soft_budget is not None:
             if data.max_budget is not None:
@@ -1980,6 +2046,7 @@ async def update_team(
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
+    - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
@@ -2031,6 +2098,7 @@ async def update_team(
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
             llm_router,
+            premium_user,
             prisma_client,
             proxy_logging_obj,
             user_api_key_cache,
@@ -2069,6 +2137,7 @@ async def update_team(
 
         validate_budget_duration(data.budget_duration)
         validate_budget_duration(data.team_member_budget_duration)
+        validate_team_model_max_budget(model_max_budget=data.model_max_budget, premium_user=premium_user)
 
         existing_team_row = await _raw_team_db(TeamRepository(prisma_client)).find_unique(
             where={"team_id": data.team_id}
@@ -2204,8 +2273,15 @@ async def update_team(
                 user_api_key_dict=user_api_key_dict,
                 existing_team_max_budget=existing_team_row.max_budget,
             )
+        _check_team_model_budget_update_authority(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            existing_model_max_budget=existing_team_row.model_max_budget,
+        )
 
         updated_kv = data.json(exclude_unset=True)
+        if "model_max_budget" in updated_kv and updated_kv["model_max_budget"] is None:
+            updated_kv["model_max_budget"] = {}
 
         # Drop server-owned metadata keys from caller input so they can only
         # be written by the same code path that creates the underlying rows.
@@ -4473,7 +4549,7 @@ async def team_info(
     ```
     """
     from litellm.proxy._types import TeamInfoResponseObjectTeamTable
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client
 
     try:
         if prisma_client is None:
@@ -4573,6 +4649,12 @@ async def team_info(
             update={  # mutable-ok: pydantic update payload
                 "members_with_roles": hydrated_members,
                 "organization_models": organization_models,
+                "model_max_budget_usage": await build_model_max_budget_usage(
+                    entity_type=Litellm_EntityType.TEAM,
+                    entity_id=team_id,
+                    model_max_budget=resolved_team_info.model_max_budget,
+                    cache=model_max_budget_limiter.dual_cache,
+                ),
             }
         )
 
