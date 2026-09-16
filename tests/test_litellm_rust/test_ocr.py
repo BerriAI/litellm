@@ -1,14 +1,15 @@
-import json
 import asyncio
 import base64
+import gc
+import json
+import os
 import threading
 import weakref
-import gc
-from pathlib import Path
-from collections.abc import Generator
+from collections.abc import Coroutine, Generator
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
+from pathlib import Path
 from typing import Final, Protocol
 
 import httpx
@@ -340,7 +341,12 @@ def test_native_lifecycle_core_encodes_python_file_input(
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("source", ["path", "pathlike", "reader", "text", "bytes"])
 @pytest.mark.asyncio
-async def test_native_file_sources_preserve_sdk_behavior(ocr_server, tmp_path, asynchronous, source):
+async def test_native_file_sources_preserve_sdk_behavior(
+    ocr_server: tuple[ThreadingHTTPServer, list[dict[str, object]]],
+    tmp_path: Path,
+    asynchronous: bool,
+    source: str,
+) -> None:
     server, requests = ocr_server
     path: Final = tmp_path / "scan.png"
     content: Final = b"document bytes"
@@ -388,9 +394,12 @@ async def test_native_file_sources_preserve_sdk_behavior(ocr_server, tmp_path, a
         "api_base": f"http://127.0.0.1:{server.server_port}",
     }
     response: Final = await litellm.aocr(**kwargs) if asynchronous else litellm.ocr(**kwargs)
+    assert isinstance(response, OCRResponse)
     assert response.pages[0].markdown == "native OCR response"
     assert len(requests) == 1
-    assert requests[0]["body"]["document"] == {
+    body: Final = requests[0]["body"]
+    assert isinstance(body, dict)
+    assert body["document"] == {
         "type": "image_url",
         "image_url": "data:image/png;base64," + base64.b64encode(content).decode(),
     }
@@ -400,7 +409,11 @@ async def test_native_file_sources_preserve_sdk_behavior(ocr_server, tmp_path, a
 
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.asyncio
-async def test_native_file_failures_preserve_identity_and_do_not_send(ocr_server, tmp_path, asynchronous):
+async def test_native_file_failures_preserve_identity_and_do_not_send(
+    ocr_server: tuple[ThreadingHTTPServer, list[dict[str, object]]],
+    tmp_path: Path,
+    asynchronous: bool,
+) -> None:
     from litellm.rust_bridge import _native
 
     server, requests = ocr_server
@@ -416,37 +429,47 @@ async def test_native_file_failures_preserve_identity_and_do_not_send(ocr_server
 
     reader: Final = Reader()
     path: Final = tmp_path / "missing.pdf"
-    kwargs: Final = {
-        "model": "mistral/mistral-ocr-latest",
-        "api_key": "test-key",
-        "api_base": f"http://127.0.0.1:{server.server_port}",
-    }
+
+    async def invoke(source: Reader | Path) -> None:
+        if asynchronous:
+            await _native.aocr(
+                model="mistral/mistral-ocr-latest",
+                document={"type": "file", "file": source},
+                api_key="test-key",
+                api_base=f"http://127.0.0.1:{server.server_port}",
+            )
+        else:
+            _native.ocr(
+                model="mistral/mistral-ocr-latest",
+                document={"type": "file", "file": source},
+                api_key="test-key",
+                api_base=f"http://127.0.0.1:{server.server_port}",
+            )
+
     for source, error in ((reader, KeyError), (path, FileNotFoundError)):
         with pytest.raises(error) as caught:
-            if asynchronous:
-                await _native.aocr(document={"type": "file", "file": source}, **kwargs)
-            else:
-                _native.ocr(document={"type": "file", "file": source}, **kwargs)
+            await invoke(source)
         if source is reader:
             assert caught.value is failure
         else:
-            assert caught.value.filename == str(path)
+            assert isinstance(caught.value, FileNotFoundError)
+            assert getattr(caught.value, "filename") == str(path)
     assert reader.calls == 1
     assert requests == []
 
 
-def test_unstarted_native_file_call_does_not_read_and_releases_reader():
+def test_unstarted_native_file_call_does_not_read_and_releases_reader() -> None:
     from litellm.rust_bridge import _native
 
     class Reader:
+        pending: Coroutine[object, object, OCRResponse] | None = None
+
         def read(self) -> bytes:
             raise AssertionError("unstarted call consumed its document")
 
-    def create_call():
+    def create_call() -> tuple[Coroutine[object, object, OCRResponse], weakref.ReferenceType[Reader]]:
         reader: Final = Reader()
-        pending: Final = _native.aocr(
-            model="mistral/mistral-ocr-latest", document={"type": "file", "file": reader}
-        )
+        pending: Final = _native.aocr(model="mistral/mistral-ocr-latest", document={"type": "file", "file": reader})
         reader.pending = pending
         return pending, weakref.ref(reader)
 
@@ -455,6 +478,49 @@ def test_unstarted_native_file_call_does_not_read_and_releases_reader():
     del pending
     gc.collect()
     assert reference() is None
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires Unix named pipes")
+@pytest.mark.asyncio
+async def test_native_path_cancellation_waits_for_read_completion(
+    ocr_server: tuple[ThreadingHTTPServer, list[dict[str, object]]], tmp_path: Path
+) -> None:
+    from litellm.rust_bridge import _native
+
+    server, requests = ocr_server
+    path: Final = tmp_path / "document.pdf"
+    os.mkfifo(path)
+    entered: Final = threading.Event()
+    release: Final = threading.Event()
+
+    def supply_document() -> None:
+        with path.open("wb") as stream:
+            stream.write(b"document")
+            stream.flush()
+            entered.set()
+            release.wait(5)
+
+    writer: Final = threading.Thread(target=supply_document, daemon=True)
+    writer.start()
+    task: Final = asyncio.create_task(
+        _native.aocr(
+            model="mistral/mistral-ocr-latest",
+            document={"type": "file", "file": path},
+            api_key="test-key",
+            api_base=f"http://127.0.0.1:{server.server_port}",
+        )
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 3)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        assert not task.done()
+    finally:
+        release.set()
+        await asyncio.to_thread(writer.join, 3)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert requests == []
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

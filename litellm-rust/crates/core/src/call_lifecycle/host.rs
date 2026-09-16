@@ -223,9 +223,11 @@ mod tests {
         ] {
             assert_eq!(lifecycle.phase(), phase);
             assert!(
-                lifecycle.accept(Err(HostFailure::Error(crate::ocr::Error::InvalidRequest(
-                    "callback".into()
-                )))).is_none()
+                lifecycle
+                    .accept(Err(HostFailure::Error(crate::ocr::Error::InvalidRequest(
+                        "callback".into()
+                    ))))
+                    .is_none()
             );
         }
         assert_eq!(lifecycle.phase(), HostPhase::Complete);

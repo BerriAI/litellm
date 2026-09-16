@@ -39,9 +39,10 @@ impl OcrClient {
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
         use super::{
             NativeOutcome, OcrAdmission, OcrCall, OcrCallStep, OcrHookHost, OcrHost,
-            OcrHostOperation, OcrHostResult,
+            OcrHostOperation, OcrHostResult, OcrProjectedRequest,
         };
 
+        let intercepts_requests = request.hooks.intercepts_requests();
         let host = OcrHookHost::new(request.hooks.clone());
         let mut request = Some(request);
         let NativeOutcome::Completed(mut call) = OcrCall::admit(self.clone(), OcrAdmission::all())
@@ -54,14 +55,15 @@ impl OcrClient {
         loop {
             match call.resume(result.take()).await? {
                 OcrCallStep::Host(OcrHostOperation::ProjectRequest) => {
-                    result = Some(OcrHostResult::Request(Ok((
-                        Box::new(request.take().ok_or_else(|| {
+                    result = Some(OcrHostResult::Request(Ok(OcrProjectedRequest {
+                        request: Box::new(request.take().ok_or_else(|| {
                             crate::ocr::Error::InvalidRequest(
                                 "OCR request was already projected".into(),
                             )
                         })?),
-                        false,
-                    ))))
+                        intercepts_requests,
+                        host_token_provider: false,
+                    })))
                 }
                 OcrCallStep::Host(operation) => result = Some(host.invoke(operation).await),
                 OcrCallStep::Complete(response) => return Ok(response),

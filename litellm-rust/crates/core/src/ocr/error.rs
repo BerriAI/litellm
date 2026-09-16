@@ -8,6 +8,8 @@ pub enum Error {
     },
     #[error("File is empty or could not be read")]
     EmptyFile,
+    #[error("Host OCR document read failed")]
+    HostDocumentRead,
     #[error("Failed to read OCR file {}: {source}", path.display())]
     FileRead {
         path: std::path::PathBuf,

@@ -25,17 +25,12 @@ use bindings::DeploymentHooks;
 pub(crate) use bindings::PythonLogger;
 use handle::{Execution, ExecutionBody, ExecutionStep};
 
-pub(crate) enum OperationClass {
-    Phase(HostPhase),
-    Route,
-}
-
 pub(crate) trait PythonRoute: Send + Sync {
     type Call: NativeCall + 'static;
 
     fn state(&self) -> &PythonCallState;
     fn state_mut(&mut self) -> &mut PythonCallState;
-    fn classify(operation: &<Self::Call as NativeCall>::Operation) -> OperationClass;
+    fn phase(operation: &<Self::Call as NativeCall>::Operation) -> Option<HostPhase>;
     fn lifecycle_result() -> <Self::Call as NativeCall>::Result;
     fn map_error(error: <Self::Call as NativeCall>::Error) -> PyErr;
     fn host_error(message: String) -> <Self::Call as NativeCall>::Error;
@@ -167,12 +162,8 @@ impl<R: PythonRoute> PythonLifecycle<R> {
             HostFailure::Cancelled(native)
         };
         let state = self.route.state_mut();
-        if state.error.is_none() || (cancelled && phase != Some(HostPhase::DeploymentFailure)) {
-            state.retain_error(py, error);
-        }
-        if state.end.is_none() {
-            state.end = now(py).ok();
-        }
+        state.retain_first_error(py, error, cancelled && phase != Some(HostPhase::DeploymentFailure));
+        let _ = state.finish(py);
         failure
     }
 
@@ -215,10 +206,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
                 }
                 HostStep::Ready(NativeCallStep::Host(operation)) => operation,
             };
-            let phase = match R::classify(&operation) {
-                OperationClass::Phase(phase) => Some(phase),
-                OperationClass::Route => None,
-            };
+            let phase = R::phase(&operation);
             let result = match phase {
                 Some(phase) => match self.route.state_mut().invoke(py, phase) {
                     Ok(HostStep::Suspend(awaitable)) => {
@@ -499,6 +487,19 @@ impl PythonCallState {
         self.error = Some(error.into_value(py));
     }
 
+    pub fn retain_first_error(&mut self, py: Python<'_>, error: PyErr, replace: bool) {
+        if self.error.is_none() || replace {
+            self.retain_error(py, error);
+        }
+    }
+
+    pub fn finish(&mut self, py: Python<'_>) -> PyResult<()> {
+        if self.end.is_none() {
+            self.end = Some(now(py)?);
+        }
+        Ok(())
+    }
+
     pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.args)?;
         visit.call(&self.kwargs)?;
@@ -694,8 +695,8 @@ mod tests {
             &mut self.0
         }
 
-        fn classify(_: &()) -> OperationClass {
-            OperationClass::Route
+        fn phase(_: &()) -> Option<HostPhase> {
+            None
         }
 
         fn lifecycle_result() {}

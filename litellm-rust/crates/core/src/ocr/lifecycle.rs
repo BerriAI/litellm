@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -9,8 +10,8 @@ use super::hooks::{
     OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrLogFuture, OcrPostCallRequest,
     OcrPreCallRequest,
 };
-use super::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient, OcrDocumentInput, OcrFileContent};
 use super::types::ResolvedOcrRequest;
+use super::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient, OcrDocumentInput, OcrFileContent};
 use crate::call_lifecycle::host::{
     HostCall, HostCallFuture, HostCallStep, HostFailure, HostLifecycle, HostPhase,
 };
@@ -82,8 +83,14 @@ impl OcrHostOperation {
     }
 }
 
+pub struct OcrProjectedRequest {
+    pub request: Box<LiteLLMOcrRequest>,
+    pub intercepts_requests: bool,
+    pub host_token_provider: bool,
+}
+
 pub enum OcrHostResult {
-    Request(Result<(Box<LiteLLMOcrRequest>, bool), super::Error>),
+    Request(Result<OcrProjectedRequest, super::Error>),
     Document(Result<OcrFileContent, super::Error>),
     Lifecycle(Result<(), HostFailure<super::Error>>),
     AzureAdToken(Result<ResolvedCredential, litellm_auth::Error>),
@@ -160,9 +167,10 @@ impl OcrCall {
             Some(OcrHostResult::Request(result)) if self.projecting => {
                 self.projecting = false;
                 match result {
-                    Ok((request, azure_ad_token_provider)) => {
-                        self.execution.request = Some(*request);
-                        self.execution.azure_ad_token_provider = azure_ad_token_provider;
+                    Ok(projected) => {
+                        self.execution.set_request(*projected.request);
+                        self.execution.intercepts_requests = projected.intercepts_requests;
+                        self.execution.host_token_provider = projected.host_token_provider;
                     }
                     Err(error) => self.accept(Err(HostFailure::Error(error))),
                 }
@@ -268,6 +276,15 @@ impl OcrCall {
     fn accept(&mut self, result: Result<(), HostFailure<super::Error>>) {
         let cancelled = matches!(&result, Err(HostFailure::Cancelled(_)));
         if let Some(error) = self.lifecycle.accept(result) {
+            if let Some((_, timing)) = self
+                .execution
+                .terminal
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_mut()
+            {
+                timing.end_time = epoch_seconds();
+            }
             if cancelled {
                 self.error = Some(error);
             } else {
@@ -333,11 +350,33 @@ struct OcrExecution {
     pending_result: Option<oneshot::Sender<OcrHostResult>>,
     execution: Option<tokio::task::JoinHandle<Result<LiteLLMOcrResponse, super::Error>>>,
     completed: bool,
-    azure_ad_token_provider: bool,
+    intercepts_requests: bool,
+    host_token_provider: bool,
     terminal: Arc<std::sync::Mutex<Option<(CallLifecycleContext, CallLifecycleTiming)>>>,
 }
 
 impl OcrExecution {
+    fn set_request(&mut self, mut request: LiteLLMOcrRequest) {
+        let call_id = request
+            .litellm_call_id
+            .clone()
+            .unwrap_or_else(|| format!("ocr-{:032x}", rand::random::<u128>()));
+        let context = CallLifecycleContext::new(
+            "ocr",
+            request.model.clone(),
+            request.provider_name(),
+            call_id.clone(),
+        );
+        request.litellm_call_id = Some(call_id);
+        let start = epoch_seconds();
+        *self
+            .terminal
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) =
+            Some((context, CallLifecycleTiming::new(start, start, Vec::new())));
+        self.request = Some(request);
+    }
+
     fn new(client: OcrClient) -> Self {
         let (operations_tx, operations_rx) = mpsc::unbounded_channel();
         Self {
@@ -350,7 +389,8 @@ impl OcrExecution {
             pending_result: None,
             execution: None,
             completed: false,
-            azure_ad_token_provider: false,
+            intercepts_requests: false,
+            host_token_provider: false,
             terminal: Arc::default(),
         }
     }
@@ -366,11 +406,16 @@ impl OcrExecution {
         }
         let result = if self.reading {
             let Some(OcrHostResult::Document(content)) = result else {
-                return Err(super::Error::InvalidRequest("OCR document read result is required".into()));
+                return Err(super::Error::InvalidRequest(
+                    "OCR document read result is required".into(),
+                ));
             };
             self.reading = false;
             let content = content?;
-            let request = self.request.take().expect("pending document read has a request");
+            let request = self
+                .request
+                .take()
+                .expect("pending document read has a request");
             let OcrDocumentInput::HostReader { mime_type } = &request.document else {
                 unreachable!("only host readers request document reads");
             };
@@ -428,7 +473,10 @@ impl OcrExecution {
 
     async fn prepare(&mut self) -> Result<Option<OcrHostOperation>, super::Error> {
         if self.preparation.is_none() {
-            let request = self.request.take().expect("admitted OCR call has a request");
+            let request = self
+                .request
+                .take()
+                .expect("admitted OCR call has a request");
             if matches!(request.document, OcrDocumentInput::HostReader { .. }) {
                 self.request = Some(request);
                 self.reading = true;
@@ -444,15 +492,25 @@ impl OcrExecution {
                     OcrDocumentInput::Path { path, mime_type } => {
                         super::document::read_path_document(path, mime_type.as_deref())?
                     }
-                    OcrDocumentInput::Bytes { bytes, file_name, mime_type } => {
-                        super::document::encode_file_document(bytes, file_name.as_deref(), mime_type.as_deref())?
-                    }
+                    OcrDocumentInput::Bytes {
+                        bytes,
+                        file_name,
+                        mime_type,
+                    } => super::document::encode_file_document(
+                        bytes,
+                        file_name.as_deref(),
+                        mime_type.as_deref(),
+                    )?,
                     _ => unreachable!("only native file inputs require preparation"),
                 };
                 Ok(request.with_document(document))
             }));
         }
-        let result = self.preparation.as_mut().expect("document preparation started").await;
+        let result = self
+            .preparation
+            .as_mut()
+            .expect("document preparation started")
+            .await;
         self.preparation = None;
         let request = result.map_err(|error| super::Error::DocumentTask(Arc::new(error)))??;
         self.start(request);
@@ -461,8 +519,7 @@ impl OcrExecution {
 
     fn start(&mut self, mut request: ResolvedOcrRequest) {
         let client = self.client.take().expect("admitted OCR call has a client");
-        let intercepts_requests = request.hooks.intercepts_requests();
-        if self.azure_ad_token_provider {
+        if self.host_token_provider {
             request.azure_ad_token_provider = Some(TokenProviderHandle::new(Arc::new(
                 OcrAzureAdTokenProvider {
                     operations: self.operations_tx.clone(),
@@ -471,7 +528,7 @@ impl OcrExecution {
         }
         request.hooks = Arc::new(ProtocolHooks {
             operations: self.operations_tx.clone(),
-            intercepts_requests,
+            intercepts_requests: self.intercepts_requests,
             terminal: self.terminal.clone(),
         });
         self.execution = Some(tokio::spawn(async move {
@@ -515,6 +572,13 @@ struct ProtocolHooks {
     operations: mpsc::UnboundedSender<PendingOperation>,
     intercepts_requests: bool,
     terminal: Arc<std::sync::Mutex<Option<(CallLifecycleContext, CallLifecycleTiming)>>>,
+}
+
+fn epoch_seconds() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
 }
 
 #[derive(Debug)]
@@ -743,36 +807,60 @@ mod tests {
     use crate::ocr::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
     use crate::ocr::{
         LiteLLMOcrRequest, NativeOutcome, NoopOcrHost, OcrAdmission, OcrCall, OcrCallStep,
-        OcrDecline, OcrDocument, OcrHost, OcrHostOperation, OcrHostResult,
+        OcrDecline, OcrDocument, OcrHost, OcrHostOperation, OcrHostResult, OcrProjectedRequest,
     };
+
+    fn projected_request(request: LiteLLMOcrRequest) -> OcrHostResult {
+        OcrHostResult::Request(Ok(OcrProjectedRequest {
+            intercepts_requests: request.hooks.intercepts_requests(),
+            request: Box::new(request),
+            host_token_provider: false,
+        }))
+    }
 
     #[tokio::test]
     async fn sdk_paths_are_read_during_execution_and_hooks_observe_normalized_documents() {
         struct CaptureDocument(Arc<Mutex<Vec<OcrDocument>>>);
         impl OcrHooks for CaptureDocument {
-            fn intercepts_requests(&self) -> bool { true }
+            fn intercepts_requests(&self) -> bool {
+                true
+            }
             fn pre_call(&self, request: OcrPreCallRequest) -> OcrHookFuture<'_, OcrPreCallRequest> {
                 self.0.lock().unwrap().push(request.document.clone());
                 Box::pin(async { Ok(request) })
             }
         }
         let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
-        let path = std::env::temp_dir().join(format!("ocr-sdk-{:032x}.pdf", rand::random::<u128>()));
+        let path =
+            std::env::temp_dir().join(format!("ocr-sdk-{:032x}.pdf", rand::random::<u128>()));
         let documents = Arc::new(Mutex::new(Vec::new()));
         let request = LiteLLMOcrRequest::from_inputs(
-            "mistral/model".into(), path.clone(), None, Default::default(),
-            crate::ocr::OcrConnectionInputs { api_base: Some(base), api_key: Some("test-key".into()), ..Default::default() },
-        ).unwrap().with_host_hooks(Arc::new(CaptureDocument(documents.clone())), None);
+            "mistral/model".into(),
+            path.clone(),
+            None,
+            Default::default(),
+            crate::ocr::OcrConnectionInputs {
+                api_base: Some(base),
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .with_host_hooks(Arc::new(CaptureDocument(documents.clone())), None);
         std::fs::write(&path, b"sdk document").unwrap();
         let result = perform_ocr(request).await;
         std::fs::remove_file(&path).unwrap();
         result.unwrap();
         server.await.unwrap();
         let expected = json!({"type":"document_url","document_url":"data:application/pdf;base64,c2RrIGRvY3VtZW50"});
-        assert_eq!(serde_json::to_value(&documents.lock().unwrap()[0]).unwrap(), expected);
+        assert_eq!(
+            serde_json::to_value(&documents.lock().unwrap()[0]).unwrap(),
+            expected
+        );
         let requests = seen.lock().unwrap();
         assert_eq!(requests.len(), 1);
-        let body: Value = serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+        let body: Value =
+            serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
         assert_eq!(body["document"], expected);
     }
 
@@ -781,40 +869,78 @@ mod tests {
         let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
         let request = wire_request("mistral/model", &base, json!({}))
             .with_document(crate::ocr::OcrDocumentInput::HostReader { mime_type: None })
-            .with_host_hooks(Arc::new(AdmissionSpy { effects: Arc::new(Mutex::new(0)) }), None);
+            .with_host_hooks(
+                Arc::new(AdmissionSpy {
+                    effects: Arc::new(Mutex::new(0)),
+                }),
+                None,
+            );
         let mut request = Some(request);
-        let NativeOutcome::Completed(mut call) = OcrCall::admit(crate::ocr::test_support::ocr_client(), OcrAdmission::all()) else { panic!("admission declined"); };
+        let NativeOutcome::Completed(mut call) =
+            OcrCall::admit(crate::ocr::test_support::ocr_client(), OcrAdmission::all())
+        else {
+            panic!("admission declined");
+        };
         let mut result = None;
         let mut reads = 0;
         let mut pre_calls = 0;
-        loop {
-            match call.resume(result.take()).await.unwrap() {
-                OcrCallStep::Host(operation) => {
-                    result = Some(match operation {
-                        OcrHostOperation::ProjectRequest => {
-                            assert_eq!(reads, 0);
-                            OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false)))
-                        }
-                        OcrHostOperation::ReadDocument => {
-                            reads += 1;
-                            OcrHostResult::Document(Ok(crate::ocr::OcrFileContent {
-                                bytes: bytes::Bytes::from_static(b"image"), file_name: Some("scan.png".into()),
-                            }))
-                        }
-                        OcrHostOperation::PreCall(request) => {
-                            assert_eq!(reads, 1);
-                            pre_calls += 1;
-                            assert!(matches!(&request.document, OcrDocument::ImageUrl { image_url, .. } if image_url == "data:image/png;base64,aW1hZ2U="));
-                            OcrHostResult::PreCall(Ok(request))
-                        }
-                        operation => NoopOcrHost.invoke(operation).await,
-                    });
+        while let OcrCallStep::Host(operation) = call.resume(result.take()).await.unwrap() {
+            result = Some(match operation {
+                OcrHostOperation::ProjectRequest => {
+                    assert_eq!(reads, 0);
+                    projected_request(request.take().unwrap())
                 }
-                OcrCallStep::Complete(_) => break,
-            }
+                OcrHostOperation::ReadDocument => {
+                    reads += 1;
+                    OcrHostResult::Document(Ok(crate::ocr::OcrFileContent {
+                        bytes: bytes::Bytes::from_static(b"image"),
+                        file_name: Some("scan.png".into()),
+                    }))
+                }
+                OcrHostOperation::PreCall(request) => {
+                    assert_eq!(reads, 1);
+                    pre_calls += 1;
+                    assert!(
+                        matches!(&request.document, OcrDocument::ImageUrl { image_url, .. } if image_url == "data:image/png;base64,aW1hZ2U=")
+                    );
+                    OcrHostResult::PreCall(Ok(request))
+                }
+                operation => NoopOcrHost.invoke(operation).await,
+            });
         }
         server.await.unwrap();
         assert_eq!((reads, pre_calls, seen.lock().unwrap().len()), (1, 1, 1));
+    }
+
+    #[tokio::test]
+    async fn sdk_file_failure_dispatches_the_typed_error_once() {
+        struct CaptureFailure(Arc<Mutex<Vec<crate::ocr::Error>>>);
+        impl OcrHooks for CaptureFailure {
+            fn failure<'a>(
+                &'a self,
+                _: &'a CallLifecycleContext,
+                error: &'a crate::ocr::Error,
+                _: &'a CallLifecycleTiming,
+            ) -> OcrLogFuture<'a> {
+                self.0.lock().unwrap().push(error.clone());
+                Box::pin(async {})
+            }
+        }
+        let path =
+            std::env::temp_dir().join(format!("missing-ocr-{:032x}.pdf", rand::random::<u128>()));
+        let failures = Arc::new(Mutex::new(Vec::new()));
+        let request = wire_request("mistral/model", "http://127.0.0.1:1", json!({}))
+            .with_document(path.clone().into())
+            .with_host_hooks(Arc::new(CaptureFailure(failures.clone())), None);
+        let error = perform_ocr(request).await.unwrap_err();
+        assert!(
+            matches!(error, crate::ocr::Error::FileRead { path: actual, .. } if actual == path)
+        );
+        let failures = failures.lock().unwrap();
+        assert_eq!(failures.len(), 1);
+        assert!(
+            matches!(&failures[0], crate::ocr::Error::FileRead { source, .. } if source.kind() == std::io::ErrorKind::NotFound)
+        );
     }
 
     #[tokio::test]
@@ -836,7 +962,8 @@ mod tests {
         std::future::poll_fn(|cx| {
             assert!(stop.as_mut().poll(cx).is_pending());
             std::task::Poll::Ready(())
-        }).await;
+        })
+        .await;
         assert!(!finished.load(Ordering::SeqCst));
         release_tx.send(()).unwrap();
         stop.await;
@@ -1034,6 +1161,8 @@ mod tests {
             mut request: OcrDuringCallRequest,
         ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
             Box::pin(async move {
+                assert_eq!(request.optional_params["pages"], json!([0]));
+                assert_eq!(request.optional_params["extra_body"]["pages"], json!([2]));
                 assert_eq!(request.body["pages"], json!([2]));
                 assert_eq!(request.body.get("future"), Some(&Value::Null));
                 request.body.as_object_mut().unwrap().remove("future");
@@ -1287,10 +1416,7 @@ mod tests {
                             result = Some(OcrHostResult::Lifecycle(Ok(())))
                         }
                         OcrHostOperation::ProjectRequest => {
-                            result = Some(OcrHostResult::Request(Ok((
-                                Box::new(request.take().unwrap()),
-                                false,
-                            ))))
+                            result = Some(projected_request(request.take().unwrap()))
                         }
                         OcrHostOperation::AcquireAzureAdToken => {
                             panic!("test request has no token provider")
@@ -1312,7 +1438,9 @@ mod tests {
                                     Ok(request)
                                 }));
                         }
-                        OcrHostOperation::PostCall(_) | OcrHostOperation::ReadDocument => panic!("transport should not be reached"),
+                        OcrHostOperation::PostCall(_) | OcrHostOperation::ReadDocument => {
+                            panic!("transport should not be reached")
+                        }
                     },
                     Err(error) => break error,
                     Ok(OcrCallStep::Complete(_)) => panic!("failed call completed"),
@@ -1345,10 +1473,7 @@ mod tests {
         let error = loop {
             match call.resume(result.take()).await {
                 Ok(OcrCallStep::Host(OcrHostOperation::ProjectRequest)) => {
-                    result = Some(OcrHostResult::Request(Ok((
-                        Box::new(request.take().unwrap()),
-                        false,
-                    ))));
+                    result = Some(projected_request(request.take().unwrap()));
                 }
                 Ok(OcrCallStep::Host(operation)) => {
                     if let OcrHostOperation::PostCall(request) = &operation {
@@ -1412,7 +1537,7 @@ mod tests {
                     });
                     result = Some(match operation {
                         OcrHostOperation::ProjectRequest => {
-                            OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false)))
+                            projected_request(request.take().unwrap())
                         }
                         operation => host.invoke(operation).await,
                     });
@@ -1472,7 +1597,9 @@ mod tests {
                             OcrHostResult::Lifecycle(Err(HostFailure::Error(selected.clone())))
                         }
                         OcrHostOperation::Failure { error, .. } => {
-                            assert!(matches!(error, crate::ocr::Error::InvalidRequest(message) if message == "public metadata failed"));
+                            assert!(
+                                matches!(error, crate::ocr::Error::InvalidRequest(message) if message == "public metadata failed")
+                            );
                             failures.push("sync");
                             OcrHostResult::Lifecycle(Err(HostFailure::Error(
                                 crate::ocr::Error::InvalidRequest("failure callback failed".into()),
@@ -1488,7 +1615,7 @@ mod tests {
                             panic!("finalization failure used provider/success dispatch")
                         }
                         OcrHostOperation::ProjectRequest => {
-                            OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false)))
+                            projected_request(request.take().unwrap())
                         }
                         operation => host.invoke(operation).await,
                     });
@@ -1498,7 +1625,9 @@ mod tests {
             }
         };
         server.await.unwrap();
-        assert!(matches!(error, crate::ocr::Error::InvalidRequest(message) if message == "public metadata failed"));
+        assert!(
+            matches!(error, crate::ocr::Error::InvalidRequest(message) if message == "public metadata failed")
+        );
         assert_eq!(failures, ["sync", "async"]);
         assert_eq!(seen.lock().unwrap().len(), 1);
     }
@@ -1525,10 +1654,7 @@ mod tests {
             match call.resume(result.take()).await.unwrap() {
                 OcrCallStep::Host(OcrHostOperation::PreCall(_)) => break,
                 OcrCallStep::Host(OcrHostOperation::ProjectRequest) => {
-                    result = Some(OcrHostResult::Request(Ok((
-                        Box::new(request.take().unwrap()),
-                        false,
-                    ))))
+                    result = Some(projected_request(request.take().unwrap()))
                 }
                 OcrCallStep::Host(operation) => result = Some(host.invoke(operation).await),
                 OcrCallStep::Complete(_) => panic!("provider executed before pre-call result"),
@@ -1751,7 +1877,7 @@ mod tests {
                         _ = entered.notified() => break,
                         step = call.resume(result.take()) => {
                             result = Some(match step.unwrap() {
-                                OcrCallStep::Host(OcrHostOperation::ProjectRequest) => OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false))),
+                                OcrCallStep::Host(OcrHostOperation::ProjectRequest) => projected_request(request.take().unwrap()),
                                 OcrCallStep::Host(operation) => NoopOcrHost.invoke(operation).await,
                                 OcrCallStep::Complete(_) => panic!("pending provider completed"),
                             });
@@ -1778,7 +1904,9 @@ mod tests {
             )
             .await
             .unwrap();
-            assert!(matches!(result, Err(crate::ocr::Error::InvalidRequest(message)) if message == "cancelled"));
+            assert!(
+                matches!(result, Err(crate::ocr::Error::InvalidRequest(message)) if message == "cancelled")
+            );
             assert!(
                 dropped.load(Ordering::SeqCst),
                 "cancellation returned while provider captures were still alive"

@@ -8,7 +8,7 @@ import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr import legacy
 from litellm.rust_bridge import bindings, configuration
-from litellm.rust_bridge.ocr import NATIVE_AOCR, NATIVE_OCR
+from litellm.rust_bridge.ocr import NATIVE_AOCR, NATIVE_OCR, post_call, pre_call, update_logging
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +19,72 @@ def isolated_ocr_configuration(monkeypatch: pytest.MonkeyPatch) -> Generator[Non
     NATIVE_OCR.reset()
     NATIVE_AOCR.reset()
     configuration.reset_rust_configuration()
+
+
+def test_logging_redacts_views_and_preserves_opaque_arguments_and_pricing() -> None:
+    logger: Final = Mock()
+    opaque: Final = object()
+    logger_fn: Final = object()
+    kwargs: Final = {
+        "vertex_credentials": "secret",
+        "proxy_server_request": opaque,
+        "metadata": opaque,
+        "logger_fn": logger_fn,
+        "litellm_request_debug": False,
+        "litellm_call_id": "call-id",
+        "input_cost_per_token": 0,
+        "output_cost_per_token": None,
+    }
+    optional: Final = {"vertex_credentials": "secret", "pages": [1], "proxy_server_request": opaque}
+    update_logging(logger, kwargs, "model", "vertex_ai", optional, ("vertex_credentials",), "https://provider")
+    logger.update_from_kwargs.assert_called_once_with(
+        kwargs={
+            "vertex_credentials": "****",
+            "metadata": opaque,
+            "logger_fn": logger_fn,
+            "litellm_request_debug": False,
+            "litellm_call_id": "call-id",
+            "input_cost_per_token": 0,
+            "output_cost_per_token": None,
+        },
+        model="model",
+        custom_llm_provider="vertex_ai",
+        optional_params={"vertex_credentials": "****", "pages": [1]},
+        litellm_params={
+            "litellm_call_id": "call-id",
+            "api_base": "https://provider",
+            "logger_fn": logger_fn,
+            "litellm_request_debug": False,
+            "input_cost_per_token": 0,
+        },
+    )
+    assert kwargs["vertex_credentials"] == optional["vertex_credentials"] == "secret"
+    assert kwargs["proxy_server_request"] is optional["proxy_server_request"] is opaque
+    assert logger.update_from_kwargs.call_args.kwargs["kwargs"]["metadata"] is opaque
+    assert logger.update_from_kwargs.call_args.kwargs["optional_params"]["pages"] is optional["pages"]
+
+
+def test_logging_callbacks_receive_captured_payload_roots_and_propagate_errors() -> None:
+    logger: Final = Mock()
+    body: Final[dict[str, object]] = {"document": "original"}
+    headers: Final = {"authorization": "key"}
+    response: Final = object()
+    pre_call(logger, "key", body, headers, "https://provider")
+    post_call(logger, response, body, headers)
+    logger.pre_call.assert_called_once_with(
+        input="OCR document processing",
+        api_key="key",
+        additional_args={"complete_input_dict": body, "headers": headers, "api_base": "https://provider"},
+    )
+    for callback in (logger.pre_call, logger.post_call):
+        assert callback.call_args.kwargs["additional_args"]["complete_input_dict"] is body
+        assert callback.call_args.kwargs["additional_args"]["headers"] is headers
+    assert logger.post_call.call_args.kwargs["original_response"] is response
+    failure: Final = RuntimeError("callback failed")
+    failing_logger: Final = Mock(pre_call=Mock(side_effect=failure))
+    with pytest.raises(RuntimeError) as caught:
+        pre_call(failing_logger, None, body, headers, "https://provider")
+    assert caught.value is failure
 
 
 @pytest.mark.asyncio

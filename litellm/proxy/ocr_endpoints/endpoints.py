@@ -29,10 +29,12 @@ def _build_document_from_upload(
     filename: str | None,
     content_type: str | None,
 ) -> dict[str, str]:
-    mime_type: Final = content_type.split(";")[0].strip() if content_type else None
-    if not mime_type or mime_type == "application/octet-stream":
-        if filename:
-            mime_type = get_mime_type(filename)
+    supplied_mime: Final = content_type.split(";")[0].strip() if content_type else None
+    mime_type: Final = (
+        get_mime_type(filename)
+        if filename and (not supplied_mime or supplied_mime == "application/octet-stream")
+        else supplied_mime
+    )
 
     return convert_file_document_to_url_document(
         {
