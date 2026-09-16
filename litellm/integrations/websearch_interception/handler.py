@@ -213,6 +213,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         enabled_providers: list[LlmProviders | str] | None = None,
         search_tool_name: str | None = None,
         max_agentic_loops: int | None = None,
+        recognize_conventional_web_search_name: bool = False,
     ):
         """
         Args:
@@ -225,6 +226,10 @@ class WebSearchInterceptionLogger(CustomLogger):
             max_agentic_loops: How many follow-up model calls one intercepted request
                               may chain before the loop is refused and the turn ends.
                               If None, LiteLLM's default of 3 applies.
+            recognize_conventional_web_search_name: When True, treat name-only OpenAI
+                              function tools named ``web_search`` as server search.
+                              Default False so a user-defined name-only ``web_search``
+                              still reaches the client handler.
         """
         super().__init__()
         # Convert enum values to strings for comparison
@@ -234,7 +239,18 @@ class WebSearchInterceptionLogger(CustomLogger):
             self.enabled_providers = [p.value if isinstance(p, LlmProviders) else p for p in enabled_providers]
         self.search_tool_name = search_tool_name
         self.max_agentic_loops = self._validated_max_agentic_loops(max_agentic_loops)
+        self.recognize_conventional_web_search_name = bool(recognize_conventional_web_search_name)
         self._request_has_websearch = False  # Track if current request has web search
+
+    def _is_web_search_tool(self, tool: dict[str, Any]) -> bool:
+        return is_web_search_tool(
+            tool, recognize_conventional_name=self.recognize_conventional_web_search_name
+        )
+
+    def _is_web_search_tool_chat_completion(self, tool: dict[str, Any]) -> bool:
+        return is_web_search_tool_chat_completion(
+            tool, recognize_conventional_name=self.recognize_conventional_web_search_name
+        )
 
     @staticmethod
     def _validated_max_agentic_loops(max_agentic_loops: object) -> int | None:
@@ -305,7 +321,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             pass  # unknown provider enum → safe to short-circuit
 
         # All tools must be web search tools
-        if not all(is_web_search_tool(t) for t in tools):
+        if not all(self._is_web_search_tool(t) for t in tools):
             return None
 
         # Extract search query from the last user message
@@ -419,7 +435,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         if call_type in (CallTypes.responses, CallTypes.aresponses):
             return self._convert_responses_tools(kwargs=kwargs, tools=tools)
 
-        has_websearch: Final = any(is_web_search_tool(t) for t in tools)
+        has_websearch: Final = any(self._is_web_search_tool(t) for t in tools)
 
         if not has_websearch:
             return None
@@ -437,7 +453,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Convert native/custom web_search tools to LiteLLM standard
         converted_tools: Final = []
         for tool in tools:
-            if is_web_search_tool(tool):
+            if self._is_web_search_tool(tool):
                 # Convert to LiteLLM standard web search tool
                 converted_tool = get_litellm_web_search_tool_openai()
                 converted_tools.append(converted_tool)
@@ -509,6 +525,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         enabled_providers_str: Final = config.get("enabled_providers", None)
         search_tool_name: Final = config.get("search_tool_name", None)
         max_agentic_loops: Final = config.get("max_agentic_loops", None)
+        recognize_conventional_web_search_name: Final = bool(
+            config.get("recognize_conventional_web_search_name", False)
+        )
 
         # Convert string provider names to LlmProviders enum values
         enabled_providers: list[LlmProviders | str] | None = None
@@ -527,6 +546,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             enabled_providers=enabled_providers,
             search_tool_name=search_tool_name,
             max_agentic_loops=max_agentic_loops,
+            recognize_conventional_web_search_name=recognize_conventional_web_search_name,
         )
 
     @staticmethod
@@ -591,7 +611,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             return None
 
         # Check if any tool is a web search tool
-        has_websearch: Final = any(is_web_search_tool(t) for t in tools)
+        has_websearch: Final = any(self._is_web_search_tool(t) for t in tools)
         if not has_websearch:
             return None
 
@@ -612,7 +632,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Convert native web search tools to LiteLLM standard
         converted_tools: Final[list[dict[str, object]]] = []
         for tool in tools:
-            if is_web_search_tool(tool):
+            if self._is_web_search_tool(tool):
                 standard_tool = get_litellm_web_search_tool()
                 converted_tools.append(standard_tool)
                 verbose_logger.debug(
@@ -687,7 +707,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             return False, {}
 
         # Check if tools include any web search tool (LiteLLM standard or native)
-        has_websearch_tool: Final = any(is_web_search_tool(t) for t in (tools or []))
+        has_websearch_tool: Final = any(self._is_web_search_tool(t) for t in (tools or []))
         if not has_websearch_tool:
             verbose_logger.debug("WebSearchInterception: No web search tool in request")
             return False, {}
@@ -783,7 +803,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             return False, {}
 
         # Check if tools include any web search tool (strict check for chat completions)
-        has_websearch_tool: Final = any(is_web_search_tool_chat_completion(t) for t in (tools or []))
+        has_websearch_tool: Final = any(self._is_web_search_tool_chat_completion(t) for t in (tools or []))
         if not has_websearch_tool:
             verbose_logger.debug("WebSearchInterception: No litellm_web_search tool in request")
             return False, {}

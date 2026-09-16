@@ -14,13 +14,21 @@ from litellm.integrations.websearch_interception.tools import (
     "tool",
     [
         {"type": "function", "function": {"name": "litellm_web_search"}},
-        {"type": "function", "function": {"name": "web_search"}},
     ],
 )
-def test_openai_function_web_search_shapes_are_detected(tool: dict[str, Any]):
-    """Recognize both LiteLLM and conventional web_search function names."""
+def test_openai_function_litellm_web_search_is_detected(tool: dict[str, Any]):
+    """Recognize the LiteLLM standard web_search function name."""
     assert is_web_search_tool(tool) is True
     assert is_web_search_tool_chat_completion(tool) is True
+
+
+def test_conventional_web_search_requires_opt_in():
+    """Name-only web_search stays a user tool unless explicitly opted in."""
+    tool = {"type": "function", "function": {"name": "web_search"}}
+    assert is_web_search_tool(tool) is False
+    assert is_web_search_tool_chat_completion(tool) is False
+    assert is_web_search_tool(tool, recognize_conventional_name=True) is True
+    assert is_web_search_tool_chat_completion(tool, recognize_conventional_name=True) is True
 
 
 @pytest.mark.parametrize(
