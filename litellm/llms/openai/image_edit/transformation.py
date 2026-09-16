@@ -75,7 +75,10 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         if isinstance(image, BufferedReader):
             files_list.append((field_name, (image.name, image, image_content_type)))
         else:
-            files_list.append((field_name, ("image.png", image, image_content_type)))
+            _filename = getattr(image, "name", None)
+            if not isinstance(_filename, str) or not _filename:
+                _filename = "image.png"
+            files_list.append((field_name, (_filename, image, image_content_type)))
 
     def transform_image_edit_request(
         self,
@@ -135,7 +138,10 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                 if isinstance(_mask, BufferedReader):
                     files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
                 else:
-                    files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
+                    _mask_filename = getattr(_mask, "name", None)
+                    if not isinstance(_mask_filename, str) or not _mask_filename:
+                        _mask_filename = "mask.png"
+                    files_list.append(("mask", (_mask_filename, _mask, mask_content_type)))
 
         return data_without_files, files_list
 

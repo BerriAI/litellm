@@ -298,14 +298,18 @@ async def image_edit_api(
     #########################################################
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
-    data: Final = {
-        key: value
-        for key, value in coerce_numeric_form_fields(
-            parsed_body=await _read_request_body(request=request),
-            numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
-        ).items()
-        if key not in BRACKETED_FILE_FIELDS
-    }
+    parsed_body: Final = coerce_numeric_form_fields(
+        parsed_body=await _read_request_body(request=request),
+        numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
+    )
+    for _field in BRACKETED_FILE_FIELDS:
+        _value = parsed_body.get(_field)
+        if isinstance(_value, str) or (isinstance(_value, list) and any(isinstance(_v, str) for _v in _value)):
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{_field}' must be provided as a multipart file upload, not a string.",
+            )
+    data: Final = {key: value for key, value in parsed_body.items() if key not in BRACKETED_FILE_FIELDS}
     image_files: Final = await batch_to_bytesio(image)
     mask_files: Final = await batch_to_bytesio(mask)
     if image_files:
