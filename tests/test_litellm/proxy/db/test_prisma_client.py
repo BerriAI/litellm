@@ -171,6 +171,35 @@ def test_get_engine_pid_returns_zero_for_disconnected_client(disconnected_prisma
     assert wrapper._get_engine_pid() == 0
 
 
+def test_write_engine_uses_the_public_setter_not_the_mangled_name():
+    """Real Prisma clients (>=0.13) are __slots__ classes exposing only a public
+    `_engine` property/setter, with no `_Prisma__engine` slot. Writing to the
+    mangled name raises AttributeError instead of storing the engine."""
+
+    class _FakeSlotsBasedPrismaClient:
+        __slots__ = ("_internal_engine",)
+
+        def __init__(self):
+            self._internal_engine = None
+
+        @property
+        def _engine(self):
+            if self._internal_engine is None:
+                raise AttributeError("not connected")
+            return self._internal_engine
+
+        @_engine.setter
+        def _engine(self, engine):
+            self._internal_engine = engine
+
+    client = _FakeSlotsBasedPrismaClient()
+    sentinel = object()
+
+    PrismaWrapper._write_engine(client, sentinel)
+
+    assert PrismaWrapper._read_engine(client) is sentinel
+
+
 @pytest.mark.asyncio
 async def test_recreate_prisma_client_recovers_from_disconnected_client(
     mock_prisma_binary, disconnected_prisma
