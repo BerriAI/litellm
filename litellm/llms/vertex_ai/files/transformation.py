@@ -6,6 +6,7 @@ import os
 import re
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from types import MappingProxyType
 from typing import Any, Final, TypedDict
 from urllib.parse import quote, unquote
 
@@ -38,7 +39,9 @@ from litellm.llms.base_llm.files.transformation import (
     LiteLLMLoggingObj,
 )
 from litellm.llms.vertex_ai.common_utils import (
+    VERTEX_CUSTOM_ENDPOINT_KEY_FIELD,
     _convert_vertex_datetime_to_openai_datetime,
+    get_custom_endpoint_id_from_api_base,
     get_vertex_ai_fine_tuned_endpoint_id,
 )
 from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
@@ -645,6 +648,41 @@ def _parse_vertex_batch_output_row(line: str) -> _VertexBatchRow:
     return row
 
 
+def _is_custom_endpoint_batch_output_row(row: Mapping[str, object]) -> bool:
+    """
+    An unmanaged-container (custom_endpoint) batch output row: Vertex echoes the instance (or the
+    `key` extracted from it) alongside a `prediction` wrapper, unlike Gemini rows which pair
+    `request`/`response`/`processed_time`.
+    """
+    return "prediction" in row and ("instance" in row or "key" in row)
+
+
+def _custom_endpoint_row_to_openai_batch_output_row(row: Mapping[str, object]) -> _OpenAIBatchOutputRow:
+    """
+    Unwraps one unmanaged-container batch output row. The vLLM `@requestFormat: chatCompletions`
+    mode already produces a full OpenAI chat.completion under `prediction.predictions`, so the
+    transform is: recover the custom_id (the `key` field when `instanceConfig.keyField` was
+    honored, else the echoed instance's tag) and re-wrap in the OpenAI batch output envelope.
+    """
+    key: Final = row.get("key")
+    instance: Final = row.get("instance")
+    tagged_custom_id: Final = (
+        instance.get(VERTEX_CUSTOM_ENDPOINT_KEY_FIELD, "") if isinstance(instance, Mapping) else ""
+    )
+    custom_id: Final = str(key if key is not None else tagged_custom_id)
+
+    prediction: Final = row.get("prediction")
+    body: Final = prediction.get("predictions") if isinstance(prediction, Mapping) else None
+    if not isinstance(body, Mapping):
+        error_text: Final = str(row.get("status") or prediction or "prediction carries no response body")
+        return _openai_batch_output_row(
+            custom_id=custom_id,
+            error_code="vertex_ai_error",
+            error_message=error_text,
+        )
+    return _openai_batch_output_row(custom_id=custom_id, body=body)
+
+
 class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
     """Streams an OpenAI batch JSONL upload as Vertex-wrapped JSONL one row at a
     time, so the transformed payload is never held in full.
@@ -671,6 +709,47 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
 
     def iter_bytes(self) -> Iterator[bytes]:
         return self._iter_vertex_jsonl_chunks()
+
+
+VERTEX_CUSTOM_ENDPOINT_GCS_SEGMENT: Final = "custom-endpoints"
+_VERTEX_CHAT_COMPLETIONS_REQUEST_FORMAT: Final = "chatCompletions"
+_EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _openai_batch_jsonl_entry_to_custom_endpoint_row(openai_entry: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    One OpenAI batch JSONL line as the instance a vLLM-serving Vertex container consumes:
+    the OpenAI request body itself tagged `@requestFormat: chatCompletions` (the container
+    speaks OpenAI natively, so no Gemini translation), minus `model` (the batch replica
+    serves exactly one model) plus the custom_id tag the job's `instanceConfig.excludedFields`
+    strips back out before the container sees it.
+    """
+    raw_body: Final = openai_entry.get("body")
+    body: Final = raw_body if isinstance(raw_body, Mapping) else _EMPTY_MAPPING
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in itertools.chain(
+                (("@requestFormat", _VERTEX_CHAT_COMPLETIONS_REQUEST_FORMAT),),
+                ((k, v) for k, v in body.items() if k != "model"),
+                ((VERTEX_CUSTOM_ENDPOINT_KEY_FIELD, str(openai_entry.get("custom_id", ""))),),
+            )
+        }
+    )
+
+
+class _OpenAIToCustomEndpointBatchUploadStream(BaseFileUploadStream):
+    """Streams an OpenAI batch JSONL upload as `@requestFormat: chatCompletions` instances
+    for a custom_endpoint (OpenAI-compatible container) batch job, one row at a time."""
+
+    def __init__(self, openai_file_content: FileTypes) -> None:
+        self._openai_file_content = openai_file_content
+
+    def iter_bytes(self) -> Iterator[bytes]:
+        for index, entry in enumerate(_iter_openai_jsonl_entries(self._openai_file_content)):
+            row = _openai_batch_jsonl_entry_to_custom_endpoint_row(entry)
+            prefix = b"" if index == 0 else b"\n"
+            yield prefix + json.dumps(row, default=dict).encode("utf-8")
 
 
 class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
@@ -740,13 +819,24 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         object_name: Final = f"{VERTEX_AI_MANAGED_GCS_PREFIX}{safe_model_path}/{uuid.uuid4()}"
         return object_name
 
-    def get_object_name(self, file_data: FileTypes, purpose: str, deployment_model: str | None = None) -> str:
+    def get_object_name(
+        self,
+        file_data: FileTypes,
+        purpose: str,
+        deployment_model: str | None = None,
+        custom_endpoint_id: str | None = None,
+    ) -> str:
         """
         Get the object name for the request.
 
         Reads only the first JSONL entry (streamed) for batch files, so a large
         upload is never materialized just to derive the GCS object name.
         """
+        if purpose == "batch" and custom_endpoint_id is not None:
+            safe_endpoint_id: Final = sanitize_cloud_object_path(custom_endpoint_id, fallback="endpoint")
+            return (
+                f"{VERTEX_AI_MANAGED_GCS_PREFIX}{VERTEX_CUSTOM_ENDPOINT_GCS_SEGMENT}/{safe_endpoint_id}/{uuid.uuid4()}"
+            )
         if purpose == "batch":
             ## 1. If jsonl, derive the object name from the deployment model (or the first entry's)
             first_entry: Final = next(_iter_openai_jsonl_entries(file_data), None)
@@ -781,16 +871,6 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         Get the complete url for the request
         """
-        if data.get("purpose") == "batch" and litellm_params.get("custom_endpoint"):
-            raise VertexAIError(
-                status_code=400,
-                message=(
-                    "Vertex AI batch prediction is not supported for `custom_endpoint` deployments. "
-                    "The OpenAI-compatible custom endpoint path has no batch surface in LiteLLM; "
-                    "remove this deployment from the batch request (e.g. `target_model_names`) or "
-                    "use a publisher model / fine-tuned Gemini endpoint instead."
-                ),
-            )
         bucket_name = self._get_configured_bucket_name(litellm_params)
         bucket_name, object_prefix = split_configured_cloud_bucket_name(bucket_name)
         file_data: Final = data.get("file")
@@ -800,20 +880,33 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         if purpose is None:
             raise ValueError("purpose is required")
         configured_model: Final = litellm_params.get("model")
+        deployment_api_base: Final = litellm_params.get("api_base")
+        custom_endpoint_id: Final = (
+            get_custom_endpoint_id_from_api_base(deployment_api_base if isinstance(deployment_api_base, str) else None)
+            if litellm_params.get("custom_endpoint")
+            else None
+        )
+        if litellm_params.get("custom_endpoint") and purpose == "batch" and custom_endpoint_id is None:
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    "Vertex AI batch prediction on a `custom_endpoint` deployment requires the "
+                    "deployment's `api_base` to name its Vertex endpoint "
+                    "(e.g. https://.../endpoints/<endpoint id>:rawPredict), so the batch job can "
+                    "run replicas of that endpoint's serving container."
+                ),
+            )
         object_name = self.get_object_name(
             file_data,
             purpose,
             deployment_model=configured_model if isinstance(configured_model, str) else None,
+            custom_endpoint_id=custom_endpoint_id,
         )
         if object_prefix:
             object_name = f"{object_prefix}/{object_name}"
         encoded_object_name: Final = encode_gcs_object_name_for_url(object_name)
         endpoint: Final = f"upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={encoded_object_name}"
-        api_base = api_base or "https://storage.googleapis.com"
-        if not api_base:
-            raise ValueError("api_base is required")
-
-        return f"{api_base}/{endpoint}"
+        return f"https://storage.googleapis.com/{endpoint}"
 
     def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         return []
@@ -871,12 +964,17 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             create_file_data=create_file_data,
             content_type=content_type,
         ):
+            body_stream: Final[BaseFileUploadStream] = (
+                _OpenAIToCustomEndpointBatchUploadStream(file_data)
+                if litellm_params.get("custom_endpoint")
+                else _OpenAIToVertexBatchUploadStream(
+                    file_data,
+                    self._map_openai_to_vertex_params,
+                )
+            )
             return {
                 "streaming_media_upload": StreamingMediaUploadConfig(
-                    body_stream=_OpenAIToVertexBatchUploadStream(
-                        file_data,
-                        self._map_openai_to_vertex_params,
-                    ),
+                    body_stream=body_stream,
                     content_type="application/json",
                 )
             }
@@ -1120,14 +1218,20 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # first line is not valid UTF-8/JSON) raises and falls through to the
             # passthrough below, leaving the content untouched.
             first_row: Final = _parse_vertex_batch_output_row(first_line)
-            is_vertex_batch_output: Final = _is_vertex_embeddings_batch_output_row(first_row) or (
-                "request" in first_row
-                and "response" in first_row
-                and "processed_time" in first_row
-                and (
-                    "candidates" in first_row.get("response", {})
-                    or "promptFeedback" in first_row.get("response", {})
-                    or bool(first_row.get("status"))
+            is_custom_endpoint_output: Final = _is_custom_endpoint_batch_output_row(first_row)
+            first_row_response: Final = first_row.get("response") or ()
+            is_vertex_batch_output: Final = (
+                is_custom_endpoint_output
+                or _is_vertex_embeddings_batch_output_row(first_row)
+                or (
+                    "request" in first_row
+                    and "response" in first_row
+                    and "processed_time" in first_row
+                    and (
+                        "candidates" in first_row_response
+                        or "promptFeedback" in first_row_response
+                        or bool(first_row.get("status"))
+                    )
                 )
             )
             if not is_vertex_batch_output:
@@ -1154,6 +1258,13 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             )
 
             all_lines = itertools.chain((first_line,), lines)
+
+            if is_custom_endpoint_output:
+                return b"\n".join(
+                    json.dumps(_custom_endpoint_row_to_openai_batch_output_row(json.loads(line))).encode("utf-8")
+                    for line in all_lines
+                    if line.strip()
+                )
 
             # Embedding rows are grouped by `custom_id` rather than transformed one at a
             # time, since an entry that asked for several embeddings comes back as

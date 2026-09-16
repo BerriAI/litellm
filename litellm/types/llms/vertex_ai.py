@@ -1,7 +1,9 @@
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
+    ReadOnly,
     Required,
     TypedDict,
 )
@@ -678,11 +680,37 @@ class GcsBucketResponse(TypedDict):
     timeFinalized: str
 
 
-class VertexAIBatchPredictionJob(TypedDict):
-    displayName: str
-    model: str
-    inputConfig: InputConfig
-    outputConfig: OutputConfig
+class BatchDedicatedResources(TypedDict, total=False):
+    """Sizing for batch-owned replicas; machineSpec is copied verbatim from the online
+    deployment's dedicatedResources, hence the loose Mapping."""
+
+    machineSpec: ReadOnly[Mapping[str, object]]
+    startingReplicaCount: ReadOnly[int]
+    maxReplicaCount: ReadOnly[int]
+
+
+class UnmanagedContainerModel(TypedDict, total=False):
+    """The v1beta1 batch shape for running batch-owned replicas of a serving container. The
+    containerSpec is copied verbatim from the deployed model resource (hence the loose Mapping):
+    hand-building one loses model-source args/env and crash-loops the batch container."""
+
+    containerSpec: ReadOnly[Mapping[str, object]]
+
+
+class BatchInstanceConfig(TypedDict, total=False):
+    instanceType: ReadOnly[str]
+    keyField: ReadOnly[str]
+    excludedFields: ReadOnly[Sequence[str]]
+
+
+class VertexAIBatchPredictionJob(TypedDict, total=False):
+    displayName: ReadOnly[Required[str]]
+    model: ReadOnly[str]
+    unmanagedContainerModel: ReadOnly[UnmanagedContainerModel]
+    dedicatedResources: ReadOnly[BatchDedicatedResources]
+    instanceConfig: ReadOnly[BatchInstanceConfig]
+    inputConfig: ReadOnly[Required[InputConfig]]
+    outputConfig: ReadOnly[Required[OutputConfig]]
 
 
 class VertexBatchPredictionResponse(TypedDict, total=False):

@@ -5,6 +5,7 @@ from enum import Enum
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Any, Final, Literal, cast, get_type_hints
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -368,6 +369,26 @@ def get_vertex_base_model_name(model: str) -> str:
             return model.replace(route, "", 1)
 
     return model
+
+
+VERTEX_CUSTOM_ENDPOINT_KEY_FIELD: Final = "litellm_custom_id"
+
+
+def get_custom_endpoint_id_from_api_base(api_base: str | None) -> str | None:
+    """
+    The Vertex endpoint a `custom_endpoint` deployment serves from is only recorded in its
+    api_base (`.../endpoints/<id>:rawPredict` or a dedicated-domain equivalent); batch jobs need
+    that id to read the endpoint's containerSpec, so extract it (verb suffix stripped).
+    """
+    if not api_base:
+        return None
+    path_segments: Final = urlparse(api_base).path.split("/")
+    after_endpoints: Final = tuple(
+        segment for prior, segment in zip(path_segments, path_segments[1:]) if prior == "endpoints"
+    )
+    if not after_endpoints:
+        return None
+    return after_endpoints[-1].split(":")[0] or None
 
 
 def get_vertex_ai_fine_tuned_endpoint_id(model: str) -> str | None:

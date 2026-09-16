@@ -129,13 +129,23 @@ class VertexAIBatchTransformation:
     def _get_output_file_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str:
         """
         Gets the output file id from the Vertex AI Batch response
+
+        Gemini jobs write `predictions.jsonl`; unmanaged-container jobs (custom_endpoint
+        deployments) write sharded `prediction.results-*` files into a directory Vertex names
+        `prediction-custom-unmanaged-model-<timestamp>`.
         """
 
         output_info: Final = response.get("outputInfo") or OutputInfo()
-        output_file_id: str = output_info.get("gcsOutputDirectory", "")
+        output_directory: Final = output_info.get("gcsOutputDirectory", "")
+        results_filename: Final = (
+            "prediction.results-00000-of-00001"
+            if "prediction-custom-unmanaged-model" in output_directory
+            else "predictions.jsonl"
+        )
+        output_file_id: str = output_directory
         if output_file_id:
-            output_file_id = output_file_id.rstrip("/") + "/predictions.jsonl"
-        if output_file_id and output_file_id != "/predictions.jsonl":
+            output_file_id = output_file_id.rstrip("/") + f"/{results_filename}"
+        if output_file_id and output_file_id != f"/{results_filename}":
             return output_file_id
 
         output_config: Final = response.get("outputConfig")
@@ -209,17 +219,21 @@ class VertexAIBatchTransformation:
         to its deployed tuned model (`projects/../locations/../models/<id>`) before sending the job.
         """
         parsed_model: Final = cls._get_model_from_gcs_file(input_file_id)
-        if not parsed_model.startswith("endpoints/"):
+        if not parsed_model.startswith(("endpoints/", "custom-endpoints/")):
             return parsed_model
         if not vertex_project:
             raise VertexAIError(
                 status_code=400,
                 message=(
-                    f"Vertex AI batch jobs against a fine-tuned endpoint ('{parsed_model}') require "
+                    f"Vertex AI batch jobs against an endpoint ('{parsed_model}') require "
                     "`vertex_project` to build the endpoint resource name"
                 ),
             )
-        return f"projects/{vertex_project}/locations/{vertex_location or 'us-central1'}/{parsed_model}"
+        location_segment: Final = f"projects/{vertex_project}/locations/{vertex_location or 'us-central1'}"
+        if parsed_model.startswith("custom-endpoints/"):
+            endpoint_id: Final = parsed_model.removeprefix("custom-endpoints/")
+            return f"{location_segment}/custom-endpoints/{endpoint_id}"
+        return f"{location_segment}/{parsed_model}"
 
     @classmethod
     def _get_model_from_gcs_file(cls, gcs_file_uri: str) -> str:
@@ -260,12 +274,15 @@ class VertexAIBatchTransformation:
     @classmethod
     def _parse_model_from_gcs_file(cls, gcs_file_uri: str) -> str | None:
         """
-        Returns the `publishers/<publisher>/models/<model>` or `endpoints/<numeric id>` path from a
-        gcs uri, or None if the uri does not contain one.
+        Returns the `publishers/<publisher>/models/<model>`, `endpoints/<numeric id>`, or
+        `custom-endpoints/<numeric id>` path from a gcs uri, or None if the uri does not contain
+        one.
 
-        A publisher path wins over an `endpoints/` segment, and the last `endpoints/` occurrence is
-        used, so a user-configured bucket prefix that happens to contain `endpoints/<digits>` cannot
-        override the model path LiteLLM appended after it.
+        A publisher path wins over an endpoints segment, `custom-endpoints/` (a custom_endpoint
+        deployment's serving container run as an unmanaged-container batch) wins over a plain
+        `endpoints/` (a fine-tuned Gemini endpoint), and the last occurrence of each is used, so a
+        user-configured bucket prefix that happens to contain `endpoints/<digits>` cannot override
+        the model path LiteLLM appended after it.
         """
         unquoted_uri: Final = unquote(gcs_file_uri)
         _, separator, model_path = unquoted_uri.partition("publishers/")
@@ -273,6 +290,11 @@ class VertexAIBatchTransformation:
             parts: Final = model_path.split("/")
             if len(parts) >= 3 and parts[1] == "models" and parts[2]:
                 return f"publishers/{'/'.join(parts[:3])}"
+
+        _, custom_separator, custom_path = unquoted_uri.rpartition("custom-endpoints/")
+        custom_endpoint_id: Final = custom_path.split("/")[0] if custom_separator else ""
+        if custom_endpoint_id.isdigit():
+            return f"custom-endpoints/{custom_endpoint_id}"
 
         _, endpoint_separator, endpoint_path = unquoted_uri.rpartition("endpoints/")
         endpoint_id: Final = endpoint_path.split("/")[0] if endpoint_separator else ""

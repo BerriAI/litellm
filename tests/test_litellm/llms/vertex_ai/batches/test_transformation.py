@@ -36,8 +36,7 @@ INPUT_FILE = (
 
 ENDPOINT_ID = "7768560373388541952"
 ENDPOINT_INPUT_FILE = (
-    f"gs://litellm-testing-bucket/litellm-vertex-files/endpoints/{ENDPOINT_ID}/"
-    "e9412502-2c91-42a6-8e61-f5c294cc0fc8"
+    f"gs://litellm-testing-bucket/litellm-vertex-files/endpoints/{ENDPOINT_ID}/e9412502-2c91-42a6-8e61-f5c294cc0fc8"
 )
 
 
@@ -389,6 +388,29 @@ def test_get_model_from_gcs_file_non_numeric_endpoints_segment_raises_400():
 
 def test_get_bare_model_name_from_gcs_file_fine_tuned_endpoint():
     assert T.get_bare_model_name_from_gcs_file(ENDPOINT_INPUT_FILE) == ENDPOINT_ID
+
+
+CUSTOM_ENDPOINT_ID = "4980511146650894336"
+CUSTOM_ENDPOINT_INPUT_FILE = (
+    f"gs://litellm-testing-bucket/litellm-vertex-files/custom-endpoints/{CUSTOM_ENDPOINT_ID}/"
+    "e9412502-2c91-42a6-8e61-f5c294cc0fc8"
+)
+
+
+def test_get_model_from_gcs_file_custom_endpoint():
+    """`custom-endpoints/` contains `endpoints/` as a substring, so the custom marker must be
+    matched first or the id would be misread as a fine-tuned Gemini endpoint and the batch job
+    would target a nonexistent tuned model (LIT-7387)."""
+    assert T._get_model_from_gcs_file(CUSTOM_ENDPOINT_INPUT_FILE) == f"custom-endpoints/{CUSTOM_ENDPOINT_ID}"
+
+
+def test_batch_job_model_custom_endpoint_builds_resource_path():
+    job = T.transform_openai_batch_request_to_vertex_ai_batch_request(
+        {"input_file_id": CUSTOM_ENDPOINT_INPUT_FILE},
+        vertex_project="my-project",
+        vertex_location="us-central1",
+    )
+    assert job["model"] == f"projects/my-project/locations/us-central1/custom-endpoints/{CUSTOM_ENDPOINT_ID}"
 
 
 # =========================================================================== #
