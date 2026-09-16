@@ -16,7 +16,11 @@ from redis.exceptions import DataError
 
 import litellm
 from litellm.proxy._types import Litellm_EntityType
-from litellm.proxy.db.db_spend_update_writer import _TEAM_MEMBER_SPEND_SQL, DBSpendUpdateWriter
+from litellm.proxy.db.db_spend_update_writer import (
+    _TEAM_ADVISORY_LOCKS_SQL,
+    _TEAM_MEMBER_SPEND_SQL,
+    DBSpendUpdateWriter,
+)
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
@@ -945,9 +949,10 @@ async def test_commit_spend_updates_to_db_writes_team_member_spend_in_one_roster
     Regression (LIT-5502): members added without a budget had no membership row, and the
     previous update_many matched zero rows, so their spend was silently dropped.
 
-    The flush now runs one INSERT ... ON CONFLICT statement for the whole batch that adds
-    the cost to both spend and total_spend and creates the missing row for a user still on
-    the team roster, so no per-team read can fail or time out ahead of the writes.
+    The flush now takes the same per-team advisory lock the team endpoints hold, then runs
+    one INSERT ... ON CONFLICT statement for the whole batch that adds the cost to both spend
+    and total_spend and creates the missing row for a user still on the team roster, so no
+    per-team read can fail or time out ahead of the writes.
     """
     db_writer = DBSpendUpdateWriter()
     team_id = "team-abc"
@@ -967,13 +972,17 @@ async def test_commit_spend_updates_to_db_writes_team_member_spend_in_one_roster
         ),
     )
 
-    mock_transaction.execute_raw.assert_awaited_once()
-    statement, user_ids, team_ids, costs = mock_transaction.execute_raw.await_args.args
+    lock_call, spend_call = mock_transaction.execute_raw.await_args_list
+    lock_statement, locked_team_ids = lock_call.args
+    assert lock_statement is _TEAM_ADVISORY_LOCKS_SQL
+    assert locked_team_ids == [team_id]
+    assert "pg_advisory_xact_lock(hashtext(teams.team_id))" in lock_statement
+    assert "ORDER BY team_id" in lock_statement
+    statement, user_ids, team_ids, costs = spend_call.args
     assert statement is _TEAM_MEMBER_SPEND_SQL
     assert (user_ids, team_ids, costs) == ([user_id], [team_id], [response_cost])
     assert 'INSERT INTO "LiteLLM_TeamMembership"' in statement
     assert "members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', p.user_id))" in statement
-    assert "FOR SHARE" in statement
     assert "ON CONFLICT (user_id, team_id) DO UPDATE" in statement
     assert 'spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend' in statement
     assert 'total_spend = "LiteLLM_TeamMembership".total_spend + EXCLUDED.total_spend' in statement
@@ -982,9 +991,10 @@ async def test_commit_spend_updates_to_db_writes_team_member_spend_in_one_roster
 @pytest.mark.asyncio
 async def test_commit_spend_updates_to_db_orders_team_member_rows_by_team_then_user():
     """
-    The single member spend statement locks rows in the order of its input arrays, so the
-    batch is handed over sorted by (team_id, user_id), with each cost kept next to its
-    member, so concurrent pods lock in the same order and cannot deadlock.
+    The member spend statement touches rows in the order of its input arrays, so the batch
+    is handed over sorted by (team_id, user_id), with each cost kept next to its member, and
+    the advisory lock statement receives the same team ids, so concurrent pods lock in the
+    same order and cannot deadlock.
     """
     db_writer = DBSpendUpdateWriter()
     mock_transaction, mock_prisma_client = _team_member_flush_fixtures()
@@ -1006,7 +1016,9 @@ async def test_commit_spend_updates_to_db_orders_team_member_rows_by_team_then_u
         ),
     )
 
-    _statement, user_ids, team_ids, costs = mock_transaction.execute_raw.await_args.args
+    lock_call, spend_call = mock_transaction.execute_raw.await_args_list
+    _statement, user_ids, team_ids, costs = spend_call.args
+    assert lock_call.args == (_TEAM_ADVISORY_LOCKS_SQL, ["team_a", "team_a", "team_b", "team_c"])
     assert list(zip(team_ids, user_ids, costs)) == [
         ("team_a", "user_x", 0.3),
         ("team_a", "user_y", 0.2),
