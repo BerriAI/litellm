@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, NoReturn
+from typing import Final, Literal, NamedTuple, NoReturn, Protocol, TypeAlias
 
 from fastapi import Request, status
 from pydantic import TypeAdapter, ValidationError
@@ -58,11 +58,24 @@ _REDIS_FAILURES: Final = (RedisError, RedisCircuitBreakerOpenError, OSError, asy
 _LOCAL_BLOCK_EXPIRY: Final = TypeAdapter[float | None](float | None)
 _SOURCE_LIMIT_OVERRIDES: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
 
-Scope = Literal["user", "source"]
+Scope: TypeAlias = Literal["user", "source"]
 
-_BlockTtls = tuple[int, int]
+_BlockTtls: TypeAlias = tuple[int, int]
 _LUA_BLOCK_TTLS: Final = TypeAdapter[_BlockTtls](_BlockTtls)
-_Network = ipaddress.IPv4Network | ipaddress.IPv6Network
+_Network: TypeAlias = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+class LocalStore(Protocol):
+    """The per-worker store behind the counters and blocks; ``InMemoryCache`` satisfies it."""
+
+    def get_cache(self, key: str) -> object: ...
+
+    def set_cache(self, key: str, value: float, *, ttl: int) -> None: ...
+
+    def increment_cache(self, key: str, value: float, *, ttl: int) -> float: ...
+
+    def delete_cache(self, key: str) -> None: ...
+
 
 # KEYS: pair counter, pair block, source counter, source block (one cluster slot via the source hash tag)
 # ARGV: pair limit, source limit (0 = source scope off), window seconds, block seconds
@@ -87,7 +100,7 @@ _COUNTERS: Final = InMemoryCache(
     max_size_in_memory=_MAX_TRACKED_COUNTERS, default_ttl=DEFAULT_FAILED_LOGIN_WINDOW_SECONDS
 )
 _BLOCKS: Final = InMemoryCache(max_size_in_memory=_MAX_TRACKED_BLOCKS, default_ttl=DEFAULT_FAILED_LOGIN_BLOCK_SECONDS)
-_HELD_ATTEMPTS: Final[dict[str, int]] = {}
+_HELD_ATTEMPTS: Final[dict[str, int]] = {}  # mutable-ok: in-flight hold counts rise on entry and fall on exit
 
 
 async def _sleep(seconds: float) -> None:
@@ -216,8 +229,8 @@ class LoginThrottle:
     user_limit: int
     window_seconds: int
     block_seconds: int
-    counters: InMemoryCache
-    blocks: InMemoryCache
+    counters: LocalStore
+    blocks: LocalStore
     redis_cache: RedisCache | None = None
     enabled: bool = True
 
@@ -304,7 +317,7 @@ class LoginThrottle:
             return _NOT_BLOCKED
         try:
             return _LUA_BLOCK_TTLS.validate_python(
-                await self.redis_cache.async_register_script(_BLOCK_TTLS_LUA)(list(keys), [])
+                await self.redis_cache.async_register_script(_BLOCK_TTLS_LUA)(keys, ())
             )
         except _REDIS_FAILURES as err:
             self._warn_redis(err)
@@ -326,7 +339,7 @@ class LoginThrottle:
             try:
                 return _LUA_BLOCK_TTLS.validate_python(
                     await self.redis_cache.async_register_script(_RECORD_FAILURE_LUA)(
-                        list(keys), [self.user_limit, source_limit, self.window_seconds, self.block_seconds]
+                        keys, (self.user_limit, source_limit, self.window_seconds, self.block_seconds)
                     )
                 )
             except _REDIS_FAILURES as err:
@@ -369,7 +382,7 @@ class LoginThrottle:
             type=ProxyErrorTypes.auth_error,
             param="username",
             code=status.HTTP_429_TOO_MANY_REQUESTS,
-            headers={"Retry-After": str(retry_after)},
+            headers={"Retry-After": str(retry_after)},  # mutable-ok: ProxyException writes into its headers dict
         )
 
 
