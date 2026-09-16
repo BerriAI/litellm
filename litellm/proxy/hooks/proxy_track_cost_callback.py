@@ -267,6 +267,7 @@ class _ProxyDBLogger(CustomLogger):
             start_time=actual_start_time,
             end_time=datetime.now(),
             org_id=user_api_key_dict.org_id,
+            project_id=user_api_key_dict.project_id,
         )
 
     @log_db_metrics
@@ -318,6 +319,7 @@ class _ProxyDBLogger(CustomLogger):
             user_id: Final = cast(str | None, metadata.get("user_api_key_user_id", None))
             team_id: Final = cast(str | None, metadata.get("user_api_key_team_id", None))
             org_id: Final = cast(str | None, metadata.get("user_api_key_org_id", None))
+            project_id: Final = cast(str | None, metadata.get("user_api_key_project_id", None))
             key_alias: Final = cast(str | None, metadata.get("user_api_key_alias", None))
             end_user_max_budget: Final = metadata.get("user_api_end_user_max_budget", None)
             sl_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
@@ -368,6 +370,7 @@ class _ProxyDBLogger(CustomLogger):
                         budget_reservation=budget_reservation,
                         request_tags=tags,
                         model_access_groups=model_access_groups,
+                        project_id=project_id,
                     )
                     if not charged:
                         return
@@ -651,6 +654,7 @@ async def _update_database_and_spend_counters(
     budget_reservation: dict | None,
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
+    project_id: str | None = None,
 ) -> bool:
     if budget_reservation is not None:
         await _reconcile_budget_reservation_before_db_update(
@@ -668,6 +672,7 @@ async def _update_database_and_spend_counters(
             start_time=start_time,
             end_time=end_time,
             org_id=org_id,
+            project_id=project_id,
         )
     except Exception:
         if budget_reservation is not None:
@@ -698,6 +703,7 @@ async def _update_database_and_spend_counters(
             tags=request_tags,
             request_started_at=start_time,
             model_access_groups=model_access_groups,
+            project_id=project_id,
         )
     except Exception:
         if budget_reservation is not None:

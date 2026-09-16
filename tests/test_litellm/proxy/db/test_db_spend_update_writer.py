@@ -1061,6 +1061,82 @@ async def test_batch_database_updates_queues_org_member_spend_for_the_request_us
 
 
 @pytest.mark.asyncio
+async def test_project_spend_is_persisted_to_project_table_and_project_cache_is_evicted():
+    """Regression for LIT-3269: a request made with a project-scoped key must
+    increment LiteLLM_ProjectTable.spend, otherwise /project/info stays at 0
+    and the project budget never blocks. The cached project row is evicted so
+    the next auth check reads the fresh spend."""
+    db_writer: Final = DBSpendUpdateWriter()
+    await db_writer._batch_database_updates(
+        response_cost=0.25,
+        user_id="u1",
+        hashed_token="t1",
+        team_id="team-1",
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload={"request_id": "req-1", "model": "gpt-4o-mini", "spend": 0.25},
+        project_id="proj-1",
+    )
+    await db_writer._batch_database_updates(
+        response_cost=0.5,
+        user_id="u1",
+        hashed_token="t1",
+        team_id="team-1",
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload={"request_id": "req-2", "model": "gpt-4o-mini", "spend": 0.5},
+        project_id="proj-1",
+    )
+    transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["project_list_transactions"] == {"proj-1": 0.75}
+    assert transactions["team_member_list_transactions"] == {"team_id::team-1::user_id::u1": 0.75}
+
+    mock_batcher: Final = MagicMock()
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(mock_batcher))
+    user_api_key_cache: Final = MagicMock()
+    user_api_key_cache.async_delete_cache = AsyncMock()
+    proxy_logging: Final = MagicMock()
+    proxy_logging.call_details = {"user_api_key_cache": user_api_key_cache}
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging,
+        db_spend_update_transactions=transactions,
+    )
+
+    mock_batcher.litellm_projecttable.update_many.assert_called_once_with(
+        where={"project_id": "proj-1"},
+        data={"spend": {"increment": 0.75}},
+    )
+    user_api_key_cache.async_delete_cache.assert_any_await(key="project_id:proj-1")
+
+
+@pytest.mark.asyncio
+async def test_batch_database_updates_without_project_id_touches_no_project_row():
+    db_writer: Final = DBSpendUpdateWriter()
+    await db_writer._batch_database_updates(
+        response_cost=0.1,
+        user_id="u1",
+        hashed_token="t1",
+        team_id=None,
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload={"request_id": "req-1", "model": "gpt-4o-mini", "spend": 0.1},
+    )
+    transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+
+    assert transactions["project_list_transactions"] == {}
+
+
+@pytest.mark.asyncio
 async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_id():
     """
     Test that add_spend_log_transaction_to_daily_tag_transaction correctly processes request_id.

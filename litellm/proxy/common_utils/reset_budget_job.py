@@ -41,6 +41,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     model_access_group_cache_key,
     model_access_group_spend_counter_key,
+    project_cache_key,
+    project_spend_counter_key,
     tag_cache_key,
 )
 from litellm.proxy.db.budget_window_spend_writer import roll_window_spend_row
@@ -49,6 +51,7 @@ from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import SpendLinkedTable
+from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     EndUserRepository,
     ModelAccessGroupBudgetRepository,
@@ -113,6 +116,11 @@ class _TagRow(_BudgetLinkedRow, Protocol):
 class _ModelAccessGroupRow(_BudgetLinkedRow, Protocol):
     @property
     def access_group_name(self) -> str: ...
+
+
+class _ProjectRow(_BudgetLinkedRow, Protocol):
+    @property
+    def project_id(self) -> str: ...
 
 
 class _EndUserRow(_BudgetLinkedRow, Protocol):
@@ -183,6 +191,14 @@ def _model_access_group_counter_key(row: _ModelAccessGroupRow) -> str:
 
 def _model_access_group_cache_keys(row: _ModelAccessGroupRow) -> tuple[str, ...]:
     return (model_access_group_cache_key(row.access_group_name),)
+
+
+def _project_counter_key(row: _ProjectRow) -> str:
+    return project_spend_counter_key(row.project_id)
+
+
+def _project_cache_keys(row: _ProjectRow) -> tuple[str, ...]:
+    return (project_cache_key(row.project_id),)
 
 
 def _enduser_counter_key(row: _EndUserRow) -> str:
@@ -661,6 +677,11 @@ class ResetBudgetJob:
             where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
             log_subject="model access groups",
         )
+        projects: Final[tuple[_ProjectRow, ...]] = await self._fetch_linked_rows(
+            table=ProjectRepository(self.prisma_client).table,
+            where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
+            log_subject="projects",
+        )
         rollover_caps: Final[Mapping[str, float]] = MappingProxyType(
             {  # mutable-ok: MappingProxyType wraps a one-shot dict comprehension
                 b.budget_id: cap
@@ -695,6 +716,7 @@ class ResetBudgetJob:
                     (_model_access_group_counter_key(row), _row_carried_spend(row, rollover_caps))
                     for row in model_access_groups
                 ),
+                *((_project_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in projects),
                 *((_enduser_counter_key(row), _enduser_carried_spend(row, rollover_caps)) for row in endusers),
             ),
             rollover_caps=rollover_caps,
@@ -704,6 +726,7 @@ class ResetBudgetJob:
                 *(key for row in orgs for key in _org_cache_keys(row)),
                 *(key for row in tags for key in _tag_cache_keys(row)),
                 *(key for row in model_access_groups for key in _model_access_group_cache_keys(row)),
+                *(key for row in projects for key in _project_cache_keys(row)),
                 *(key for row in endusers for key in _enduser_cache_keys(row)),
             ),
         )
@@ -731,6 +754,7 @@ class ResetBudgetJob:
             _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.model_access_groups, cascade, extra=_SPENT_ROWS_WHERE)
+            _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_enduser_resets(uow.endusers, cascade)
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
