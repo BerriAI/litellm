@@ -29528,6 +29528,8 @@ export interface components {
             object_permission_id?: string | null;
             /** Org Id */
             org_id?: string | null;
+            /** Organization Id */
+            organization_id?: string | null;
             /**
              * Permissions
              * @default {}
