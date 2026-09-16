@@ -1,12 +1,13 @@
 use serde_json::{Map, Value, json};
 
+use crate::audio_transcription::Error;
 use crate::audio_transcription::transformation::{
     AudioTranscriptionAuth, AudioTranscriptionProviderConfig,
 };
 use crate::audio_transcription::types::{
     AudioTranscriptionRequestData, AudioTranscriptionResponseData,
 };
-use crate::error::{Error, json_type_name};
+use crate::http_utils::json_type_name;
 
 pub use super::aws_base::{aws_auth_config, bedrock_model_id_and_region, resolve_bedrock_region};
 use super::constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE};

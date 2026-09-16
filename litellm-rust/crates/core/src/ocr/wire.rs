@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use super::types::{LiteLLMOcrRequest, OcrConnection, OcrDocument};
-use crate::Error;
-use crate::auth::InputSource;
+use crate::ocr::Error;
+use litellm_auth::InputSource;
 use serde::{
     Deserialize,
     de::{DeserializeOwned, IntoDeserializer},
