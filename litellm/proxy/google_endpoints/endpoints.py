@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -7,6 +8,10 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.google_endpoints.caller_credentials import (
+    enforce_caller_supplied_provider_key,
+    query_template,
+)
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 router: Final = APIRouter(
@@ -14,9 +19,27 @@ router: Final = APIRouter(
 )
 
 
-def _provider_from_query(request: Request) -> str:
-    """The provider that owns the interaction; Gemini unless ``?custom_llm_provider=`` says otherwise."""
-    return request.query_params.get("custom_llm_provider") or "gemini"
+def _lifecycle_data(
+    request: Request, interaction_id: str, user_api_key_dict: UserAPIKeyAuth
+) -> dict[str, object]:  # mutable-ok: ProxyBaseLLMRequestProcessing owns and mutates the request data
+    """
+    GET, DELETE and cancel keep Gemini as the default. Another provider is selected with
+    the JSON-encoded ``litellm_params_template`` query parameter, which is also how a
+    non-admin caller supplies the provider key: without one the shared environment
+    credential would let any proxy key read, interrupt or delete any session it can name.
+    """
+    data: Final[dict[str, object]] = {  # mutable-ok: ProxyBaseLLMRequestProcessing owns and mutates the request data
+        "custom_llm_provider": "gemini",
+        **query_template(request),
+        "interaction_id": interaction_id,
+    }
+    _enforce_key_for_non_default_provider(data, user_api_key_dict)
+    return data
+
+
+def _enforce_key_for_non_default_provider(data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth) -> None:
+    if data.get("custom_llm_provider") != "gemini":
+        enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
 
 @router.post(
@@ -278,6 +301,7 @@ async def create_interaction(
     # Default to gemini provider for interactions
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = "gemini"
+    _enforce_key_for_non_default_provider(data, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -345,7 +369,7 @@ async def get_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": _provider_from_query(request)}
+    data: Final = _lifecycle_data(request, interaction_id, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -413,7 +437,7 @@ async def delete_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": _provider_from_query(request)}
+    data: Final = _lifecycle_data(request, interaction_id, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -481,7 +505,7 @@ async def cancel_interaction(
         version,
     )
 
-    data: Final = {"interaction_id": interaction_id, "custom_llm_provider": _provider_from_query(request)}
+    data: Final = _lifecycle_data(request, interaction_id, user_api_key_dict)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:

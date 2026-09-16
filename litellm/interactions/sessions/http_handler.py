@@ -8,6 +8,7 @@ from typing import Final
 
 import httpx
 
+from litellm.constants import request_timeout
 from litellm.interactions.http_handler import InteractionsHTTPHandler
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.interactions.session_transformation import BaseSessionInteractionsConfig
@@ -71,12 +72,13 @@ class SessionInteractionsHTTPHandler(InteractionsHTTPHandler):
         http_client: Final = self._sync_client(litellm_params, client)
         try:
             session_response: Final = http_client.get(  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.get exposes untyped optional mappings
-                url=session_url, headers=headers, params=session_params
+                url=session_url, headers=headers, params=session_params, timeout=timeout or request_timeout
             )
             transcript_response: Final = http_client.get(  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.get exposes untyped optional mappings
                 url=transcript_url,
                 headers=headers,
                 params=dict(transcript_params),  # mutable-ok: httpx params= needs a plain dict
+                timeout=timeout or request_timeout,
             )
         except httpx.HTTPError as e:
             raise self._handle_error(e=e, provider_config=config)
@@ -114,12 +116,13 @@ class SessionInteractionsHTTPHandler(InteractionsHTTPHandler):
         http_client: Final = self._async_client(litellm_params, client)
         try:
             session_response: Final = await http_client.get(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.get exposes untyped optional mappings
-                url=session_url, headers=headers, params=session_params
+                url=session_url, headers=headers, params=session_params, timeout=timeout or request_timeout
             )
             transcript_response: Final = await http_client.get(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.get exposes untyped optional mappings
                 url=transcript_url,
                 headers=headers,
                 params=dict(transcript_params),  # mutable-ok: httpx params= needs a plain dict
+                timeout=timeout or request_timeout,
             )
         except httpx.HTTPError as e:
             raise self._handle_error(e=e, provider_config=config)
