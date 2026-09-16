@@ -1,8 +1,38 @@
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 import orjson
 
 from litellm.types.videos.utils import encode_character_id_with_provider
+
+
+class VideoModelIdResolver(Protocol):
+    def resolve_model_name_from_model_id(self, model_id: str | None) -> str | None: ...
+
+
+def infer_video_provider_from_model(model: str | None) -> str | None:
+    if not isinstance(model, str) or not model:
+        return None
+    unprefixed: Final = model.split("/", 1)[-1]
+    if unprefixed.startswith("grok-imagine-video"):
+        return "xai"
+    return None
+
+
+def resolve_video_request_model(
+    *,
+    model_id_from_decoded: str | None,
+    query_model: str | None,
+    llm_router: VideoModelIdResolver | None,
+) -> str | None:
+    if model_id_from_decoded:
+        if llm_router is not None:
+            resolved: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+            if isinstance(resolved, str) and resolved:
+                return resolved
+        return model_id_from_decoded
+    if isinstance(query_model, str) and query_model:
+        return query_model
+    return None
 
 
 def extract_model_from_target_model_names(target_model_names: Any) -> str | None:

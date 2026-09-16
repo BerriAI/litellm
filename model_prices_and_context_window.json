@@ -60450,7 +60450,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -60466,7 +60467,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -60483,7 +60485,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -60500,7 +60503,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -60517,7 +60521,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -60533,7 +60538,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -60550,7 +60556,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -60637,7 +60644,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -65270,5 +65278,56 @@
         "supports_tool_choice": false,
         "supports_response_schema": true,
         "supports_vision": false
+    },
+    "xai/grok-imagine-video": {
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.05,
+        "source": "https://docs.x.ai/docs/models",
+        "supported_endpoints": [
+            "/v1/videos",
+            "/v1/videos/generations"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "xai/grok-imagine-video-1.5": {
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.08,
+        "source": "https://docs.x.ai/docs/models",
+        "supported_endpoints": [
+            "/v1/videos",
+            "/v1/videos/generations"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "xai/grok-imagine-video-1.5-preview": {
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.08,
+        "source": "https://docs.x.ai/docs/models",
+        "supported_endpoints": [
+            "/v1/videos",
+            "/v1/videos/generations"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }

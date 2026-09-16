@@ -2653,7 +2653,8 @@
         "messages": true,
         "responses": true,
         "embeddings": false,
-        "image_generations": false,
+        "image_generations": true,
+        "image_edits": true,
         "audio_transcriptions": false,
         "audio_speech": false,
         "moderations": false,
@@ -2661,7 +2662,8 @@
         "rerank": false,
         "a2a": true,
         "interactions": true,
-        "realtime": true
+        "realtime": true,
+        "video_generations": true
       }
     },
     "xinference": {
