@@ -2,9 +2,12 @@
 
 Only days that are over get rolled up, so a pod still flushing per-key spend for the current
 day can never leave the global table short; usage reads serve days through the recorded
-marker from the global table and later days live from the per-key table. The marker lives in
-``LiteLLM_Config``. This runs as a background cron, never in a Prisma migration, since on a
-large deployment the first backfill is minutes of work.
+marker from the global table and later days live from the per-key table. Per-key rows are
+dated by request start, so spend can land on a day that was already rolled up (a flush
+straddling midnight, a retry after an outage). Each run therefore also rewrites every closed
+day that has rows touched since the previous run's scan, whatever the date. The marker lives
+in ``LiteLLM_Config``. This runs as a background cron, never in a Prisma migration, since on
+a large deployment the first backfill is minutes of work.
 """
 
 from collections.abc import Awaitable, Callable
@@ -27,7 +30,6 @@ if TYPE_CHECKING:
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
     from litellm.proxy.utils import PrismaClient
 
-_REPLAY_DAYS: Final = 1
 GLOBAL_SPEND_TABLE_NAME: Final = "LiteLLM_DailyGlobalSpend"
 # The unique constraint, in constraint order. NULL never matches itself in a unique index, so
 # every column is normalized to '' or the same group would be inserted again on every run.
@@ -69,15 +71,26 @@ def _reconcile_day_sql() -> str:
 
 
 RECONCILE_DAY_SQL: Final = _reconcile_day_sql()
+_DB_NOW_SQL: Final = "SELECT (NOW() AT TIME ZONE 'UTC')::text AS now"
+_ALL_CLOSED_DAYS_SQL: Final = 'SELECT DISTINCT "date" FROM "LiteLLM_DailyUserSpend" WHERE "date" <= $1 ORDER BY "date"'
+# Pod clocks drift from the database clock and from each other, so rows are picked up from a
+# little before the previous scan; rewriting a day twice is idempotent.
 _PENDING_DAYS_SQL: Final = (
-    'SELECT DISTINCT "date" FROM "LiteLLM_DailyUserSpend" WHERE "date" >= $1 AND "date" <= $2 ORDER BY "date"'
+    'SELECT DISTINCT "date" FROM "LiteLLM_DailyUserSpend" WHERE "date" <= $1 '
+    'AND ("date" > $2 OR "updated_at" >= $3::timestamp - INTERVAL \'1 hour\') '
+    'ORDER BY "date"'
 )
 
 
 class ReconciledThrough(BaseModel):
+    """``reconciled_through`` is the last closed UTC day the global table covers. ``scanned_at`` is
+    the database clock when the scan behind the last fully successful run started: every per-key
+    row written before it, on any day through the marker, is in the global table."""
+
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     reconciled_through: str
+    scanned_at: str | None = None
 
 
 class _MarkerRow(BaseModel):
@@ -92,6 +105,12 @@ class _DateRow(BaseModel):
     date: str
 
 
+class _NowRow(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    now: str
+
+
 @dataclass(frozen=True, slots=True)
 class ReconcileResult:
     days_reconciled: tuple[str, ...]
@@ -99,49 +118,70 @@ class ReconcileResult:
     failed_day: str | None = None
 
 
-def _marker_from_param_value(value: object) -> str | None:
+@dataclass(frozen=True, slots=True)
+class _PendingScan:
+    marker: ReconciledThrough | None
+    scanned_at: str
+    days: tuple[str, ...]
+
+
+def _marker_from_param_value(value: object) -> ReconciledThrough | None:
     try:
-        parsed: Final = (
+        return (
             ReconciledThrough.model_validate_json(value)
             if isinstance(value, str)
             else ReconciledThrough.model_validate(value)
         )
     except ValidationError:
         return None
-    return parsed.reconciled_through
 
 
-async def reconciled_through(prisma_client: "PrismaClient") -> str | None:
-    """The last UTC day ``LiteLLM_DailyGlobalSpend`` is known to cover, or None before the first run."""
+async def read_marker(prisma_client: "PrismaClient") -> ReconciledThrough | None:
     from litellm.proxy.utils import get_config_param
 
     row: Final = await get_config_param(prisma_client, DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
     return None if row is None else _marker_from_param_value(_MarkerRow.model_validate(row).param_value)
 
 
-async def _record_reconciled_through(prisma_client: "PrismaClient", day: str) -> None:
+async def reconciled_through(prisma_client: "PrismaClient") -> str | None:
+    """The last UTC day ``LiteLLM_DailyGlobalSpend`` is known to cover, or None before the first run."""
+    marker: Final = await read_marker(prisma_client)
+    return None if marker is None else marker.reconciled_through
+
+
+async def _record_marker(prisma_client: "PrismaClient", marker: ReconciledThrough) -> None:
     from litellm.proxy.utils import invalidate_config_param
 
     await ConfigRepository(prisma_client).set_param(
-        DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM, ReconciledThrough(reconciled_through=day).model_dump_json()
+        DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM, marker.model_dump_json()
     )
     await invalidate_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
 
 
-def _first_pending_day(marker: str | None) -> str:
-    if marker is None:
-        return ""
-    return (date.fromisoformat(marker) - timedelta(days=_REPLAY_DAYS)).isoformat()
+async def _db_now(prisma_client: "PrismaClient") -> str:
+    rows: Final = await prisma_client.db.query_raw(_DB_NOW_SQL)
+    return _NowRow.model_validate(rows[0]).now
+
+
+async def _scan_pending(prisma_client: "PrismaClient", today: date) -> _PendingScan:
+    """Every closed UTC day (strictly before today) still to roll up, oldest first: days past the
+    marker, plus any day with per-key rows written since the scan behind the marker. Before a
+    run has fully succeeded there is no such scan, so every closed day is rolled up."""
+    marker: Final = await read_marker(prisma_client)
+    scanned_at: Final = await _db_now(prisma_client)
+    last_closed_day: Final = (today - timedelta(days=1)).isoformat()
+    rows: Final = (
+        await prisma_client.db.query_raw(_ALL_CLOSED_DAYS_SQL, last_closed_day)
+        if marker is None or marker.scanned_at is None
+        else await prisma_client.db.query_raw(
+            _PENDING_DAYS_SQL, last_closed_day, marker.reconciled_through, marker.scanned_at
+        )
+    )
+    return _PendingScan(marker, scanned_at, tuple(_DateRow.model_validate(row).date for row in rows))
 
 
 async def pending_days(prisma_client: "PrismaClient", today: date) -> tuple[str, ...]:
-    """Every closed UTC day (strictly before today) still to roll up, oldest first. The marker
-    day and the one before it are replayed so per-key rows that landed after their day was
-    rolled up (a flush straddling midnight, a late retry) are folded in."""
-    marker: Final = await reconciled_through(prisma_client)
-    last_closed_day: Final = (today - timedelta(days=1)).isoformat()
-    rows: Final = await prisma_client.db.query_raw(_PENDING_DAYS_SQL, _first_pending_day(marker), last_closed_day)
-    return tuple(_DateRow.model_validate(row).date for row in rows)
+    return (await _scan_pending(prisma_client, today)).days
 
 
 async def reconcile_day(prisma_client: "PrismaClient", day: str) -> None:
@@ -155,26 +195,42 @@ async def run_daily_global_spend_reconcile(
     today: date | None = None,
 ) -> ReconcileResult:
     """Roll up every pending day, advancing the marker after each; a failing day stops the run
-    with the marker on the last good day so the next run resumes there."""
+    with the marker on the last good day so the next run resumes there. The scan time is only
+    recorded once every pending day is done, so late rows a failed run saw are found again."""
     effective_today: Final = today or datetime.now(timezone.utc).date()
-    days: Final = await pending_days(prisma_client, effective_today)
-    done: Final = await _reconcile_until_failure(prisma_client, days)
-    failed: Final = days[len(done)] if len(done) < len(days) else None
-    marker: Final = done[-1] if done else await reconciled_through(prisma_client)
-    return ReconcileResult(days_reconciled=done, reconciled_through=marker, failed_day=failed)
+    scan: Final = await _scan_pending(prisma_client, effective_today)
+    done: Final = await _reconcile_until_failure(prisma_client, scan)
+    if len(done) < len(scan.days):
+        marker: Final = await reconciled_through(prisma_client)
+        return ReconcileResult(days_reconciled=done, reconciled_through=marker, failed_day=scan.days[len(done)])
+    if scan.marker is not None or done:
+        await _record_marker(prisma_client, _advanced(scan.marker, done, scanned_at=scan.scanned_at))
+    return ReconcileResult(days_reconciled=done, reconciled_through=await reconciled_through(prisma_client))
 
 
-async def _reconcile_until_failure(prisma_client: "PrismaClient", days: tuple[str, ...]) -> tuple[str, ...]:
-    for index, day in enumerate(days):
-        if not await _reconcile_and_record(prisma_client, day):
-            return days[:index]
-    return days
+def _advanced(marker: ReconciledThrough | None, days: tuple[str, ...], *, scanned_at: str | None) -> ReconciledThrough:
+    """The marker after ``days`` were rewritten: a late old day never moves it back."""
+    through: Final = max((marker.reconciled_through if marker is not None else "", *days))
+    return ReconciledThrough(reconciled_through=through, scanned_at=scanned_at)
 
 
-async def _reconcile_and_record(prisma_client: "PrismaClient", day: str) -> bool:
+async def _reconcile_until_failure(prisma_client: "PrismaClient", scan: _PendingScan) -> tuple[str, ...]:
+    for index, day in enumerate(scan.days):
+        if not await _reconcile_and_record(prisma_client, scan.marker, scan.days[: index + 1]):
+            return scan.days[:index]
+    return scan.days
+
+
+async def _reconcile_and_record(
+    prisma_client: "PrismaClient", marker: ReconciledThrough | None, done_with_this: tuple[str, ...]
+) -> bool:
+    day: Final = done_with_this[-1]
     try:
         await reconcile_day(prisma_client, day)
-        await _record_reconciled_through(prisma_client, day)
+        await _record_marker(
+            prisma_client,
+            _advanced(marker, done_with_this, scanned_at=None if marker is None else marker.scanned_at),
+        )
     except Exception as exc:  # noqa: BLE001  # one bad day must not lose the days already done
         verbose_proxy_logger.exception("Daily global spend reconcile: day %s failed: %s", day, exc)
         return False
