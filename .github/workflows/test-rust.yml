@@ -107,15 +107,9 @@ jobs:
 
       - run: rustup toolchain install --no-self-update
 
-      - name: Install cargo-nextest 0.9.143
-        working-directory: ${{ runner.temp }}
-        run: |
-          curl -fsSL --retry 3 -o cargo-nextest.tar.gz \
-            https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.143/cargo-nextest-0.9.143-x86_64-unknown-linux-gnu.tar.gz
-          echo "66786b9abe23920d022a182d1416b1bbc8130dd4872a9553d76985a1708dcd1e  cargo-nextest.tar.gz" | sha256sum -c -
-          mkdir -p bin
-          tar xzf cargo-nextest.tar.gz -C bin cargo-nextest
-          echo "$PWD/bin" >> "$GITHUB_PATH"
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: cargo-nextest@0.9.143
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
