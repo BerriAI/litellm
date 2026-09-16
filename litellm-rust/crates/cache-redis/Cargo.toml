@@ -7,5 +7,5 @@ repository.workspace = true
 
 [dependencies]
 litellm-cache.workspace = true
-redis.workspace = true
+redis = "1.7.0"
 serde_json.workspace = true
