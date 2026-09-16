@@ -5,7 +5,7 @@ import httpx
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr import legacy
-from litellm.ocr.input import convert_file_document_to_url_document, get_mime_type
+from litellm.ocr.legacy import convert_file_document_to_url_document, get_mime_type
 from litellm.rust_bridge.bindings import native_exception_types
 from litellm.rust_bridge.configuration import rust_ocr_enabled
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
