@@ -68,19 +68,32 @@ const readOAuthRestore = (): OAuthRestore | null => {
 const toSortKey = (value: string | null): McpServerSortKey | null =>
   MCP_SERVER_SORT_KEYS.find((key) => key === value) ?? null;
 
-export function useMcpServersUrlState(isAdmin: boolean, servers: readonly MCPServer[]) {
+export function useMcpServersUrlState(isAdmin: boolean, servers: readonly MCPServer[], serversLoaded: boolean) {
   const [tab, setTab] = useUrlTab<McpPageTab>(isAdmin ? ADMIN_PAGE_TABS : USER_PAGE_TABS, "servers");
   const [filters, setFilters] = useQueryStates(listParsers);
   const [detail, setDetail] = useQueryStates(detailParsers);
   const [fillEnvVars, setFillEnvVars] = useQueryState("fill_env_vars", parseAsString);
   const [envVarsDeepLinkId, setEnvVarsDeepLinkId] = useState(fillEnvVars);
-  const [oauthRestore] = useState(readOAuthRestore);
+  const [oauthRestore] = useState(() => {
+    const stored = readOAuthRestore();
+    return stored && (detail.server ?? stored.serverId) === stored.serverId ? stored : null;
+  });
   const [editServer, setEditServer] = useState(oauthRestore?.tab === "settings");
+  const restoredServerMissing =
+    oauthRestore !== null && serversLoaded && !servers.some((server) => server.server_id === oauthRestore.serverId);
 
   useEffect(() => {
     clearStorage(TOOLS_OAUTH_UI_STATE_KEY);
-    if (oauthRestore) void setDetail({ server: oauthRestore.serverId, server_tab: oauthRestore.tab });
+    if (!oauthRestore) {
+      clearStorage(EDIT_OAUTH_UI_STATE_KEY);
+      return;
+    }
+    void setDetail({ server: oauthRestore.serverId, server_tab: oauthRestore.tab });
   }, [oauthRestore, setDetail]);
+
+  useEffect(() => {
+    if (restoredServerMissing) clearStorage(EDIT_OAUTH_UI_STATE_KEY);
+  }, [restoredServerMissing]);
 
   useEffect(() => {
     if (fillEnvVars !== null) void setFillEnvVars(null);

@@ -146,7 +146,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     closeServer,
     envVarsDeepLinkId,
     clearEnvVarsDeepLink,
-  } = useMcpServersUrlState(isAdmin, serversWithHealth);
+  } = useMcpServersUrlState(isAdmin, serversWithHealth, mcpServers !== undefined);
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isModalVisible, setModalVisible] = useState(false);
@@ -368,7 +368,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <p className="mt-1 text-sm text-muted-foreground">Configure and manage your MCP servers</p>
           </div>
           <div className="flex items-center gap-2">
-            {isAdminRole(userRole) && (
+            {isAdmin && (
               <>
                 <Button className="shrink-0" variant="secondary" onClick={() => setImportVisible(true)}>
                   Import from JSON
@@ -378,7 +378,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 </Button>
               </>
             )}
-            {!isAdminRole(userRole) && (
+            {!isAdmin && (
               <Button
                 className="shrink-0"
                 onClick={() => {
@@ -424,25 +424,21 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <TabsTrigger value="connect" className="flex-none rounded-none px-4 py-2">
               Connect
             </TabsTrigger>
-            {isAdminRole(userRole) && (
-              <TabsTrigger value="semantic-filter" className="flex-none rounded-none px-4 py-2">
-                Semantic Filter
-              </TabsTrigger>
-            )}
-            {isAdminRole(userRole) && (
-              <TabsTrigger value="tool-search" className="flex-none rounded-none px-4 py-2">
-                Tool Search
-              </TabsTrigger>
-            )}
-            {isAdminRole(userRole) && (
-              <TabsTrigger value="network" className="flex-none rounded-none px-4 py-2">
-                Network Settings
-              </TabsTrigger>
-            )}
-            {isAdminRole(userRole) && (
-              <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
-                Submitted MCPs
-              </TabsTrigger>
+            {isAdmin && (
+              <>
+                <TabsTrigger value="semantic-filter" className="flex-none rounded-none px-4 py-2">
+                  Semantic Filter
+                </TabsTrigger>
+                <TabsTrigger value="tool-search" className="flex-none rounded-none px-4 py-2">
+                  Tool Search
+                </TabsTrigger>
+                <TabsTrigger value="network" className="flex-none rounded-none px-4 py-2">
+                  Network Settings
+                </TabsTrigger>
+                <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
+                  Submitted MCPs
+                </TabsTrigger>
+              </>
             )}
           </TabsList>
           <TabsContent value="servers" keepMounted>
@@ -451,7 +447,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 key={selectedServer.server_id}
                 mcpServer={selectedServer}
                 onBack={handleBack}
-                isProxyAdmin={isAdminRole(userRole)}
+                isProxyAdmin={isAdmin}
                 isEditing={editServer}
                 accessToken={accessToken}
                 userID={userID}
@@ -565,7 +561,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                   ) : displayedServers.length === 0 ? (
                     <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
                       <p className="text-sm text-muted-foreground">
-                        {filteredServers.length === 0
+                        {serversWithHealth.length === 0
                           ? "No MCP servers configured. Click '+ Add New MCP Server' to get started."
                           : "No servers match the current filters or search."}
                       </p>
@@ -588,7 +584,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                           }
                           onByokConnect={server.is_byok ? () => setByokModalServer(server) : undefined}
                           onOpenFillFields={() => setEnvVarsModalServer(server)}
-                          onDelete={isAdminRole(userRole) ? () => handleDelete(server.server_id) : undefined}
+                          onDelete={isAdmin ? () => handleDelete(server.server_id) : undefined}
                         />
                       ))}
                     </div>
@@ -603,25 +599,21 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           <TabsContent value="connect" keepMounted>
             <MCPConnect />
           </TabsContent>
-          {isAdminRole(userRole) && (
-            <TabsContent value="semantic-filter" keepMounted>
-              <MCPSemanticFilterSettings accessToken={accessToken} />
-            </TabsContent>
-          )}
-          {isAdminRole(userRole) && (
-            <TabsContent value="tool-search" keepMounted>
-              <MCPToolSearchSettings accessToken={accessToken} />
-            </TabsContent>
-          )}
-          {isAdminRole(userRole) && (
-            <TabsContent value="network" keepMounted>
-              <MCPNetworkSettings accessToken={accessToken} />
-            </TabsContent>
-          )}
-          {isAdminRole(userRole) && (
-            <TabsContent value="submitted" keepMounted>
-              <MCPSubmissionsTab accessToken={accessToken} />
-            </TabsContent>
+          {isAdmin && (
+            <>
+              <TabsContent value="semantic-filter" keepMounted>
+                <MCPSemanticFilterSettings accessToken={accessToken} />
+              </TabsContent>
+              <TabsContent value="tool-search" keepMounted>
+                <MCPToolSearchSettings accessToken={accessToken} />
+              </TabsContent>
+              <TabsContent value="network" keepMounted>
+                <MCPNetworkSettings accessToken={accessToken} />
+              </TabsContent>
+              <TabsContent value="submitted" keepMounted>
+                <MCPSubmissionsTab accessToken={accessToken} />
+              </TabsContent>
+            </>
           )}
         </Tabs>
 

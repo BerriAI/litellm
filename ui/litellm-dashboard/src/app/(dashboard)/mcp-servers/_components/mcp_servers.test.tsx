@@ -298,6 +298,19 @@ describe("MCPServers", () => {
       vi.mocked(networking.fetchMCPServers).mockResolvedValue(urlServers);
     });
 
+    it.each([
+      ["toolsets", "Toolsets"],
+      ["connect", "Connect"],
+      ["semantic-filter", "Semantic Filter"],
+      ["tool-search", "Tool Search"],
+      ["network", "Network Settings"],
+      ["submitted", "Submitted MCPs"],
+    ])("opens the %s tab from the URL for an admin", (value, name) => {
+      renderPage(`?tab=${value}`);
+
+      expect(screen.getByRole("tab", { name })).toHaveAttribute("aria-selected", "true");
+    });
+
     it("opens the tab named in the URL and writes the tab the user picks", async () => {
       const onUrlUpdate = renderPage("?tab=toolsets");
 
@@ -384,6 +397,20 @@ describe("MCPServers", () => {
       expect(shownServerNames()).toEqual(["Charlie"]);
     });
 
+    it("says no server matches when a URL filter excludes every server", async () => {
+      renderPage("?team=unknown-team");
+
+      expect(await screen.findByText("No servers match the current filters or search.")).toBeInTheDocument();
+      expect(screen.queryByText(/No MCP servers configured/)).not.toBeInTheDocument();
+    });
+
+    it("says no servers are configured when the proxy has none", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+      renderPage("?team=team-a");
+
+      expect(await screen.findByText(/No MCP servers configured/)).toBeInTheDocument();
+    });
+
     it("opens the server in the URL even when the filters hide it", async () => {
       renderPage("?server=bravo&team=team-a");
 
@@ -422,6 +449,30 @@ describe("MCPServers", () => {
       expect(closed?.options.history).toBe("push");
     });
 
+    it("clears the server tab, tool and tool search on Back but keeps the filters", async () => {
+      const onUrlUpdate = renderPage("?server=charlie&server_tab=tools&tool=search_docs&tool_search=se&team=team-a");
+
+      await userEvent.click(await screen.findByRole("button", { name: "Back to All Servers" }));
+
+      expect(await screen.findByText("Alpha")).toBeInTheDocument();
+      const closed = lastUrl(onUrlUpdate);
+      for (const key of ["server", "server_tab", "tool", "tool_search"]) {
+        expect(closed?.searchParams.has(key)).toBe(false);
+      }
+      expect(closed?.searchParams.get("team")).toBe("team-a");
+    });
+
+    it("opens a clicked server on its overview tab", async () => {
+      const onUrlUpdate = renderPage("?server=missing&server_tab=settings");
+
+      await screen.findByText("Alpha");
+      await userEvent.click(cardFor("Alpha"));
+
+      expect(await screen.findByText("viewing Alpha")).toBeInTheDocument();
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("server")).toBe("alpha");
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("server_tab")).toBe(false);
+    });
+
     it("opens the env vars modal for fill_env_vars once and drops the key", async () => {
       const onUrlUpdate = renderPageKeepingMountWrites("?fill_env_vars=bravo&team=team-a");
 
@@ -444,6 +495,12 @@ describe("MCPServers", () => {
       expect(lastUrl(onUrlUpdate)?.searchParams.get("server")).toBe("alpha");
       expect(lastUrl(onUrlUpdate)?.searchParams.get("server_tab")).toBe("tools");
       expect(window.sessionStorage.getItem(TOOLS_OAUTH_UI_STATE_KEY)).toBeNull();
+
+      await userEvent.click(screen.getByRole("button", { name: "Back to All Servers" }));
+
+      expect(await screen.findByText("Alpha")).toBeInTheDocument();
+      expect(screen.queryByRole("region", { name: "server detail" })).not.toBeInTheDocument();
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("server")).toBe(false);
     });
 
     it("returns to the editable settings of the server after an edit OAuth redirect", async () => {
@@ -455,15 +512,43 @@ describe("MCPServers", () => {
       expect(screen.getByText("settings editable")).toBeInTheDocument();
       expect(lastUrl(onUrlUpdate)?.searchParams.get("server")).toBe("charlie");
       expect(lastUrl(onUrlUpdate)?.searchParams.get("server_tab")).toBe("settings");
+      expect(window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY)).not.toBeNull();
     });
 
-    it("ignores a stored OAuth state without a server id", async () => {
-      setSecureItem(TOOLS_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId: "" }));
+    it("keeps the server in the URL over a stale edit OAuth state and drops that state", async () => {
+      setSecureItem(EDIT_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId: "charlie" }));
+
+      const onUrlUpdate = renderPageKeepingMountWrites("?server=bravo");
+
+      expect(await screen.findByText("viewing Bravo")).toBeInTheDocument();
+      expect(screen.getByText("settings read only")).toBeInTheDocument();
+      expect(onUrlUpdate.mock.calls.some(([update]) => update.searchParams.get("server") === "charlie")).toBe(false);
+      expect(window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY)).toBeNull();
+    });
+
+    it("drops an edit OAuth state whose server no longer exists", async () => {
+      setSecureItem(EDIT_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId: "deleted" }));
 
       renderPageKeepingMountWrites("");
 
       await screen.findByText("Alpha");
+      await waitFor(() => expect(window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY)).toBeNull());
       expect(screen.queryByRole("region", { name: "server detail" })).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ["not json"],
+      [JSON.stringify({ serverId: 7 })],
+      [JSON.stringify({})],
+      [JSON.stringify({ serverId: "" })],
+    ])("ignores the malformed stored OAuth state %s", async (stored) => {
+      setSecureItem(TOOLS_OAUTH_UI_STATE_KEY, stored);
+
+      const onUrlUpdate = renderPageKeepingMountWrites("");
+
+      await screen.findByText("Alpha");
+      expect(screen.queryByRole("region", { name: "server detail" })).not.toBeInTheDocument();
+      expect(onUrlUpdate.mock.calls.some(([update]) => update.searchParams.has("server"))).toBe(false);
     });
   });
 });

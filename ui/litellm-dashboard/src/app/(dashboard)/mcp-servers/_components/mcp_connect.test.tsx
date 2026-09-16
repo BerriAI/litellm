@@ -30,10 +30,14 @@ describe("MCPConnect (tab mount contract)", () => {
 });
 
 describe("MCPConnect client tab URL state", () => {
-  it("opens the client tab named in the URL", () => {
-    renderWithProviders(<MCPConnect />, { searchParams: "?connect_client=cursor" });
+  it.each([
+    ["litellm", "LiteLLM Proxy"],
+    ["cursor", "Cursor"],
+    ["http", "Streamable HTTP"],
+  ])("opens the %s client tab named in the URL", (value, name) => {
+    renderWithProviders(<MCPConnect />, { searchParams: `?connect_client=${value}` });
 
-    expect(screen.getByRole("tab", { name: "Cursor" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name })).toHaveAttribute("aria-selected", "true");
   });
 
   it("writes the client tab the user picks and drops the default", async () => {

@@ -1,4 +1,5 @@
 import userEvent from "@testing-library/user-event";
+import { parseAsString, useQueryState } from "nuqs";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import MCPToolsViewer from "./mcp_tools";
@@ -37,20 +38,21 @@ const GATE_TEXT = "Authentication required";
 // what makes the passthrough cases fail on the pre-fix code.
 const TOKEN_URL = "https://slack.com/api/oauth.v2.user.access";
 
+const viewer = (props: Record<string, unknown>) => (
+  <MCPToolsViewer
+    serverId="srv-1"
+    accessToken="litellm-key"
+    userRole="admin"
+    userID="tin@berri.ai"
+    serverAlias="slack"
+    auth_type="oauth2"
+    tokenUrl={TOKEN_URL}
+    {...props}
+  />
+);
+
 const renderViewer = (props: Record<string, unknown>, searchParams = "", onUrlUpdate?: OnUrlUpdateFunction) =>
-  renderWithProviders(
-    <MCPToolsViewer
-      serverId="srv-1"
-      accessToken="litellm-key"
-      userRole="admin"
-      userID="tin@berri.ai"
-      serverAlias="slack"
-      auth_type="oauth2"
-      tokenUrl={TOKEN_URL}
-      {...props}
-    />,
-    { searchParams, onUrlUpdate },
-  );
+  renderWithProviders(viewer(props), { searchParams, onUrlUpdate });
 
 beforeEach(() => {
   testQueryClient.clear();
@@ -293,6 +295,28 @@ describe("MCPToolsViewer URL state", () => {
     expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("tool")).toBe(false);
     expect(onUrlUpdate.mock.calls.at(-1)?.[0].options.history).toBe("push");
     expect(await screen.findByText("Select a Tool to Test")).toBeInTheDocument();
+  });
+
+  it("hides the previous tool's result when the URL switches to another tool", async () => {
+    const ToolLink = ({ name }: { name: string }) => {
+      const [, setTool] = useQueryState("tool", parseAsString.withOptions({ history: "push" }));
+      return <button onClick={() => void setTool(name)}>go to {name}</button>;
+    };
+    renderWithProviders(
+      <>
+        {viewer(M2M)}
+        <ToolLink name="fetch_page" />
+      </>,
+      { searchParams: "?tool=search_docs" },
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "Call Tool" }));
+    expect(await screen.findByText("Tool executed successfully")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "go to fetch_page" }));
+
+    expect(await screen.findByText("Ready to Call Tool")).toBeInTheDocument();
+    expect(screen.queryByText("Tool executed successfully")).not.toBeInTheDocument();
   });
 
   it("clears the previous result when the selected tool is picked again", async () => {
