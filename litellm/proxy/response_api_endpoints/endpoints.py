@@ -245,12 +245,6 @@ async def responses_api(
 
     data = await _read_request_body(request=request)
 
-    if "input" not in data:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "input parameter is required"},
-        )
-
     # Check if polling via cache should be used for this request
     from litellm.proxy.response_polling.polling_handler import (
         should_use_polling_for_request,

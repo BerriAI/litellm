@@ -518,8 +518,8 @@ def _prompt_management_sees_a_provisional_message_list(
 
 @client
 async def aresponses(
-    input: str | ResponseInputParam,
-    model: str,
+    input: str | ResponseInputParam | None = None,
+    model: str | None = None,
     include: list[ResponseIncludable] | None = None,
     instructions: str | None = None,
     max_output_tokens: int | None = None,
@@ -554,6 +554,13 @@ async def aresponses(
     """
     Async: Handles responses API requests by reusing the synchronous function
     """
+    if input is None:
+        raise litellm.BadRequestError(
+            message="input is a required parameter for the Responses API",
+            model=model or "",
+            llm_provider=custom_llm_provider or "",
+            response=None,
+        )
     local_vars: Final = locals()
     try:
         loop: Final = asyncio.get_event_loop()
@@ -1065,8 +1072,8 @@ def _responses_try_dispatch_emulated_file_search(
 
 @client
 def responses(
-    input: str | ResponseInputParam,
-    model: str,
+    input: str | ResponseInputParam | None = None,
+    model: str | None = None,
     include: list[ResponseIncludable] | None = None,
     instructions: str | None = None,
     max_output_tokens: int | None = None,
@@ -1103,6 +1110,13 @@ def responses(
     Synchronous version of the Responses API.
     Uses the synchronous HTTP handler to make requests.
     """
+    if input is None:
+        raise litellm.BadRequestError(
+            message="input is a required parameter for the Responses API",
+            model=model or "",
+            llm_provider=custom_llm_provider or "",
+            response=None,
+        )
     local_vars: Final = locals()
 
     try:

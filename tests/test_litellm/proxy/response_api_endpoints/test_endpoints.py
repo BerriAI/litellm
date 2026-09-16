@@ -58,9 +58,6 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
     @patch("litellm.proxy.proxy_server.llm_router")
     @patch("litellm.proxy.proxy_server.user_api_key_auth")
     def test_openai_v1_responses_missing_input_raises_400(self, mock_auth, mock_router):
-        """
-        Test that /openai/v1/responses returns 400 when 'input' is missing (Issue #41159).
-        """
         mock_auth.return_value = MagicMock(
             token="test_token",
             user_id="test_user",
@@ -78,7 +75,20 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         )
 
         assert response.status_code == 400
-        assert "input" in response.text.lower()
+        data = response.json()
+        assert "error" in data
+        assert "input" in data["error"]["message"].lower()
+
+    def test_responses_missing_input_raises_bad_request_error(self):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            litellm.responses(model="gpt-4o")
+        assert "input" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_aresponses_missing_input_raises_bad_request_error(self):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            await litellm.aresponses(model="gpt-4o")
+        assert "input" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")
