@@ -218,6 +218,20 @@ def _normalize_team_metadata_keys(value: str | Iterable[object] | None) -> list[
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _first_nonblank_env(*names: str) -> str | None:
+    """Return the stripped value of the first env var that is set and non-blank.
+
+    A blank value (unset, empty, or whitespace only) is treated as absent, so a
+    stray ``OTEL_EXPORTER=`` is the same as not setting it rather than a request
+    for an exporter named "".
+    """
+    for name in names:
+        raw = os.getenv(name)
+        if raw is not None and raw.strip():
+            return raw.strip()
+    return None
+
+
 _FREEZE_MAX_DEPTH: Final = 16
 
 HashableScope = str | int | float | bool | bytes | None | tuple["HashableScope", ...] | frozenset["HashableScope"]
@@ -328,8 +342,19 @@ class OpenTelemetryConfig:
             InMemorySpanExporter,
         )
 
-        exporter: Final = os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", os.getenv("OTEL_EXPORTER", "console"))
-        endpoint: Final = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", os.getenv("OTEL_ENDPOINT"))
+        explicit_exporter: Final = _first_nonblank_env("OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER")
+        endpoint: Final = _first_nonblank_env("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_ENDPOINT")
+        console_default_without_endpoint: Final = explicit_exporter is None and not endpoint
+        if console_default_without_endpoint:
+            verbose_logger.error(
+                "OpenTelemetry is enabled but neither OTEL_EXPORTER/OTEL_EXPORTER_OTLP_PROTOCOL "
+                "nor OTEL_ENDPOINT/OTEL_EXPORTER_OTLP_ENDPOINT is set. Refusing to default to the "
+                "console exporter, which writes span content (including request and response data) "
+                "to stdout. Trace export is disabled. Set an endpoint, or set OTEL_EXPORTER=console "
+                "explicitly to opt into console output."
+            )
+        default_exporter: Final = explicit_exporter if explicit_exporter is not None else "console"
+        exporter: Final = "none" if console_default_without_endpoint else default_exporter
         headers: Final = os.getenv(
             "OTEL_EXPORTER_OTLP_HEADERS", os.getenv("OTEL_HEADERS")
         )  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
@@ -3036,6 +3061,15 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             )
             return SimpleSpanProcessor(cast(SpanExporter, otel_exporter))
 
+        if otel_exporter == "none":
+            from opentelemetry.sdk.trace import SpanProcessor
+
+            verbose_logger.warning(
+                "OpenTelemetry: trace export is disabled; no exporter or endpoint was configured. "
+                "Spans are dropped. Set an endpoint, or set OTEL_EXPORTER=console to opt into console output."
+            )
+            return SpanProcessor()
+
         if otel_exporter == "console":
             verbose_logger.debug(
                 "OpenTelemetry: intiializing console exporter. Value of OTEL_EXPORTER: %s",
@@ -3081,11 +3115,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 OTLPSpanExporterGRPC(endpoint=normalized_endpoint, headers=_split_otel_headers),
             )
         else:
-            verbose_logger.debug(
-                "OpenTelemetry: intiializing console exporter. Value of OTEL_EXPORTER: %s",
-                otel_exporter,
+            raise ValueError(
+                f"OpenTelemetry: unrecognized OTEL exporter {otel_exporter!r}. Expected one of "
+                "console, otlp_http, http/protobuf, http/json, otlp_grpc, grpc, or a SpanExporter instance."
             )
-            return BatchSpanProcessor(ConsoleSpanExporter())
 
     def _get_log_exporter(self):
         """
@@ -3310,19 +3343,34 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     ) -> dict[str, str]:
         """
         Convert a string or dictionary of headers into a dictionary of headers.
+
+        A string is a comma-separated list of ``key=value`` pairs, e.g.
+        ``x-honeycomb-team=abc,x-other=def``. Blank entries are skipped and an
+        entry with no ``=`` is logged and dropped rather than crashing tracer
+        construction. The malformed entry is never logged: it may be a bare
+        ingest key, which ``redact_string`` does not scrub.
         """
-        _split_otel_headers: dict[str, str] = {}
-        if headers:
-            if isinstance(headers, str):
-                # when passed HEADERS="x-honeycomb-team=B85YgLm96******"
-                # Split only on first '=' occurrence
-                parts: Final = headers.split(",")
-                for part in parts:
-                    key, value = part.split("=", 1)
-                    _split_otel_headers[key] = value
-            elif isinstance(headers, Mapping):
-                _split_otel_headers.update(headers)
-        return _split_otel_headers
+        pairs: Final[Iterable[tuple[str, str]]] = (
+            OpenTelemetry._parse_otel_header_pairs(headers)
+            if isinstance(headers, str)
+            else headers.items() if isinstance(headers, Mapping) else ()
+        )
+        return dict(pairs)
+
+    @staticmethod
+    def _parse_otel_header_pairs(headers: str) -> "Iterable[tuple[str, str]]":
+        for raw_entry in headers.split(","):
+            entry = raw_entry.strip()
+            if not entry:
+                continue
+            if "=" not in entry:
+                verbose_logger.warning(
+                    "OpenTelemetry: skipping malformed OTEL_HEADERS entry (expected key=value); "
+                    "the raw value is omitted because it may be a secret"
+                )
+                continue
+            key, value = entry.split("=", 1)
+            yield key.strip(), value.strip()
 
     async def async_management_endpoint_success_hook(
         self,

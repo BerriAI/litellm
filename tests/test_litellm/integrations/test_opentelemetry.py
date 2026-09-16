@@ -2080,6 +2080,132 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
         self.assertEqual(traces, "http://collector:4318/v1/traces")
 
 
+class TestOpenTelemetryHeaderParsing(unittest.TestCase):
+    """OTEL_HEADERS / OTEL_EXPORTER_OTLP_HEADERS string parsing robustness."""
+
+    def test_well_formed_single_pair(self):
+        self.assertEqual(
+            OpenTelemetry._get_headers_dictionary("x-honeycomb-team=abc123"),
+            {"x-honeycomb-team": "abc123"},
+        )
+
+    def test_mapping_passthrough(self):
+        headers = MappingProxyType({"x-api-key": "secret", "x-other": "v"})
+        self.assertEqual(
+            OpenTelemetry._get_headers_dictionary(headers),
+            {"x-api-key": "secret", "x-other": "v"},
+        )
+
+    def test_value_containing_equals_is_preserved(self):
+        self.assertEqual(
+            OpenTelemetry._get_headers_dictionary("authorization=Bearer=a=b"),
+            {"authorization": "Bearer=a=b"},
+        )
+
+    def test_bare_entry_without_equals_is_dropped_not_raised(self):
+        self.assertEqual(OpenTelemetry._get_headers_dictionary("deadbeefsecret"), {})
+
+    def test_blank_entries_from_stray_commas_are_ignored(self):
+        self.assertEqual(
+            OpenTelemetry._get_headers_dictionary(",x-a=1,,x-b=2,"),
+            {"x-a": "1", "x-b": "2"},
+        )
+
+    def test_valid_and_invalid_entry_keeps_only_valid(self):
+        self.assertEqual(
+            OpenTelemetry._get_headers_dictionary("x-a=1,deadbeefsecret"),
+            {"x-a": "1"},
+        )
+
+    def test_whitespace_around_entries_is_trimmed(self):
+        self.assertEqual(
+            OpenTelemetry._get_headers_dictionary("  x-a = 1 , x-b = two "),
+            {"x-a": "1", "x-b": "two"},
+        )
+
+    def test_malformed_entry_value_never_appears_in_logs(self):
+        secret = "B85YgLm96superSecretIngestKey"
+        with patch("litellm._logging.verbose_logger.warning") as mock_warning:
+            result = OpenTelemetry._get_headers_dictionary(f"x-a=1,{secret}")
+        self.assertEqual(result, {"x-a": "1"})
+        mock_warning.assert_called_once()
+        logged = " ".join(
+            str(arg) for call in mock_warning.call_args_list for arg in call.args
+        )
+        self.assertNotIn(secret, logged)
+
+
+class TestOpenTelemetryConsoleFallbackGuard(unittest.TestCase):
+    """from_env must not silently default to the console exporter without an endpoint."""
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_console_default_without_endpoint_is_disabled_and_logged(self):
+        with patch("litellm._logging.verbose_logger.error") as mock_error:
+            config = OpenTelemetryConfig.from_env()
+        self.assertEqual(config.exporter, "none")
+        self.assertIsNone(config.endpoint)
+        mock_error.assert_called_once()
+
+    @patch.dict(
+        os.environ,
+        {"OTEL_EXPORTER": "", "OTEL_ENDPOINT": "   ", "OTEL_EXPORTER_OTLP_ENDPOINT": ""},
+        clear=True,
+    )
+    def test_blank_exporter_env_is_treated_as_unset_not_a_named_exporter(self):
+        """A stray ``OTEL_EXPORTER=`` must disable export, not build an exporter
+        named "" that later raises on every span processor construction."""
+        with patch("litellm._logging.verbose_logger.error") as mock_error:
+            config = OpenTelemetryConfig.from_env()
+        self.assertEqual(config.exporter, "none")
+        self.assertIsNone(config.endpoint)
+        mock_error.assert_called_once()
+
+        from opentelemetry.sdk.trace import SpanProcessor
+
+        otel = OpenTelemetry(config=config, tracer_provider=TracerProvider())
+        self.assertIs(type(otel._get_span_processor()), SpanProcessor)
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_disabled_config_builds_no_console_exporter(self):
+        from opentelemetry.sdk.trace import SpanProcessor
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+
+        config = OpenTelemetryConfig.from_env()
+        otel = OpenTelemetry(config=config, tracer_provider=TracerProvider())
+        processor = otel._get_span_processor()
+
+        self.assertIs(type(processor), SpanProcessor)
+        self.assertNotIsInstance(processor, BatchSpanProcessor)
+        self.assertNotIsInstance(getattr(processor, "span_exporter", None), ConsoleSpanExporter)
+
+    @patch.dict(os.environ, {"OTEL_EXPORTER": "console"}, clear=True)
+    def test_explicit_console_is_preserved(self):
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+
+        config = OpenTelemetryConfig.from_env()
+        self.assertEqual(config.exporter, "console")
+        otel = OpenTelemetry(config=config, tracer_provider=TracerProvider())
+        processor = otel._get_span_processor()
+        self.assertIsInstance(processor, BatchSpanProcessor)
+        self.assertIsInstance(processor.span_exporter, ConsoleSpanExporter)
+
+    @patch.dict(
+        os.environ, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318"}, clear=True
+    )
+    def test_endpoint_set_exporter_unset_promotes_to_otlp_http(self):
+        with patch("litellm._logging.verbose_logger.error") as mock_error:
+            config = OpenTelemetryConfig.from_env()
+        self.assertEqual(config.exporter, "otlp_http")
+        mock_error.assert_not_called()
+
+    def test_unknown_exporter_raises(self):
+        config = OpenTelemetryConfig(exporter="bogus_exporter", endpoint="http://x:4318")
+        otel = OpenTelemetry(config=config, tracer_provider=TracerProvider())
+        with self.assertRaises(ValueError) as ctx:
+            otel._get_span_processor()
+        self.assertIn("unrecognized OTEL exporter", str(ctx.exception))
+
+
 class TestOpenTelemetryProtocolSelection(unittest.TestCase):
     """Test suite for verifying correct exporter selection based on protocol"""
 
