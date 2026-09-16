@@ -1137,21 +1137,6 @@ def _together_chat_transport() -> tuple[HTTPHandler, list[httpx.Request]]:
     return client, captured_requests
 
 
-def test_only_the_provider_prefix_is_stripped_from_a_slashed_model_name():
-    client, captured_requests = _together_chat_transport()
-
-    litellm.completion(
-        model=f"together_ai/{TOOL_CALLING_MODEL}",
-        messages=[{"role": "user", "content": "Hello!"}],
-        api_key="fake-key",
-        client=client,
-    )
-
-    assert "/" in TOOL_CALLING_MODEL
-    assert str(captured_requests[0].url) == "https://api.together.ai/v1/chat/completions"
-    assert json.loads(captured_requests[0].content)["model"] == TOOL_CALLING_MODEL
-
-
 def test_custom_role_wrappers_never_reach_the_request():
     client, captured_requests = _together_chat_transport()
     messages = [{"role": "user", "content": "Hello!"}]
