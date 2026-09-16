@@ -20,6 +20,7 @@ from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
+from litellm.repositories.team_repository import TEAM_ADVISORY_LOCK_SQL
 
 
 @pytest.mark.asyncio
@@ -913,38 +914,22 @@ async def test_commit_spend_updates_to_db_increments_agent_spend():
     assert call_kwargs["data"] == {"spend": {"increment": response_cost}}
 
 
-@pytest.mark.asyncio
-async def test_commit_spend_updates_to_db_increments_team_member_spend_and_total_spend():
-    """
-    Verify that _commit_spend_updates_to_db increments BOTH spend (cycle-scoped)
-    and total_spend (non-resetting) on LiteLLM_TeamMembership in a single
-    upsert call, using the same response_cost.
-
-    Regression (LIT-5502): members added without a budget had no membership row, and
-    the previous update_many matched zero rows, so their spend was silently dropped.
-    The upsert has to create the row seeded with this call's cost in that case.
-    """
-    db_writer = DBSpendUpdateWriter()
-
+def _team_member_flush_fixtures(team_id: str, rostered_user_ids: list[str]) -> tuple[MagicMock, AsyncMock, MagicMock]:
+    """A batcher, transaction and prisma client whose locked roster read for `team_id` lists `rostered_user_ids`."""
     mock_batcher = MagicMock()
-    mock_batcher.litellm_verificationtoken = MagicMock()
-    mock_batcher.litellm_verificationtoken.update_many = MagicMock()
-    mock_batcher.litellm_usertable = MagicMock()
-    mock_batcher.litellm_usertable.update_many = MagicMock()
-    mock_batcher.litellm_teamtable = MagicMock()
-    mock_batcher.litellm_teamtable.update_many = MagicMock()
     mock_batcher.litellm_teammembership = MagicMock()
     mock_batcher.litellm_teammembership.upsert = MagicMock()
-    mock_batcher.litellm_organizationtable = MagicMock()
-    mock_batcher.litellm_organizationtable.update_many = MagicMock()
-    mock_batcher.litellm_tagtable = MagicMock()
-    mock_batcher.litellm_tagtable.update_many = MagicMock()
-    mock_batcher.litellm_agentstable = MagicMock()
-    mock_batcher.litellm_agentstable.update_many = MagicMock()
+    mock_batcher.litellm_teammembership.update_many = MagicMock()
+
+    roster_row = {"members_with_roles": json.dumps([{"user_id": uid, "role": "user"} for uid in rostered_user_ids])}
+
+    async def query_raw(query: str, *args: str) -> list[dict[str, object]]:
+        return [] if query == TEAM_ADVISORY_LOCK_SQL else [roster_row]
 
     mock_transaction = AsyncMock()
     mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
     mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.query_raw = AsyncMock(side_effect=query_raw)
     mock_transaction.batch_ = MagicMock(
         return_value=AsyncMock(
             __aenter__=AsyncMock(return_value=mock_batcher),
@@ -955,16 +940,11 @@ async def test_commit_spend_updates_to_db_increments_team_member_spend_and_total
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = MagicMock()
     mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+    return mock_batcher, mock_transaction, mock_prisma_client
 
-    mock_proxy_logging = MagicMock()
-    # Skip team-membership cache invalidation — out of scope for this test.
-    mock_proxy_logging.call_details.get = MagicMock(return_value=None)
 
-    team_id = "team-abc"
-    user_id = "user-xyz"
-    response_cost = 0.75
-    entity_id = f"team_id::{team_id}::user_id::{user_id}"
-    db_spend_update_transactions = {
+def _team_member_only_transactions(entity_id: str, response_cost: float) -> dict[str, dict[str, float]]:
+    return {
         "user_list_transactions": {},
         "end_user_list_transactions": {},
         "key_list_transactions": {},
@@ -975,14 +955,38 @@ async def test_commit_spend_updates_to_db_increments_team_member_spend_and_total
         "agent_list_transactions": {},
     }
 
-    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
-        await db_writer._commit_spend_updates_to_db(
-            prisma_client=mock_prisma_client,
-            n_retry_times=0,
-            proxy_logging_obj=mock_proxy_logging,
-            db_spend_update_transactions=db_spend_update_transactions,
-        )
 
+@pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_increments_team_member_spend_and_total_spend():
+    """
+    Verify that _commit_spend_updates_to_db increments BOTH spend (cycle-scoped)
+    and total_spend (non-resetting) on LiteLLM_TeamMembership in a single
+    upsert call, using the same response_cost.
+
+    Regression (LIT-5502): members added without a budget had no membership row, and
+    the previous update_many matched zero rows, so their spend was silently dropped.
+    For a member still on the team roster the upsert has to create the row seeded
+    with this call's cost in that case.
+    """
+    db_writer = DBSpendUpdateWriter()
+    team_id = "team-abc"
+    user_id = "user-xyz"
+    response_cost = 0.75
+    mock_batcher, mock_transaction, mock_prisma_client = _team_member_flush_fixtures(team_id, [user_id])
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.call_details.get = MagicMock(return_value=None)
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=mock_proxy_logging,
+        db_spend_update_transactions=_team_member_only_transactions(
+            f"team_id::{team_id}::user_id::{user_id}", response_cost
+        ),
+    )
+
+    assert mock_transaction.query_raw.await_args_list[0] == call(TEAM_ADVISORY_LOCK_SQL, team_id)
     mock_batcher.litellm_teammembership.upsert.assert_called_once()
     mock_batcher.litellm_teammembership.update_many.assert_not_called()
     call_kwargs = mock_batcher.litellm_teammembership.upsert.call_args.kwargs
@@ -999,6 +1003,43 @@ async def test_commit_spend_updates_to_db_increments_team_member_spend_and_total
             "total_spend": {"increment": response_cost},
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_does_not_recreate_membership_of_removed_team_member():
+    """
+    A spend flush that lands after /team/member_delete must not resurrect the deleted
+    membership row: a user missing from the team roster, read under the team's advisory
+    lock inside the flush transaction, only gets an increment on whatever row still
+    exists, never a create.
+    """
+    db_writer = DBSpendUpdateWriter()
+    team_id = "team-abc"
+    removed_user_id = "user-removed"
+    response_cost = 0.75
+    mock_batcher, mock_transaction, mock_prisma_client = _team_member_flush_fixtures(team_id, ["user-still-here"])
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.call_details.get = MagicMock(return_value=None)
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=mock_proxy_logging,
+        db_spend_update_transactions=_team_member_only_transactions(
+            f"team_id::{team_id}::user_id::{removed_user_id}", response_cost
+        ),
+    )
+
+    assert mock_transaction.query_raw.await_args_list[0] == call(TEAM_ADVISORY_LOCK_SQL, team_id)
+    mock_batcher.litellm_teammembership.upsert.assert_not_called()
+    mock_batcher.litellm_teammembership.update_many.assert_called_once_with(
+        where={"team_id": team_id, "user_id": removed_user_id},
+        data={
+            "spend": {"increment": response_cost},
+            "total_spend": {"increment": response_cost},
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -2232,13 +2273,9 @@ async def test_commit_daily_tag_spend_no_requeue_on_success():
                 "team_id::team_b::user_id::user_x": 0.3,
             },
             "litellm_teammembership",
-            "upsert",
-            "user_id_team_id",
-            [
-                {"user_id": "user_x", "team_id": "team_a"},
-                {"user_id": "user_x", "team_id": "team_b"},
-                {"user_id": "user_x", "team_id": "team_c"},
-            ],
+            "update_many",
+            "team_id",
+            ["team_a", "team_b", "team_c"],
             id="team_member",
         ),
         pytest.param(
@@ -2311,6 +2348,8 @@ async def test_commit_spend_updates_iterates_in_sorted_order(
             __aexit__=AsyncMock(return_value=False),
         )
     )
+
+    mock_transaction.query_raw = AsyncMock(return_value=[])
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = MagicMock()
@@ -3071,6 +3110,7 @@ def _good_tx(mock_batcher):
     tx = AsyncMock()
     tx.__aenter__ = AsyncMock(return_value=tx)
     tx.__aexit__ = AsyncMock(return_value=False)
+    tx.query_raw = AsyncMock(return_value=[])
     tx.batch_ = MagicMock(
         return_value=AsyncMock(
             __aenter__=AsyncMock(return_value=mock_batcher),
