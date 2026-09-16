@@ -12,13 +12,11 @@ field set to ``True``.
 import json
 import os
 
-
 import litellm
 from litellm.utils import (
     _supports_factory,
     supports_response_schema,
 )
-
 
 # ---------------------------------------------------------------------------
 # Data-level tests – verify the JSON files are in sync

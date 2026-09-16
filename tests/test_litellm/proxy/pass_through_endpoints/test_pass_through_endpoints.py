@@ -34,6 +34,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -494,6 +495,33 @@ def test_is_vertex_route_ignores_plain_predict_path_segment():
         )
         is True
     )
+
+
+def test_interactions_create_routes_are_tracked_for_vertex_and_gemini():
+    """
+    Regression for LIT-6896: Interactions API (gemini-omni) passthrough responses
+    were never handed to the Vertex/Gemini logging handlers, so SpendLogs rows
+    landed with zero tokens and zero spend. Only the create URL is billable;
+    GET/DELETE on an interaction id and non-Google `/interactions` URLs stay generic.
+    """
+    handler = PassThroughEndpointLogging()
+    vertex_create = "https://aiplatform.googleapis.com/v1beta1/projects/p/locations/global/interactions"
+    gemini_create = "https://generativelanguage.googleapis.com/v1beta/interactions"
+
+    assert handler.is_vertex_route(vertex_create) is True
+    assert handler.is_vertex_route(f"{vertex_create}/abc123") is False
+    assert handler.is_vertex_route("https://upstream.example.com/api/interactions") is False
+    assert handler.is_vertex_route("https://upstream.example.com/locations/eu/interactions") is False
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/interactions"
+        )
+        is True
+    )
+
+    assert handler.is_gemini_route(gemini_create, custom_llm_provider="gemini") is True
+    assert handler.is_gemini_route(f"{gemini_create}/abc123", custom_llm_provider="gemini") is False
+    assert handler.is_gemini_route(gemini_create, custom_llm_provider=None) is False
 
 
 @pytest.mark.asyncio
@@ -5932,6 +5960,32 @@ def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key
         )
         == "per-call-random-trace-id"
     )
+
+
+@pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
+def test_passthrough_logs_the_resolved_deployment_model_info_over_the_request_body(client_metadata_key: str):
+    """A provider route that resolved a router deployment stashes its model_info on request.state. That
+    deployment, not a model_info the client put in its own body, is what spend logs and metrics attribute
+    the call to (LIT-1761: passthrough successes carried model_id="")."""
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent"
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+    mock_request.state = SimpleNamespace(
+        **{LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY: {"id": "vertex-gemini-38-flash-dep"}}
+    )
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={client_metadata_key: {"model_info": {"id": "client-forged-id"}}},
+        litellm_call_id="lit-1761-call-id",
+    )
+
+    assert kwargs["litellm_params"]["metadata"]["model_info"] == {"id": "vertex-gemini-38-flash-dep"}
 
 
 @pytest.mark.asyncio

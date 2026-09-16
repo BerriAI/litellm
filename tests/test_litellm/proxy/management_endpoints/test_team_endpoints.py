@@ -245,6 +245,55 @@ async def test_validate_team_org_change_same_org_id():
         mock_access_check.assert_not_called()  # Ensure access check wasn't called
 
 
+@pytest.mark.parametrize(
+    "org_max_budget, team_max_budget, expect_blocked",
+    [
+        (0.0, 100.0, True),  # explicit zero org budget must still cap the team's budget
+        (0.0, None, False),  # team has no budget of its own, nothing to compare
+        (None, 100.0, False),  # unlimited (None) org budget never blocks
+        (50.0, 100.0, True),  # a positive org budget is still enforced normally
+    ],
+)
+@pytest.mark.asyncio
+async def test_validate_team_org_change_zero_org_budget_is_enforced(
+    org_max_budget, team_max_budget, expect_blocked
+):
+    """An organization with an explicit max_budget of 0 must still block moving in a
+    team with a larger budget, matching key/team/user zero-budget semantics.
+
+    Regression for LIT-7797: the truthy check `organization.litellm_budget_table.max_budget`
+    treated an explicit 0 the same as no budget table at all, silently skipping this guard.
+    """
+    org_id = "team-org-123"
+    new_org_id = "new-org-456"
+
+    team = MagicMock(spec=LiteLLM_TeamTable)
+    team.organization_id = org_id
+    team.models = []
+    team.max_budget = team_max_budget
+    team.tpm_limit = None
+    team.rpm_limit = None
+    team.members_with_roles = []
+
+    organization = MagicMock(spec=LiteLLM_OrganizationTableWithMembers)
+    organization.organization_id = new_org_id
+    organization.models = []
+    organization.litellm_budget_table = (
+        LiteLLM_BudgetTable(max_budget=org_max_budget) if org_max_budget is not None else None
+    )
+    organization.members = []
+
+    mock_router = MagicMock(spec=Router)
+
+    if expect_blocked:
+        with pytest.raises(HTTPException) as exc_info:
+            validate_team_org_change(team=team, organization=organization, llm_router=mock_router)
+        assert exc_info.value.status_code == 403
+    else:
+        result = validate_team_org_change(team=team, organization=organization, llm_router=mock_router)
+        assert result is None or result is True
+
+
 @pytest.mark.asyncio
 async def test_validate_team_org_change_members_in_org():
     """
@@ -624,6 +673,42 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
 
     # Verify object_permission dict is NOT in the team data
     assert "object_permission" not in team_data
+
+
+@pytest.mark.asyncio
+async def test_new_team_persists_tpd_limit(mock_db_client, mock_admin_auth):
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+    mock_db_client.db.litellm_modeltable = MagicMock()
+    mock_db_client.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
+
+    team_create_result = MagicMock(team_id="team-tpd")
+    team_create_result.model_dump.return_value = {"team_id": "team-tpd", "tpd_limit": 250000}
+    mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+    _wire_team_create_tx(mock_db_client)
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    await new_team(
+        data=NewTeamRequest(team_alias="tpd-team", rpm_limit=5, tpd_limit=250000),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    team_data = mock_team_create.call_args.kwargs["data"]
+    assert team_data["tpd_limit"] == 250000
+    assert team_data["rpm_limit"] == 5
 
 
 @pytest.mark.asyncio
@@ -7548,6 +7633,48 @@ async def test_update_team_rpm_limit_not_gated_by_user_limit(
 
 
 @pytest.mark.asyncio
+async def test_update_team_persists_tpd_limit(disable_audit_logging_for_mocked_team):
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    with (
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.prisma_client"
+        ) as mock_prisma,
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.user_api_key_cache"
+        ) as mock_cache,
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+        ),
+        patch(  # test-quality-ok: stubs the audit write so the test observes only the team column written
+            "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+        ),
+    ):
+        existing_team = MagicMock(team_id="team-tpd", organization_id=None, model_id=None, tpd_limit=None)
+        existing_team.model_dump.return_value = {"team_id": "team-tpd", "organization_id": None}
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_set_cache = AsyncMock()
+        updated_team = MagicMock(team_id="team-tpd", organization_id=None, litellm_model_table=None)
+        updated_team.model_dump.return_value = {"team_id": "team-tpd", "organization_id": None, "tpd_limit": 250000}
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated_team)
+
+        await update_team(
+            data=UpdateTeamRequest(team_id="team-tpd", tpd_limit=250000),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+        written = mock_prisma.db.litellm_teamtable.update.call_args.kwargs["data"]
+        assert written["tpd_limit"] == 250000
+        assert "rpm_limit" not in written
+
+
+@pytest.mark.asyncio
 async def test_new_team_org_scoped_tpm_exceeds_org_limit():
     """
     Test that /team/new for an org-scoped team fails when TPM exceeds organization's TPM limit.
@@ -8914,6 +9041,11 @@ async def test_delete_team_survives_a_failing_cache_backend(
 @pytest.mark.asyncio
 async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        UserApiKeyCache,
+        team_membership_auth_cache_key,
+        team_membership_reservation_cache_key,
+    )
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         LiteLLM_VerificationToken,
     )
@@ -9011,6 +9143,16 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
         lambda **kwargs: True,
     )
 
+    cache: Final = UserApiKeyCache()
+    revoked_cache_keys: Final = (
+        "team_id:team-1", "team_alias:test-team", "user-123", "hashed-token-1", "hashed-token-2",
+        team_membership_auth_cache_key(user_id="user-123", team_id="team-1"),
+        team_membership_reservation_cache_key(user_id="user-123", team_id="team-1"),
+    )
+    for cache_key in (*revoked_cache_keys, "unrelated-key"):
+        cache.set_cache(key=cache_key, value={"retained": True})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+
     data = TeamMemberDeleteRequest(team_id="team-1", user_id="user-123")
 
     result = await team_member_delete(
@@ -9027,6 +9169,9 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     assert all(record["team_id"] == "team-1" for record in records)
     assert all(record["user_id"] == "user-123" for record in records)
     mock_delete_keys.assert_called_once()
+    assert result.members_with_roles == []
+    assert all(cache.get_cache(key=cache_key) is None for cache_key in revoked_cache_keys)
+    assert cache.get_cache(key="unrelated-key") == {"retained": True}
 
 
 @pytest.mark.asyncio

@@ -246,6 +246,7 @@ class Litellm_EntityType(enum.Enum):
     TEAM = "team"
     TEAM_MEMBER = "team_member"
     ORGANIZATION = "organization"
+    ORGANIZATION_MEMBER = "organization_member"
     PROJECT = "project"
     TAG = "tag"
     AGENT = "agent"
@@ -286,6 +287,7 @@ class KeyManagementRoutes(str, enum.Enum):
     # team's `team_member_permissions`, non-admin members of that team may set
     # `access_group_ids` on keys they create/update. Default-deny.
     KEY_ACCESS_GROUP_ASSIGNMENT = "/key/access_group_assignment"
+    AUTO_ROUTER_MANAGE = "/auto_router/manage"
 
     # info and health routes
     KEY_INFO = "/key/info"
@@ -484,6 +486,7 @@ class LiteLLMRoutes(enum.Enum):
         "/milvus",
         "/gigachat",
         "/watsonx",
+        "/nvidia_nim",
     ]
 
     #########################################################
@@ -652,15 +655,18 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
         KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value,
+        KeyManagementRoutes.AUTO_ROUTER_MANAGE.value,
     ]
 
     management_routes = (
         [
             # user
             "/user/new",
+            "/management/v1/users/bulk",
             "/user/update",
             "/user/bulk_update",
             "/user/delete",
+            "/management/v1/users/bulk_delete",
             "/user/info",
             "/user/list",
             "/user/daily/activity",
@@ -840,6 +846,7 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
+        "/management/v1/teams/{team_id}/members/bulk_delete",
         "/team/member_update",
         "/team/{team_id}/member/{user_id}/reset_spend",
         "/team/permissions_list",
@@ -866,6 +873,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
+        "/management/v1/users/bulk_delete",  # proxy admins delete anyone, org admins only their orgs' users; others 403
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
@@ -1200,6 +1208,7 @@ class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
 
 class KeyRequestBase(GenerateRequestBase):
     key: str | None = None
+    tpd_limit: int | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     budget_id: str | None = None
@@ -1885,6 +1894,9 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     )
     tpm_limit: int | None = Field(default=None, description="Max tokens per minute, allowed for this budget id.")
     rpm_limit: int | None = Field(default=None, description="Max requests per minute, allowed for this budget id.")
+    tpd_limit: int | None = Field(
+        default=None, description="Max tokens per day, charged by batch submissions, allowed for this budget id."
+    )
     budget_duration: str | None = Field(
         default=None,
         description="Max duration budget should be set for (e.g. '1hr', '1d', '28d')",
@@ -2061,6 +2073,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     metadata: dict | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    tpd_limit: int | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
     models: list | None = None
@@ -3016,6 +3029,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_alias: str | None = None
     team_tpm_limit: int | None = None
     team_rpm_limit: int | None = None
+    team_tpd_limit: int | None = None
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
     team_models: list = []
@@ -3035,6 +3049,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_id: str | None = None
     end_user_tpm_limit: int | None = None
     end_user_rpm_limit: int | None = None
+    end_user_tpd_limit: int | None = None
     end_user_max_budget: float | None = None
     end_user_model_max_budget: dict | None = None
 
@@ -3833,6 +3848,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key_team_alias: str | None
     spend_logs_metadata: dict | None  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: str | None
+    user_agent: ReadOnly[str | None]
     litellm_call_id: str | None
     applied_guardrails: list[str] | None
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
@@ -4472,12 +4488,14 @@ class CreateJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
     jwt_claim_name: str
     jwt_claim_value: str
     key: str
+    jwt_issuer: str | None = None
     description: str | None = None
 
 
 class UpdateJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
     id: str
     key: str | None = None
+    jwt_issuer: str | None = None
     description: str | None = None
     is_active: bool | None = None
 
@@ -4488,6 +4506,7 @@ class DeleteJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
 
 class JWTKeyMappingResponse(LiteLLMPydanticObjectBase):
     id: str
+    jwt_issuer: str | None = None
     jwt_claim_name: str
     jwt_claim_value: str
     description: str | None = None
@@ -4710,6 +4729,7 @@ class JWTAuthBuilderResult(TypedDict):
     org_id: str | None
     team_membership: LiteLLM_TeamMembership | None
     jwt_claims: dict  # Decoded JWT token claims (avoids re-decoding)
+    agent_id: ReadOnly[str | None]
 
 
 class ClientSideFallbackModel(TypedDict, total=False):
@@ -4948,6 +4968,14 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_allowed_roles: list[str] | None = None
     user_id_upsert: bool = Field(default=False, description="If user doesn't exist, upsert them into the db.")
     end_user_id_jwt_field: str | None = None
+    agent_id_jwt_field: str | None = Field(
+        default=None,
+        description=(
+            "The field in the JWT token that identifies the calling agent (e.g. 'azp' for a Microsoft Entra ID "
+            "app token). Supports dot notation. The value is matched against a registered agent's agent_id, "
+            "then agent_name, and the request is rejected when it matches neither."
+        ),
+    )
     public_key_ttl: float = 600
     public_key_stale_ttl: float = Field(
         default=DEFAULT_JWKS_STALE_TTL,
@@ -5192,6 +5220,8 @@ class BaseDailySpendTransaction(TypedDict):
     api_requests: int
     successful_requests: int
     failed_requests: int
+    total_response_time_ms: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
+    timed_requests: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
 
 
 class DailyTeamSpendTransaction(BaseDailySpendTransaction):
@@ -5230,6 +5260,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_list_transactions: dict[str, float] | None
     team_member_list_transactions: dict[str, float] | None
     org_list_transactions: dict[str, float] | None
+    org_member_list_transactions: ReadOnly[dict[str, float] | None]
     tag_list_transactions: dict[str, float] | None
     agent_list_transactions: dict[str, float] | None
     model_access_group_list_transactions: ReadOnly[dict[str, float] | None]
