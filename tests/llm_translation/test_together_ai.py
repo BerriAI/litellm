@@ -19,7 +19,7 @@ class TestTogetherAI(BaseLLMChatTest):
         litellm.set_verbose = True
         return {
             "model": cheapest_together_chat_model(
-                "supports_function_calling", "supports_response_schema"
+                function_calling=True, response_schema=True
             )
         }
 
