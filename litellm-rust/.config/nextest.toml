@@ -1,3 +1,0 @@
-[[profile.default.overrides]]
-filter = "test(long_repeated_runs_stay_cheap)"
-threads-required = "num-cpus"
