@@ -1,13 +1,17 @@
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from litellm._uuid import uuid
-from unittest.mock import AsyncMock, MagicMock
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
+import litellm
+from litellm._uuid import uuid
 from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
     LiteLLM_TeamMembership,
+    LiteLLM_TeamTable,
     LiteLLM_UserTable,
     Member,
     UserAPIKeyAuth,
@@ -165,19 +169,8 @@ async def test_management_otel_span_redacts_nested_submission_env_var_secrets(
 
 @pytest.mark.asyncio
 async def test_add_new_member_links_default_team_budget_id():
-    """
-    A member added without any per-member limit must be LINKED to the team's
-    shared default member budget, not given a private copy of it.
-
-    Linking is what makes a later ``/team/update team_member_budget=...``
-    reach existing members: the auth check reads the budget row behind the
-    membership, so a private clone would freeze the member at the old cap.
-    Per-member isolation is handled by ``/team/member_update`` cloning the
-    shared row on first write.
-    """
     from litellm.proxy._types import LitellmUserRoles
 
-    # Setup test data
     test_user_id = "test_user_123"
     test_team_id = "test_team_456"
     test_default_budget_id = "default_budget_789"
@@ -236,14 +229,12 @@ async def test_add_new_member_links_default_team_budget_id():
     assert result_user is not None
     assert result_user.user_id == test_user_id
 
-    # Membership points at the shared default row itself.
     assert result_team_membership is not None
     assert result_team_membership.budget_id == test_default_budget_id
 
     mock_prisma_client.db.litellm_usertable.upsert.assert_called_once()
     mock_prisma_client.db.litellm_teammembership.create.assert_called_once()
 
-    # The default is only checked for existence; no private budget row is created.
     mock_prisma_client.db.litellm_budgettable.find_unique.assert_called_once_with(
         where={"budget_id": test_default_budget_id}
     )
@@ -258,9 +249,6 @@ async def test_add_new_member_links_default_team_budget_id():
 
 @pytest.mark.asyncio
 async def test_add_new_member_no_budget_when_default_budget_row_is_missing():
-    """If team metadata still names a default member budget whose row was
-    deleted, the member must get no budget rather than a dangling link that
-    the membership foreign key would reject."""
     from litellm.proxy._types import LitellmUserRoles
 
     new_member = Member(user_id="missing-default-user", role="user")
@@ -656,11 +644,6 @@ async def test_add_new_member_persists_budget_duration_without_max_budget():
 
 @pytest.mark.asyncio
 async def test_add_new_member_with_user_email_links_default_budget():
-    """
-    Test add_new_member with user_email instead of user_id and a team default
-    budget. The membership must link the shared default row so team-level
-    budget updates keep applying to this member.
-    """
     from litellm.proxy._types import LitellmUserRoles
 
     test_user_email = "test@example.com"
@@ -737,6 +720,147 @@ async def test_add_new_member_with_user_email_links_default_budget():
         where={"budget_id": test_default_budget_id}
     )
     mock_prisma_client.db.litellm_budgettable.create.assert_not_called()
+
+
+class _FakeBudgetTable:
+    def __init__(self) -> None:
+        self.rows: dict[str, dict[str, object]] = {}
+
+    def _record(self, budget_id: str) -> LiteLLM_BudgetTable:
+        row: Final = self.rows[budget_id]
+        return LiteLLM_BudgetTable(**{k: v for k, v in row.items() if k in LiteLLM_BudgetTable.model_fields})
+
+    async def create(
+        self, *, data: Mapping[str, object], include: Mapping[str, bool] | None = None
+    ) -> LiteLLM_BudgetTable:
+        budget_id: Final = str(data.get("budget_id") or uuid.uuid4())
+        self.rows[budget_id] = {**data, "budget_id": budget_id}
+        return self._record(budget_id)
+
+    async def find_unique(self, *, where: Mapping[str, str]) -> LiteLLM_BudgetTable | None:
+        return self._record(where["budget_id"]) if where["budget_id"] in self.rows else None
+
+    async def update(self, *, where: Mapping[str, str], data: Mapping[str, object]) -> LiteLLM_BudgetTable:
+        self.rows[where["budget_id"]] = {**self.rows[where["budget_id"]], **data}
+        return self._record(where["budget_id"])
+
+
+class _FakeMembershipTable:
+    def __init__(self, budgets: _FakeBudgetTable) -> None:
+        self.budgets: Final = budgets
+        self.budget_ids: dict[tuple[str, str], str | None] = {}
+
+    def membership(self, team_id: str, user_id: str) -> LiteLLM_TeamMembership:
+        budget_id: Final = self.budget_ids[(team_id, user_id)]
+        return LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            budget_id=budget_id,
+            litellm_budget_table=self.budgets._record(budget_id) if budget_id is not None else None,
+        )
+
+    async def create(self, *, data: Mapping[str, str], include: Mapping[str, bool]) -> LiteLLM_TeamMembership:
+        self.budget_ids[(data["team_id"], data["user_id"])] = data["budget_id"]
+        return self.membership(data["team_id"], data["user_id"])
+
+    async def upsert(self, *, where: Mapping[str, Mapping[str, str]], data: Mapping[str, Mapping[str, object]]) -> None:
+        key: Final = where["user_id_team_id"]
+        connect: Final = data["update"]["litellm_budget_table"]
+        assert isinstance(connect, dict)
+        self.budget_ids[(key["team_id"], key["user_id"])] = connect["connect"]["budget_id"]
+
+
+class _FakeUserTable:
+    async def upsert(self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, object]]) -> LiteLLM_UserTable:
+        return LiteLLM_UserTable(user_id=where["user_id"], teams=list(data["create"].get("teams", [])))
+
+    async def update_many(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> int:
+        return 1
+
+
+class _FakeDb:
+    def __init__(self) -> None:
+        self.litellm_budgettable: Final = _FakeBudgetTable()
+        self.litellm_teammembership: Final = _FakeMembershipTable(self.litellm_budgettable)
+        self.litellm_usertable: Final = _FakeUserTable()
+
+
+@pytest.mark.asyncio
+async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.auth_checks import _check_team_member_budget
+    from litellm.proxy.management_endpoints.common_utils import _upsert_budget_and_membership
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+    from litellm.proxy.utils import ProxyLogging
+
+    db: Final = _FakeDb()
+    prisma_client: Final = MagicMock()
+    prisma_client.db = db
+    admin: Final = UserAPIKeyAuth(user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN)
+    team_id: Final = "team-shared-default"
+    default_budget: Final = await db.litellm_budgettable.create(data={"budget_id": "team-default", "max_budget": 100.0})
+    team: Final = LiteLLM_TeamTable(team_id=team_id, metadata={"team_member_budget_id": default_budget.budget_id})
+
+    for user_id in ("inherits", "overridden"):
+        await add_new_member(
+            new_member=Member(user_id=user_id, role="user"),
+            max_budget_in_team=None,
+            prisma_client=prisma_client,
+            team_id=team_id,
+            user_api_key_dict=admin,
+            litellm_proxy_admin_name="admin",
+            default_team_budget_id=default_budget.budget_id,
+        )
+
+    await _upsert_budget_and_membership(
+        db,
+        team_id=team_id,
+        user_id="overridden",
+        existing_budget_id=default_budget.budget_id,
+        user_api_key_dict=admin,
+        budget_patch={"max_budget": 50.0},
+        team_default_budget_id=default_budget.budget_id,
+    )
+    assert db.litellm_teammembership.membership(team_id, "inherits").budget_id == default_budget.budget_id
+    assert db.litellm_teammembership.membership(team_id, "overridden").budget_id != default_budget.budget_id
+    assert db.litellm_budgettable.rows[default_budget.budget_id]["max_budget"] == 100.0
+
+    with patch(  # test-quality-ok: update_budget reads this module global; no dependency injection seam exists
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    ):
+        await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+            team_table=team,
+            user_api_key_dict=admin,
+            updated_kv={},
+            team_member_budget=1.0,
+        )
+
+    async def spend_from_membership(counter_key: str, fallback_spend: float, max_budget: float | None = None) -> float:
+        return fallback_spend
+
+    async def check(user_id: str, spend: float) -> None:
+        membership: Final = db.litellm_teammembership.membership(team_id, user_id).model_copy(update={"spend": spend})
+        with patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.proxy.proxy_server.get_current_spend", spend_from_membership
+        ):
+            await _check_team_member_budget(
+                team_object=team,
+                user_object=LiteLLM_UserTable(user_id=user_id),
+                valid_token=UserAPIKeyAuth(token="tok", user_id=user_id, team_id=team_id),
+                prisma_client=prisma_client,
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                team_membership=membership,
+                team_membership_loaded=True,
+            )
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await check("inherits", spend=2.0)
+    assert exc_info.value.max_budget == 1.0
+    await check("overridden", spend=2.0)
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await check("overridden", spend=60.0)
+    assert exc_info.value.max_budget == 50.0
 
 
 @pytest.mark.asyncio
