@@ -221,6 +221,14 @@ class UserApiKeyCache(DualCache):
             return
         await super().async_delete_cache(key)
 
+    async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
+        key_object_keys: Final = tuple(key for key in keys if is_user_key_cache_key(key))
+        other_keys: Final = tuple(key for key in keys if not is_user_key_cache_key(key))
+        if key_object_keys:
+            await self.key_object_cache.async_delete_cache_keys(key_object_keys)
+        if other_keys:
+            await super().async_delete_cache_keys(other_keys)
+
     def flush_cache(self) -> None:
         super().flush_cache()
         self.key_object_cache.in_memory_cache.flush_cache()

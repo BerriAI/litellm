@@ -278,10 +278,22 @@ class _BudgetCascade:
 
 
 @dataclass(frozen=True, slots=True)
+class _EndUserInvalidation:
+    """How far the post-commit customer walk got, and whether a failed page read
+    cut it short of the tail."""
+
+    invalidated: int = 0
+    truncated: bool = False
+
+
+_NO_ENDUSERS_INVALIDATED: Final = _EndUserInvalidation()
+
+
+@dataclass(frozen=True, slots=True)
 class _BudgetCascadeCommitted:
     cascade: _BudgetCascade
     advanced: int
-    endusers_invalidated: int = 0
+    endusers: _EndUserInvalidation
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +303,10 @@ class _BudgetCascadeFailed:
 
 
 _EMPTY_CASCADE: Final = _BudgetCascade()
+
+#: Which of the proxy's two caches a batch of keys belongs to. ``spend_counter_cache``
+#: holds the live running spend; ``user_api_key_cache`` holds the cached management rows.
+_InvalidatedCache = Literal["spend counter", "user_api_key_cache"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,10 +439,12 @@ _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
 )
 
 
-def _budget_cascade_event_metadata(cascade: _BudgetCascade, endusers_invalidated: int = 0) -> dict[str, object]:
+def _budget_cascade_event_metadata(
+    cascade: _BudgetCascade, endusers: _EndUserInvalidation = _NO_ENDUSERS_INVALIDATED
+) -> dict[str, object]:
     return {
         "num_budgets_found": len(cascade.budgets),
-        "num_endusers_found": endusers_invalidated,
+        "num_endusers_found": endusers.invalidated,
     }
 
 
@@ -610,19 +628,30 @@ class ResetBudgetJob:
         population is unbounded, and awaiting each key in turn makes the last
         dependent wait out every dependent ahead of it.
         """
-        if not counter_keys and not cache_keys:
+        await ResetBudgetJob._invalidate_cache("spend counter", counter_keys)
+        await ResetBudgetJob._invalidate_cache("user_api_key_cache", cache_keys)
+
+    @staticmethod
+    async def _invalidate_cache(cache: _InvalidatedCache, keys: Sequence[str]) -> None:
+        """One cache's share of a batch, awaited separately from the other's so a
+        failure against either still leaves the other one invalidated."""
+        if not keys:
             return
         try:
             from litellm.proxy.proxy_server import spend_counter_cache, user_api_key_cache
 
-            await spend_counter_cache.async_delete_cache_keys(counter_keys)
-            await user_api_key_cache.async_delete_cache_keys(cache_keys)
+            match cache:
+                case "spend counter":
+                    await spend_counter_cache.async_delete_cache_keys(keys)
+                case "user_api_key_cache":
+                    await user_api_key_cache.async_delete_cache_keys(keys)
+                case _:
+                    assert_never(cache)
         except Exception as e:
             verbose_proxy_logger.warning(
-                "Failed to invalidate %d spend counters and %d user_api_key_cache entries: %s. "
-                "Budgets may be over-enforced until the counters expire.",
-                len(counter_keys),
-                len(cache_keys),
+                "Failed to invalidate %d %s entries: %s. Budgets may be over-enforced until they expire.",
+                len(keys),
+                cache,
                 e,
             )
 
@@ -645,7 +674,7 @@ class ResetBudgetJob:
             verbose_proxy_logger.warning("Failed to fetch %s for counter invalidation: %s", log_subject, e)
             return ()
 
-    async def _invalidate_enduser_caches(self, budget_ids: Sequence[str]) -> int:
+    async def _invalidate_enduser_caches(self, budget_ids: Sequence[str]) -> _EndUserInvalidation:
         """Drop the cached spend of every customer the committed tier reset zeroed.
 
         Walked a page at a time with a keyset cursor, for the same reason
@@ -658,41 +687,52 @@ class ResetBudgetJob:
         survive the run, so a cap would restart at the first customer every tick
         and never reach the tail. The cursor strictly advances, so this
         terminates on its own.
+
+        A page that fails to read stops the walk short of the tail. The window is
+        already advanced by then, so no later tick comes back for the customers
+        past it, which is why the walk reports that it was cut short instead of
+        passing the part it managed off as the whole.
         """
         if not budget_ids:
-            return 0
+            return _NO_ENDUSERS_INVALIDATED
         where: Final = _enduser_invalidation_where(budget_ids)
         cursor = ""
         invalidated = 0
         while True:
-            rows = await self._fetch_enduser_page(where=where, cursor=cursor)
+            try:
+                rows = await self._fetch_enduser_page(where=where, cursor=cursor)
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Failed to fetch end users for cache invalidation after %s customers (cursor %r): %s. "
+                    "The customers past that page keep their cached spend until it expires.",
+                    invalidated,
+                    cursor,
+                    e,
+                )
+                return _EndUserInvalidation(invalidated=invalidated, truncated=True)
             if not rows:
-                return invalidated
+                return _EndUserInvalidation(invalidated=invalidated)
             await self._invalidate_caches(
                 counter_keys=tuple(_enduser_counter_key(row) for row in rows),
                 cache_keys=tuple(key for row in rows for key in _enduser_cache_keys(row)),
             )
             invalidated += len(rows)
             if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
-                return invalidated
+                return _EndUserInvalidation(invalidated=invalidated)
             cursor = rows[-1].user_id
 
     async def _fetch_enduser_page(self, where: Mapping[str, object], cursor: str) -> tuple[_EndUserRow, ...]:
         """One keyset page of customers, ordered by primary key so the cursor never repeats a row."""
-        try:
-            return tuple(
-                await self._with_db_retry(
-                    lambda: EndUserRepository(self.prisma_client).table.find_many(
-                        where={**where, "user_id": {"gt": cursor}},  # mutable-ok: prisma where filter must be a dict
-                        order={"user_id": "asc"},  # mutable-ok: prisma order filter must be a dict
-                        take=RESET_BUDGET_JOB_BATCH_SIZE,
-                    ),
-                    reason="reset_budget_read_endusers_failure",
-                )
+        return tuple(
+            await self._with_db_retry(
+                lambda: EndUserRepository(self.prisma_client).table.find_many(
+                    where={**where, "user_id": {"gt": cursor}},  # mutable-ok: prisma where filter must be a dict
+                    order={"user_id": "asc"},  # mutable-ok: prisma order filter must be a dict
+                    take=RESET_BUDGET_JOB_BATCH_SIZE,
+                ),
+                reason="reset_budget_read_endusers_failure",
             )
-        except Exception as e:
-            verbose_proxy_logger.warning("Failed to fetch end users for cache invalidation: %s", e)
-            return ()
+        )
 
     async def _collect_budget_cascade(self, budgets_to_reset: Sequence[LiteLLM_BudgetTableFull]) -> _BudgetCascade:
         """Resolve every row the expiring budget tiers gate, before any write.
@@ -834,7 +874,7 @@ class ResetBudgetJob:
                 (reset_at for _, reset_at in cascade.budget_resets),
                 cutoff=datetime.now(timezone.utc),
             ),
-            endusers_invalidated=await self._invalidate_enduser_caches(cascade.budget_ids),
+            endusers=await self._invalidate_enduser_caches(cascade.budget_ids),
         )
 
     async def reset_budget_for_litellm_budget_table(self) -> None:
@@ -854,7 +894,7 @@ class ResetBudgetJob:
         end_time: Final = time.time()
 
         match outcome:
-            case _BudgetCascadeCommitted(cascade=cascade, advanced=advanced, endusers_invalidated=endusers_invalidated):
+            case _BudgetCascadeCommitted() as committed:
                 asyncio.create_task(
                     self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
                         service=ServiceTypes.RESET_BUDGET_JOB,
@@ -863,13 +903,14 @@ class ResetBudgetJob:
                         start_time=start_time,
                         end_time=end_time,
                         event_metadata={
-                            **_budget_cascade_event_metadata(cascade, endusers_invalidated),
-                            "num_endusers_updated": endusers_invalidated,
+                            **_budget_cascade_event_metadata(committed.cascade, committed.endusers),
+                            "num_endusers_updated": committed.endusers.invalidated,
                             "num_endusers_failed": 0,
+                            "enduser_invalidation_truncated": committed.endusers.truncated,
                         },
                     )
                 )
-                return _ChunkOutcome(fetched=len(cascade.budgets), advanced=advanced)
+                return _ChunkOutcome(fetched=len(committed.cascade.budgets), advanced=committed.advanced)
             case _BudgetCascadeFailed(cascade=cascade, error=error):
                 verbose_proxy_logger.exception(
                     "Failed to reset the budget table cascade (team member, enduser, org, tag and model access "
