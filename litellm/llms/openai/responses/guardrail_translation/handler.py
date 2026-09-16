@@ -1175,13 +1175,11 @@ class OpenAIResponsesHandler(BaseTranslation):
         last_event_type: Final = stream_item_field(last_event, "type")
         if last_event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
             return None
-        if last_event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value:
+        if last_event_type in _TERMINAL_ENVELOPE_EVENT_TYPES:
             return self._completed_response_scan_key(stream_item_field(last_event, "response"))
-        stream_ended: Final = self._check_streaming_has_ended(responses_so_far)
         return StreamingScanKey(
             texts=(self.get_streaming_string_so_far(responses_so_far),),
-            stream_ended=stream_ended,
-            tool_calls_in_flight=not stream_ended and self._has_streamed_tool_call_events(responses_so_far),
+            tool_calls_in_flight=self._has_streamed_tool_call_events(responses_so_far),
         )
 
     @staticmethod

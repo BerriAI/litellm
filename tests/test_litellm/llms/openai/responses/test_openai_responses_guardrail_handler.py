@@ -3212,6 +3212,24 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         done = {"type": "response.output_item.done", "sequence_number": 1, "item": {"type": "function_call"}}
         assert OpenAIResponsesHandler().get_streaming_scan_key([self._delta(0, "hi"), done]) is None
 
+    @pytest.mark.parametrize("terminal_type", ["response.incomplete", "response.failed"])
+    def test_non_completed_terminal_envelopes_key_their_output_items(self, terminal_type):
+        handler = OpenAIResponsesHandler()
+        arguments_delta = {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 1,
+            "item_id": "fc_1",
+            "delta": '{"city":',
+        }
+        function_call = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city":'}
+        terminal = {"type": terminal_type, "sequence_number": 2, "response": {"id": "resp_1", "output": [function_call]}}
+        mid_stream_key = handler.get_streaming_scan_key([arguments_delta])
+        ended_key = handler.get_streaming_scan_key([arguments_delta, terminal])
+        assert ended_key.stream_ended is True
+        assert ended_key.tool_calls_in_flight is False
+        assert len(ended_key.tool_calls) == 1
+        assert ended_key != mid_stream_key
+
     def test_streamed_tool_call_events_flag_tool_calls_in_flight_until_the_stream_ends(self):
         handler = OpenAIResponsesHandler()
         added = {
