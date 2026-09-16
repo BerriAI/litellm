@@ -1,5 +1,6 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import SearchToolTable from "./SearchToolTable";
@@ -28,6 +29,17 @@ const defaultProps = {
   onEdit: vi.fn(),
   onDelete: vi.fn(),
 };
+
+const namedTools = (count: number): SearchTool[] =>
+  Array.from({ length: count }, (_, index) =>
+    makeSearchTool({
+      search_tool_id: `tool-${index}`,
+      search_tool_name: `tool-name-${String(index).padStart(2, "0")}`,
+      created_at: new Date(Date.UTC(2024, 0, 1 + index)).toISOString(),
+    }),
+  );
+
+const firstRowName = () => within(screen.getAllByRole("row")[1]).getByText(/^tool-name-/).textContent;
 
 describe("SearchToolTable", () => {
   beforeEach(() => {
@@ -113,5 +125,48 @@ describe("SearchToolTable", () => {
   it("should show the empty state when there are no search tools", () => {
     renderWithProviders(<SearchToolTable {...defaultProps} searchTools={[]} />);
     expect(screen.getByText("No search tools configured")).toBeInTheDocument();
+  });
+
+  describe("URL state", () => {
+    it("orders rows by the sort_by and sort_order in the URL", () => {
+      renderWithProviders(<SearchToolTable {...defaultProps} searchTools={namedTools(3)} />, {
+        searchParams: { sort_by: "search_tool_name", sort_order: "asc" },
+      });
+      expect(firstRowName()).toBe("tool-name-00");
+    });
+
+    it("opens on the page in the URL", () => {
+      renderWithProviders(<SearchToolTable {...defaultProps} searchTools={namedTools(30)} />, {
+        searchParams: { page: "2" },
+      });
+      expect(screen.getAllByRole("row")).toHaveLength(6);
+      expect(firstRowName()).toBe("tool-name-04");
+    });
+
+    it("writes the clicked sort column to the URL", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<SearchToolTable {...defaultProps} searchTools={namedTools(3)} />, { onUrlUpdate });
+
+      await user.click(screen.getByTestId("sort-header-search_tool_name"));
+
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      const params = onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+      expect(params?.get("sort_by")).toBe("search_tool_name");
+      expect(params?.get("sort_order")).toBe("asc");
+      expect(firstRowName()).toBe("tool-name-00");
+    });
+
+    it("writes the next page to the URL", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<SearchToolTable {...defaultProps} searchTools={namedTools(30)} />, { onUrlUpdate });
+      expect(firstRowName()).toBe("tool-name-29");
+
+      await user.click(screen.getByRole("button", { name: "Go to next page" }));
+
+      await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("page")).toBe("2"));
+      expect(firstRowName()).toBe("tool-name-04");
+    });
   });
 });

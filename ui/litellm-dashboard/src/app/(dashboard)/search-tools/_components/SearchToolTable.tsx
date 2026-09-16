@@ -1,10 +1,9 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 
 import { getSearchToolTableColumns, searchToolKey } from "./SearchToolTableColumns";
 import { AvailableSearchProvider, SearchTool } from "./types";
@@ -12,13 +11,19 @@ import { AvailableSearchProvider, SearchTool } from "./types";
 interface SearchToolTableProps {
   searchTools: SearchTool[];
   isLoading: boolean;
+  isError?: boolean;
   availableProviders: AvailableSearchProvider[];
   onView: (searchToolId: string) => void;
   onEdit: (searchToolId: string) => void;
   onDelete: (searchToolId: string) => void;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["search_tool_id", "search_tool_name", "created_at", "updated_at"],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 25,
+  filterColumns: [],
+};
 
 function EmptyState() {
   return (
@@ -35,12 +40,13 @@ function EmptyState() {
 const SearchToolTable: React.FC<SearchToolTableProps> = ({
   searchTools,
   isLoading,
+  isError,
   availableProviders,
   onView,
   onEdit,
   onDelete,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
 
   const columns = useMemo(() => {
     const deps = { availableProviders, onView, onEdit, onDelete };
@@ -51,12 +57,15 @@ const SearchToolTable: React.FC<SearchToolTableProps> = ({
     <DataTable
       data={searchTools}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(tool, index) => searchToolKey(tool) || String(index)}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       isLoading={isLoading}
+      isError={isError}
       loadingMessage="Loading search tools…"
       noDataMessage={<EmptyState />}
       size="compact"
