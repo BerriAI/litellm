@@ -10,6 +10,7 @@ import httpx
 import json
 import logging
 import time
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -98,8 +99,8 @@ async def test_generic_api_callback():
     assert isinstance(actual_request, list), "Request body should be a list"
     assert len(actual_request) > 0, "Request body list should not be empty"
 
-    this_test_messages = [{"role": "user", "content": "Hello, world!"}]
-    mine = [
+    this_test_messages: Final = [{"role": "user", "content": "Hello, world!"}]
+    mine: Final = [
         item for item in actual_request if item.get("messages") == this_test_messages
     ]
     assert (
@@ -455,12 +456,14 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
     assert isinstance(ndjson_data, str), "Data should be a string for NDJSON"
 
     lines = ndjson_data.strip().split("\n")
-    records = [json.loads(line) for line in lines]
+    records: Final = [json.loads(line) for line in lines]
 
-    this_test_messages = [
+    this_test_messages: Final = [
         [{"role": "user", "content": f"Test {i}"}] for i in range(2)
     ]
-    mine = [record for record in records if record.get("messages") in this_test_messages]
+    mine: Final = [
+        record for record in records if record.get("messages") in this_test_messages
+    ]
     assert (
         len(mine) == 2
     ), f"Expected this test's 2 calls as NDJSON lines, got {len(mine)} of {len(records)}"
