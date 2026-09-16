@@ -963,6 +963,19 @@ class FallbackAccessCheck(Protocol):
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
 
 
+class FallbackBudgetCheck(Protocol):
+    """
+    Decides whether the caller behind `request_kwargs` is still within budget for fallback `model`.
+
+    Budget is enforced once during auth, against the *requested* model group. A fallback target is
+    chosen later, inside the router, so a zero-cost group that falls back to a priced one bills
+    without any budget gate. The router runs this before every cross-model-group fallback attempt
+    and skips targets it rejects, leaving the free attempt itself untouched.
+    """
+
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+
+
 class AutoRouterCapabilityLimit(Protocol):
     """
     Resolves how many complexity routers may claim each licensed capability right now; None means unlimited.

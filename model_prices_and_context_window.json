@@ -377,8 +377,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_tool_choice": true,
-        "cache_read_input_token_cost": 1.5e-08
+        "supports_tool_choice": true
     },
     "amazon.nova-2-lite-v1:0": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -561,8 +560,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "cache_read_input_token_cost": 8.75e-09
+        "supports_tool_choice": true
     },
     "amazon.nova-pro-v1:0": {
         "cache_read_input_token_cost": 2e-07,
@@ -578,8 +576,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_tool_choice": true,
-        "cache_read_input_token_cost": 2e-07
+        "supports_tool_choice": true
     },
     "amazon.nova-sonic-v1:0": {
         "deprecation_date": "2026-09-14",
@@ -26108,6 +26105,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -26165,6 +26163,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -28114,6 +28113,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -28173,6 +28173,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -28595,6 +28596,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -28652,6 +28654,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -45794,8 +45797,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_tool_choice": true,
-        "cache_read_input_token_cost": 1.5e-08
+        "supports_tool_choice": true
     },
     "us.amazon.nova-micro-v1:0": {
         "cache_read_input_token_cost": 8.75e-09,
@@ -45809,8 +45811,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "cache_read_input_token_cost": 8.75e-09
+        "supports_tool_choice": true
     },
     "us.amazon.nova-premier-v1:0": {
         "deprecation_date": "2026-09-14",
@@ -45842,8 +45843,7 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_tool_choice": true,
-        "cache_read_input_token_cost": 2e-07
+        "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-haiku-20241022-v1:0": {
         "cache_creation_input_token_cost": 1e-06,

@@ -33,15 +33,6 @@ def aocr(
     timeout_seconds: float | None = None,
 ) -> Future[dict[str, object]]: ...
 
-_OCR_MAX_FILE_BYTES: int
-
-def _ocr_upload_document(
-    file_content: bytes,
-    file_name: str | None = None,
-    content_type: str | None = None,
-) -> dict[str, str]: ...
-def _ocr_file_document(document: Mapping[str, object]) -> dict[str, str]: ...
-def _ocr_mime_type(file_name: str) -> str: ...
 def _ocr_lifecycle(
     request: LiteLLMOcrRequest,
     args: tuple[object, ...],
@@ -139,15 +130,11 @@ class TokenCounter:
 def gil_stats() -> dict[str, int]: ...
 
 __all__ = [
-    "_OCR_MAX_FILE_BYTES",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
     "RustUpstreamError",
     "TokenCounter",
-    "_ocr_file_document",
     "_ocr_lifecycle",
-    "_ocr_mime_type",
-    "_ocr_upload_document",
     "achat_completions",
     "amessages",
     "aocr",
