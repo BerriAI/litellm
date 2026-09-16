@@ -1431,6 +1431,60 @@ async def test_key_info_returns_object_permission(monkeypatch):
     )
 
 
+def _stored_key_with_lifetime_spend(token: str, spend: float, total_spend: float) -> LiteLLM_VerificationToken:
+    return LiteLLM_VerificationToken.model_validate(
+        {"token": token, "user_id": "user123", "spend": spend, "total_spend": total_spend}
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_info_returns_lifetime_total_spend_next_to_resettable_spend(monkeypatch):
+    """After a budget reset the period spend is 0 while total_spend keeps the lifetime figure."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=_stored_key_with_lifetime_spend(token="hashed_key", spend=0.0, total_spend=3.75)
+    )
+
+    result = await info_key_fn(
+        key="sk-test-key-456",
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test-key-456"),
+    )
+
+    assert result["info"]["spend"] == 0.0
+    assert result["info"]["total_spend"] == 3.75
+
+
+@pytest.mark.asyncio
+async def test_list_keys_full_object_returns_lifetime_total_spend():
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[_stored_key_with_lifetime_spend(token="hashed_key", spend=0.0, total_spend=3.75)]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=1)
+
+    result = await _list_key_helper(
+        prisma_client=mock_prisma_client,
+        page=1,
+        size=50,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        return_full_object=True,
+        admin_team_ids=None,
+    )
+
+    listed_key = result["keys"][0]
+    assert isinstance(listed_key, UserAPIKeyAuth)
+    assert listed_key.spend == 0.0
+    assert listed_key.total_spend == 3.75
+
+
 @pytest.mark.asyncio
 async def test_get_new_token_with_valid_key(monkeypatch):
     """Test get_new_token function when provided with a valid key that starts with 'sk-'"""

@@ -13,6 +13,7 @@ import {
   IdCell,
   IdentityCell,
   ModelsCell,
+  MoneyCell,
   SpendBudgetCell,
   StatusBadge,
   UserPopoverCell,
@@ -273,6 +274,20 @@ export const getKeyTableColumns = ({
         />
       );
     },
+  },
+  {
+    id: "total_spend",
+    accessorKey: "total_spend",
+    meta: { title: "Lifetime Spend" },
+    header: () => (
+      <InfoHeader
+        label="Lifetime Spend"
+        tooltip="Cumulative spend across every budget period. Budget resets do not touch this value. Keys created before this field existed only count spend from then on."
+      />
+    ),
+    size: 130,
+    enableSorting: false,
+    cell: (info) => <MoneyCell value={info.getValue() as number | null | undefined} showZero />,
   },
   {
     id: "budget_reset_at",

@@ -29686,6 +29686,11 @@ export interface components {
             team_id?: string | null;
             /** Token */
             token?: string | null;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -31259,6 +31264,11 @@ export interface components {
             team_id?: string | null;
             /** Token */
             token?: string | null;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -40057,6 +40067,11 @@ export interface components {
             team_tpm_limit?: number | null;
             /** Token */
             token?: string | null;
+            /**
+             * Total Spend
+             * @default 0
+             */
+            total_spend: number;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */

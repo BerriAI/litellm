@@ -1619,6 +1619,7 @@ class DBSpendUpdateWriter:
                                     where={"token": token},
                                     data={
                                         "spend": {"increment": response_cost},
+                                        "total_spend": {"increment": response_cost},
                                         "last_active": datetime.now(timezone.utc),
                                     },
                                 )
