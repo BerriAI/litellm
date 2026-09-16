@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationEr
 LIFETIME_SECONDS: Final = 86_400
 MAX_REQUEST_BYTES: Final = 256 * 1024
 MAX_RESPONSE_BYTES: Final = 8 * 1024 * 1024
+UNRECORDED_RESPONSE_HEADERS: Final = frozenset({"set-cookie"})
 JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
@@ -103,8 +104,6 @@ def cacheable_endpoint(method: str, url: str, body: bytes | None) -> bool:
 
 def successful_response(url: str, status: int, headers: Mapping[str, str], body: bytes) -> bool:
     if not 200 <= status < 300 or len(body) > MAX_RESPONSE_BYTES:
-        return False
-    if any(name.lower() == "set-cookie" for name in headers):
         return False
     streaming: Final = "text/event-stream" in headers.get("content-type", "").lower()
     if streaming:
@@ -283,11 +282,14 @@ class CacheEdge:
                     yield step
                     capture.observe(step)
             chunks: Final = capture.chunks() if capture.eligible else ()
-            if not capture.eligible or not successful_response(url, head.status_code, head.headers, b"".join(chunks)):
+            headers: Final = {
+                name: value for name, value in head.headers.items() if name.lower() not in UNRECORDED_RESPONSE_HEADERS
+            }
+            if not capture.eligible or not successful_response(url, head.status_code, headers, b"".join(chunks)):
                 self.counters.increment("rejected")
                 return
             response: Final = CachedResponse(
-                request_key=key, status_code=head.status_code, headers=head.headers,
+                request_key=key, status_code=head.status_code, headers=headers,
                 chunks=tuple(base64.b64encode(chunk).decode("ascii") for chunk in chunks),
             )
             published: Final = self.store.publish(key, lease, encode_response(self.secret, response))
