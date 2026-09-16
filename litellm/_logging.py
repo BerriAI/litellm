@@ -90,7 +90,9 @@ def _is_redacted(record: logging.LogRecord) -> bool:
 
 def _redact_extra_value(key: str, value: object) -> object:
     try:
-        return json.loads(safe_dumps({key: value}, value_transform=_redact_structured_value))[key]
+        rendered: Final = safe_dumps({key: value})
+        scrubbed: Final = safe_dumps({key: value}, value_transform=_redact_structured_value)
+        return value if scrubbed == rendered else json.loads(scrubbed)[key]
     except (TypeError, ValueError, KeyError):
         return _redact_string(str(value))
 
