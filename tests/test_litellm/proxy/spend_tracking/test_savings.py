@@ -4,6 +4,7 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.llms.anthropic.cost_calculation import cost_per_token as anthropic_cost_per_token
 from litellm.proxy.spend_tracking.savings import (
     _baseline_usage,
     _resolve_model,
@@ -15,6 +16,34 @@ from litellm.router import Router
 from litellm.types.utils import Usage
 
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
+
+
+@pytest.mark.parametrize("modifier", [{"speed": "fast"}, {"inference_geo": "us"}])
+@pytest.mark.parametrize("continuing", [False, True])
+def test_baseline_preserves_anthropic_pricing_fields(modifier: dict[str, str], continuing: bool) -> None:
+    usage: Final = _usage(1000, 0, 1000, 100).model_copy(update=modifier)
+    expected: Final = (_usage(1000, 1000, 0, 100) if continuing else usage).model_copy(update=modifier)
+    normalized: Final = _baseline_usage(usage, continuing)
+    cache_fields: Final = {"prompt_tokens_details", "cache_read_input_tokens", "cache_creation_input_tokens"}
+    assert normalized.model_dump(exclude=cache_fields) == usage.model_dump(exclude=cache_fields)
+    assert usage.prompt_tokens_details.cached_tokens == 0
+    selected_cost: Final = 0.013
+    assert compute_autorouter_savings(
+        "claude-opus-5", "claude-sonnet-5", "anthropic", usage, conversation_continuing=continuing,
+        cost_breakdown={"input_cost": 0.01, "output_cost": 0.003},
+    ) == pytest.approx(sum(anthropic_cost_per_token("claude-opus-5", expected)) - selected_cost)
+
+
+def test_anthropic_baseline_keeps_negotiated_prices_with_provider_multiplier() -> None:
+    info: Final = {
+        **litellm.get_model_info("claude-opus-5", "anthropic"),
+        "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "cache_read_input_token_cost": 3e-7,
+    }
+    usage: Final = _usage(1000, 1000, 0, 100).model_copy(update={"speed": "fast"})
+    assert compute_autorouter_savings(
+        "claude-opus-5", "claude-sonnet-5", "anthropic", usage, baseline_info=info,
+        cost_breakdown={"input_cost": 0.01, "output_cost": 0.003},
+    ) == pytest.approx(0.0015 * 2 - 0.013)
 
 
 def _anthropic_costs(model: str) -> tuple[float, float]:
