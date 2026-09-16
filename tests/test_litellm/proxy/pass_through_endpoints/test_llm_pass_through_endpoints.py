@@ -28,6 +28,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
     _join_url_paths,
+    anthropic_proxy_route,
     azure_proxy_route,
     bedrock_llm_proxy_route,
     bedrock_proxy_route,
@@ -4284,6 +4285,298 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
         assert "authorization" not in forwarded
         assert "sk-master-1234" not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+
+class TestAnthropicPassthroughVirtualKeyLeak:
+    """Regression coverage for LIT-3550.
+
+    ``/anthropic/{endpoint}`` forwarded every incoming header to Anthropic, so the
+    header that carried the caller's LiteLLM virtual key (``Authorization``,
+    ``x-api-key``, ``x-litellm-api-key``, or an operator-configured name) reached
+    Anthropic and was rejected there as an invalid credential, with or without a
+    proxy-side Anthropic key layered on top. The virtual key must never leave the
+    proxy: it is dropped by value from the headers Anthropic reads as credentials
+    (``Authorization`` / ``x-api-key``), the proxy-only credential headers are
+    dropped by name, a caller's own Anthropic credential still passes through, and
+    a request with neither a proxy credential nor a caller credential fails with a
+    clean 401 instead of reaching ``create_pass_through_route``.
+
+    The forwarded set is rebuilt the way ``pass_through_request`` builds it from
+    the captured ``create_pass_through_route`` kwargs, so a route that re-enables
+    ``_forward_headers`` fails these tests the same way the original bug did.
+    """
+
+    VKEY = "sk-litellm-victim-key"
+    PROXY_KEY = "sk-ant-api03-proxy-configured-key"
+    ENDPOINT = "v1/messages"
+
+    async def _run(
+        self,
+        monkeypatch,
+        headers: list[tuple[bytes, bytes]],
+        authenticated: UserAPIKeyAuth | None = None,
+        master_key: str | None = "sk-master-1234",
+        proxy_api_key: str | None = None,
+    ) -> tuple[HTTPException | None, dict | None]:
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+        from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
+            PassthroughEndpointRouter,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", master_key)
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+        if proxy_api_key is None:
+            monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        else:
+            monkeypatch.setenv("ANTHROPIC_API_KEY", proxy_api_key)
+        caller: Final = authenticated if authenticated is not None else UserAPIKeyAuth(api_key=self.VKEY)
+
+        async def receive():
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": f"/anthropic/{self.ENDPOINT}",
+                "headers": headers,
+                "query_string": b"",
+            },
+            receive=receive,
+        )
+
+        captured: dict = {}
+
+        def fake_create_pass_through_route(**kwargs):
+            captured.update(kwargs)
+            return AsyncMock(return_value={"status": "success"})
+
+        module = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+        monkeypatch.setattr(f"{module}.passthrough_endpoint_router", PassthroughEndpointRouter(lambda: None))
+        raised: HTTPException | None = None
+        with (
+            mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
+            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=caller)),
+        ):
+            try:
+                await anthropic_proxy_route(
+                    endpoint=self.ENDPOINT,
+                    request=request,
+                    fastapi_response=Response(),
+                    user_api_key_dict=caller,
+                )
+            except HTTPException as exc:
+                raised = exc
+
+        if not captured:
+            return raised, None
+        upstream: Final = HttpPassThroughEndpointHelpers.forward_headers_from_request(
+            request_headers=dict(request.headers),
+            headers=dict(captured["custom_headers"] or {}),
+            forward_headers=captured.get("_forward_headers", False),
+        )
+        return raised, upstream
+
+    @staticmethod
+    def _blob(forwarded: dict) -> str:
+        return " ".join(f"{name}:{value}" for name, value in forwarded.items())
+
+    @pytest.mark.asyncio
+    async def test_authorization_bearer_virtual_key_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", f"Bearer {self.VKEY}".encode()), (b"content-type", b"application/json")],
+        )
+        assert forwarded is None, "credential-less request must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+        assert "ANTHROPIC_API_KEY" in str(raised.detail) and "use_in_pass_through" in str(raised.detail)
+
+    @pytest.mark.asyncio
+    async def test_x_api_key_virtual_key_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"x-api-key", self.VKEY.encode()), (b"content-type", b"application/json")],
+        )
+        assert forwarded is None, "a virtual key that authenticated via x-api-key must be stripped, not forwarded"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_x_litellm_api_key_virtual_key_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"x-litellm-api-key", self.VKEY.encode()), (b"content-type", b"application/json")],
+        )
+        assert forwarded is None, "credential-less request must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_master_key_in_authorization_is_rejected_not_forwarded(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", b"Bearer sk-master-1234"), (b"content-type", b"application/json")],
+            authenticated=UserAPIKeyAuth(api_key="sk-master-1234", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert forwarded is None, "the master key must never reach Anthropic"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_byo_anthropic_oauth_token_still_forwards_without_virtual_key(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"authorization", b"Bearer sk-ant-oat01-caller-oauth-token"),
+                (b"anthropic-version", b"2023-06-01"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("authorization") == "Bearer sk-ant-oat01-caller-oauth-token"
+        assert forwarded.get("anthropic-version") == "2023-06-01"
+        assert "x-litellm-api-key" not in forwarded
+        assert self.VKEY not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_byo_x_api_key_still_forwards_without_virtual_key(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"authorization", f"Bearer {self.VKEY}".encode()),
+                (b"x-api-key", b"sk-ant-api03-caller-own-key"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-api-key") == "sk-ant-api03-caller-own-key"
+        assert "authorization" not in forwarded
+        assert self.VKEY not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_custom_auth_caller_keeps_own_authorization_token(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", b"Bearer sk-ant-oat01-caller-oauth-token"), (b"content-type", b"application/json")],
+            authenticated=UserAPIKeyAuth(api_key=None),
+            master_key=None,
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("authorization") == "Bearer sk-ant-oat01-caller-oauth-token"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "credential_header",
+        sorted(SpecialHeaders.litellm_credential_header_names() - {"authorization", "x-api-key", "x-litellm-api-key"}),
+    )
+    async def test_every_non_anthropic_credential_header_is_dropped_by_name(self, monkeypatch, credential_header):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"x-api-key", b"sk-ant-api03-caller-own-key"),
+                (credential_header.encode(), b"some-distinct-caller-secret-value"),
+                (b"content-type", b"application/json"),
+            ],
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-api-key") == "sk-ant-api03-caller-own-key"
+        assert credential_header not in forwarded
+        assert "x-litellm-api-key" not in forwarded
+        assert self.VKEY not in self._blob(forwarded)
+        assert "some-distinct-caller-secret-value" not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_virtual_key_in_operator_configured_header_is_stripped(self, monkeypatch):
+        with mock.patch.dict(  # test-quality-ok: general_settings is the real proxy config surface for litellm_key_header_name; no injection seam exists on this route
+            "litellm.proxy.proxy_server.general_settings",
+            {"litellm_key_header_name": "x-company-key"},
+        ):
+            raised, forwarded = await self._run(
+                monkeypatch,
+                [
+                    (b"x-company-key", f"Bearer {self.VKEY}".encode()),
+                    (b"x-api-key", b"sk-ant-api03-caller-own-key"),
+                    (b"content-type", b"application/json"),
+                ],
+            )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-api-key") == "sk-ant-api03-caller-own-key"
+        assert "x-company-key" not in forwarded
+        assert self.VKEY not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_proxy_credential_replaces_virtual_key_sent_as_bearer(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"authorization", f"Bearer {self.VKEY}".encode()),
+                (b"anthropic-version", b"2023-06-01"),
+                (b"content-type", b"application/json"),
+            ],
+            proxy_api_key=self.PROXY_KEY,
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-api-key") == self.PROXY_KEY
+        assert "authorization" not in forwarded
+        assert forwarded.get("anthropic-version") == "2023-06-01"
+        assert self.VKEY not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_proxy_credential_replaces_virtual_key_sent_as_x_api_key(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"x-api-key", self.VKEY.encode()), (b"content-type", b"application/json")],
+            proxy_api_key=self.PROXY_KEY,
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-api-key") == self.PROXY_KEY
+        assert self.VKEY not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_proxy_credential_wins_over_callers_own_x_api_key(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.VKEY.encode()),
+                (b"x-api-key", b"sk-ant-api03-caller-own-key"),
+                (b"content-type", b"application/json"),
+            ],
+            proxy_api_key=self.PROXY_KEY,
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-api-key") == self.PROXY_KEY
+        assert "sk-ant-api03-caller-own-key" not in self._blob(forwarded)
+
+    @pytest.mark.asyncio
+    async def test_x_pass_and_hop_by_hop_handling_is_unchanged(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"authorization", f"Bearer {self.VKEY}".encode()),
+                (b"x-pass-anthropic-beta", b"interleaved-thinking-2025-05-14"),
+                (b"x-pass-authorization", b"Bearer smuggled"),
+                (b"content-length", b"2"),
+                (b"host", b"proxy.internal"),
+                (b"accept-encoding", b"br"),
+                (b"user-agent", b"curl/8.7.1"),
+            ],
+            proxy_api_key=self.PROXY_KEY,
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("anthropic-beta") == "interleaved-thinking-2025-05-14"
+        assert forwarded.get("user-agent") == "curl/8.7.1"
+        assert "authorization" not in forwarded
+        assert "content-length" not in forwarded
+        assert "host" not in forwarded
+        assert "accept-encoding" not in forwarded
 
 
 class TestVertexPassthroughDefaultLocationOnShortRoutes:
