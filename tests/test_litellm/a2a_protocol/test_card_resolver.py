@@ -138,3 +138,64 @@ def test_normalize_agent_card_interfaces_downgrades_miscased_interfaces_to_the_0
     ]
     assert card.supported_interfaces[0].protocol_binding == "jsonrpc"
     assert card.supported_interfaces[0].protocol_version == "1.0"
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_falls_through_to_the_foundry_card_path():
+    """Microsoft Foundry agents serve their card only at /agentCard/v1.0 and 404 both well-known
+    paths, so discovery must reach that path after the two well-known probes fail."""
+    mock_agent_card = MagicMock()
+    paths_called = []
+
+    async def mock_parent_get_agent_card(self, relative_card_path=None, http_kwargs=None):
+        paths_called.append(relative_card_path)
+        if relative_card_path == "/agentCard/v1.0":
+            return mock_agent_card
+        raise Exception("404 Not Found")
+
+    with patch.object(LiteLLMA2ACardResolver.__bases__[0], "get_agent_card", mock_parent_get_agent_card):
+        resolver = LiteLLMA2ACardResolver(httpx_client=MagicMock(), base_url="https://foundry.example.com/a2a")
+        result = await resolver.get_agent_card()
+
+    assert paths_called == ["/.well-known/agent-card.json", "/.well-known/agent.json", "/agentCard/v1.0"]
+    assert result is mock_agent_card
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_explicit_path_skips_the_probes():
+    mock_agent_card = MagicMock()
+    paths_called = []
+
+    async def mock_parent_get_agent_card(self, relative_card_path=None, http_kwargs=None):
+        paths_called.append(relative_card_path)
+        return mock_agent_card
+
+    with patch.object(LiteLLMA2ACardResolver.__bases__[0], "get_agent_card", mock_parent_get_agent_card):
+        resolver = LiteLLMA2ACardResolver(httpx_client=MagicMock(), base_url="https://foundry.example.com/a2a")
+        result = await resolver.get_agent_card(relative_card_path="agentCard/v1.0")
+
+    assert paths_called == ["agentCard/v1.0"]
+    assert result is mock_agent_card
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_names_every_probed_path_when_discovery_fails():
+    """A Foundry agent 401s its well-known paths and 404s the rest; surfacing only the last probe's
+    error would hide the auth failure that actually explains the outage."""
+    from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError
+
+    async def mock_parent_get_agent_card(self, relative_card_path=None, http_kwargs=None):
+        if relative_card_path == "/.well-known/agent.json":
+            raise Exception("HTTP 401 Unauthorized")
+        raise Exception("HTTP 404 Not Found")
+
+    with patch.object(LiteLLMA2ACardResolver.__bases__[0], "get_agent_card", mock_parent_get_agent_card):
+        resolver = LiteLLMA2ACardResolver(httpx_client=MagicMock(), base_url="https://foundry.example.com/a2a")
+        with pytest.raises(A2AAgentCardDiscoveryError) as raised:
+            await resolver.get_agent_card()
+
+    message = str(raised.value)
+    assert "https://foundry.example.com/a2a" in message
+    assert "/.well-known/agent-card.json (HTTP 404 Not Found)" in message
+    assert "/.well-known/agent.json (HTTP 401 Unauthorized)" in message
+    assert "/agentCard/v1.0 (HTTP 404 Not Found)" in message

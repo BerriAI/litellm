@@ -24,6 +24,7 @@ from pydantic import ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+from litellm.llms.azure_ai.common_utils import has_azure_entra_params, resolve_azure_ai_agent_auth_header
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
@@ -157,10 +158,30 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, 
     )
 
 
+async def _resolve_backend_auth_header(
+    litellm_params: dict[str, object],
+    custom_llm_provider: object,
+) -> Mapping[str, str] | None:
+    """
+    Mint the bearer the agent's backend requires, when the agent is configured for one.
+
+    Databricks Apps take a short-lived OAuth M2M token from a ``databricks_oauth`` block. Microsoft
+    Foundry agents take an Entra ID token from the agent's own Entra credentials, but only when the
+    proxy speaks A2A to that URL itself: for completion-bridge agents (``custom_llm_provider`` set)
+    those same fields belong to the model provider and travel with the completion call instead.
+    """
+    if litellm_params.get(DATABRICKS_OAUTH_PARAM):
+        return await resolve_databricks_app_auth_header(litellm_params)
+    if not custom_llm_provider and has_azure_entra_params(litellm_params):
+        return await resolve_azure_ai_agent_auth_header(litellm_params)
+    return None
+
+
 def _forwarding_headers(
     caller_identity: Mapping[str, str],
     request_data: Mapping[str, object],
     agent_extra_headers: Mapping[str, str] | None,
+    backend_auth_header: Mapping[str, str] | None,
 ) -> dict[str, str] | None:
     passthrough: Final = tuple(
         (name, value)
@@ -169,7 +190,8 @@ def _forwarding_headers(
     )
     trace_id: Final = request_data.get("litellm_trace_id")
     trace: Final = (("X-LiteLLM-Trace-Id", str(trace_id)),) if trace_id else ()
-    merged: Final = dict((*passthrough, *caller_identity.items(), *trace))
+    backend_auth: Final = backend_auth_header.items() if backend_auth_header else ()
+    merged: Final = dict((*passthrough, *caller_identity.items(), *trace, *backend_auth))
     return merged or None
 
 
@@ -795,25 +817,15 @@ async def invoke_agent_a2a(
                     if header_name:
                         dynamic_headers[header_name] = val
 
-        agent_extra_headers = _forwarding_headers(
+        agent_extra_headers: Final = _forwarding_headers(
             caller_identity=caller_identity,
             request_data=data,
             agent_extra_headers=merge_agent_headers(
                 dynamic_headers=dynamic_headers or None,
                 static_headers=static_headers or None,
             ),
+            backend_auth_header=await _resolve_backend_auth_header(litellm_params, custom_llm_provider),
         )
-
-        # Databricks App endpoints require a short-lived OAuth M2M token rather
-        # than a static bearer. Only agents explicitly configured with a
-        # ``databricks_oauth`` block get one; every other agent is left untouched.
-        if litellm_params.get(DATABRICKS_OAUTH_PARAM):
-            databricks_auth: Final = await resolve_databricks_app_auth_header(litellm_params)
-            if databricks_auth:
-                agent_extra_headers = {
-                    **(agent_extra_headers or {}),
-                    **databricks_auth,
-                }
 
         # Merge agent-level guardrails into data so post_call_success_hook and
         # _handle_stream_message both pick them up.  A2A agents use model
