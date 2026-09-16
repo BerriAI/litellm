@@ -1,15 +1,14 @@
-import os
-import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
-from litellm.proxy._experimental.mcp_server.db import get_mcp_servers_by_team
+from litellm.proxy._experimental.mcp_server.db import (
+    approve_mcp_server,
+    get_mcp_servers_by_team,
+    reject_mcp_server,
+)
 
 
 def _prisma_client_returning(team_record: object) -> MagicMock:
@@ -43,3 +42,30 @@ async def test_fetch_mcp_servers_by_team(team_record, expected):
         where={"team_id": "team-123"},
         include={"object_permission": True},
     )
+
+
+def _prisma_client_with_missing_mcp_server_row() -> MagicMock:
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.update = AsyncMock(return_value=None)
+    return prisma_client
+
+
+@pytest.mark.asyncio
+async def test_approve_mcp_server_raises_value_error_when_row_missing():
+    prisma_client = _prisma_client_with_missing_mcp_server_row()
+
+    with pytest.raises(ValueError, match=r"^MCP server not found, passed server_id=server-gone$"):
+        await approve_mcp_server(prisma_client, "server-gone", touched_by="admin")
+
+
+@pytest.mark.asyncio
+async def test_reject_mcp_server_raises_value_error_when_row_missing():
+    prisma_client = _prisma_client_with_missing_mcp_server_row()
+
+    with pytest.raises(ValueError, match=r"^MCP server not found, passed server_id=server-gone$"):
+        await reject_mcp_server(
+            prisma_client,
+            "server-gone",
+            touched_by="admin",
+            review_notes="spam",
+        )

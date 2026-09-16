@@ -1,13 +1,11 @@
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
+from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 
@@ -121,3 +119,190 @@ def test_initialize_guardrail_sets_run_in_parallel(config_value, expected):
 
     custom_guardrail = guardrail_handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
     assert custom_guardrail.run_in_parallel is expected
+
+
+def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
+    """Regression (LIT-4785): `presidio_analyze_chunk_size_bytes` set in
+    config.yaml must reach the guardrail instance. The field lives on
+    PresidioConfigModel, so LitellmParams parses it, but initialize_presidio
+    enumerates its constructor kwargs explicitly and would silently drop it.
+    """
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+
+    test_guardrail = {
+        "guardrail_name": "test_presidio_chunk_size",
+        "litellm_params": {
+            "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+            "mode": "pre_call",
+            "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+            "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+            "presidio_analyze_chunk_size_bytes": 250_000,
+        },
+    }
+
+    guardrail_handler = InMemoryGuardrailHandler()
+    guardrail_handler.initialize_guardrail(guardrail=test_guardrail)
+
+    initialized = [
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, _OPTIONAL_PresidioPIIMasking)
+        and callback.guardrail_name == "test_presidio_chunk_size"
+    ]
+    assert initialized, "presidio guardrail was not registered as a callback"
+    assert initialized[-1].presidio_analyze_chunk_size_bytes == 250_000
+
+
+@pytest.mark.parametrize(
+    "config_value, expected",
+    [(True, True), (False, False), (None, False)],
+)
+def test_initialize_guardrail_sets_scan_raw_request(config_value, expected):
+    """scan_raw_request from litellm_params must reach the built guardrail instance,
+    same wiring as run_in_parallel."""
+    litellm_params = {
+        "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+        "mode": "pre_call",
+        "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+        "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+    }
+    if config_value is not None:
+        litellm_params["scan_raw_request"] = config_value
+
+    guardrail_handler = InMemoryGuardrailHandler()
+    result = guardrail_handler.initialize_guardrail(
+        guardrail={"guardrail_name": "test_scan_raw_request_flag", "litellm_params": litellm_params},
+    )
+
+    custom_guardrail = guardrail_handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+    assert custom_guardrail.scan_raw_request is expected
+
+
+def test_init_guardrails_v2_skips_invalid_guardrail_instead_of_crashing_boot():
+    """
+    Regression: one guardrail with an invalid litellm_params combination (Lakera's
+    on_flagged="inject_system_message" with payload=False, which LakeraAIGuardrail's
+    __init__ rejects with ValueError since masking can't happen without payload data)
+    must not take down the entire proxy at startup. init_guardrails_v2 previously had
+    no try/except around initialize_guardrail, so this ValueError propagated all the
+    way through proxy_server.py's load_config and crashed the whole process, including
+    every other, correctly-configured guardrail in the list.
+
+    mode="during_call" + on_flagged="inject_system_message" is deliberately NOT used
+    here anymore (maintainer finding on BerriAI/litellm#34940): that combination is
+    now accepted at construction time, since async_moderation_hook already degrades
+    it gracefully at runtime instead of needing a config-time rejection.
+    """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "broken_lakera_advisory",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.LAKERA_V2.value,
+                "mode": "pre_call",
+                "on_flagged": "inject_system_message",
+                "payload": False,
+                "api_key": "fake-key",
+            },
+        },
+        {
+            "guardrail_name": "healthy_presidio",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+                "mode": "pre_call",
+                "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+                "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+            },
+        },
+    ]
+
+    init_guardrails_v2(all_guardrails=all_guardrails)
+
+    guardrail_names = {
+        guardrail["guardrail_name"] for guardrail in IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values()
+    }
+    assert "broken_lakera_advisory" not in guardrail_names
+    assert "healthy_presidio" in guardrail_names
+
+
+def test_init_guardrails_v2_accepts_during_call_advisory_mode():
+    """
+    Maintainer finding on BerriAI/litellm#34940: on_flagged='inject_system_message'
+    with mode='during_call' must construct successfully now -- async_moderation_hook
+    already masks whatever's maskable and falls back to a log-only warning when the
+    advisory itself can't be delivered, so rejecting this combination at config time
+    disabled a guardrail that runtime already handles safely.
+    """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "during_call_advisory",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.LAKERA_V2.value,
+                "mode": "during_call",
+                "on_flagged": "inject_system_message",
+                "api_key": "fake-key",
+            },
+        },
+    ]
+
+    init_guardrails_v2(all_guardrails=all_guardrails)
+
+    guardrail_names = {
+        guardrail["guardrail_name"] for guardrail in IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values()
+    }
+    assert "during_call_advisory" in guardrail_names
+
+
+def test_init_guardrails_v2_skips_guardrail_with_malformed_advisory_template():
+    """
+    Regression: a malformed advisory_system_message (missing the {reason} placeholder
+    LakeraAIGuardrail's __init__ requires) is a second, independent trigger for the same
+    uncaught-ValueError-crashes-boot root cause as the during_call+inject_system_message
+    case above. Both must be caught by init_guardrails_v2, not just one.
+    """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "broken_lakera_template",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.LAKERA_V2.value,
+                "mode": "pre_call",
+                "on_flagged": "inject_system_message",
+                "advisory_system_message": "This request was flagged, no placeholder here",
+                "api_key": "fake-key",
+            },
+        },
+        {
+            "guardrail_name": "healthy_presidio",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+                "mode": "pre_call",
+                "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+                "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+            },
+        },
+    ]
+
+    init_guardrails_v2(all_guardrails=all_guardrails)
+
+    guardrail_names = {
+        guardrail["guardrail_name"] for guardrail in IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values()
+    }
+    assert "broken_lakera_template" not in guardrail_names
+    assert "healthy_presidio" in guardrail_names

@@ -29,15 +29,8 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
       </p>
 
       <p className="text-sm text-muted-foreground mt-3 mb-1">Virtual Key:</p>
-      <div
-        style={{
-          background: "#f8f8f8",
-          padding: "10px",
-          borderRadius: "5px",
-          marginBottom: "10px",
-        }}
-      >
-        <pre style={{ wordWrap: "break-word", whiteSpace: "normal", margin: 0 }}>{apiKey}</pre>
+      <div className="bg-muted rounded-md p-2.5 mb-2.5">
+        <pre className="m-0 whitespace-normal break-words text-foreground">{apiKey}</pre>
       </div>
 
       <CopyToClipboard text={apiKey} onCopy={handleCopy}>

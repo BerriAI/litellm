@@ -82,6 +82,8 @@ describe("ProjectsPage", () => {
     mockUseProjects.mockReturnValue({ data: [], isLoading: false });
     renderWithProviders(<ProjectsPage />);
     expect(screen.getByRole("heading", { name: /projects/i })).toBeInTheDocument();
+    expect(screen.getByText("Manage projects within your teams")).toBeInTheDocument();
+    expect(document.querySelector(".lucide-folder")).not.toBeNull();
   });
 
   it("should show a 'Create Project' button", () => {

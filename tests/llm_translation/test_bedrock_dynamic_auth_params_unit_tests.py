@@ -1,14 +1,9 @@
 # tests/llm_translation/test_base_aws_llm.py
-import os
 import json
 import pytest
 from unittest.mock import patch
 from botocore.credentials import Credentials
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -199,6 +194,7 @@ class DummyCredentials:
         ("aws_web_identity_token", "dummy_web_identity_token"),
         ("aws_sts_endpoint", "dummy_sts_endpoint"),
         ("aws_external_id", "dummy_external_id"),
+        ("aws_session_tags", [{"Key": "team", "Value": "genai"}]),
     ],
 )
 def test_dynamic_aws_params_propagation(model, param_name, param_value):

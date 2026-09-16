@@ -1,9 +1,7 @@
 import io
 import os
-import sys
 
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import litellm
@@ -30,6 +28,7 @@ verbose_logger.setLevel(logging.DEBUG)
 
 ignored_keys = [
     "request_id",
+    "litellm_call_id",
     "metadata.litellm_call_id",
     "session_id",
     "startTime",

@@ -8,9 +8,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.proxy.hooks.prompt_injection_detection import (

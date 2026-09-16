@@ -1,5 +1,6 @@
 import { getProviderLogoAndName, Providers, providerLogoMap } from "@/components/provider_info_helpers";
 import milvusLogo from "../../public/assets/logos/milvus.svg";
+import mongodbLogo from "../../public/assets/logos/mongodb.svg";
 import postgresqlLogo from "../../public/assets/logos/postgresql.svg";
 import s3VectorLogo from "../../public/assets/logos/s3_vector.png";
 import valkeyLogo from "../../public/assets/logos/valkey.svg";
@@ -13,6 +14,7 @@ export enum VectorStoreProviders {
   OpenAI = "OpenAI",
   Azure = "Azure OpenAI",
   Milvus = "Milvus",
+  MongoDB = "MongoDB (BETA)",
   Valkey = "Valkey",
 }
 
@@ -24,6 +26,7 @@ export const vectorStoreProviderMap: Record<string, string> = {
   OpenAI: "openai",
   Azure: "azure",
   Milvus: "milvus",
+  MongoDB: "mongodb",
   S3Vectors: "s3_vectors",
   Valkey: "valkey",
 };
@@ -36,6 +39,7 @@ export const vectorStoreProviderLogoMap: Record<string, string> = {
   [VectorStoreProviders.OpenAI]: providerLogoMap[Providers.OpenAI] ?? "",
   [VectorStoreProviders.Azure]: providerLogoMap[Providers.Azure] ?? "",
   [VectorStoreProviders.Milvus]: milvusLogo.src,
+  [VectorStoreProviders.MongoDB]: mongodbLogo.src,
   [VectorStoreProviders.S3Vectors]: s3VectorLogo.src,
   [VectorStoreProviders.Valkey]: valkeyLogo.src,
 };
@@ -167,6 +171,78 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       placeholder: "text-embedding-3-small",
       required: true,
       type: "select",
+    },
+  ],
+  mongodb: [
+    {
+      name: "api_base",
+      label: "Sidecar URL",
+      tooltip: "Use HTTPS for a remote sidecar, or HTTP with a loopback IP for a sidecar on the same host or Pod",
+      placeholder: "http://127.0.0.1:8080",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "api_key",
+      label: "Sidecar API Key",
+      tooltip: "The MONGODB_SIDECAR_API_KEY configured in your MongoDB sidecar",
+      placeholder: "Enter sidecar API key",
+      required: true,
+      type: "password",
+    },
+    {
+      name: "mongodb_database",
+      label: "Database",
+      tooltip: "The MongoDB database holding the collection you want to search",
+      placeholder: "sample_mflix",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "mongodb_collection",
+      label: "Collection",
+      tooltip: "The collection your MongoDB Vector Search index was built on",
+      placeholder: "embedded_movies",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "embedding_model",
+      label: "Embedding Model",
+      tooltip:
+        "The embedding model on this proxy that created the vectors already stored in your collection. LiteLLM embeds every search query with it, so it must be the same model. A different model of the same size will not error, it will just return wrong results. Add it under Models first if it is not listed",
+      placeholder: "text-embedding-3-small",
+      required: true,
+      type: "select",
+    },
+    {
+      name: "mongodb_embedding_field",
+      label: "Vector Field Name",
+      tooltip:
+        "The field in each document that holds its embedding. It must match the path your MongoDB Vector Search index was created on (default: embedding)",
+      placeholder: "embedding",
+      required: false,
+      type: "text",
+      initialValue: "embedding",
+    },
+    {
+      name: "mongodb_text_field",
+      label: "Text Field",
+      tooltip:
+        "The field in each document that holds its readable text. LiteLLM returns this text in search results, and it accepts a dotted path such as metadata.body (default: text)",
+      placeholder: "text",
+      required: false,
+      type: "text",
+      initialValue: "text",
+    },
+    {
+      name: "mongodb_num_candidates",
+      label: "Candidates Considered",
+      tooltip:
+        "How many nearest neighbours MongoDB examines before returning the top results. Higher is more accurate and slower. Leave blank to let LiteLLM scale it with the requested result count",
+      placeholder: "100",
+      required: false,
+      type: "text",
     },
   ],
   valkey: [

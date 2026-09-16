@@ -1,10 +1,7 @@
-import os
-import sys
 import pytest
 import json
 
 # Adds the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.bytez.chat.transformation import BytezChatConfig, API_BASE, version
 

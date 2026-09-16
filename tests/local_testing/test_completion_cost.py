@@ -1,14 +1,9 @@
 import os
-import sys
 import traceback
 
 import litellm.cost_calculator
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
-import os
 import time
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch

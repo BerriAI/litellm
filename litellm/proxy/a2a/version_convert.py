@@ -25,7 +25,6 @@ The two wire shapes:
 """
 
 from collections.abc import Callable
-from types import ModuleType
 from typing import Final, Literal
 
 from pydantic import BaseModel
@@ -181,7 +180,7 @@ def _send_result_to(result: JsonDict, target: A2AVersion, request_id: RequestId)
     )
 
     if target == "1.0":
-        compat_result: Final = _validate_message_or_task(result, types_v03)
+        compat_result: Final = _validate_message_or_task(result)
         response: Final = types_v03.SendMessageResponse(
             root=types_v03.SendMessageSuccessResponse(
                 id=str(request_id) if request_id is not None else "",
@@ -285,7 +284,7 @@ def _stream_result_to(result: JsonDict, target: A2AVersion, request_id: RequestI
     )
 
     if target == "1.0":
-        event: Final = _validate_stream_event(result, types_v03)
+        event: Final = _validate_stream_event(result)
         wrapper: Final = types_v03.SendStreamingMessageSuccessResponse(
             id=str(request_id) if request_id is not None else "",
             result=event,  # pyright: ignore[reportArgumentType]
@@ -318,13 +317,17 @@ def _convert_agent_card(card: JsonDict, target: A2AVersion) -> JsonDict:
     return MessageToDict(core, preserving_proto_field_name=False)
 
 
-def _validate_message_or_task(result: JsonDict, types_v03: ModuleType) -> BaseModel:
+def _validate_message_or_task(result: JsonDict) -> BaseModel:
+    from a2a.compat.v0_3.conversions import types_v03
+
     if result.get("kind") == "task":
         return types_v03.Task.model_validate(result)
     return types_v03.Message.model_validate(result)
 
 
-def _validate_stream_event(result: JsonDict, types_v03: ModuleType) -> BaseModel:
+def _validate_stream_event(result: JsonDict) -> BaseModel:
+    from a2a.compat.v0_3.conversions import types_v03
+
     kind: Final = result.get("kind")
     if kind == "task":
         return types_v03.Task.model_validate(result)

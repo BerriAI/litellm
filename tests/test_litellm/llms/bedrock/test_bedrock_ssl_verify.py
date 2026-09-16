@@ -10,13 +10,11 @@ being applied to boto3 clients, causing "certificate verify failed" errors.
 """
 
 import os
-import sys
 import tempfile
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM

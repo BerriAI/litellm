@@ -4,7 +4,6 @@
 import asyncio
 import os
 import random
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -13,9 +12,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 

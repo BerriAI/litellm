@@ -2,15 +2,12 @@
 Tests for Volcengine Responses API transformation.
 """
 
-import os
-import sys
 from typing import List, Literal, Optional, Union
 
 import httpx
 import pytest
 from pydantic import BaseModel, Field
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.llms.volcengine.responses.transformation import (

@@ -1,8 +1,9 @@
 """Standalone entrypoint for applying database migrations and generating the Prisma client.
 
-The entrypoint enforces migration failures by default. Set
-ENFORCE_PRISMA_MIGRATION_CHECK=false to preserve log-only behavior for migration and
-Prisma generate failures.
+Migration failures fail the entrypoint by default; set ENFORCE_PRISMA_MIGRATION_CHECK=false
+for log-only behavior. A failed 'prisma generate' is always log-only: every shipped image
+bakes the client at build time, and refreshing it writes into site-packages, which an
+arbitrary non-root uid or a read-only root filesystem cannot do.
 """
 
 import os
@@ -12,6 +13,8 @@ import sys
 sys.path.insert(0, os.path.abspath("./"))
 
 from typing import Final
+
+from litellm_proxy_extras.prisma_toolchain import resolve_prisma_argv
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.proxy_cli import run_server
@@ -28,15 +31,15 @@ def main() -> int:
     run_server(run_server_args, standalone_mode=False)
 
     verbose_proxy_logger.info("Running 'prisma generate'...")
-    result: Final = subprocess.run(("prisma", "generate"), capture_output=True, text=True)
+    result: Final = subprocess.run(resolve_prisma_argv(("prisma", "generate")), capture_output=True, text=True)
     verbose_proxy_logger.info("'prisma generate' stdout: %s", result.stdout)
-    exit_code: Final = result.returncode
 
-    if exit_code != 0:
-        verbose_proxy_logger.info("'prisma generate' failed with exit code %s.", exit_code)
-        verbose_proxy_logger.error("'prisma generate' stderr: %s", result.stderr)
-        if enforce_prisma_migration_check:
-            return exit_code
+    if result.returncode != 0:
+        verbose_proxy_logger.warning(
+            "'prisma generate' exited %s; continuing with the client baked at image build time. stderr: %s",
+            result.returncode,
+            result.stderr,
+        )
     return 0
 
 

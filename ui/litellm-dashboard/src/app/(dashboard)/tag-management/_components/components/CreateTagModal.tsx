@@ -4,7 +4,7 @@ import { ChevronRight, CircleHelp } from "lucide-react";
 import React from "react";
 import { z } from "zod/v4";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -143,7 +143,11 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSu
                     )}
                   >
                     {({ id, value, onChange }) => (
-                      <BudgetDurationDropdown id={id} value={value ?? null} onChange={onChange} />
+                      <BudgetDurationDropdown
+                        id={id}
+                        value={value ?? null}
+                        onChange={(next) => onChange(next ?? undefined)}
+                      />
                     )}
                   </FormField>
                 </FieldGroup>

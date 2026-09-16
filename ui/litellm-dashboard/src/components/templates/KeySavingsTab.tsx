@@ -9,9 +9,6 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { hasProxyWideSpendView, spendScopeUserId } from "@/utils/roles";
 import {
-  autorouterOf,
-  cachingOf,
-  compressionOf,
   formatRangeLabel,
   localIsoDay,
   MAX_POINTS_WITH_DOTS,
@@ -19,12 +16,16 @@ import {
   SAVINGS_SERIES,
   SavingsAccumulation,
   SavingsPoint,
+  savingsSeriesOf,
   shortDate,
   toCumulative,
   usd,
   withStartAnchor,
 } from "@/app/(dashboard)/cost-optimization/_components/costOptimizationUtils";
-import { useScopedDailyActivityRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
+import {
+  useScopedDailyActivityRange,
+  type ActivityDateRange,
+} from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 
 interface KeySavingsTabProps {
   accessToken: string | null;
@@ -32,38 +33,25 @@ interface KeySavingsTabProps {
   keyToken: string;
   userId: string | null;
   userRole: string;
+  activity: ActivityDateRange;
 }
 
-const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, userId, userRole }) => {
+const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, userId, userRole, activity }) => {
   // Proxy admins read the whole key. For anyone else the endpoint applies the caller's own user_id
   // alongside the key filter, so the figures cover only that viewer's requests on this key -- said
   // plainly in the scope note below rather than left to be misread as the key's total.
   const readsWholeKey = hasProxyWideSpendView(userRole);
-  const activity = useScopedDailyActivityRange(accessToken, {
-    userId: spendScopeUserId(userRole, userId),
-    apiKey: keyToken,
-  });
-
-  const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
+  const { dateValue, onDateChange, results, loading, isFetchingMore } = useScopedDailyActivityRange(
+    accessToken,
+    { userId: spendScopeUserId(userRole, userId), apiKey: keyToken },
+    activity,
+  );
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
 
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
 
-  // Sort on the raw ISO date before shortDate() drops the year: the rollup arrives newest
-  // first, and the running total has to accumulate forward in time.
-  const perInterval = useMemo<SavingsPoint[]>(
-    () =>
-      [...results]
-        .sort((a, b) => a.date.localeCompare(b.date))
-        .map((d) => ({
-          date: shortDate(d.date),
-          Compression: compressionOf(d.metrics),
-          "Prompt caching": cachingOf(d.metrics),
-          "Auto-router": autorouterOf(d.metrics),
-        })),
-    [results],
-  );
+  const perInterval = useMemo<SavingsPoint[]>(() => savingsSeriesOf(results), [results]);
 
   const overTime = useMemo(() => {
     if (accumulation !== "cumulative") return perInterval;

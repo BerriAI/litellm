@@ -417,3 +417,94 @@ class TestFilterAnthropicOutputSchema:
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
 
         assert result["additionalProperties"] is False
+
+    def test_drops_union_type_alongside_enum(self):
+        """A union ``type`` can never match a single declared type.
+
+        Anthropic rejects it with "Invalid schema: Enum value 'low' does not
+        match declared type '['string', 'null']'". ``enum`` is the tighter
+        constraint, so the conflicting ``type`` is dropped.
+        """
+        schema = {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "enum": ["low", "medium", "high", None],
+                    "type": ["string", "null"],
+                }
+            },
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert "type" not in result["properties"]["confidence"]
+        assert result["properties"]["confidence"]["enum"] == [
+            "low",
+            "medium",
+            "high",
+            None,
+        ]
+
+    def test_drops_type_when_an_enum_value_does_not_match_it(self):
+        """``enum: ["x", None]`` with ``type: "string"`` is rejected too."""
+        schema = {
+            "type": "object",
+            "properties": {"a": {"enum": ["x", None], "type": "string"}},
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert "type" not in result["properties"]["a"]
+
+    def test_preserves_type_when_every_enum_value_matches(self):
+        """The non-conflicting case must be left exactly as-is."""
+        schema = {
+            "type": "object",
+            "properties": {"a": {"enum": ["x", "y"], "type": "string"}},
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["properties"]["a"]["type"] == "string"
+        assert result["properties"]["a"]["enum"] == ["x", "y"]
+
+    def test_integer_enum_satisfies_number_type(self):
+        """JSON Schema ``number`` accepts integers, so this is not a conflict."""
+        schema = {
+            "type": "object",
+            "properties": {"a": {"enum": [1, 2], "type": "number"}},
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["properties"]["a"]["type"] == "number"
+
+    def test_bool_enum_does_not_satisfy_integer_type(self):
+        """``bool`` is a Python ``int`` subclass but is not a JSON integer."""
+        schema = {
+            "type": "object",
+            "properties": {"a": {"enum": [True], "type": "integer"}},
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert "type" not in result["properties"]["a"]
+
+    def test_normalizes_enum_type_inside_array_items(self):
+        """Normalization applies at every recursion site, not just top level."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"c": {"enum": ["a", None], "type": ["string", "null"]}},
+                    },
+                }
+            },
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert "type" not in result["properties"]["rows"]["items"]["properties"]["c"]

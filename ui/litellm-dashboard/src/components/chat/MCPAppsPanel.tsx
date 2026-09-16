@@ -13,23 +13,32 @@ import {
   getMCPOAuthUserCredentialStatus,
   listMCPTools,
 } from "../networking";
-import { AUTH_TYPE, MCPServer, MCPTool, handleTransport, isUnsupportedOnGatewayConnect } from "../mcp_tools/types";
+import {
+  getMcpOAuthMode,
+  MCPServer,
+  MCPTool,
+  handleTransport,
+  isUnsupportedOnGatewayConnect,
+} from "../mcp_tools/types";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
 import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 interface OAuth2ConnectButtonProps {
-  server: MCPServer;
+  server: Pick<MCPServer, "server_id" | "server_name" | "alias">;
   accessToken: string;
   onConnect: (serverId: string) => void;
   variant?: "badge" | "button";
+  autoStartKey?: string | null;
 }
 
-const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
+export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
   server,
   accessToken,
   onConnect,
   variant = "badge",
+  autoStartKey = null,
 }) => {
   const name = server.server_name ?? server.alias ?? server.server_id;
   const { startOAuthFlow, status } = useUserMcpOAuthFlow({
@@ -38,6 +47,12 @@ const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
     serverAlias: name,
     onSuccess: useCallback(() => onConnect(server.server_id), [onConnect, server.server_id]),
   });
+
+  useEffect(() => {
+    if (autoStartKey === null || status !== "idle" || getSecureItem(autoStartKey) !== null) return;
+    setSecureItem(autoStartKey, "1");
+    startOAuthFlow();
+  }, [autoStartKey, status, startOAuthFlow]);
 
   const loading = status === "authorizing" || status === "exchanging";
 
@@ -190,7 +205,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         if (!isCurrentLoad()) return;
         const list: MCPServer[] = Array.isArray(serverData) ? serverData : serverData?.data ?? [];
         const reachable = connectMode ? list.filter((s) => s.connected_app_reachable !== false) : list;
-        const oauthServers = reachable.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);
+        const oauthServers = reachable.filter((s) => getMcpOAuthMode(s) === "authorization_code");
         commitServers(reachable);
         setOauthChecking(new Set(oauthServers.map((s) => s.server_id)));
         setLoading(false);
@@ -274,7 +289,10 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         <span className="text-[11px] text-muted-foreground shrink-0 whitespace-nowrap">{unavailabilityLabel}</span>
       );
     }
-    if (server.auth_type === AUTH_TYPE.OAUTH2) {
+    if (getMcpOAuthMode(server) === "m2m") {
+      return <CheckCircle className="h-3.5 w-3.5 text-success shrink-0" />;
+    }
+    if (getMcpOAuthMode(server) === "authorization_code") {
       if (oauthConnected.has(server.server_id)) {
         return <CheckCircle className="h-3.5 w-3.5 text-success shrink-0" />;
       }
@@ -339,7 +357,10 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
       if (unavailabilityLabel !== null) {
         return <span className="text-[13px] text-muted-foreground py-2.5 shrink-0">{unavailabilityLabel}</span>;
       }
-      if (detailServer.auth_type !== AUTH_TYPE.OAUTH2) {
+      if (getMcpOAuthMode(detailServer) === "m2m") {
+        return <span className="text-[13px] text-muted-foreground">Authorized</span>;
+      }
+      if (getMcpOAuthMode(detailServer) !== "authorization_code") {
         return (
           <Button
             variant={isConnected ? "outline" : "default"}

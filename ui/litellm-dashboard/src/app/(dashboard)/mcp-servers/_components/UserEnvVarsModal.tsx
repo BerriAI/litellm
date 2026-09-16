@@ -5,11 +5,12 @@ import { z } from "zod/v4";
 import { MCPServer, MCPUserEnvVarsStatus, MCPUserEnvVarSpec } from "@/components/mcp_tools/types";
 import { getMCPUserEnvVars, storeMCPUserEnvVars } from "@/components/networking";
 import { toast } from "@/lib/toast";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -133,7 +134,7 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
         <DialogHeader>
           <div className="flex items-center gap-2">
             <DialogTitle className="text-base font-semibold">Set your credentials</DialogTitle>
-            <Badge variant="info">Per-user</Badge>
+            <StatusBadge tone="info" label="Per-user" />
           </div>
           <span className="text-xs text-muted-foreground">{displayName}</span>
         </DialogHeader>

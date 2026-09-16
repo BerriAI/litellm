@@ -48,6 +48,8 @@ from litellm.integrations.otel.model.utils import as_str, to_seconds
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
 
+LANGFUSE_TRACE_NAME_HEADER: Final = "langfuse_trace_name"
+
 
 @dataclass(frozen=True)
 class RequestIdentity:
@@ -64,6 +66,7 @@ class RequestIdentity:
     # completes (routing has picked a deployment), so it's absent from the
     # auth-time seed and filled only from the payload.
     provider_model: str | None = None
+    request_route: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -87,6 +90,7 @@ class RequestIdentity:
             key_hash=as_str(raw_meta.get("user_api_key_hash")),
             end_user=as_str(payload.get("end_user")) or as_str(raw_meta.get("user_api_key_end_user_id")),
             provider_model=resolve_provider_model(payload),
+            request_route=as_str(raw_meta.get("user_api_key_request_route")),
             metadata=metadata,
         )
 
@@ -203,11 +207,17 @@ class LLMCallEvent:
     # True for synthetic proxy-gate logs (auth / rate-limit rejections): they fire
     # the ``pre_call`` hook but never made an upstream call, so they get no span.
     is_no_upstream_call: bool
+    # True once the request handed off to a provider (``pre_call`` stamped
+    # ``api_call_start_time``). The affirmative signal that an LLM call was
+    # actually attempted — router pre-call rejections, SDK failures before the
+    # provider handoff, and standalone guardrail runs all lack it.
+    upstream_started: bool
     # A best-effort ``"{operation} {model}"`` name known at ``pre_call`` time. The
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
     provisional_span_name: str
     time_to_first_chunk_seconds: float | None
+    trace_name: str | None
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, Any]) -> LLMCallEvent:
@@ -221,9 +231,31 @@ class LLMCallEvent:
             dynamic_params=kwargs.get("standard_callback_dynamic_params"),
             auth_metadata=auth_metadata(payload, kwargs),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
+            upstream_started=kwargs.get("api_call_start_time") is not None,
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
+            trace_name=caller_trace_name(kwargs),
         )
+
+
+def caller_trace_name(kwargs: Mapping[str, object]) -> str | None:
+    request: Final = _as_str_mapping(kwargs.get("litellm_params"))
+    if request is None:
+        return None
+    proxy_request: Final = _as_str_mapping(request.get("proxy_server_request"))
+    headers: Final = _as_str_mapping(proxy_request.get("headers")) if proxy_request is not None else None
+    from_header: Final = as_str(headers.get(LANGFUSE_TRACE_NAME_HEADER)) if headers is not None else None
+    if from_header:
+        return from_header
+    return next(
+        (
+            name
+            for key in ("metadata", "litellm_metadata")
+            if (metadata := _as_str_mapping(request.get(key))) is not None
+            and (name := as_str(metadata.get("trace_name")))
+        ),
+        None,
+    )
 
 
 def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:

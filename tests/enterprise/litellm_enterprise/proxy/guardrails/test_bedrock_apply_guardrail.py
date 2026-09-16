@@ -2,13 +2,10 @@
 Test the Bedrock guardrail apply_guardrail functionality
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 
 from litellm.proxy._types import UserAPIKeyAuth

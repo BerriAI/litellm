@@ -23,8 +23,6 @@ production. Provider env vars are not required: missing creds resolve to None an
 flow through harmlessly because the handler is mocked.
 """
 
-import os
-import sys
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict
@@ -33,7 +31,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 import litellm.batches.main as bm
@@ -159,6 +156,14 @@ def test_create__vertex_ai_dispatch(seams):
 
     assert result is seams.vertex.create_batch.return_value
     _assert_only(seams.vertex.create_batch, seams, "create_batch")
+
+
+def test_create__vertex_ai_forwards_custom_endpoint(seams):
+    """The vertex handler owns the custom_endpoint batch rejection (LIT-6899), so the dispatcher
+    must forward the flag for the handler to act on."""
+    bm.create_batch(**CREATE_KW, custom_llm_provider="vertex_ai", custom_endpoint=True)
+
+    assert seams.vertex.create_batch.call_args.kwargs["custom_endpoint"] is True
 
 
 def test_create__provider_config_routes_to_base_http_handler(seams):
