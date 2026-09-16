@@ -78,6 +78,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 )
 from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     MB,
+    check_allowed_extension,
     check_blocked_extension,
     check_unsafe_filename,
     check_upload_file_size,
@@ -472,6 +473,11 @@ async def create_file(
         general_size_failure: Final = check_upload_file_size(file_source, max_file_size_mb)
         if general_size_failure is not None:
             raise_upload_validation_failure(general_size_failure)
+
+        allowed_extensions: Final = coerce_optional_str_list_setting(general_settings.get("allowed_file_extensions"))
+        allowed_extension_failure: Final = check_allowed_extension(file.filename, allowed_extensions)
+        if allowed_extension_failure is not None:
+            raise_upload_validation_failure(allowed_extension_failure)
 
         blocked_extensions: Final = coerce_optional_str_list_setting(general_settings.get("blocked_file_extensions"))
         blocked_extension_failure: Final = check_blocked_extension(file.filename, blocked_extensions)

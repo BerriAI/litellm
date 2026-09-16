@@ -1,5 +1,10 @@
 import { toast } from "@/lib/toast";
 import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
+import {
+  buildPlaygroundHeaders,
+  type CustomHeaders,
+  withRequiredHeaders,
+} from "@/components/llm_calls/request_headers";
 
 export async function makeInteractionsRequest(
   input: string,
@@ -10,6 +15,7 @@ export async function makeInteractionsRequest(
   signal?: AbortSignal,
   customBaseUrl?: string,
   previousInteractionId?: string,
+  customHeaders?: CustomHeaders,
 ): Promise<void> {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -24,13 +30,10 @@ export async function makeInteractionsRequest(
   const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
   const requestUrl = `${normalizedBaseUrl}/v1beta/interactions`;
 
-  const headers: Record<string, string> = {
+  const headers: Record<string, string> = withRequiredHeaders(buildPlaygroundHeaders(tags, customHeaders), {
     "Content-Type": "application/json",
     [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
-  };
-  if (tags && tags.length > 0) {
-    headers["x-litellm-tags"] = tags.join(",");
-  }
+  });
 
   const body: Record<string, unknown> = {
     model: selectedModel,

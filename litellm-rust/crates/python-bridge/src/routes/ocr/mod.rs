@@ -12,8 +12,3 @@ pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     document::register(module)?;
     lifecycle::register(module)
 }
-
-#[cfg(feature = "trace-parity")]
-pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    value::register_trace(module)
-}

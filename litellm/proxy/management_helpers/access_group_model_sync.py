@@ -10,7 +10,7 @@ from typing import Final, Protocol
 
 from pydantic import BaseModel
 
-from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.management_helpers.access_group_team_sync import invalidate_access_group_caches
 from litellm.repositories.table_repositories import AccessGroupRepository
 from litellm.router import Router
@@ -56,7 +56,7 @@ _REMOVE_MODEL_NAME_SQL: Final = (
 
 def _raw_executor(prisma_client: object) -> _RawExecutor:
     db: Final = AccessGroupRepository(prisma_client).prisma_client.db  # pyright: ignore[reportAny]  # untyped Prisma client
-    return WriterPinnedClient(db).db  # pyright: ignore[reportAny, reportReturnType]  # untyped Prisma client behind the pin
+    return writer_wrapper(db)  # pyright: ignore[reportAny, reportReturnType]  # untyped Prisma client behind the pin
 
 
 def _config_sourced_sibling(llm_router: Router, deployment_id: str, model_id: str) -> bool:

@@ -14,7 +14,6 @@ pub(crate) struct ParsedProviderParams<T> {
     pub extra_params: Map<String, Value>,
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(crate) fn _prepare_ocr_request<T: DeserializeOwned>(
     request: &LiteLLMOcrRequest,
 ) -> Result<ParsedProviderParams<T>, OcrRequestError> {
@@ -120,7 +119,7 @@ pub(crate) fn build_http_request<B: Serialize>(
         .timeout(request.connection.timeout);
     crate::http_utils::with_headers(builder, headers, crate::http_utils::HeaderPolicy::All)
         .build()
-        .map_err(crate::error::TransportError::from)
+        .map_err(crate::transport::Error::from)
         .map_err(OcrError::from)
 }
 

@@ -34,6 +34,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -494,6 +495,33 @@ def test_is_vertex_route_ignores_plain_predict_path_segment():
         )
         is True
     )
+
+
+def test_interactions_create_routes_are_tracked_for_vertex_and_gemini():
+    """
+    Regression for LIT-6896: Interactions API (gemini-omni) passthrough responses
+    were never handed to the Vertex/Gemini logging handlers, so SpendLogs rows
+    landed with zero tokens and zero spend. Only the create URL is billable;
+    GET/DELETE on an interaction id and non-Google `/interactions` URLs stay generic.
+    """
+    handler = PassThroughEndpointLogging()
+    vertex_create = "https://aiplatform.googleapis.com/v1beta1/projects/p/locations/global/interactions"
+    gemini_create = "https://generativelanguage.googleapis.com/v1beta/interactions"
+
+    assert handler.is_vertex_route(vertex_create) is True
+    assert handler.is_vertex_route(f"{vertex_create}/abc123") is False
+    assert handler.is_vertex_route("https://upstream.example.com/api/interactions") is False
+    assert handler.is_vertex_route("https://upstream.example.com/locations/eu/interactions") is False
+    assert (
+        handler.is_vertex_route(
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/interactions"
+        )
+        is True
+    )
+
+    assert handler.is_gemini_route(gemini_create, custom_llm_provider="gemini") is True
+    assert handler.is_gemini_route(f"{gemini_create}/abc123", custom_llm_provider="gemini") is False
+    assert handler.is_gemini_route(gemini_create, custom_llm_provider=None) is False
 
 
 @pytest.mark.asyncio
@@ -5030,6 +5058,100 @@ async def test_websocket_passthrough_rewrites_gateway_alias_setup_model():
     assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
 
 
+@pytest.mark.parametrize(
+    "setup_model",
+    ["gemini-live-2.5-flash", "models/gemini-live-2.5-flash", "publishers/google/models/gemini-live-2.5-flash"],
+)
+def test_vertex_live_setup_model_resolves_before_extraction(setup_model):
+    """A bare gateway alias left the session logged as ``unknown`` at zero cost.
+
+    The model was read off the raw client frame, and the extractor only yields a name when the string
+    already contains ``/models/``. The rewriter qualifies it a few lines later for the upstream, so a
+    client that addressed the gateway the documented way, by alias, logged no model and therefore
+    resolved no cost-map entry. Resolving first is what puts the real name on the logging object.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _build_vertex_live_setup_model_rewriter,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _extract_model_from_vertex_ai_setup,
+        _resolved_vertex_live_setup,
+    )
+
+    rewriter = _build_vertex_live_setup_model_rewriter(
+        vertex_project="proj-db", vertex_location="global", llm_router=None
+    )
+    setup_data = {"model": setup_model}
+
+    resolved = _extract_model_from_vertex_ai_setup(_resolved_vertex_live_setup(setup_data, rewriter))
+
+    assert resolved == "gemini-live-2.5-flash", "an unresolved setup model logs the session as 'unknown'"
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_logs_a_bare_alias_setup_model():
+    """End to end through the relay: a bare alias must reach the logging object as a real model name.
+
+    This is the call-site half of the fix. The helper tests above pass even if extraction moves back
+    before the rewrite, so this one drives the real websocket relay and asserts on what got logged,
+    which is the name the cost map is looked up by. An unbilled session logs ``unknown``.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _build_vertex_live_setup_model_rewriter,
+    )
+
+    upstream_ws = RecordingUpstreamWebSocket()
+    setup_frame = json.dumps({"setup": {"model": "gemini-live-2.5-flash"}})
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                {"type": "websocket.receive", "text": setup_frame},
+                {"type": "websocket.disconnect"},
+            ]
+        )
+    )
+    built = []
+    real_logging = litellm.litellm_core_utils.litellm_logging.Logging
+
+    def _capture(*args, **kwargs):
+        obj = real_logging(*args, **kwargs)
+        built.append(obj)
+        return obj
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        with patch("litellm.litellm_core_utils.litellm_logging.Logging", side_effect=_capture):
+            await websocket_passthrough_request(
+                websocket=websocket,
+                target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+                custom_headers={"Authorization": "Bearer token"},
+                user_api_key_dict=UserAPIKeyAuth(),
+                forward_headers=False,
+                endpoint="/vertex_ai/live",
+                accept_websocket=False,
+                setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
+                    vertex_project="proj-db", vertex_location="global", llm_router=None
+                ),
+            )
+
+    assert built, "the relay should have built a logging object"
+    assert built[0].model == "gemini-live-2.5-flash", "a bare alias must not log as 'unknown'"
+
+
+def test_vertex_live_setup_resolution_is_inert_without_a_rewriter():
+    """Non-Live passthrough routes pass no rewriter, so the frame must be handed over untouched."""
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _extract_model_from_vertex_ai_setup,
+        _resolved_vertex_live_setup,
+    )
+
+    setup_data = {"model": "projects/p/locations/global/publishers/google/models/gemini-live-2.5-flash"}
+
+    assert _resolved_vertex_live_setup(setup_data, None) is setup_data
+    assert _extract_model_from_vertex_ai_setup(_resolved_vertex_live_setup(setup_data, None)) == (
+        "gemini-live-2.5-flash"
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rcvd_close", [None, "abnormal", "no_status"])
 async def test_websocket_passthrough_does_not_relay_unsendable_upstream_close(rcvd_close):
@@ -5838,6 +5960,32 @@ def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key
         )
         == "per-call-random-trace-id"
     )
+
+
+@pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
+def test_passthrough_logs_the_resolved_deployment_model_info_over_the_request_body(client_metadata_key: str):
+    """A provider route that resolved a router deployment stashes its model_info on request.state. That
+    deployment, not a model_info the client put in its own body, is what spend logs and metrics attribute
+    the call to (LIT-1761: passthrough successes carried model_id="")."""
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent"
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+    mock_request.state = SimpleNamespace(
+        **{LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY: {"id": "vertex-gemini-38-flash-dep"}}
+    )
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={client_metadata_key: {"model_info": {"id": "client-forged-id"}}},
+        litellm_call_id="lit-1761-call-id",
+    )
+
+    assert kwargs["litellm_params"]["metadata"]["model_info"] == {"id": "vertex-gemini-38-flash-dep"}
 
 
 @pytest.mark.asyncio

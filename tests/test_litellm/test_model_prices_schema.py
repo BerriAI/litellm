@@ -221,6 +221,14 @@ def test_chat_latest_declares_the_one_effort_openai_accepts(prices: dict):
     assert resolve_supported_reasoning_efforts(prices["chat-latest"], deployment_is_mapped=True) == ("medium",)
 
 
+@pytest.mark.parametrize("key", ["azure/gpt-chat-latest", "azure/chat-latest", "azure/us/gpt-chat-latest"])
+def test_azure_gpt_chat_latest_declares_the_one_effort_azure_accepts(prices: dict, key: str):
+    """Azure answers every reasoning_effort on a gpt-chat-latest deployment except medium with
+    "Unsupported value ... Supported values are: 'medium'", the same fixed level OpenAI's chat-latest
+    carries, so the Foundry product name and the OpenAI API name both declare that one level."""
+    assert resolve_supported_reasoning_efforts(prices[key], deployment_is_mapped=True) == ("medium",)
+
+
 BEDROCK_OPENAI_GPT_MARKERS: Final = ("openai.gpt-5.4", "openai.gpt-5.5", "openai.gpt-5.6", "openai.gpt-6-astra")
 BEDROCK_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse", "bedrock_mantle"))
 BEDROCK_ROW_PREFIXES: Final = ("bedrock_mantle/", "us.", "global.")

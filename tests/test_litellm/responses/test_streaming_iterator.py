@@ -5,17 +5,20 @@ completion_start_time = end_time."""
 
 import json
 from datetime import datetime
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+from pydantic_core import PydanticSerializationError
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
+    _estimate_usage_from_text,
 )
 from litellm.types.llms.openai import (
     ResponseAPIUsage,
@@ -31,16 +34,23 @@ def _sse_event(payload: dict) -> bytes:
 
 def _mock_config() -> Mock:
     mock_config = Mock(spec=BaseResponsesAPIConfig)
-    mock_responses_api_response = Mock(spec=ResponsesAPIResponse)
-    mock_responses_api_response.id = "resp_ttft"
+    mock_responses_api_response = ResponsesAPIResponse(
+        id="resp_ttft",
+        created_at=0,
+        status="completed",
+        model="gpt-4o-mini",
+        object="response",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+    )
 
     def _transform(model, parsed_chunk, logging_obj):
         evt_type = parsed_chunk.get("type")
         if evt_type == "response.completed":
-            completed = Mock(spec=ResponseCompletedEvent)
-            completed.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-            completed.response = mock_responses_api_response
-            return completed
+            return ResponseCompletedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=mock_responses_api_response,
+            )
         stub = Mock()
         stub.type = evt_type
         return stub
@@ -54,6 +64,8 @@ def _make_iterator(
     sse_events: list[bytes],
     logging_obj: LiteLLMLoggingObj,
     trailing_error: Optional[Exception] = None,
+    config: Mock | None = None,
+    request_data: dict | None = None,
 ) -> ResponsesAPIStreamingIterator:
     async def aiter_bytes():
         for evt in sse_events:
@@ -68,10 +80,11 @@ def _make_iterator(
     return ResponsesAPIStreamingIterator(
         response=mock_response,
         model="gpt-4o-mini",
-        responses_api_provider_config=_mock_config(),
+        responses_api_provider_config=config or _mock_config(),
         logging_obj=logging_obj,
         litellm_metadata={},
         custom_llm_provider="openai",
+        request_data=request_data,
     )
 
 
@@ -327,6 +340,88 @@ def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
 
     assert iterator.completed_response._hidden_params["_response_ms"] == 10000.0
     assert "litellm_overhead_time_ms" not in iterator.completed_response._hidden_params
+
+
+def _mock_config_with_completed_response(response: ResponsesAPIResponse) -> Mock:
+    mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+    def _transform(model, parsed_chunk, logging_obj):
+        evt_type = parsed_chunk.get("type")
+        if evt_type == "response.completed":
+            return ResponseCompletedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=response,
+            )
+        stub = Mock()
+        stub.type = evt_type
+        if "delta" in parsed_chunk:
+            stub.delta = parsed_chunk.get("delta")
+        if "item" in parsed_chunk:
+            stub.item = parsed_chunk.get("item")
+        return stub
+
+    mock_config.transform_streaming_response.side_effect = _transform
+    return mock_config
+
+
+def _responses_api_response_without_usage() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_no_usage",
+        created_at=int(datetime(2025, 1, 1).timestamp()),
+        status="completed",
+        model="gpt-4o-mini",
+        object="response",
+        output=[],
+        usage=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_completed_event_without_usage_gets_text_estimate():
+    """A response.completed event carrying usage: null still bills: the
+    iterator estimates usage from the request input and generated text."""
+    response = _responses_api_response_without_usage()
+    iterator = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_text.delta", "delta": "hello world"}),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=_mock_config_with_completed_response(response),
+        request_data={"input": "count these input tokens please"},
+    )
+
+    async for _ in iterator:
+        pass
+
+    usage = iterator.completed_response.response.usage
+    assert usage is not None
+    assert usage.input_tokens > 0
+    assert usage.output_tokens > 0
+    assert usage.total_tokens == usage.input_tokens + usage.output_tokens
+
+
+@pytest.mark.asyncio
+async def test_completed_event_with_usage_is_left_untouched():
+    """Provider-reported usage on response.completed wins over the estimate."""
+    response = _responses_api_response_with_usage()
+    iterator = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_text.delta", "delta": "hello world"}),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=_mock_config_with_completed_response(response),
+        request_data={"input": "count these input tokens please"},
+    )
+
+    async for _ in iterator:
+        pass
+
+    usage = iterator.completed_response.response.usage
+    assert usage.input_tokens == 20
+    assert usage.output_tokens == 60
+    assert usage.total_tokens == 80
 
 
 def _responses_api_response_with_usage() -> ResponsesAPIResponse:
@@ -628,3 +723,222 @@ async def test_streaming_logging_copy_keeps_client_usage_when_response_fails_val
     assert isinstance(client_usage, ResponseAPIUsage)
     assert client_usage.input_tokens == 29
     assert client_usage.cost == pytest.approx(0.0001)
+
+
+@pytest.mark.asyncio
+async def test_completed_event_without_usage_counts_tool_call_arguments():
+    """A function-call-only stream still bills output tokens: streamed
+    function_call_arguments deltas feed the text estimate."""
+    response = _responses_api_response_without_usage()
+    iterator = _make_iterator(
+        sse_events=[
+            _sse_event(
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "function_call", "name": "get_weather", "call_id": "call_1"},
+                }
+            ),
+            _sse_event(
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "delta": '{"location": "San Francisco", "unit": "celsius"}',
+                }
+            ),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=_mock_config_with_completed_response(response),
+        request_data={"input": "what is the weather in san francisco"},
+    )
+
+    async for _ in iterator:
+        pass
+
+    usage = iterator.completed_response.response.usage
+    assert usage is not None
+    assert usage.output_tokens > 0
+    assert usage.total_tokens == usage.input_tokens + usage.output_tokens
+
+
+@pytest.mark.asyncio
+async def test_completed_event_without_usage_counts_multimodal_input_as_messages():
+    """Multimodal request input is counted as chat messages, not as a JSON blob:
+    a huge base64 image must not inflate the estimated input tokens."""
+    image_input: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "what is in this image"},
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64," + "A" * 4000,
+                },
+            ],
+        }
+    ]
+    json_count: Final = litellm.token_counter(model="gpt-4o-mini", text=json.dumps(image_input))
+    response = _responses_api_response_without_usage()
+    iterator = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_text.delta", "delta": "it is a cat"}),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=_mock_config_with_completed_response(response),
+        request_data={"input": image_input},
+    )
+
+    async for _ in iterator:
+        pass
+
+    usage = iterator.completed_response.response.usage
+    assert usage is not None
+    assert usage.input_tokens < json_count / 2
+
+
+@pytest.mark.asyncio
+async def test_completed_event_survives_a_failing_usage_estimate():
+    """A malformed request input that makes the message transformer raise must not
+    break a stream that previously completed: the estimate is best-effort and
+    falls back to usage None."""
+    malformed_input: Final = [{"type": "message", "role": "user", "content": 42}]
+    with pytest.raises(ValueError, match="Invalid content type"):
+        _estimate_usage_from_text("gpt-4o-mini", malformed_input, {"input": malformed_input}, "hello world")
+
+    response = _responses_api_response_without_usage()
+    iterator = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_text.delta", "delta": "hello world"}),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=_mock_config_with_completed_response(response),
+        request_data={"input": malformed_input},
+    )
+
+    yielded: list = []
+    async for chunk in iterator:
+        yielded.append(chunk)
+
+    assert yielded
+    assert iterator.completed_response.response.usage is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_delta_event_type",
+    ["response.custom_tool_call_input.delta", "response.mcp_call_arguments.delta"],
+)
+async def test_completed_event_without_usage_counts_tool_input_deltas(tool_delta_event_type):
+    """Custom-tool and MCP argument deltas feed the streamed usage fallback the
+    same way function_call_arguments deltas do."""
+    response = _responses_api_response_without_usage()
+    iterator = _make_iterator(
+        sse_events=[
+            _sse_event({"type": tool_delta_event_type, "delta": '{"query": "weather in sf"}'}),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=_mock_config_with_completed_response(response),
+        request_data={"input": "what is the weather in san francisco"},
+    )
+
+    async for _ in iterator:
+        pass
+
+    usage = iterator.completed_response.response.usage
+    assert usage is not None
+    assert usage.output_tokens > 0
+    assert usage.total_tokens == usage.input_tokens + usage.output_tokens
+
+
+@pytest.mark.asyncio
+async def test_completed_event_with_a_dict_response_is_typed_and_billed():
+    """transform_streaming_response can model_construct a terminal event whose
+    response stays a plain dict; the iterator must type it so the estimated
+    usage reaches the cost stamping path."""
+    dict_response: Final = {
+        "id": "resp_dict",
+        "model": "gpt-4o-mini",
+        "object": "response",
+        "output": [],
+        "usage": None,
+    }
+
+    def _transform(model, parsed_chunk, logging_obj):
+        if parsed_chunk.get("type") == "response.completed":
+            return ResponseCompletedEvent.model_construct(type="response.completed", response=dict_response)
+        stub: Final = Mock()
+        stub.type = parsed_chunk.get("type")
+        if "delta" in parsed_chunk:
+            stub.delta = parsed_chunk.get("delta")
+        return stub
+
+    config: Final = Mock(spec=BaseResponsesAPIConfig)
+    config.transform_streaming_response.side_effect = _transform
+    logging_obj: Final = _logging_obj_stub()
+    logging_obj._response_cost_calculator.return_value = 0.000704
+    iterator: Final = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_text.delta", "delta": "hello world"}),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=logging_obj,
+        config=config,
+        request_data={"input": "count these input tokens please"},
+    )
+
+    yielded: Final = [chunk async for chunk in iterator]
+
+    terminal_event: Final = iterator.completed_response
+    assert yielded[-1] is terminal_event
+    completed_response: Final = terminal_event.response
+    assert isinstance(completed_response, ResponsesAPIResponse)
+    usage: Final = completed_response.usage
+    assert usage is not None
+    assert usage.input_tokens > 0
+    assert usage.output_tokens > 0
+    assert usage.cost == pytest.approx(0.000704)
+    logging_obj._response_cost_calculator.assert_any_call(result=completed_response)
+
+
+def test_billed_terminal_response_keeps_a_response_that_already_has_usage():
+    from litellm.responses.streaming_iterator import _billed_terminal_response
+
+    response: Final = _responses_api_response_with_usage()
+
+    assert _billed_terminal_response(response, None) is response
+
+
+def test_billed_terminal_response_copies_when_estimating_and_leaves_the_original_untouched():
+    from litellm.responses.streaming_iterator import _billed_terminal_response
+
+    response: Final = _responses_api_response_without_usage()
+    estimated: Final = ResponseAPIUsage(input_tokens=3, output_tokens=4, total_tokens=7)
+
+    billed: Final = _billed_terminal_response(response, lambda: estimated)
+
+    assert billed is not response
+    assert billed.usage is estimated
+    assert response.usage is None
+
+
+def test_persist_completed_response_to_cache_survives_an_unserializable_response(monkeypatch):
+    bad_response: Final = ResponsesAPIResponse.model_construct(id="r", output=[object()], usage=None)
+    with pytest.raises(PydanticSerializationError):
+        bad_response.model_dump_json()
+
+    logging_obj: Final = _logging_obj_stub()
+    caching_handler: Final = Mock()
+    caching_handler.request_kwargs = {"stream": True}
+    logging_obj._llm_caching_handler = caching_handler
+    iterator: Final = _make_iterator(sse_events=[], logging_obj=logging_obj)
+    iterator.completed_response = ResponseCompletedEvent.model_construct(
+        type="response.completed", response=bad_response
+    )
+    cache: Final = Mock()
+    monkeypatch.setattr(litellm, "cache", cache)
+
+    iterator._persist_completed_response_to_cache(is_async=False)
+
+    cache.add_cache.assert_not_called()
