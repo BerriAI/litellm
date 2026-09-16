@@ -11171,8 +11171,8 @@ async def test_identity_bound_authorization_carries_nonce_and_caller_through_cal
               "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
               new=AsyncMock(return_value="alice")),
         patch(  # test-quality-ok: isolate user access lookup while testing nonce and caller preservation
-              "litellm.proxy._experimental.mcp_server.discoverable_endpoints._bridge_authorize_access_denial",
-              new=AsyncMock(return_value=None)),
+              "litellm.proxy._experimental.mcp_server.discoverable_endpoints._user_can_reach_mcp_server",
+              new=AsyncMock(return_value=True)),
     ):
         authorized = await authorize_with_server(
             request, server, "client", "http://127.0.0.1:6274/callback", state="client-state",
@@ -11972,3 +11972,117 @@ async def test_oauth_write_denial_does_not_erase_identity_binding(
     assert denied.value.status_code == 403
     assert denied.value.detail == {"error": "oauth_principal_mismatch"}
     manager.get_allowed_mcp_servers.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin_only", [False, True])
+async def test_signed_oauth_callback_honors_credential_write_policy(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    admin_only: bool,
+) -> None:
+    import httpx
+    import litellm
+
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints, mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server: Final = MCPServer(
+        server_id="signed-server", name="signed-server", transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code", client_id="client",
+        token_url="https://upstream.example.test/token",
+    )
+    monkeypatch.setattr(proxy_server, "general_settings", {
+        "enable_jwt_auth": True,
+        "admin_only_routes": [f"/v1/mcp/server/{server.server_id}/oauth-user-credential"] if admin_only else [],
+    })
+    monkeypatch.setenv("LITELLM_SALT_KEY", "signed-oauth-test-salt")
+    manager: Final = MagicMock()
+    manager.get_allowed_mcp_servers = AsyncMock(return_value=[server.server_id])
+    manager.invalidate_user_oauth_token_cache = AsyncMock()
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    table: Final = proxy_server.prisma_client.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=None)
+    table.upsert = AsyncMock()
+    clients: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", clients)
+
+    def upstream_response(outbound: httpx.Request) -> httpx.Response:
+        assert outbound.url == server.token_url
+        assert b"code=upstream-code" in outbound.content
+        return httpx.Response(200, json={"access_token": "upstream-token", "token_type": "Bearer"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream_response)) as transport:
+        upstream: Final = AsyncHTTPHandler()
+        await upstream.client.aclose()
+        upstream.client = transport
+        clients.set_cache("async_httpx_client" + httpxSpecialProvider.Oauth2Check, upstream)
+        response: Final = await discoverable_endpoints.exchange_token_with_server(
+            request=_token_request({}, path="/signed-server/token"), mcp_server=server,
+            grant_type="authorization_code",
+            code=discoverable_endpoints.seal_bridge_authorization_code("upstream-code", "jwt-owner", server.server_id),
+            redirect_uri="http://localhost/callback", client_id="client", client_secret=None, code_verifier=None,
+        )
+    assert response.status_code == 200
+    assert json.loads(response.body)["access_token"] == "upstream-token"
+    if admin_only:
+        table.upsert.assert_not_awaited()
+    else:
+        table.upsert.assert_awaited_once()
+        assert table.upsert.call_args.kwargs["where"]["user_id_server_id"] == {
+            "user_id": "jwt-owner", "server_id": server.server_id,
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowed", [False, True])
+async def test_identity_bound_authorize_preserves_presented_jwt_permissions(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    allowed: bool,
+) -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server import byok_oauth_endpoints, discoverable_endpoints, mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+
+    _, signing_key = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "authorize-policy-test-salt")
+    server: Final = MCPServer(
+        server_id="bound-server", name="bound-server", transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code", client_id="client",
+        authorization_url="https://upstream.example.test/authorize", token_url="https://upstream.example.test/token",
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce", issuer="https://upstream.example.test", audiences=["client"],
+        ),
+    )
+    manager: Final = MagicMock()
+    # The full user roster permits the server; the presented JWT may have narrower access.
+    manager.get_allowed_mcp_servers = AsyncMock(
+        side_effect=lambda auth: [server.server_id] if allowed or auth.mcp_admitted_user_subject else [],
+    )
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(  # test-quality-ok: session-cookie decoder is the separate authentication boundary; a valid cookie must not override a denied explicit credential
+        byok_oauth_endpoints, "_user_id_from_session_cookie", lambda request: "jwt-owner",
+    )
+    response: Final = await discoverable_endpoints.authorize_with_server(
+        request=_token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key)}"}),
+        mcp_server=server, client_id="client", redirect_uri="http://127.0.0.1:6274/callback",
+        state="client-state", code_challenge="pkce-challenge", code_challenge_method="S256",
+    )
+    redirect: Final = urlparse(response.headers["location"])
+    query: Final = parse_qs(redirect.query)
+    if allowed:
+        assert redirect.hostname == "upstream.example.test"
+        assert query["nonce"] and response.headers.get("set-cookie")
+    else:
+        assert redirect.hostname == "127.0.0.1"
+        assert query["error"] == ["access_denied"]
+        assert query["state"] == ["client-state"]
+        assert "set-cookie" not in response.headers

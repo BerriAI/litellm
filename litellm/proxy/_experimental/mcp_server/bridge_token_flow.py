@@ -306,18 +306,8 @@ async def _revalidate_active_subject(identity: "EnvelopeIdentity") -> "_KeyResol
 
 async def _extract_user_id_from_request(request: Request, server_id: str | None = None) -> str | None:
     """Resolve identity for binding, or authorize the credential-write action for a target server."""
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # registry imports auth helpers
-        global_mcp_server_manager,
-    )
-    from litellm.proxy._experimental.mcp_server.ui_session_utils import (
-        can_access_mcp_server,  # noqa: PLC0415  # proxy import cycle
-    )
     from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
-    from litellm.proxy.auth.route_checks import RouteChecks  # noqa: PLC0415  # proxy import cycle
-    from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
-        _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse admission policy for the credential-write action
-    )
 
     token: Final = _litellm_key_from_request(request)
     # The OAuth relay is public; the optional server-side write is the same protected action
@@ -331,21 +321,37 @@ async def _extract_user_id_from_request(request: Request, server_id: str | None 
     auth: Final = resolved.key if isinstance(resolved, _ResolvedKey) else resolved
     if not isinstance(auth, UserAPIKeyAuth) or not _active_key_user_id(auth):
         return None
-    if write_route is not None and server_id is not None:
-        try:
-            RouteChecks.is_virtual_key_allowed_to_call_route(route=write_route, valid_token=auth, request=request)
-            await _run_centralized_common_checks(
-                user_api_key_auth_obj=auth,
-                request=request,
-                request_data={},
-                route=write_route,
-            )
-            if not await can_access_mcp_server(auth, server_id, global_mcp_server_manager.get_allowed_mcp_servers):
-                return None
-        except Exception as exc:  # noqa: BLE001  # authorization failure must never write credentials
-            verbose_logger.debug("OAuth credential write not authorized (%s)", type(exc).__name__)
-            return None
+    if server_id is not None and not await can_store_oauth_credential(request, auth, server_id):
+        return None
     return auth.user_id
+
+
+async def can_store_oauth_credential(request: Request, auth: "UserAPIKeyAuth", server_id: str) -> bool:
+    """Apply the same write policy to request credentials and verified signed-callback users."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # registry imports auth helpers
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+        can_access_mcp_server,  # noqa: PLC0415  # proxy import cycle
+    )
+    from litellm.proxy.auth.route_checks import RouteChecks  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
+        _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse admission policy for the credential-write action
+    )
+
+    write_route: Final = f"/v1/mcp/server/{server_id}/oauth-user-credential"
+    try:
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=write_route, valid_token=auth, request=request)
+        await _run_centralized_common_checks(
+            user_api_key_auth_obj=auth,
+            request=request,
+            request_data={},
+            route=write_route,
+        )
+        return await can_access_mcp_server(auth, server_id, global_mcp_server_manager.get_allowed_mcp_servers)
+    except Exception as exc:  # noqa: BLE001  # authorization failure must never write credentials
+        verbose_logger.debug("OAuth credential write not authorized (%s)", type(exc).__name__)
+        return False
 
 
 async def _resolve_jwt_auth(
