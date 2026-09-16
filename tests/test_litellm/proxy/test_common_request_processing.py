@@ -6410,7 +6410,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @staticmethod
     def _otel_key(
-        rpm_limit: int | None = None, model_rpm_limit: dict[str, int] | None = None
+        rpm_limit: int | None = None,
+        model_rpm_limit: dict[str, int] | None = None,
+        disable_fallbacks: bool = False,
     ) -> ProxyUserAPIKeyAuth:
         from opentelemetry.sdk.trace import TracerProvider
 
@@ -6419,7 +6421,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             api_key="hashed-key",
             parent_otel_span=span,
             rpm_limit=rpm_limit,
-            metadata={"model_rpm_limit": model_rpm_limit} if model_rpm_limit else {},
+            metadata={
+                **({"model_rpm_limit": model_rpm_limit} if model_rpm_limit else {}),
+                **({"disable_fallbacks": True} if disable_fallbacks else {}),
+            },
         )
 
     @staticmethod
@@ -6539,6 +6544,27 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         assert data["model"] == fallback_model
         assert rig[3] == [primary_model, primary_model, fallback_model]
+
+    @pytest.mark.asyncio
+    async def test_key_metadata_disable_fallbacks_returns_429_instead_of_retrying(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """``disable_fallbacks`` set in key metadata only lands on ``data`` during the first
+        pre-call pass (``add_key_level_controls``), so it must be honored after that pass."""
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        primary_model = "gpt-4.1"
+        fallback_model = "gpt-4.1-mini"
+        key = self._otel_key(model_rpm_limit={primary_model: 1}, disable_fallbacks=True)
+        rig = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
+        request = {"model": primary_model, "messages": [{"role": "user", "content": "hi"}]}
+
+        await self._pre_call(dict(request), key, rig)
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await self._pre_call(dict(request), key, rig)
+
+        assert exc_info.value.status_code == 429
+        assert rig[3] == [primary_model, primary_model]
 
 
 class _RecordingSuccessLogger(CustomLogger):

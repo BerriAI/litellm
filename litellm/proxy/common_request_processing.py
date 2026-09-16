@@ -2093,7 +2093,12 @@ class ProxyBaseLLMRequestProcessing:
         except ProxyRateLimitError as original_exc:
             rate_limited_data: Final = self.data
             original_model: Final = rate_limited_data.get("model")
-            if pristine is None or not configured_fallbacks or not isinstance(original_model, str):
+            if (
+                pristine is None
+                or not configured_fallbacks
+                or rate_limited_data.get("disable_fallbacks")
+                or not isinstance(original_model, str)
+            ):
                 raise
 
             fallback_models: Final = self._resolve_fallback_models(
