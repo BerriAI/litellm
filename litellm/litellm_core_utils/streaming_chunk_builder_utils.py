@@ -5,6 +5,7 @@ from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
 
+from pydantic import BaseModel
 from typing_extensions import ReadOnly, Required
 
 from litellm._logging import verbose_logger
@@ -148,6 +149,7 @@ class _ToolCallChunk(TypedDict):
 class _UsageBearingChunk(TypedDict, total=False):
     usage: Usage | None
     _hidden_params: Mapping[str, str]
+    choices: ReadOnly[Sequence[StreamingChoices | Mapping[str, object]]]
 
 
 class _UsageSummary(TypedDict):
@@ -921,21 +923,22 @@ class ChunkProcessor:
 
         prompt_tokens_details = attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details)
 
-        completion_tokens = self._reset_anthropic_cursor_completion_tokens(
+        recovered_completion_tokens: Final = self._reset_anthropic_cursor_completion_tokens(
             chunks=chunks,
             completion_tokens=completion_tokens,
             completion_usage_updates=completion_usage_updates,
         )
+        cursor_was_reset: Final = recovered_completion_tokens != completion_tokens
 
         return UsagePerChunk(
             prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            completion_tokens=recovered_completion_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             server_tool_use=server_tool_use,
             web_search_requests=web_search_requests,
             google_maps_grounding_requests=google_maps_grounding_requests,
-            completion_tokens_details=completion_tokens_details,
+            completion_tokens_details=None if cursor_was_reset else completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
             cost=cost,
             inference_geo=self._last_provider_pricing_field(chunks, "inference_geo"),
@@ -961,6 +964,32 @@ class ChunkProcessor:
         return values[-1] if values else None
 
     @staticmethod
+    def _finish_reason_of_choice(choice: object) -> str | None:
+        match choice:
+            case StreamingChoices(finish_reason=reason) | Choices(finish_reason=reason):
+                return reason
+            case {"finish_reason": str() as reason}:
+                return reason
+            case _:
+                return None
+
+    @staticmethod
+    def _chunk_choices(chunk: "_UsageBearingChunk | BaseModel") -> Sequence[object]:
+        if isinstance(chunk, dict):
+            return chunk.get("choices", ())
+        if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+            return chunk.choices
+        return ()
+
+    @staticmethod
+    def _saw_finish_reason(chunks: Sequence["_UsageBearingChunk | ModelResponse"]) -> bool:
+        return any(
+            ChunkProcessor._finish_reason_of_choice(choice) is not None
+            for chunk in chunks
+            for choice in ChunkProcessor._chunk_choices(chunk)
+        )
+
+    @staticmethod
     def _reset_anthropic_cursor_completion_tokens(
         chunks: Sequence["_UsageBearingChunk | ModelResponse"],
         completion_tokens: int,
@@ -970,18 +999,18 @@ class ChunkProcessor:
 
         See the ``completion_usage_updates`` comment in
         ``_calculate_usage_per_chunk``. The accumulated value is NOT a stale
-        cursor when either it is > 1 (definitely not a placeholder) or we saw
-        >= 2 completion-bearing usage events (positive evidence ``message_delta``
-        arrived). Otherwise — the only completion update we ever saw was the
-        Anthropic ``message_start`` cursor (=1) — reset to 0 so
-        ``calculate_usage()``'s ``or token_counter(text=...)`` fallback estimates
-        from the actually-received completion text instead of trusting the
-        placeholder. Gated on ``custom_llm_provider == "anthropic"`` so the
-        heuristic (which encodes Anthropic's specific message_start SSE shape)
-        does not silently affect other providers that may legitimately report
-        ``completion_tokens=1`` from a single usage event.
+        cursor when we saw >= 2 completion-bearing usage events or any chunk
+        carried a ``finish_reason`` (positive evidence ``message_delta``
+        arrived). Otherwise the only completion update we ever saw was the
+        Anthropic ``message_start`` cursor, a small placeholder whose magnitude
+        varies per request (1 and 8 both observed live), so reset to 0 and let
+        ``calculate_usage()``'s ``or token_counter(...)`` fallback estimate from
+        the actually-received text and reasoning instead. Gated on
+        ``custom_llm_provider == "anthropic"`` so the heuristic (which encodes
+        Anthropic's specific message_start SSE shape) does not silently affect
+        other providers that legitimately report usage from a single event.
         """
-        saw_non_cursor_completion: Final = completion_tokens > 1 or completion_usage_updates >= 2
+        saw_non_cursor_completion: Final = completion_usage_updates >= 2 or ChunkProcessor._saw_finish_reason(chunks)
         if saw_non_cursor_completion:
             return completion_tokens
 
@@ -995,7 +1024,7 @@ class ChunkProcessor:
             if isinstance(hp, dict):
                 custom_llm_provider = hp.get("custom_llm_provider")
 
-        if custom_llm_provider == "anthropic" and completion_tokens == 1:
+        if custom_llm_provider == "anthropic":
             return 0
         return completion_tokens
 
@@ -1039,10 +1068,13 @@ class ChunkProcessor:
             returned_usage.prompt_tokens = 0
         returned_usage.completion_tokens = (
             completion_tokens
-            or token_counter(
-                model=model,
-                text=completion_output,
-                count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+            or (
+                token_counter(
+                    model=model,
+                    text=completion_output,
+                    count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+                )
+                + (reasoning_tokens or 0)
             )
         )
         returned_usage.total_tokens = returned_usage.prompt_tokens + returned_usage.completion_tokens
