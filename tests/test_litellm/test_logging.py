@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import base64
+import dataclasses
 import json
 import logging
 import re
@@ -1022,6 +1023,54 @@ def test_unserializable_extra_never_breaks_the_filter(monkeypatch, extra):
 
     assert rendered["message"] == "request sent"
     assert "payload" in rendered
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _RequestExtra:
+    model: str
+    attempt: int
+
+
+@pytest.mark.parametrize(
+    "extra",
+    (
+        ("gpt-4o", 2),
+        {"gpt-4o", "gpt-4o-mini"},
+        {"models": ("gpt-4o", "gpt-4o-mini")},
+        _RequestExtra(model="gpt-4o", attempt=2),
+    ),
+    ids=("tuple", "set", "nested_tuple", "dataclass"),
+)
+def test_secret_free_extra_keeps_its_original_object(monkeypatch, extra):
+    """A host application's own handler on a litellm logger reads extras by type, so a
+    container that carried no secret must reach it untouched, not as its JSON shape."""
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "request sent")
+    record.payload = extra
+
+    assert SecretRedactionFilter().filter(record) is True
+
+    assert record.payload is extra
+    assert "payload" in json.loads(JsonFormatter().format(record))
+
+
+@pytest.mark.parametrize(
+    "extra",
+    (("gpt-4o", "sk-1234567890abcdefghij"), {"gpt-4o", "sk-1234567890abcdefghij"}),
+    ids=("tuple", "set"),
+)
+def test_extra_that_carried_a_secret_comes_back_scrubbed(monkeypatch, extra):
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "request sent")
+    record.payload = extra
+
+    assert SecretRedactionFilter().filter(record) is True
+    rendered = JsonFormatter().format(record)
+
+    assert isinstance(record.payload, list)
+    assert sorted(record.payload) == ["REDACTED", "gpt-4o"]
+    assert "sk-1234567890abcdefghij" not in rendered
+    assert "REDACTED" in rendered
 
 
 def test_unscrubbed_record_is_still_redacted_by_the_formatter(monkeypatch):
