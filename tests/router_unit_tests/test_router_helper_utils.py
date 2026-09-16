@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import traceback
@@ -12,7 +13,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from create_mock_standard_logging_payload import create_standard_logging_payload
 from litellm.types.utils import StandardLoggingPayload
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
-from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
+from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 
 
 @pytest.fixture
@@ -928,17 +929,10 @@ async def test_set_response_headers(model_list):
 
 
 @pytest.mark.asyncio
-async def test_set_response_headers_subtracts_in_flight_delta(model_list):
+async def test_set_response_headers_passes_through_post_increment_counters(model_list):
     """
-    LIT-2719: router-derived `x-ratelimit-remaining-*` headers must be
-    post-decrement (match OpenAI/Anthropic vendor semantics) so the proxy's
-    HTTP response headers and the prometheus gauges that read them stay
-    comparable across providers.
-
-    Router's TPM/RPM counter is incremented post-response by
-    `deployment_callback_on_success`, so `get_remaining_model_group_usage`
-    sees pre-decrement values. `set_response_headers` must replay the
-    in-flight increment before writing the headers.
+    LIT-3058: `make_call` increments the router's TPM/RPM counter before the headers
+    are built, so `set_response_headers` writes the remaining values it reads as-is.
     """
     from pydantic import BaseModel
 
@@ -952,49 +946,10 @@ async def test_set_response_headers_subtracts_in_flight_delta(model_list):
     router = Router(model_list=model_list)
     router.get_remaining_model_group_usage = AsyncMock(
         return_value={
-            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-tokens": 958,
             "x-ratelimit-limit-tokens": 1000,
-            "x-ratelimit-remaining-requests": 100,
+            "x-ratelimit-remaining-requests": 99,
             "x-ratelimit-limit-requests": 100,
-        }
-    )
-
-    resp = _Resp()
-    resp._hidden_params = {}
-    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
-
-    headers = resp._hidden_params["additional_headers"]
-    assert headers["x-ratelimit-remaining-tokens"] == 958
-    assert headers["x-ratelimit-remaining-requests"] == 99
-    # Limit headers pass through unmodified.
-    assert headers["x-ratelimit-limit-tokens"] == 1000
-    assert headers["x-ratelimit-limit-requests"] == 100
-
-
-@pytest.mark.asyncio
-async def test_set_response_headers_in_flight_delta_only_adjusts_tpm_rpm(model_list):
-    """
-    The in-flight replay applies only to the post-incremented TPM/RPM counters
-    (`x-ratelimit-remaining-tokens` / `-requests`). The ITPM/OTPM counters are
-    incremented at reservation time (pre-call), so the input/output token
-    headers already reflect this request and must pass through untouched.
-    """
-    from pydantic import BaseModel
-
-    class _Usage(BaseModel):
-        total_tokens: int = 30
-        prompt_tokens: int = 20
-        completion_tokens: int = 10
-
-    class _Resp(BaseModel):
-        usage: _Usage = _Usage()
-        _hidden_params: dict = {}
-
-    router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
-        return_value={
-            "x-ratelimit-remaining-tokens": 1000,
-            "x-ratelimit-remaining-requests": 100,
             "x-ratelimit-remaining-input-tokens": 1000,
             "x-ratelimit-remaining-output-tokens": 500,
         }
@@ -1005,12 +960,153 @@ async def test_set_response_headers_in_flight_delta_only_adjusts_tpm_rpm(model_l
     await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
 
     headers = resp._hidden_params["additional_headers"]
-    # TPM/RPM headers replay the in-flight increment...
-    assert headers["x-ratelimit-remaining-tokens"] == 970
+    assert headers["x-ratelimit-remaining-tokens"] == 958
     assert headers["x-ratelimit-remaining-requests"] == 99
-    # ...but the reservation-based input/output headers pass through unchanged.
+    assert headers["x-ratelimit-limit-tokens"] == 1000
+    assert headers["x-ratelimit-limit-requests"] == 100
     assert headers["x-ratelimit-remaining-input-tokens"] == 1000
     assert headers["x-ratelimit-remaining-output-tokens"] == 500
+
+
+def _rpm_tpm_router(model_id: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-fake", "tpm": 1000, "rpm": 100},
+                "model_info": {"id": model_id},
+            }
+        ]
+    )
+
+
+def _ratelimit_headers(response) -> dict:
+    return {k: v for k, v in response._hidden_params["additional_headers"].items() if k.startswith("x-ratelimit-")}
+
+
+@pytest.mark.asyncio
+async def test_acompletion_headers_read_post_increment_counter_and_count_once():
+    """
+    LIT-3058 regression: the remaining-* headers on the response must already include
+    this request, and the request must land in the router counter exactly once even
+    though `deployment_callback_on_success` still runs after the response returns.
+    """
+    router = _rpm_tpm_router("lit-3058-async")
+
+    response = await router.acompletion(
+        model="gpt-5-mini", messages=[{"role": "user", "content": "hi"}], mock_response="pong"
+    )
+    total_tokens = response.usage.total_tokens
+    assert total_tokens > 0
+
+    headers = _ratelimit_headers(response)
+    assert headers["x-ratelimit-remaining-tokens"] == 1000 - total_tokens
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert await router.get_model_group_usage("gpt-5-mini") == (total_tokens, 1)
+
+    await asyncio.sleep(0.5)
+    assert await router.get_model_group_usage("gpt-5-mini") == (total_tokens, 1)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_wildcard_route_headers_and_counter_use_resolved_deployment_name():
+    """The counter key is written under the resolved model name, which is what the usage reader looks up."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "sk-fake", "tpm": 1000, "rpm": 100},
+                "model_info": {"id": "lit-3058-wildcard"},
+            }
+        ]
+    )
+
+    response = await router.acompletion(
+        model="openai/gpt-5-mini", messages=[{"role": "user", "content": "hi"}], mock_response="pong"
+    )
+    total_tokens = response.usage.total_tokens
+
+    headers = _ratelimit_headers(response)
+    assert headers["x-ratelimit-remaining-tokens"] == 1000 - total_tokens
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert await router.get_model_group_usage("openai/gpt-5-mini") == (total_tokens, 1)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_counts_request_before_headers_and_tokens_once_on_completion():
+    """
+    A stream has no usage when the headers are built: the request is counted before the
+    headers and the final token usage is added once when the stream completes.
+    """
+    router = _rpm_tpm_router("lit-3058-stream")
+
+    stream = await router.acompletion(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong pong pong",
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    headers = _ratelimit_headers(stream)
+    assert headers["x-ratelimit-remaining-tokens"] == 1000
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert await router.get_model_group_usage("gpt-5-mini") == (None, 1)
+
+    chunks = [chunk async for chunk in stream]
+    total_tokens = chunks[-1].usage.total_tokens
+    assert total_tokens > 0
+
+    await asyncio.sleep(0.5)
+    assert await router.get_model_group_usage("gpt-5-mini") == (total_tokens, 1)
+
+
+@pytest.mark.asyncio
+async def test_deployment_callback_on_success_adds_only_uncounted_tokens():
+    """
+    When the request was already counted before the headers, the success callback adds
+    only the tokens that were not known at that point and never a second request.
+    """
+    import time
+
+    router = _rpm_tpm_router("lit-3058-callback")
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["total_tokens"] = 100
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "deployment": "gpt-5-mini",
+                "model_group": "gpt-5-mini",
+                ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 60,
+            },
+            "model_info": {"id": "lit-3058-callback"},
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+
+    tpm_key = await router.deployment_callback_on_success(
+        kwargs=kwargs,
+        completion_response=litellm.ModelResponse(model="gpt-5-mini", usage={"total_tokens": 100}),
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+
+    assert tpm_key is not None
+    assert await router.get_model_group_usage("gpt-5-mini") == (40, None)
+
+
+@pytest.mark.asyncio
+async def test_increment_deployment_usage_for_response_skips_session_wrappers():
+    """WebSocket and realtime session wrappers return None and are not counted as a request."""
+    router = _rpm_tpm_router("lit-3058-ws")
+    request_kwargs = {
+        "model": "gpt-5-mini",
+        "litellm_metadata": {"model_group": "gpt-5-mini", "model_info": {"id": "lit-3058-ws"}},
+    }
+
+    await router.increment_deployment_usage_for_response(response=None, request_kwargs=request_kwargs)
+
+    assert await router.get_model_group_usage("gpt-5-mini") == (None, None)
+    assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in request_kwargs["litellm_metadata"]
 
 
 @pytest.mark.asyncio
@@ -1154,8 +1250,8 @@ async def test_set_response_headers_native_input_token_header_does_not_suppress_
     await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
 
     headers = resp._hidden_params["additional_headers"]
-    assert headers["x-ratelimit-remaining-tokens"] == 958
-    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert headers["x-ratelimit-remaining-tokens"] == 1000
+    assert headers["x-ratelimit-remaining-requests"] == 100
     # the provider's native header is left untouched
     assert headers["x-ratelimit-remaining-input-tokens"] == 5
 
@@ -1187,7 +1283,7 @@ async def test_set_response_headers_native_token_header_does_not_suppress_io_hea
 
     headers = resp._hidden_params["additional_headers"]
     assert headers["x-ratelimit-remaining-tokens"] == 5
-    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert headers["x-ratelimit-remaining-requests"] == 100
     assert headers["x-ratelimit-remaining-input-tokens"] == 900
     assert headers["x-ratelimit-remaining-output-tokens"] == 450
 
@@ -1196,8 +1292,7 @@ async def test_set_response_headers_native_token_header_does_not_suppress_io_hea
 async def test_set_response_headers_handles_missing_usage(model_list):
     """
     Streaming chunks and some response shapes may lack a `usage` attribute or
-    populated `total_tokens`. The in-flight subtraction must default to 0
-    tokens (still subtract 1 from requests) and never raise.
+    populated `total_tokens`. Header composition must not depend on usage and never raise.
     """
     from pydantic import BaseModel
 
@@ -1218,7 +1313,7 @@ async def test_set_response_headers_handles_missing_usage(model_list):
 
     headers = resp._hidden_params["additional_headers"]
     assert headers["x-ratelimit-remaining-tokens"] == 1000
-    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert headers["x-ratelimit-remaining-requests"] == 100
 
 
 @pytest.mark.asyncio
