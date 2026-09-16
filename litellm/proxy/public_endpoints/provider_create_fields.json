@@ -2488,6 +2488,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "OPENINFER",
+    "provider_display_name": "OpenInfer",
+    "litellm_provider": "openinfer",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.openinfer.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "openinfer/@oi/Llama-3.2-1B-Instruct"
+  },
+  {
     "provider": "Openrouter",
     "provider_display_name": "Openrouter",
     "litellm_provider": "openrouter",
