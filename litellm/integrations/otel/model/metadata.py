@@ -43,12 +43,11 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.otel.model.semconv import resolve_operation
-from litellm.integrations.otel.model.utils import as_str, to_seconds
+from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
+from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
-
-LANGFUSE_TRACE_NAME_HEADER: Final = "langfuse_trace_name"
 
 
 @dataclass(frozen=True)
@@ -217,7 +216,7 @@ class LLMCallEvent:
     # needs to be reasonable for a span that never gets closed (a leak).
     provisional_span_name: str
     time_to_first_chunk_seconds: float | None
-    trace_name: str | None
+    trace: TraceControls
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, Any]) -> LLMCallEvent:
@@ -234,28 +233,8 @@ class LLMCallEvent:
             upstream_started=kwargs.get("api_call_start_time") is not None,
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
-            trace_name=caller_trace_name(kwargs),
+            trace=caller_trace_controls(kwargs),
         )
-
-
-def caller_trace_name(kwargs: Mapping[str, object]) -> str | None:
-    request: Final = _as_str_mapping(kwargs.get("litellm_params"))
-    if request is None:
-        return None
-    proxy_request: Final = _as_str_mapping(request.get("proxy_server_request"))
-    headers: Final = _as_str_mapping(proxy_request.get("headers")) if proxy_request is not None else None
-    from_header: Final = as_str(headers.get(LANGFUSE_TRACE_NAME_HEADER)) if headers is not None else None
-    if from_header:
-        return from_header
-    return next(
-        (
-            name
-            for key in ("metadata", "litellm_metadata")
-            if (metadata := _as_str_mapping(request.get(key))) is not None
-            and (name := as_str(metadata.get("trace_name")))
-        ),
-        None,
-    )
 
 
 def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
@@ -292,15 +271,8 @@ def auth_metadata(payload: StandardLoggingPayload | None, kwargs: Mapping[str, o
     )
 
 
-def _as_str_mapping(value: object) -> Mapping[str, object] | None:
-    """A read-only view of ``value`` when it is a mapping, else ``None``."""
-    if not isinstance(value, Mapping):
-        return None
-    return cast("Mapping[str, object]", value)  # cast-ok: isinstance-guarded, JSON metadata has str keys
-
-
 def _string_entries(value: object) -> Mapping[str, str] | None:
-    entries: Final = _as_str_mapping(value)
+    entries: Final = as_str_mapping(value)
     if entries is None:
         return None
     typed: Final = MappingProxyType({key: item for key, item in entries.items() if isinstance(item, str)})
@@ -316,18 +288,18 @@ def _metadata_dicts(
     litellm copies it onto ``metadata``, but both are yielded so a route that
     populates only one is still covered.
     """
-    payload_view: Final = _as_str_mapping(payload)
+    payload_view: Final = as_str_mapping(payload)
     if payload_view is not None:
-        payload_metadata: Final = _as_str_mapping(payload_view.get("metadata"))
+        payload_metadata: Final = as_str_mapping(payload_view.get("metadata"))
         if payload_metadata is not None:
             yield payload_metadata
-    params: Final = _as_str_mapping(kwargs.get("litellm_params"))
+    params: Final = as_str_mapping(kwargs.get("litellm_params"))
     if params is None:
         return
     yield from (
         metadata
         for key in ("metadata", "litellm_metadata")
-        if (metadata := _as_str_mapping(params.get(key))) is not None
+        if (metadata := as_str_mapping(params.get(key))) is not None
     )
 
 
