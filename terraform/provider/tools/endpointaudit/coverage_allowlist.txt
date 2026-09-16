@@ -60,6 +60,7 @@ POST /cache/settings/test
 POST /coordination_redis/settings/test
 GET /guardrails/submissions
 GET /guardrails/submissions/{guardrail_id}
+PATCH /guardrails/{guardrail_id}/enabled           # runtime kill switch, like model/customer block; not desired state
 POST /credentials/migrate-encryption
 POST /customer/block
 POST /customer/unblock

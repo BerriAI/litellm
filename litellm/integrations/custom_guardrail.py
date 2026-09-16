@@ -223,6 +223,7 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
+        self.enabled: bool = True
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
@@ -986,6 +987,8 @@ class CustomGuardrail(CustomLogger):
         """
         Returns True if the guardrail should be run on the event_type
         """
+        if not self.enabled:
+            return False
         if self._suppressed_by_auto_router_compression():
             return False
 

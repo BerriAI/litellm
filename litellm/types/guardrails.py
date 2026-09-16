@@ -1174,6 +1174,7 @@ class GuardrailInfoResponse(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.CONFIG
+    enabled: bool = True
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -1219,3 +1220,13 @@ class PatchGuardrailRequest(BaseModel):
     guardrail_name: str | None = None
     litellm_params: BaseLitellmParams | None = None
     guardrail_info: dict[str, Any] | None = None
+
+
+class SetGuardrailEnabledRequest(BaseModel):
+    enabled: bool
+
+
+class SetGuardrailEnabledResponse(BaseModel):
+    guardrail_id: str
+    guardrail_name: str
+    enabled: bool

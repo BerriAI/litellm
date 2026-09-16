@@ -37,6 +37,7 @@ export interface Guardrail {
   created_at?: string;
   updated_at?: string;
   guardrail_definition_location: GuardrailDefinitionLocation;
+  enabled: boolean;
 }
 
 export enum GuardrailDefinitionLocation {
