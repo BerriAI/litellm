@@ -23,10 +23,18 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
-from litellm.types.utils import Delta, GenericGuardrailAPIInputs, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    Delta,
+    Function,
+    GenericGuardrailAPIInputs,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 BLOCK_MESSAGE = "Blocked by policy: this response was withheld."
 ORIGINAL_MARKER = "ORIGINAL-SECRET-ANSWER"
+TOOL_ARGUMENTS_MARKER = "TOOL-ARGS-SECRET"
 
 
 class _BlockingGuardrail(CustomGuardrail):
@@ -73,6 +81,24 @@ class _CountingPassingGuardrail(_PassingGuardrail):
         logging_obj: Optional[Any] = None,
     ) -> GenericGuardrailAPIInputs:
         self.scan_count += 1
+        return inputs
+
+
+class _ToolCallRecordingGuardrail(_CountingPassingGuardrail):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tool_call_scan_indexes: List[int] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.scan_count += 1
+        if inputs.get("tool_calls"):
+            self.tool_call_scan_indexes.append(self.scan_count)
         return inputs
 
 
@@ -165,20 +191,63 @@ def _chat_chunk(content: str = "", finish_reason: str | None = None) -> ModelRes
     )
 
 
+def _tool_call_chunk(arguments: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-windowed",
+        created=1724900000,
+        model="gpt-4",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id="call_1",
+                            type="function",
+                            index=0,
+                            function=Function(name="run_shell", arguments=arguments),
+                        )
+                    ],
+                ),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
 async def _windowed_chat_stream(
-    yielded_count: List[int], collected: List[Any], content_chunks: List[str]
+    yielded_count: List[int],
+    collected: List[Any],
+    content_chunks: List[str],
+    tool_argument_chunks: List[str] | None = None,
 ) -> AsyncGenerator[ModelResponseStream, None]:
     for content in content_chunks:
         yielded_count.append(len(collected))
         yield _chat_chunk(content)
+    for arguments in tool_argument_chunks or []:
+        yielded_count.append(len(collected))
+        yield _tool_call_chunk(arguments)
     yielded_count.append(len(collected))
-    yield _chat_chunk(finish_reason="stop")
+    yield _chat_chunk(finish_reason="tool_calls" if tool_argument_chunks else "stop")
+
+
+def _tool_argument_text(chunks: List[Any]) -> str:
+    return "".join(
+        tool_call.function.arguments or ""
+        for chunk in chunks
+        if isinstance(chunk, ModelResponseStream)
+        for choice in chunk.choices
+        for tool_call in choice.delta.tool_calls or []
+    )
 
 
 async def _run_windowed(
     guardrail: CustomGuardrail,
     content_chunks: List[str],
     end_of_stream_only: bool = False,
+    tool_argument_chunks: List[str] | None = None,
 ) -> tuple[List[Any], List[int]]:
     guardrail.streaming_buffer_until_moderated = True
     guardrail.streaming_buffer_release_on_scan = True
@@ -195,7 +264,7 @@ async def _run_windowed(
     yielded_count: List[int] = []
     async for chunk in unified.async_post_call_streaming_iterator_hook(
         user_api_key_dict=user_api_key_dict,
-        response=_windowed_chat_stream(yielded_count, collected, content_chunks),
+        response=_windowed_chat_stream(yielded_count, collected, content_chunks, tool_argument_chunks),
         request_data=request_data,
     ):
         collected.append(chunk)
@@ -280,6 +349,20 @@ async def test_windowed_buffer_drops_blocked_window():
     assert "MARKER" not in raw
     assert BLOCK_MESSAGE in raw
     assert '"error"' not in raw
+
+
+@pytest.mark.asyncio
+async def test_windowed_buffer_holds_tool_call_windows_until_end_of_stream_scan():
+    guardrail = _ToolCallRecordingGuardrail(guardrail_name="windowed-tools", event_hook="post_call")
+    content_chunks = ["one ", "two ", "three "]
+    tool_argument_chunks = ['{"cmd": "', TOOL_ARGUMENTS_MARKER, '"}']
+
+    collected, yielded_count = await _run_windowed(guardrail, content_chunks, tool_argument_chunks=tool_argument_chunks)
+
+    assert yielded_count == [0, 0, 2, 2, 2, 2, 2]
+    assert _chat_text(collected) == "".join(content_chunks)
+    assert _tool_argument_text(collected) == "".join(tool_argument_chunks)
+    assert guardrail.tool_call_scan_indexes == [guardrail.scan_count]
 
 
 @pytest.mark.asyncio

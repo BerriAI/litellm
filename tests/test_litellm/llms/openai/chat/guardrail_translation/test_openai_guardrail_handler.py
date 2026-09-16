@@ -2206,8 +2206,11 @@ class TestStreamingScanKey:
             [self._chunk("hi"), tool_chunk, self._chunk(None, finish_reason="stop")]
         )
         assert open_key == StreamingScanKey(texts=("hi",))
+        assert open_key.tool_calls_in_flight is True
+        assert handler.get_streaming_scan_key([self._chunk("hi")]).tool_calls_in_flight is False
         assert ended_key.texts == ("hi",)
         assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
+        assert ended_key.tool_calls_in_flight is False
         assert ended_key != open_key
 
     def test_text_after_the_first_choice_finishes_still_changes_the_key(self):
