@@ -1,4 +1,6 @@
 import base64
+import json
+from typing import Final
 
 import pytest
 
@@ -2781,3 +2783,59 @@ def test_gemini_server_side_tool_signature_not_duplicated_on_text():
     assert "thoughtSignature" not in text_part
     tool_call_part = next(p for p in parts if "toolCall" in p)
     assert tool_call_part["thoughtSignature"] == "server_side_signature"
+
+
+@pytest.mark.parametrize("provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+@pytest.mark.parametrize("multimodal", [False, True])
+def test_request_body_serializes_canonical_function_response(provider, multimodal):
+    signature: Final = base64.b64encode(b"synthetic-thought-signature").decode()
+    tool_call_id: Final = f"call_search__thought__{signature}"
+    response: Final = {"function_response": {"keep_this_business_key": True}, "result": "found"}
+    tool_content: Final = (
+        [
+            {"type": "text", "text": json.dumps(response)},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}},
+        ]
+        if multimodal
+        else json.dumps(response)
+    )
+    messages: Final = [
+        {"role": "user", "content": "Search for the test marker"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {"name": "search", "arguments": '{"query":"test marker"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": tool_call_id, "content": tool_content},
+    ]
+
+    request: Final = _transform_request_body(
+        messages=messages,
+        model="gemini-3.8-flash",
+        optional_params={},
+        custom_llm_provider=provider,
+        litellm_params={},
+        cached_content=None,
+    )
+    contents: Final = json.loads(json.dumps(request))["contents"]
+    assert tuple(content["role"] for content in contents) == ("user", "model", "user")
+    call_part: Final = contents[1]["parts"][0]
+    assert call_part["thoughtSignature"] == signature
+    assert call_part["function_call"] == {
+        "id": "call_search",
+        "name": "search",
+        "args": {"query": "test marker"},
+    }
+    result_part: Final = contents[2]["parts"][0]
+    assert tuple(result_part) == ("functionResponse",)
+    function_response: Final = result_part["functionResponse"]
+    assert function_response["name"] == "search"
+    assert function_response["id"] == "call_search"
+    assert function_response["response"] == response
+    if multimodal:
+        assert function_response["parts"] == [{"inline_data": {"mime_type": "image/png", "data": "aGVsbG8="}}]

@@ -393,13 +393,13 @@ def test_multiple_function_call():
                     "role": "user",
                     "parts": [
                         {
-                            "function_response": {
+                            "functionResponse": {
                                 "name": "test",
                                 "response": {"content": "42"},
                             }
                         },
                         {
-                            "function_response": {
+                            "functionResponse": {
                                 "name": "test2",
                                 "response": {"content": "15"},
                             }
@@ -501,13 +501,13 @@ def test_multiple_function_call_changed_text_pos():
                 "role": "user",
                 "parts": [
                     {
-                        "function_response": {
+                        "functionResponse": {
                             "name": "test2",
                             "response": {"content": "15"},
                         }
                     },
                     {
-                        "function_response": {
+                        "functionResponse": {
                             "name": "test",
                             "response": {"content": "42"},
                         }

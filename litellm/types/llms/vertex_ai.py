@@ -52,6 +52,7 @@ class PartType(TypedDict, total=False):
     file_data: FileDataType
     function_call: FunctionCall
     function_response: FunctionResponse
+    functionResponse: FunctionResponse  # writable-ok: serializer renames the internal key in place
     thought: bool
     thoughtSignature: str
     media_resolution: Literal["low", "medium", "high"]

@@ -1217,6 +1217,11 @@ def _transform_request_body(
                 if media_resolution_value and generation_config is not None:
                     generation_config["mediaResolution"] = media_resolution_value["level"]
 
+        for message in content:
+            for part in message["parts"]:
+                if "function_response" in part:
+                    part["functionResponse"] = part.pop("function_response")
+
         data: Final = RequestBody(contents=content)
         # Vertex rejects system_instruction/tools/toolConfig alongside cachedContent.
         # Treat dropping these fields as a request mutation guarded by modify_params.
