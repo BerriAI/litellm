@@ -52,6 +52,27 @@ class TimeController:
 
 
 @pytest.fixture
+def model_rate_limit_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4"},
+                "model_info": {"access_groups": ["gpt4-family"]},
+            },
+            {
+                "model_name": "gpt-4-turbo",
+                "litellm_params": {"model": "openai/gpt-4-turbo"},
+                "model_info": {"access_groups": ["gpt4-family"]},
+            },
+        ],
+        model_group_alias={"gpt4": "gpt-4"},
+        set_verbose=False,
+        num_retries=0,
+    )
+
+
+@pytest.fixture
 def time_controller(monkeypatch):
     controller = TimeController()
     monkeypatch.setattr(time, "time", lambda: controller.now().timestamp())
@@ -63,6 +84,147 @@ def _isolated_request_stash():
     token = _request_stash.set(None)
     yield
     _request_stash.reset(token)
+
+
+@pytest.mark.parametrize(
+    ("metadata", "requested_model", "expected_model", "expected_tokens"),
+    [
+        ({"model_tpm_limit": {"gpt-4": 100}}, "gpt4", "gpt-4", 100),
+        ({"model_tpm_limit": {"gpt4-family": 100}}, "gpt-4-turbo", "gpt4-family", 100),
+        (
+            {"model_tpm_limit": {"gpt-4": 100, "gpt4": 50}},
+            "gpt4",
+            "gpt4",
+            50,
+        ),
+        ({"model_tpm_limit": {"other-model": 100}}, "gpt4", None, None),
+    ],
+)
+def test_model_per_key_rate_limit_resolves_alias_and_access_group(
+    monkeypatch,
+    model_rate_limit_router,
+    metadata,
+    requested_model,
+    expected_model,
+    expected_tokens,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.hooks.parallel_request_limiter_v3._proxy_llm_router",
+        lambda: model_rate_limit_router,
+    )
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    descriptors = handler._create_rate_limit_descriptors(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-model-key", metadata=metadata),
+        data={"model": requested_model},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+    model_descriptor = next(
+        (descriptor for descriptor in descriptors if descriptor["key"] == "model_per_key"),
+        None,
+    )
+    if expected_model is None:
+        assert model_descriptor is None
+        return
+    assert model_descriptor is not None
+    assert model_descriptor["value"] == f"{hash_token('sk-model-key')}:{expected_model}"
+    assert model_descriptor["rate_limit"]["tokens_per_unit"] == expected_tokens
+
+
+def test_model_per_team_rate_limit_resolves_alias(monkeypatch, model_rate_limit_router):
+    monkeypatch.setattr(
+        "litellm.proxy.hooks.parallel_request_limiter_v3._proxy_llm_router",
+        lambda: model_rate_limit_router,
+    )
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    descriptors = []
+    handler._add_team_model_rate_limit_descriptor_from_metadata(
+        user_api_key_dict=UserAPIKeyAuth(
+            team_id="team-model-key",
+            team_metadata={"model_tpm_limit": {"gpt-4": 100}},
+        ),
+        requested_model="gpt4",
+        descriptors=descriptors,
+    )
+    assert descriptors == [
+        {
+            "key": "model_per_team",
+            "value": "team-model-key:gpt-4",
+            "rate_limit": {
+                "requests_per_unit": None,
+                "tokens_per_unit": 100,
+                "window_size": handler.window_size,
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_model_per_key_rate_limit_alias_shares_tpm_counter(
+    monkeypatch, model_rate_limit_router
+):
+    monkeypatch.setattr(
+        "litellm.proxy.hooks.parallel_request_limiter_v3._proxy_llm_router",
+        lambda: model_rate_limit_router,
+    )
+    api_key = hash_token("sk-model-counter")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        metadata={"model_tpm_limit": {"gpt-4": 10}},
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    first_request = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 5,
+    }
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data=first_request,
+        call_type="",
+    )
+    await handler.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                "metadata": {"user_api_key_hash": api_key},
+            },
+            "model": "gpt-4",
+        },
+        response_obj=ModelResponse(
+            id="model-counter",
+            object="chat.completion",
+            created=int(datetime.now().timestamp()),
+            model="gpt-4",
+            usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10),
+            choices=[],
+        ),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    counter_key = handler.create_rate_limit_keys(
+        "model_per_key",
+        f"{api_key}:gpt-4",
+        "tokens",
+    )
+    assert await local_cache.async_get_cache(key=counter_key) == 10
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt4"},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
 
 
 @pytest.mark.parametrize(
