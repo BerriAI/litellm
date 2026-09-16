@@ -5761,6 +5761,7 @@ def completion(
             or custom_llm_provider == "baseten"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "volcengine"
+            or custom_llm_provider == "byteplus"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "openai"
             or custom_llm_provider == "nebius"
@@ -6977,13 +6978,20 @@ def embedding(
                 client=client,
                 aembedding=aembedding,
             )
-        elif custom_llm_provider == "volcengine":
+        elif custom_llm_provider in ("volcengine", "byteplus"):
             volcengine_key: Final = (
-                api_key or litellm.api_key or get_secret_str("ARK_API_KEY") or get_secret_str("VOLCENGINE_API_KEY")
+                api_key
+                or litellm.api_key
+                or (
+                    get_secret_str("BYTEPLUS_API_KEY")
+                    if custom_llm_provider == "byteplus"
+                    else get_secret_str("VOLCENGINE_API_KEY")
+                )
+                or get_secret_str("ARK_API_KEY")
             )
             if volcengine_key is None:
                 raise ValueError(
-                    "Missing API key for Volcengine. Set ARK_API_KEY or VOLCENGINE_API_KEY environment variable or pass api_key parameter."
+                    f"Missing API key for {custom_llm_provider.capitalize()}. Set ARK_API_KEY or {custom_llm_provider.upper()}_API_KEY environment variable or pass api_key parameter."
                 )
             if extra_headers is not None and isinstance(extra_headers, dict):
                 headers = extra_headers
@@ -8116,6 +8124,7 @@ def speech(
     if custom_llm_provider == "openai" or (
         custom_llm_provider in litellm.openai_compatible_providers
         and custom_llm_provider not in AZURE_OPENAI_AUDIO_PROVIDERS
+        and custom_llm_provider != "byteplus"
     ):
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
@@ -8492,6 +8501,36 @@ def speech(
             api_key=api_key,
             **kwargs,
         )
+    elif custom_llm_provider == "byteplus":
+        from litellm.llms.byteplus.text_to_speech.transformation import (
+            BytePlusTextToSpeechConfig,
+        )
+
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = BytePlusTextToSpeechConfig()
+
+        if isinstance(text_to_speech_provider_config, BytePlusTextToSpeechConfig):
+            response = text_to_speech_provider_config.dispatch_text_to_speech(  # rebind-ok: same pattern as other TTS provider blocks
+                model=model,
+                input=input,
+                voice=voice,
+                optional_params=optional_params,
+                litellm_params_dict=litellm_params_dict,
+                logging_obj=logging_obj,
+                timeout=timeout,
+                extra_headers=extra_headers,
+                base_llm_http_handler=base_llm_http_handler,
+                aspeech=aspeech or False,
+                api_base=api_base,
+                api_key=api_key,
+                **kwargs,
+            )
+        else:
+            raise litellm.BadRequestError(
+                message="BytePlus Text-to-Speech configuration not found",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
 
     if response is None:
         raise Exception(

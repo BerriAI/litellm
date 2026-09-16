@@ -1825,6 +1825,9 @@ if TYPE_CHECKING:
     from .llms.volcengine.responses.transformation import (
         VolcEngineResponsesAPIConfig as VolcEngineResponsesAPIConfig,
     )
+    from .llms.byteplus.responses.transformation import (
+        BytePlusResponsesAPIConfig as BytePlusResponsesAPIConfig,
+    )
     from .llms.manus.responses.transformation import (
         ManusResponsesAPIConfig as ManusResponsesAPIConfig,
     )
@@ -1982,6 +1985,13 @@ if TYPE_CHECKING:
     from .llms.volcengine.chat.transformation import (
         VolcEngineChatConfig as VolcEngineChatConfig,
         VolcEngineChatConfig as VolcEngineConfig,
+    )
+    from .llms.byteplus.chat.transformation import (
+        BytePlusChatConfig as BytePlusChatConfig,
+        BytePlusChatConfig as BytePlusConfig,
+    )
+    from .llms.byteplus.embedding.transformation import (
+        BytePlusEmbeddingConfig as BytePlusEmbeddingConfig,
     )
     from .llms.codestral.completion.transformation import (
         CodestralTextCompletionConfig as CodestralTextCompletionConfig,
