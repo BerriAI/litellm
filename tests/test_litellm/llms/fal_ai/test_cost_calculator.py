@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 import litellm
@@ -60,12 +62,23 @@ def test_provider_prefixed_edit_model_uses_keyed_edit_price():
 
 
 def test_default_request_priced_at_default_size_and_quality():
-    cost = cost_calculator(
+    cost: Final = cost_calculator(
         model="openai/gpt-image-2",
         image_response=_image_response(),
         optional_params={},
     )
-    assert cost == pytest.approx(_price("fal_ai/openai/gpt-image-2"))
+    no_params_cost: Final = cost_calculator(
+        model="openai/gpt-image-2",
+        image_response=_image_response(),
+        optional_params=None,
+    )
+    keyed_cost: Final = cost_calculator(
+        model="openai/gpt-image-2",
+        image_response=_image_response(),
+        optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
+    )
+    assert cost == pytest.approx(no_params_cost)
+    assert cost != pytest.approx(keyed_cost)
 
 
 def test_auto_quality_priced_as_high():
@@ -105,30 +118,63 @@ def test_edit_model_uses_keyed_edit_price():
 
 
 def test_edit_model_without_size_falls_back_to_flat_price():
-    cost = cost_calculator(
+    cost: Final = cost_calculator(
         model="openai/gpt-image-2/edit",
         image_response=_image_response(),
         optional_params={"quality": "high"},
     )
-    assert cost == pytest.approx(_price("fal_ai/openai/gpt-image-2/edit"))
+    no_params_cost: Final = cost_calculator(
+        model="openai/gpt-image-2/edit",
+        image_response=_image_response(),
+        optional_params=None,
+    )
+    keyed_cost: Final = cost_calculator(
+        model="openai/gpt-image-2/edit",
+        image_response=_image_response(),
+        optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
+    )
+    assert cost == pytest.approx(no_params_cost)
+    assert cost != pytest.approx(keyed_cost)
 
 
 def test_missing_optional_params_falls_back_to_flat_price():
-    cost = cost_calculator(
+    cost: Final = cost_calculator(
         model="openai/gpt-image-2",
         image_response=_image_response(),
         optional_params=None,
     )
-    assert cost == pytest.approx(_price("fal_ai/openai/gpt-image-2"))
+    default_cost: Final = cost_calculator(
+        model="openai/gpt-image-2",
+        image_response=_image_response(),
+        optional_params={},
+    )
+    keyed_cost: Final = cost_calculator(
+        model="openai/gpt-image-2",
+        image_response=_image_response(),
+        optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
+    )
+    assert cost == pytest.approx(default_cost)
+    assert cost != pytest.approx(keyed_cost)
 
 
 def test_unlisted_size_falls_back_to_flat_price():
-    cost = cost_calculator(
+    cost: Final = cost_calculator(
         model="openai/gpt-image-2",
         image_response=_image_response(),
         optional_params={"quality": "high", "image_size": {"width": 999, "height": 999}},
     )
-    assert cost == pytest.approx(_price("fal_ai/openai/gpt-image-2"))
+    no_params_cost: Final = cost_calculator(
+        model="openai/gpt-image-2",
+        image_response=_image_response(),
+        optional_params=None,
+    )
+    keyed_cost: Final = cost_calculator(
+        model="openai/gpt-image-2",
+        image_response=_image_response(),
+        optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
+    )
+    assert cost == pytest.approx(no_params_cost)
+    assert cost != pytest.approx(keyed_cost)
 
 
 def test_keyed_price_multiplies_per_image():

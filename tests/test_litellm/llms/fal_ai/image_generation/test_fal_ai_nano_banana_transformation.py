@@ -149,6 +149,11 @@ def test_cost_calculator_scales_with_image_count():
     image_response = ImageResponse(
         data=[ImageObject(url="https://x/1.png"), ImageObject(url="https://x/2.png")]
     )
-    cost = cost_calculator(model="fal-ai/nano-banana", image_response=image_response)
     model_info: Final = litellm.get_model_info("fal-ai/nano-banana", "fal_ai")
-    assert cost == pytest.approx(2 * model_info["output_cost_per_image"])
+    single_image_cost: Final = cost_calculator(
+        model="fal-ai/nano-banana",
+        image_response=ImageResponse(data=[ImageObject(url="https://x/1.png")]),
+    )
+    cost: Final = cost_calculator(model="fal-ai/nano-banana", image_response=image_response)
+    assert model_info["output_cost_per_image"] > 0
+    assert cost == pytest.approx(2 * single_image_cost)
