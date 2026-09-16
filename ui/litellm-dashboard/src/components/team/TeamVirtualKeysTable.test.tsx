@@ -1,7 +1,17 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
-import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { ReactElement, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi, Mock, MockedFunction } from "vitest";
-import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
+import {
+  fireEvent,
+  render,
+  renderWithProviders,
+  screen,
+  testQueryClient,
+  waitFor,
+  within,
+} from "../../../tests/test-utils";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
@@ -31,16 +41,18 @@ vi.mock("../templates/key_info_view", () => ({
       onKeyDataUpdate,
     }: {
       keyId: string;
-      keyData?: { key_alias?: string | null };
+      keyData?: { key_alias?: string | null; max_budget?: number | null };
       onClose: () => void;
-      onKeyDataUpdate?: (data: { token: string }) => void;
+      onKeyDataUpdate?: (data: { token?: string; spend?: number; max_budget?: number }) => void;
     }) => (
       <div>
         <span>Key Info View</span>
         <span data-testid="key-info-id">{keyId}</span>
         <span data-testid="key-info-alias">{keyData?.key_alias ?? "no key data"}</span>
+        <span data-testid="key-info-budget">{keyData?.max_budget ?? "no budget"}</span>
         <button onClick={onClose}>Close</button>
-        <button onClick={() => onKeyDataUpdate?.({ token: "sk-rotated" })}>Rotate</button>
+        <button onClick={() => onKeyDataUpdate?.({ token: "sk-rotated", max_budget: 5 })}>Rotate</button>
+        <button onClick={() => onKeyDataUpdate?.({ spend: 0 })}>Reset spend</button>
       </div>
     ),
   ),
@@ -65,6 +77,20 @@ const keysResult = (keys: KeyResponse[], totalCount = keys.length, refetch = vi.
     isError: false,
     refetch,
   }) as unknown as ReturnType<typeof useKeys>;
+
+const renderKeepingMountUpdates = (ui: ReactElement, searchParams: string, onUrlUpdate: OnUrlUpdateFunction) =>
+  render(ui, {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <NuqsTestingAdapter
+        searchParams={searchParams}
+        onUrlUpdate={onUrlUpdate}
+        hasMemory
+        resetUrlUpdateQueueOnMount={false}
+      >
+        <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+      </NuqsTestingAdapter>
+    ),
+  });
 
 const lastUrlUpdate = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => {
   const event = onUrlUpdate.mock.calls.at(-1)?.[0];
@@ -453,6 +479,54 @@ describe("TeamVirtualKeysTable", () => {
       expect(screen.getByTestId("datatable-search")).toHaveValue("prod");
     });
 
+    it("falls back to the created_at sort for a keys_sort_by the backend cannot sort on", async () => {
+      mockUseKeys.mockReturnValue(keysResult([createMockKey()]));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, {
+        searchParams: { keys_sort_by: "user_email", keys_sort_order: "asc" },
+      });
+
+      await waitFor(() =>
+        expect(mockUseKeys).toHaveBeenLastCalledWith(
+          1,
+          50,
+          expect.objectContaining({ sortBy: "created_at", sortOrder: "asc" }),
+        ),
+      );
+    });
+
+    it.each(["token", "key_alias", "created_at", "updated_at", "spend", "max_budget"])(
+      "passes the sortable column %s from keys_sort_by to the keys query",
+      async (sortBy) => {
+        mockUseKeys.mockReturnValue(keysResult([createMockKey()]));
+
+        renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, {
+          searchParams: { keys_sort_by: sortBy, keys_sort_order: "asc" },
+        });
+
+        await waitFor(() =>
+          expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy, sortOrder: "asc" })),
+        );
+      },
+    );
+
+    it("keeps the linked keys_page while the keys request is failing", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      mockUseKeys.mockReturnValue({
+        data: undefined,
+        isPending: false,
+        isFetching: false,
+        isError: true,
+        refetch: vi.fn(),
+      } as unknown as ReturnType<typeof useKeys>);
+
+      renderKeepingMountUpdates(<TeamVirtualKeysTable {...defaultProps} />, "?keys_page=3", onUrlUpdate);
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(mockUseKeys).toHaveBeenLastCalledWith(3, 50, expect.anything());
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+
     it("writes the search box to keys_search and leaves the list search alone", async () => {
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
       mockUseKeys.mockReturnValue(keysResult([createMockKey()]));
@@ -483,6 +557,9 @@ describe("TeamVirtualKeysTable", () => {
 
       await user.click(screen.getByTestId("sort-header-key_alias"));
       await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("keys_sort_by")).toBe("key_alias"));
+      await waitFor(() =>
+        expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: "key_alias" })),
+      );
       const params = lastUrlUpdate(onUrlUpdate).searchParams;
       expect(params.has("keys_page")).toBe(false);
       expect(params.has("sort_by")).toBe(false);
@@ -574,15 +651,20 @@ describe("TeamVirtualKeysTable", () => {
       await user.click(await screen.findByRole("button", { name: "Close" }));
 
       await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.has("key")).toBe(false));
-      expect(lastUrlUpdate(onUrlUpdate).searchParams.get("team")).toBe("team-1");
+      const { searchParams, options } = lastUrlUpdate(onUrlUpdate);
+      expect(searchParams.get("team")).toBe("team-1");
+      expect(searchParams.get("team_tab")).toBe("virtual-keys");
+      expect(options.history).toBe("push");
       expect(await screen.findByText("listed_key")).toBeInTheDocument();
     });
 
-    it("replaces the key param with the rotated token and refetches the list", async () => {
+    it("replaces the key param with the rotated token and keeps the detail open while the list refetches", async () => {
       const user = userEvent.setup();
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
       const refetch = vi.fn();
-      mockUseKeys.mockReturnValue(keysResult([createMockKey({ token: "sk-listed" })], 1, refetch));
+      mockUseKeys.mockReturnValue(
+        keysResult([createMockKey({ token: "sk-listed", key_alias: "listed_key", max_budget: 100 })], 1, refetch),
+      );
 
       renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, {
         searchParams: { key: "sk-listed" },
@@ -594,6 +676,29 @@ describe("TeamVirtualKeysTable", () => {
       await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("key")).toBe("sk-rotated"));
       expect(lastUrlUpdate(onUrlUpdate).options.history).toBe("replace");
       expect(refetch).toHaveBeenCalled();
+      await waitFor(() => expect(screen.getByTestId("key-info-id")).toHaveTextContent("sk-rotated"));
+      expect(screen.queryByText("Loading key...")).not.toBeInTheDocument();
+      expect(screen.getByTestId("key-info-alias")).toHaveTextContent("listed_key");
+      expect(screen.getByTestId("key-info-budget")).toHaveTextContent("5");
+    });
+
+    it("leaves the key param alone for updates that do not rotate the key", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      const refetch = vi.fn();
+      mockUseKeys.mockReturnValue(keysResult([createMockKey({ token: "sk-listed" })], 1, refetch));
+
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />, {
+        searchParams: { key: "sk-listed" },
+        onUrlUpdate,
+      });
+
+      await user.click(await screen.findByRole("button", { name: "Reset spend" }));
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+      expect(refetch).not.toHaveBeenCalled();
+      expect(screen.getByTestId("key-info-id")).toHaveTextContent("sk-listed");
     });
   });
 

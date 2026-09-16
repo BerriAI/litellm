@@ -17,7 +17,6 @@ import {
   DataTableSortHeader,
   DataTableToolbar,
   useUrlTableState,
-  type UrlTableStateOptions,
 } from "@/components/shared/DataTable";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -27,7 +26,6 @@ import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnDef, ColumnFiltersState } from "@tanstack/react-table";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { parseAsString, useQueryState } from "nuqs";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
@@ -35,7 +33,7 @@ import { deriveKeyModelScope } from "../key_scope";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
-import { SELECTED_TEAM_KEY_URL_KEY, TEAM_KEYS_FILTER_URL_KEYS, TEAM_KEYS_URL_PREFIX } from "./useTeamDetailUrlState";
+import { TEAM_KEYS_TABLE_STATE_OPTIONS, type TeamKeysFilterColumn, useSelectedTeamKey } from "./useTeamDetailUrlState";
 
 interface TeamVirtualKeysTableProps {
   teamId: string;
@@ -43,31 +41,13 @@ interface TeamVirtualKeysTableProps {
   organization: Organization | null;
 }
 
-const FILTER_COLUMNS = ["user_id", "key_hash"] as const;
-type FilterColumn = (typeof FILTER_COLUMNS)[number];
-
-const SORT_FIELDS = ["token", "key_alias", "created_at", "updated_at", "spend", "max_budget"] as const;
-
-const TABLE_STATE_OPTIONS: UrlTableStateOptions<FilterColumn> = {
-  sortFields: SORT_FIELDS,
-  defaultSort: { id: "created_at", desc: true },
-  defaultPageSize: 50,
-  maxPageSize: 100,
-  filterColumns: FILTER_COLUMNS,
-  keyPrefix: TEAM_KEYS_URL_PREFIX,
-  urlKeys: TEAM_KEYS_FILTER_URL_KEYS,
-};
-
-const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): string | undefined => {
+const appliedFilter = (filters: ColumnFiltersState, column: TeamKeysFilterColumn): string | undefined => {
   const value = filters.find((filter) => filter.id === column)?.value;
   return typeof value === "string" ? value : undefined;
 };
 
 export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVirtualKeysTableProps) {
-  const [selectedKeyId, setSelectedKeyId] = useQueryState(
-    SELECTED_TEAM_KEY_URL_KEY,
-    parseAsString.withOptions({ history: "push" }),
-  );
+  const { keyId: selectedKeyId, openKey, closeKey, replaceKey } = useSelectedTeamKey();
   const {
     search: searchInput,
     setSearch,
@@ -77,7 +57,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     onPaginationChange,
     columnFilters,
     onColumnFiltersChange,
-  } = useUrlTableState(TABLE_STATE_OPTIONS);
+  } = useUrlTableState(TEAM_KEYS_TABLE_STATE_OPTIONS);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
 
@@ -119,16 +99,19 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
   const { data: fetchedSelectedKey, isError: selectedKeyLoadFailed } = useKeyInfo(selectedKeyId, {
     enabled: !selectedKeyFromList,
   });
-  const selectedKey = selectedKeyFromList ?? fetchedSelectedKey;
+  const [rotatedKey, setRotatedKey] = useState<KeyResponse>();
+  const selectedKey =
+    selectedKeyFromList ?? fetchedSelectedKey ?? (rotatedKey?.token === selectedKeyId ? rotatedKey : undefined);
 
   const handleSelectedKeyDataUpdate = useCallback(
     (updated: Partial<KeyResponse>) => {
       const rotatedToken = updated.token ?? updated.token_id;
       if (!rotatedToken || rotatedToken === selectedKeyId) return;
-      void setSelectedKeyId(rotatedToken, { history: "replace" });
+      setRotatedKey(selectedKey && { ...selectedKey, ...updated, token: rotatedToken });
+      replaceKey(rotatedToken);
       void refetch();
     },
-    [refetch, selectedKeyId, setSelectedKeyId],
+    [refetch, replaceKey, selectedKey, selectedKeyId],
   );
 
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
@@ -170,10 +153,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         size: 120,
         enableSorting: true,
         cell: (info) => (
-          <IdCell
-            value={info.getValue() as string | null}
-            onClick={() => void setSelectedKeyId(info.row.original.token)}
-          />
+          <IdCell value={info.getValue() as string | null} onClick={() => openKey(info.row.original.token)} />
         ),
       },
       {
@@ -451,7 +431,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         },
       },
     ],
-    [expandedAccordions, setSelectedKeyId],
+    [expandedAccordions, openKey],
   );
 
   if (selectedKeyId) {
@@ -460,7 +440,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         {selectedKey || selectedKeyLoadFailed ? (
           <KeyInfoView
             keyId={selectedKeyId}
-            onClose={() => void setSelectedKeyId(null)}
+            onClose={closeKey}
             keyData={selectedKey}
             teams={[currentTeam]}
             onDelete={refetch}

@@ -101,12 +101,7 @@ import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_c
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
 import MyUserTab from "./MyUserTab";
-import {
-  getTeamInfoDefaultTab,
-  getTeamInfoVisibleTabs,
-  TEAM_INFO_TAB_KEYS,
-  TEAM_INFO_TAB_LABELS,
-} from "./tabVisibilityUtils";
+import { TEAM_INFO_TAB_KEYS, TEAM_INFO_TAB_LABELS } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import { useTeamDetailUrlState } from "./useTeamDetailUrlState";
@@ -625,12 +620,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   );
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
-  const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
-  const { tab, selectTab, hasVisited, clearDetailState } = useTeamDetailUrlState(
-    visibleTabs,
-    getTeamInfoDefaultTab(editTeam, canEditTeam),
-    !loading && !userOrganizationsLoading,
-  );
+  const permissionsResolved = !loading && !userOrganizationsLoading;
+  const detailUrlOptions = { canEditTeam, editTeam, permissionsResolved, onClose };
+  const { visibleTabs, tab, selectTab, hasVisited, close } = useTeamDetailUrlState(detailUrlOptions);
 
   const teamFormValues = (): TeamUpdateFormValues => {
     const info = teamData?.team_info;
@@ -2204,14 +2196,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              clearDetailState();
-              onClose();
-            }}
-            className="mb-4"
-          >
+          <Button variant="ghost" onClick={close} className="mb-4">
             <ArrowLeftIcon className="h-4 w-4" />
             Back to Teams
           </Button>
