@@ -39,7 +39,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         Handles `thinking` and `reasoning_effort` parameters for DeepSeek reasoner models.
         DeepSeek supports `{"type": "enabled"}` and `{"type": "disabled"}` - no budget_tokens
         like Anthropic. `reasoning_effort="none"` is the OpenAI-style way to ask for thinking
-        off, so it maps to `{"type": "disabled"}`; any other effort keeps thinking on.
+        off, so it maps to `{"type": "disabled"}`; any other effort keeps thinking on and
+        is forwarded, since DeepSeek grades effort itself server-side.
 
         Reference: https://api-docs.deepseek.com/guides/thinking_mode
         """
@@ -57,7 +58,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         # Otherwise fall back to reasoning_effort: "none" disables, anything else enables
         elif reasoning_effort is not None:
-            optional_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
+            thinking_enabled: Final = reasoning_effort != "none"
+            optional_params["thinking"] = {"type": "enabled" if thinking_enabled else "disabled"}
+            if thinking_enabled:
+                optional_params["reasoning_effort"] = reasoning_effort
 
         return optional_params
 
