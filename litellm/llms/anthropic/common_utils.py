@@ -68,6 +68,46 @@ _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
+_CONTEXT_1M_SUFFIX: Final = re.compile(r"\[1m\]$", flags=re.IGNORECASE)
+
+
+def model_has_context_1m_suffix(model: object) -> bool:
+    return isinstance(model, str) and _CONTEXT_1M_SUFFIX.search(model) is not None
+
+
+def strip_context_1m_suffix(model: str) -> str:
+    return _CONTEXT_1M_SUFFIX.sub("", model)
+
+
+def _original_model_from(params: object) -> object:
+    if not isinstance(params, Mapping):
+        return None
+    return params.get("_original_model")
+
+
+def context_1m_requested(
+    *,
+    model: object = "",
+    optional_params: object = None,
+    litellm_params: object = None,
+) -> bool:
+    return any(
+        model_has_context_1m_suffix(candidate)
+        for candidate in (
+            model,
+            _original_model_from(optional_params),
+            _original_model_from(litellm_params),
+        )
+    )
+
+
+_CONTEXT_1M_BETA: Final = "context-1m-2025-08-07"
+
+
+def context_1m_beta_values(supported: bool) -> frozenset[str]:
+    return frozenset((_CONTEXT_1M_BETA,)) if supported else frozenset()
+
+
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 _CLAUDE_CODE_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
@@ -845,8 +885,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         container_with_skills_used: bool = False,
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
+        context_1m_supported: bool = False,
     ) -> dict:
-        betas: Final = set()
+        betas: Final = set(context_1m_beta_values(context_1m_supported))
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
@@ -955,8 +996,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         user_anthropic_beta_headers: Final = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
+        context_1m_supported: Final = context_1m_requested(
+            model=model,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
         anthropic_headers: Final = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
+            context_1m_supported=context_1m_supported,
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key,
