@@ -1,10 +1,12 @@
-import { render, screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { formatCellDate } from "@/components/shared/table_cells";
 import { Tag } from "@/components/tag_management/types";
 
+import { renderWithProviders } from "@/../tests/test-utils";
 import TagTable from "./TagTable";
 
 describe("TagTable", () => {
@@ -45,25 +47,25 @@ describe("TagTable", () => {
   });
 
   it("should render every column header", () => {
-    render(<TagTable {...defaultProps} />);
+    renderWithProviders(<TagTable {...defaultProps} />);
     for (const header of ["Tag Name", "Description", "Allowed Models", "Created"]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
   });
 
   it("should display the empty state when data is empty", () => {
-    render(<TagTable {...defaultProps} />);
+    renderWithProviders(<TagTable {...defaultProps} />);
     expect(screen.getByText("No tags yet")).toBeInTheDocument();
   });
 
   it("should display tag name and description", () => {
-    render(<TagTable {...defaultProps} data={[mockTag]} />);
+    renderWithProviders(<TagTable {...defaultProps} data={[mockTag]} />);
     expect(screen.getByText("test-tag")).toBeInTheDocument();
     expect(screen.getByText("Test description")).toBeInTheDocument();
   });
 
   it("should display model names from model_info", () => {
-    render(<TagTable {...defaultProps} data={[mockTag]} />);
+    renderWithProviders(<TagTable {...defaultProps} data={[mockTag]} />);
     expect(screen.getByText("GPT-4")).toBeInTheDocument();
     expect(screen.getByText("Claude-3")).toBeInTheDocument();
   });
@@ -73,12 +75,12 @@ describe("TagTable", () => {
       ...mockTag,
       models: [],
     };
-    render(<TagTable {...defaultProps} data={[tagWithNoModels]} />);
+    renderWithProviders(<TagTable {...defaultProps} data={[tagWithNoModels]} />);
     expect(screen.getByText("All Models")).toBeInTheDocument();
   });
 
   it("should display formatted created date", () => {
-    render(<TagTable {...defaultProps} data={[mockTag]} />);
+    renderWithProviders(<TagTable {...defaultProps} data={[mockTag]} />);
     const formattedDate = formatCellDate(new Date(mockTag.created_at), "date");
     expect(screen.getByText(formattedDate)).toBeInTheDocument();
   });
@@ -86,7 +88,7 @@ describe("TagTable", () => {
   it("should sort by created date descending by default", () => {
     const olderTag: Tag = { ...mockTag, name: "older-tag", created_at: "2023-01-01T00:00:00Z" };
     const newerTag: Tag = { ...mockTag, name: "newer-tag", created_at: "2025-01-01T00:00:00Z" };
-    render(<TagTable {...defaultProps} data={[olderTag, newerTag]} />);
+    renderWithProviders(<TagTable {...defaultProps} data={[olderTag, newerTag]} />);
     const rows = screen.getAllByRole("row").slice(1);
     expect(within(rows[0]).getByText("newer-tag")).toBeInTheDocument();
     expect(within(rows[1]).getByText("older-tag")).toBeInTheDocument();
@@ -94,13 +96,13 @@ describe("TagTable", () => {
 
   it("should call onSelectTag when tag name is clicked", async () => {
     const user = userEvent.setup();
-    render(<TagTable {...defaultProps} data={[mockTag]} />);
+    renderWithProviders(<TagTable {...defaultProps} data={[mockTag]} />);
     await user.click(screen.getByRole("button", { name: "test-tag" }));
     expect(mockOnSelectTag).toHaveBeenCalledWith("test-tag");
   });
 
   it("should render tag name as non-clickable and muted for dynamic spend tags", () => {
-    render(<TagTable {...defaultProps} data={[mockDynamicSpendTag]} />);
+    renderWithProviders(<TagTable {...defaultProps} data={[mockDynamicSpendTag]} />);
     expect(screen.queryByRole("button", { name: "dynamic-spend-tag" })).not.toBeInTheDocument();
     expect(screen.getByText("dynamic-spend-tag")).toHaveClass("text-muted-foreground");
     expect(mockOnSelectTag).not.toHaveBeenCalled();
@@ -112,14 +114,14 @@ describe("TagTable", () => {
       name: "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15) Firefox/152.0",
       description: "A very long description that would otherwise stretch the column far beyond what users need to see",
     };
-    render(<TagTable {...defaultProps} data={[longTag]} />);
+    renderWithProviders(<TagTable {...defaultProps} data={[longTag]} />);
     expect(screen.getByText(longTag.name)).toHaveClass("truncate", "text-primary");
     expect(screen.getByText(longTag.description as string)).toHaveClass("truncate", "max-w-72");
   });
 
   it("should edit a tag through the actions menu", async () => {
     const user = userEvent.setup();
-    render(<TagTable {...defaultProps} data={[mockTag]} />);
+    renderWithProviders(<TagTable {...defaultProps} data={[mockTag]} />);
     await user.click(screen.getByTestId("tag-actions-test-tag"));
     await user.click(await screen.findByTestId("tag-action-edit"));
     expect(mockOnEdit).toHaveBeenCalledWith(mockTag);
@@ -127,7 +129,7 @@ describe("TagTable", () => {
 
   it("should delete a tag through the actions menu", async () => {
     const user = userEvent.setup();
-    render(<TagTable {...defaultProps} data={[mockTag]} />);
+    renderWithProviders(<TagTable {...defaultProps} data={[mockTag]} />);
     await user.click(screen.getByTestId("tag-actions-test-tag"));
     await user.click(await screen.findByTestId("tag-action-delete"));
     expect(mockOnDelete).toHaveBeenCalledWith("test-tag");
@@ -135,7 +137,7 @@ describe("TagTable", () => {
 
   it("should disable edit and delete for dynamic spend tags", async () => {
     const user = userEvent.setup();
-    render(<TagTable {...defaultProps} data={[mockDynamicSpendTag]} />);
+    renderWithProviders(<TagTable {...defaultProps} data={[mockDynamicSpendTag]} />);
     await user.click(screen.getByTestId("tag-actions-dynamic-spend-tag"));
 
     const editItem = await screen.findByTestId("tag-action-edit");
@@ -149,5 +151,65 @@ describe("TagTable", () => {
 
     expect(mockOnEdit).not.toHaveBeenCalled();
     expect(mockOnDelete).not.toHaveBeenCalled();
+  });
+
+  describe("URL table state", () => {
+    const olderTag: Tag = { ...mockTag, name: "b-older-tag", created_at: "2023-01-01T00:00:00Z" };
+    const newerTag: Tag = { ...mockTag, name: "a-newer-tag", created_at: "2025-01-01T00:00:00Z" };
+    const manyTags: Tag[] = Array.from({ length: 30 }, (_, index) => ({
+      ...mockTag,
+      name: `tag-${String(index).padStart(2, "0")}`,
+      created_at: `2024-01-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+    }));
+    const rowNames = () =>
+      screen
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => within(row).getAllByRole("cell")[0].textContent);
+    const lastUrlUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+      onUrlUpdate.mock.calls.at(-1)?.[0];
+
+    it("orders rows by the sort in the URL", () => {
+      renderWithProviders(<TagTable {...defaultProps} data={[newerTag, olderTag]} />, {
+        searchParams: "?sort_by=created_at&sort_order=asc",
+      });
+      expect(rowNames()).toEqual(["b-older-tag", "a-newer-tag"]);
+    });
+
+    it("falls back to newest first when the URL names an unknown sort column", () => {
+      renderWithProviders(<TagTable {...defaultProps} data={[olderTag, newerTag]} />, {
+        searchParams: "?sort_by=description&sort_order=desc",
+      });
+      expect(rowNames()).toEqual(["a-newer-tag", "b-older-tag"]);
+    });
+
+    it("writes the sort to the URL when a header is clicked", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<TagTable {...defaultProps} data={[olderTag, newerTag]} />, { onUrlUpdate });
+
+      await user.click(screen.getByTestId("sort-header-name"));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("sort_by")).toBe("name"));
+      expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("sort_order")).toBe("asc");
+      expect(rowNames()).toEqual(["a-newer-tag", "b-older-tag"]);
+    });
+
+    it("opens the page named in the URL", () => {
+      renderWithProviders(<TagTable {...defaultProps} data={manyTags} />, { searchParams: "?page=2" });
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+      expect(rowNames()).toEqual(["tag-04", "tag-03", "tag-02", "tag-01", "tag-00"]);
+    });
+
+    it("writes the page to the URL when paging forward", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<TagTable {...defaultProps} data={manyTags} />, { onUrlUpdate });
+
+      await user.click(screen.getByRole("button", { name: "Go to next page" }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("page")).toBe("2"));
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+    });
   });
 });

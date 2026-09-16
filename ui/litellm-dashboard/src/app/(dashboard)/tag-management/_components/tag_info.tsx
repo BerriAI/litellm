@@ -22,6 +22,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, ChevronRight, CopyIcon } from "lucide-react";
+import { useTagUrlState } from "./useTagUrlState";
 
 const tagEditShape = {
   name: z.string().min(1, "Please input a tag name"),
@@ -147,12 +148,13 @@ interface TagInfoViewProps {
   onClose: () => void;
   accessToken: string | null;
   is_admin: boolean;
-  editTag: boolean;
 }
 
-const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, is_admin, editTag }) => {
+const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, is_admin }) => {
   const [tagDetails, setTagDetails] = useState<Tag | null>(null);
-  const [isEditing, setIsEditing] = useState<boolean>(editTag);
+  const [{ edit: isEditing }, setTagUrl] = useTagUrlState();
+  const [openedInEditMode] = useState(isEditing);
+  const setIsEditing = (edit: boolean) => void setTagUrl({ edit });
   const [userModels, setUserModels] = useState<string[]>([]);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
 
@@ -252,7 +254,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
           <CardContent>
             <TagEditForm
               tag={tagDetails}
-              seedBudgetFields={editTag}
+              seedBudgetFields={openedInEditMode}
               userModels={userModels}
               onCancel={() => setIsEditing(false)}
               onSave={handleSave}
