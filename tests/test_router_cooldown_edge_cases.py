@@ -1,36 +1,51 @@
 import pytest
 import time
-from typing import Dict, Any
+from litellm import Router
 
-def test_router_cooldown_duration_edge_cases():
-    cooldown_cache: Dict[str, float] = {}
-    current_time = time.time()
+def test_router_model_list_initialization():
+    model_list = [
+        {
+            "model_name": "gpt-4",
+            "litellm_params": {
+                "model": "azure/gpt-4-east",
+                "api_key": "test-key-1",
+                "api_base": "https://test.azure.com",
+            },
+        },
+        {
+            "model_name": "gpt-4",
+            "litellm_params": {
+                "model": "azure/gpt-4-west",
+                "api_key": "test-key-2",
+                "api_base": "https://test.azure.com",
+            },
+        },
+    ]
     
-    # Simulate adding deployment to cooldown
-    deployment_id = "test-azure-gpt-4o"
-    cooldown_duration = 30
-    cooldown_cache[deployment_id] = current_time + cooldown_duration
+    router = Router(model_list=model_list)
+    assert len(router.model_list) == 2
+    assert router.model_list[0]["model_name"] == "gpt-4"
+    assert router.model_list[1]["model_name"] == "gpt-4"
 
-    # Active cooldown verification
-    assert cooldown_cache[deployment_id] > current_time
-    assert (cooldown_cache[deployment_id] - current_time) <= 30.0
+def test_router_cooldown_time_assignment():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "test-key"},
+            }
+        ],
+        cooldown_time=45,
+    )
+    assert router.cooldown_time == 45
 
-def test_router_model_group_alias_resolution():
-    model_aliases = {
-        "gpt-4": ["azure-gpt-4-eastus", "openai-gpt-4-prod"],
-        "claude-3-5-sonnet": ["bedrock-claude-3-5", "anthropic-claude-3-5-direct"]
-    }
-    
-    target_group = "gpt-4"
-    assert target_group in model_aliases
-    assert len(model_aliases[target_group]) == 2
-    assert "azure-gpt-4-eastus" in model_aliases[target_group]
-
-def test_router_retry_strategy_backoff():
-    base_delay = 0.5
-    max_delay = 10.0
-    
-    for attempt in range(1, 5):
-        exponential_delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
-        assert exponential_delay <= max_delay
-        assert exponential_delay >= base_delay
+def test_router_get_model_group_names():
+    router = Router(
+        model_list=[
+            {"model_name": "claude-3-haiku", "litellm_params": {"model": "bedrock/claude-3-haiku"}},
+            {"model_name": "claude-3-sonnet", "litellm_params": {"model": "bedrock/claude-3-sonnet"}},
+        ]
+    )
+    model_names = [m["model_name"] for m in router.model_list]
+    assert "claude-3-haiku" in model_names
+    assert "claude-3-sonnet" in model_names
