@@ -379,6 +379,15 @@ class ChunkProcessor:
                 if chunk_finish_reason is not None:
                     finish_reason = chunk_finish_reason
 
+        choice_provider_specific_fields: Final[dict[str, object]] = {  # mutable-ok: response field requires a dict
+            key: value
+            for chunk in chunks
+            if chunk.get("choices")
+            for fields in (chunk["choices"][0].get("provider_specific_fields"),)
+            if isinstance(fields, dict)
+            for key, value in fields.items()
+        }
+
         # Initialize the response dictionary
         response = ModelResponse(
             **{
@@ -392,6 +401,7 @@ class ChunkProcessor:
                         "index": 0,
                         "message": {"role": role, "content": ""},
                         "finish_reason": finish_reason,
+                        "provider_specific_fields": choice_provider_specific_fields or None,
                     }
                 ],
                 "usage": {

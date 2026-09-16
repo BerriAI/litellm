@@ -4628,6 +4628,8 @@ def test_transform_response_native_structured_output():
     assert result.choices[0].finish_reason == "stop"
 
 
+# AWS Bedrock Converse stopReason values, accessed 2026-09-16:
+# https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
 @pytest.mark.parametrize("stop_reason", ("stop_sequence", "end_turn"))
 def test_transform_response_preserves_raw_bedrock_stop_reason(stop_reason: str):
     response_json = {
@@ -4669,6 +4671,8 @@ def test_transform_response_preserves_raw_bedrock_stop_reason(stop_reason: str):
     }
 
 
+# AWS Bedrock Converse stopReason values, accessed 2026-09-16:
+# https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
 @pytest.mark.parametrize("stop_reason", ("stop_sequence", "end_turn"))
 def test_converse_chunk_parser_preserves_raw_bedrock_stop_reason(stop_reason: str):
     result = AWSEventStreamDecoder(model="bedrock/claude").converse_chunk_parser(
@@ -4678,6 +4682,21 @@ def test_converse_chunk_parser_preserves_raw_bedrock_stop_reason(stop_reason: st
     assert result.choices[0].finish_reason == "stop"
     assert result.choices[0].provider_specific_fields == {
         "native_finish_reason": stop_reason
+    }
+
+
+def test_converse_assembled_stream_preserves_raw_bedrock_stop_reason():
+    # AWS Bedrock Converse stopReason value, accessed 2026-09-16:
+    # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+    result = AWSEventStreamDecoder(model="bedrock/claude").converse_chunk_parser(
+        {"stopReason": "stop_sequence"}
+    )
+
+    assembled = litellm.stream_chunk_builder(chunks=[result])
+
+    assert assembled is not None
+    assert assembled.choices[0].provider_specific_fields == {
+        "native_finish_reason": "stop_sequence"
     }
 
 
