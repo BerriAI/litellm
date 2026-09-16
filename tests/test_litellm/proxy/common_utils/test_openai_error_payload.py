@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
+    litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
 )
@@ -158,3 +159,8 @@ def test_a_stringified_none_type_or_param_is_treated_as_absent():
     assert carried.type == "None"
     assert openai_error_type(carried, 400) == "invalid_request_error"
     assert openai_error_param(carried) is None
+
+
+def test_a_failed_request_answers_with_the_call_id_it_was_logged_under():
+    assert litellm_call_id_headers("call-7836") == {"x-litellm-call-id": "call-7836"}
+    assert litellm_call_id_headers(None) is None

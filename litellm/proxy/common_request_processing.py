@@ -7,7 +7,18 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequen
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, TypeAlias, TypeVar, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    NamedTuple,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    overload,
+    runtime_checkable,
+)
 
 import anyio
 import httpx
@@ -1452,7 +1463,19 @@ def _has_attribute_error_in_chain(exc: Exception) -> bool:
 _CLIENT_DISCONNECT_DETAIL: Final = "Client disconnected the request"
 
 
-def _log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
+@runtime_checkable
+class _CarriesLitellmCallId(Protocol):
+    litellm_call_id: str | None
+
+
+def request_litellm_call_id(data: Mapping[str, object]) -> str | None:
+    logging_obj: Final = data.get("litellm_logging_obj")
+    logged_id: Final = logging_obj.litellm_call_id if isinstance(logging_obj, _CarriesLitellmCallId) else None
+    call_id: Final = logged_id or data.get("litellm_call_id")
+    return call_id if isinstance(call_id, str) else None
+
+
+def log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
     if getattr(e, "status_code", None) == 499 and getattr(e, "detail", None) == _CLIENT_DISCONNECT_DETAIL:
         verbose_proxy_logger.info(
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, "
@@ -1531,6 +1554,10 @@ def _timing_values(
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
+
+    @property
+    def litellm_call_id(self) -> str | None:
+        return request_litellm_call_id(self.data)
 
     @staticmethod
     def _merge_passthrough_streaming_headers(
@@ -3429,11 +3456,7 @@ class ProxyBaseLLMRequestProcessing:
         version: str | None = None,
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
-        logging_obj: Final[LiteLLMLoggingObj | None] = self.data.get("litellm_logging_obj", None)
-        _log_llm_api_exception(
-            e,
-            (logging_obj.litellm_call_id if logging_obj is not None else None) or self.data.get("litellm_call_id"),
-        )
+        log_llm_api_exception(e, self.litellm_call_id)
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -3463,9 +3486,7 @@ class ProxyBaseLLMRequestProcessing:
 
         custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
-            call_id=(
-                _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else self.data.get("litellm_call_id")
-            ),
+            call_id=self.litellm_call_id,
             model_id=model_id,
             version=version,
             response_cost=0,
