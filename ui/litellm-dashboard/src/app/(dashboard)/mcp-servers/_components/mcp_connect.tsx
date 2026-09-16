@@ -21,6 +21,9 @@ import {
 } from "lucide-react";
 import { getProxyBaseUrl } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { useUrlTab } from "@/hooks/useUrlTab";
+
+const CONNECT_CLIENTS = ["openai", "litellm", "cursor", "http"] as const;
 
 interface CodeBlockProps {
   code: string;
@@ -126,31 +129,16 @@ const FeatureCard: React.FC<FeatureCardProps> = ({
   );
 };
 
-interface MCPConnectProps {
-  currentServerAccessGroups?: string[];
-}
+const CodeBlock: React.FC<CodeBlockProps> = ({ code, title, className = "" }) => {
+  const [copied, setCopied] = useState(false);
 
-const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
-  const proxyBaseUrl = getProxyBaseUrl();
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [currentServer] = useState("Zapier_MCP"); // This should match the current server being viewed
-
-  const copyToClipboard = async (text: string, key: string) => {
-    const success = await utilCopyToClipboard(text);
-    if (success) {
-      setCopiedStates((prev) => ({ ...prev, [key]: true }));
-      setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }));
-      }, 2000);
-    }
+  const copyCode = async () => {
+    if (!(await utilCopyToClipboard(code))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
-  const CodeBlock: React.FC<{
-    code: string;
-    copyKey: string;
-    title?: string;
-    className?: string;
-  }> = ({ code, copyKey, title, className = "" }) => (
+  return (
     <div className="relative group">
       {title && (
         <div className="flex items-center gap-2 mb-2">
@@ -163,40 +151,50 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           <Button
             variant="ghost"
             size="icon-xs"
-            onClick={() => copyToClipboard(code, copyKey)}
+            onClick={copyCode}
             className={`absolute top-2 right-2 z-raised transition-all duration-200 ${
-              copiedStates[copyKey]
+              copied
                 ? "text-success bg-success/10 border-success/20"
                 : "text-muted-foreground hover:text-foreground hover:bg-accent"
             }`}
           >
-            {copiedStates[copyKey] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
           </Button>
           <pre className="text-sm overflow-x-auto pr-10 text-foreground font-mono leading-relaxed">{code}</pre>
         </CardContent>
       </Card>
     </div>
   );
+};
 
-  const StepCard: React.FC<{
-    step: number;
-    title: string;
-    children: React.ReactNode;
-  }> = ({ step, title, children }) => (
-    <div className="flex gap-4">
-      <div className="shrink-0">
-        <div className="w-8 h-8 bg-info text-info-foreground rounded-full flex items-center justify-center text-sm font-semibold">
-          {step}
-        </div>
-      </div>
-      <div className="flex-1">
-        <strong className="mb-2 block font-semibold text-foreground">{title}</strong>
-        {children}
+const StepCard: React.FC<{
+  step: number;
+  title: string;
+  children: React.ReactNode;
+}> = ({ step, title, children }) => (
+  <div className="flex gap-4">
+    <div className="shrink-0">
+      <div className="w-8 h-8 bg-info text-info-foreground rounded-full flex items-center justify-center text-sm font-semibold">
+        {step}
       </div>
     </div>
-  );
+    <div className="flex-1">
+      <strong className="mb-2 block font-semibold text-foreground">{title}</strong>
+      {children}
+    </div>
+  </div>
+);
 
-  const LiteLLMProxyTab = () => (
+interface MCPConnectProps {
+  currentServerAccessGroups?: string[];
+}
+
+const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] }) => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const [currentServer] = useState("Zapier_MCP"); // This should match the current server being viewed
+  const [connectClient, setConnectClient] = useUrlTab(CONNECT_CLIENTS, "openai", "connect_client");
+
+  const liteLLMProxyTab = (
     <div className="flex w-full flex-col gap-6">
       <div className="bg-linear-to-r from-success/15 to-success/5 p-6 rounded-lg border border-success/15">
         <div className="flex items-center gap-3 mb-3">
@@ -266,7 +264,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     </div>
   );
 
-  const OpenAITab = () => (
+  const openAITab = (
     <div className="flex w-full flex-col gap-6">
       <div className="bg-linear-to-r from-info/15 to-info/5 p-6 rounded-lg border border-info/15">
         <div className="flex items-center gap-3 mb-3">
@@ -346,7 +344,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     </div>
   );
 
-  const CursorTab = () => (
+  const cursorTab = (
     <div className="flex w-full flex-col gap-6">
       <div className="bg-linear-to-r from-purple-50 to-blue-50 p-6 rounded-lg border border-purple-100 dark:from-purple-950 dark:to-blue-950 dark:border-purple-900">
         <div className="flex items-center gap-3 mb-3">
@@ -410,7 +408,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
     </div>
   );
 
-  const StreamableHTTPTab = () => (
+  const streamableHTTPTab = (
     <div className="flex w-full flex-col gap-6">
       <div className="bg-linear-to-r from-success/15 to-success/5 p-6 rounded-lg border border-success/15">
         <div className="flex items-center gap-3 mb-3">
@@ -479,7 +477,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           </p>
         </div>
 
-        <Tabs defaultValue="openai" className="w-full">
+        <Tabs value={connectClient} onValueChange={setConnectClient} className="w-full">
           <TabsList variant="line" className="mt-8 mb-6 h-auto w-full justify-start rounded-none border-b p-0">
             <div className="flex rounded-lg bg-muted p-1">
               <TabsTrigger value="openai" className="flex-none px-6 py-3">
@@ -509,16 +507,16 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
             </div>
           </TabsList>
           <TabsContent value="openai" keepMounted className="mt-6">
-            <OpenAITab />
+            {openAITab}
           </TabsContent>
           <TabsContent value="litellm" keepMounted className="mt-6">
-            <LiteLLMProxyTab />
+            {liteLLMProxyTab}
           </TabsContent>
           <TabsContent value="cursor" keepMounted className="mt-6">
-            <CursorTab />
+            {cursorTab}
           </TabsContent>
           <TabsContent value="http" keepMounted className="mt-6">
-            <StreamableHTTPTab />
+            {streamableHTTPTab}
           </TabsContent>
         </Tabs>
       </div>

@@ -1,9 +1,9 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../tests/test-utils";
 import * as networking from "@/components/networking";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
@@ -22,17 +22,13 @@ vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({ useMCPServe
 
 const setup = () => userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
 
-const renderTab = (toolsets: MCPToolset[] = []) => {
+const renderTab = (toolsets: MCPToolset[] = [], searchParams = "", onUrlUpdate?: OnUrlUpdateFunction) => {
   vi.mocked(useMCPToolsets).mockReturnValue({
     data: toolsets,
     isLoading: false,
   } as unknown as ReturnType<typeof useMCPToolsets>);
   vi.mocked(useMCPServers).mockReturnValue({ data: [] } as unknown as ReturnType<typeof useMCPServers>);
-  render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
-      <MCPToolsetsTab accessToken="sk-test" userRole="Admin" />
-    </QueryClientProvider>,
-  );
+  renderWithProviders(<MCPToolsetsTab accessToken="sk-test" userRole="Admin" />, { searchParams, onUrlUpdate });
 };
 
 const dialogWithButton = async (name: string) => {
@@ -193,5 +189,71 @@ describe("MCPToolsetsTab create/edit toolset form", () => {
     await waitFor(() => {
       expect(networking.updateMCPToolset).toHaveBeenCalledWith("sk-test", expectedUpdate);
     });
+  });
+});
+
+const makeToolset = (name: string, day: number): MCPToolset =>
+  ({
+    toolset_id: `id-${name}`,
+    toolset_name: name,
+    description: "",
+    tools: [],
+    created_at: `2024-01-${String(day).padStart(2, "0")}T00:00:00Z`,
+  }) as MCPToolset;
+
+const shownToolsetNames = () => screen.getAllByText(/^ts-\d{2}$/).map((node) => node.textContent);
+
+describe("MCPToolsetsTab table URL state", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const namedToolsets = [makeToolset("ts-02", 1), makeToolset("ts-03", 2), makeToolset("ts-01", 3)];
+  const manyToolsets = Array.from({ length: 30 }, (_, index) =>
+    makeToolset(`ts-${String(index + 1).padStart(2, "0")}`, index + 1),
+  );
+
+  it("lists the newest toolsets first by default", () => {
+    renderTab(namedToolsets);
+
+    expect(shownToolsetNames()).toEqual(["ts-01", "ts-03", "ts-02"]);
+  });
+
+  it("orders the rows by the sort in the URL", () => {
+    renderTab(namedToolsets, "?toolset_sort_by=toolset_name&toolset_sort_order=asc");
+
+    expect(shownToolsetNames()).toEqual(["ts-01", "ts-02", "ts-03"]);
+  });
+
+  it("writes the sort the user picks under the toolset prefix", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderTab(namedToolsets, "?toolset_page=1", onUrlUpdate);
+
+    await userEvent.click(screen.getByTestId("sort-header-toolset_name"));
+
+    const update = onUrlUpdate.mock.calls.at(-1)?.[0];
+    expect(update?.searchParams.get("toolset_sort_by")).toBe("toolset_name");
+    expect(update?.searchParams.get("toolset_sort_order")).toBe("asc");
+    expect(update?.searchParams.has("sort_by")).toBe(false);
+    expect(shownToolsetNames()).toEqual(["ts-01", "ts-02", "ts-03"]);
+  });
+
+  it("opens the page in the URL", () => {
+    renderTab(manyToolsets, "?toolset_page=2");
+
+    expect(screen.getByText("Page 2 of 2")).toBeInTheDocument();
+    expect(shownToolsetNames()).toEqual(["ts-05", "ts-04", "ts-03", "ts-02", "ts-01"]);
+  });
+
+  it("writes the page the user moves to under the toolset prefix", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderTab(manyToolsets, "", onUrlUpdate);
+
+    expect(shownToolsetNames()).toHaveLength(25);
+    await userEvent.click(screen.getByRole("button", { name: "Go to next page" }));
+
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("toolset_page")).toBe("2");
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("page")).toBe(false);
+    expect(shownToolsetNames()).toEqual(["ts-05", "ts-04", "ts-03", "ts-02", "ts-01"]);
   });
 });

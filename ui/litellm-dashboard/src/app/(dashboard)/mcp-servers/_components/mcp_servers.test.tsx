@@ -1,12 +1,26 @@
 import React from "react";
-import { render, waitFor, screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import MCPServers from "./mcp_servers";
 import * as networking from "@/components/networking";
+import type { MCPServer } from "@/components/mcp_tools/types";
+import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
+import { setSecureItem } from "@/utils/secureStorage";
+import { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
+import {
+  act,
+  chooseSelectOption,
+  fireEvent,
+  render,
+  renderWithProviders,
+  screen,
+  testQueryClient,
+  waitFor,
+  within,
+} from "@/../tests/test-utils";
 
-// Mock the networking module
 vi.mock("@/components/networking", () => ({
   fetchMCPServers: vi.fn(),
   fetchMCPServerHealth: vi.fn(),
@@ -19,385 +33,437 @@ vi.mock("@/components/networking", () => ({
   listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
 }));
 
-const createQueryClient = () =>
-  new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-        gcTime: 0,
-      },
-    },
-  });
+interface ServerViewStubProps {
+  mcpServer: MCPServer;
+  isEditing: boolean;
+  onBack: () => void;
+}
+
+vi.mock("./mcp_server_view", () => ({
+  MCPServerView: ({ mcpServer, isEditing, onBack }: ServerViewStubProps) => (
+    <section aria-label="server detail">
+      <p>viewing {mcpServer.server_name}</p>
+      <p>{isEditing ? "settings editable" : "settings read only"}</p>
+      <button onClick={onBack}>Back to All Servers</button>
+    </section>
+  ),
+}));
+
+interface EnvVarsModalStubProps {
+  server: MCPServer | null;
+  open: boolean;
+  onClose: () => void;
+}
+
+vi.mock("./UserEnvVarsModal", () => ({
+  default: ({ server, open, onClose }: EnvVarsModalStubProps) =>
+    open && server ? (
+      <section aria-label="fill env vars">
+        <p>fill fields for {server.server_name}</p>
+        <button onClick={onClose}>Close env vars</button>
+      </section>
+    ) : null,
+}));
+
+const BASE_SERVER = {
+  url: "https://example.com/mcp",
+  transport: "http",
+  auth_type: "none",
+  created_at: "2024-01-01T00:00:00Z",
+  created_by: "user-1",
+  updated_at: "2024-01-01T00:00:00Z",
+  updated_by: "user-1",
+  teams: [],
+  mcp_access_groups: [],
+};
+
+const makeServer = (overrides: Partial<MCPServer> & Pick<MCPServer, "server_id">): MCPServer => ({
+  ...BASE_SERVER,
+  server_name: overrides.server_id,
+  alias: `${overrides.server_id}-alias`,
+  ...overrides,
+});
+
+const TEAM_A = [{ team_id: "team-a", team_alias: "Team A" }];
+const TEAM_B = [{ team_id: "team-b", team_alias: "Team B" }];
+
+const urlServers: MCPServer[] = [
+  {
+    ...BASE_SERVER,
+    server_id: "alpha",
+    alias: "alpha-alias",
+    server_name: "Alpha",
+    teams: TEAM_A,
+    mcp_access_groups: ["group-x"],
+  },
+  {
+    ...BASE_SERVER,
+    server_id: "bravo",
+    alias: "bravo-alias",
+    server_name: "Bravo",
+    created_at: "2024-01-02T00:00:00Z",
+    teams: TEAM_B,
+  },
+  {
+    ...BASE_SERVER,
+    server_id: "charlie",
+    alias: "charlie-alias",
+    server_name: "Charlie",
+    created_at: "2024-01-03T00:00:00Z",
+    teams: TEAM_A,
+  },
+];
+
+const defaultProps = {
+  accessToken: "123",
+  userRole: "Admin",
+  userID: "admin-user-id",
+};
+
+const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => onUrlUpdate.mock.calls.at(-1)?.[0];
+
+const shownServerNames = () =>
+  within(screen.getByTestId("mcp-servers-grid"))
+    .getAllByText(/^(Alpha|Bravo|Charlie)$/)
+    .map((node) => node.textContent);
+
+const cardFor = (name: string): HTMLElement => {
+  const card = screen.getByText(name).closest<HTMLElement>('[role="button"]');
+  if (!card) throw new Error(`no card for ${name}`);
+  return card;
+};
+
+const selectNextTo = (label: string) => within(screen.getByText(label).parentElement!).getByRole("combobox");
+
+const renderPage = (searchParams: string, props: Partial<typeof defaultProps> = {}) => {
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  renderWithProviders(<MCPServers {...defaultProps} {...props} />, { searchParams, onUrlUpdate });
+  return onUrlUpdate;
+};
+
+const renderPageKeepingMountWrites = (searchParams: string, props: Partial<typeof defaultProps> = {}) => {
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  render(
+    <NuqsTestingAdapter
+      searchParams={searchParams}
+      onUrlUpdate={onUrlUpdate}
+      hasMemory
+      resetUrlUpdateQueueOnMount={false}
+    >
+      <QueryClientProvider client={testQueryClient}>
+        <MCPServers {...defaultProps} {...props} />
+      </QueryClientProvider>
+    </NuqsTestingAdapter>,
+  );
+  return onUrlUpdate;
+};
 
 describe("MCPServers", () => {
-  const defaultProps = {
-    accessToken: "123",
-    userRole: "Admin",
-    userID: "admin-user-id",
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
+    window.sessionStorage.clear();
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
   });
 
   it("should render the MCPServers component with title", async () => {
-    // Mock empty response for simple render test
     vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
 
-    const queryClient = createQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MCPServers {...defaultProps} />
-      </QueryClientProvider>,
-    );
+    renderWithProviders(<MCPServers {...defaultProps} />);
 
-    // Wait for the component to load and check if title renders
     await waitFor(() => {
       expect(screen.getByText("MCP Servers")).toBeInTheDocument();
     });
-
-    // Verify the title is rendered
-    expect(screen.getByText("MCP Servers")).toBeInTheDocument();
   });
 
   it("should render mocked MCP servers data in the table", async () => {
-    // Mock MCP servers data
-    const mockServers = [
+    const mockServers: MCPServer[] = [
+      { ...BASE_SERVER, server_id: "server-1", server_name: "Test Server 1", alias: "test-server-1" },
       {
-        server_id: "server-1",
-        server_name: "Test Server 1",
-        alias: "test-server-1",
-        url: "https://example.com/mcp",
-        transport: "http",
-        auth_type: "none",
-        created_at: "2024-01-01T00:00:00Z",
-        created_by: "user-1",
-        updated_at: "2024-01-01T00:00:00Z",
-        updated_by: "user-1",
-        teams: [],
-        mcp_access_groups: [],
-      },
-      {
+        ...BASE_SERVER,
         server_id: "server-2",
         server_name: "Test Server 2",
         alias: "test-server-2",
-        url: "https://example2.com/mcp",
         transport: "sse",
         auth_type: "api_key",
-        created_at: "2024-01-02T00:00:00Z",
-        created_by: "user-2",
-        updated_at: "2024-01-02T00:00:00Z",
-        updated_by: "user-2",
-        teams: [],
         mcp_access_groups: ["group-1"],
       },
     ];
-
     vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
 
-    const queryClient = createQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MCPServers {...defaultProps} />
-      </QueryClientProvider>,
-    );
+    renderWithProviders(<MCPServers {...defaultProps} />);
 
-    // Wait for the component to load
-    await waitFor(() => {
-      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
-    });
-
-    // Wait for the mocked data to render in the table
     await waitFor(() => {
       expect(screen.getByText("Test Server 1")).toBeInTheDocument();
     });
-
-    // Verify the mocked server data is rendered in the table
-    expect(screen.getByText("Test Server 1")).toBeInTheDocument();
     expect(screen.getByText("Test Server 2")).toBeInTheDocument();
     expect(screen.getAllByText("test-server-1").length).toBeGreaterThan(0);
     expect(screen.getAllByText("test-server-2").length).toBeGreaterThan(0);
-
-    // Verify the API was called
-    // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
+    // useMCPServers reads the token from the global useAuthorized mock
     expect(networking.fetchMCPServers).toHaveBeenCalledWith("123", undefined);
   });
 
   it("should fetch and merge health status for servers", async () => {
-    // Mock MCP servers data without health status
-    const mockServers = [
-      {
-        server_id: "server-1",
-        server_name: "Test Server 1",
-        alias: "test-server-1",
-        url: "https://example.com/mcp",
-        transport: "http",
-        auth_type: "none",
-        created_at: "2024-01-01T00:00:00Z",
-        created_by: "user-1",
-        updated_at: "2024-01-01T00:00:00Z",
-        updated_by: "user-1",
-        teams: [],
-        mcp_access_groups: [],
-        status: undefined,
-      },
-      {
-        server_id: "server-2",
-        server_name: "Test Server 2",
-        alias: "test-server-2",
-        url: "https://example2.com/mcp",
-        transport: "sse",
-        auth_type: "api_key",
-        created_at: "2024-01-02T00:00:00Z",
-        created_by: "user-2",
-        updated_at: "2024-01-02T00:00:00Z",
-        updated_by: "user-2",
-        teams: [],
-        mcp_access_groups: ["group-1"],
-        status: undefined,
-      },
-    ];
-
-    // Mock health status data
-    const mockHealthStatuses = [
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      makeServer({ server_id: "server-1" }),
+      makeServer({ server_id: "server-2" }),
+    ]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([
       { server_id: "server-1", status: "healthy" },
       { server_id: "server-2", status: "unhealthy" },
-    ];
+    ]);
 
-    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
-    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue(mockHealthStatuses);
+    renderWithProviders(<MCPServers {...defaultProps} />);
 
-    const queryClient = createQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MCPServers {...defaultProps} />
-      </QueryClientProvider>,
-    );
-
-    // Wait for the component to load
-    await waitFor(() => {
-      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
-    });
-
-    // Verify the health check API was called (without a server ID filter — the hook always
-    // fetches health for all servers so the query key stays stable)
     await waitFor(() => {
       expect(networking.fetchMCPServerHealth).toHaveBeenCalledWith("123");
     });
   });
 
   it("should display loading state while health check is in progress", async () => {
-    const mockServers = [
-      {
-        server_id: "server-1",
-        server_name: "Test Server 1",
-        alias: "test-server-1",
-        url: "https://example.com/mcp",
-        transport: "http",
-        auth_type: "none",
-        created_at: "2024-01-01T00:00:00Z",
-        created_by: "user-1",
-        updated_at: "2024-01-01T00:00:00Z",
-        updated_by: "user-1",
-        teams: [],
-        mcp_access_groups: [],
-      },
-    ];
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([makeServer({ server_id: "server-1" })]);
+    vi.mocked(networking.fetchMCPServerHealth).mockImplementation(() => new Promise(() => {}));
 
-    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
-    // Mock health check to never resolve (to test loading state)
-    vi.mocked(networking.fetchMCPServerHealth).mockImplementation(
-      () => new Promise(() => {}), // Never resolves
-    );
+    renderWithProviders(<MCPServers {...defaultProps} />);
 
-    const queryClient = createQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MCPServers {...defaultProps} />
-      </QueryClientProvider>,
-    );
-
-    // Wait for the component to load
-    await waitFor(() => {
-      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
-    });
-
-    // Verify that health check was initiated
     await waitFor(() => {
       expect(networking.fetchMCPServerHealth).toHaveBeenCalled();
     });
   });
 
   it("should filter servers by team when a team is selected", async () => {
-    // Mock MCP servers with different teams
-    const mockServers = [
-      {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      makeServer({
         server_id: "server-1",
         server_name: "Team A Server",
-        alias: "team-a-server",
-        url: "https://example.com/mcp",
-        transport: "http",
-        auth_type: "none",
-        created_at: "2024-01-01T00:00:00Z",
-        created_by: "user-1",
-        updated_at: "2024-01-01T00:00:00Z",
-        updated_by: "user-1",
         teams: [{ team_id: "team-a", team_alias: "Team A" }],
-        mcp_access_groups: [],
-      },
-      {
+      }),
+      makeServer({
         server_id: "server-2",
         server_name: "Team B Server",
-        alias: "team-b-server",
-        url: "https://example2.com/mcp",
-        transport: "sse",
-        auth_type: "api_key",
-        created_at: "2024-01-02T00:00:00Z",
-        created_by: "user-2",
-        updated_at: "2024-01-02T00:00:00Z",
-        updated_by: "user-2",
         teams: [{ team_id: "team-b", team_alias: "Team B" }],
-        mcp_access_groups: [],
-      },
-      {
+      }),
+      makeServer({
         server_id: "server-3",
         server_name: "Team A Server 2",
-        alias: "team-a-server-2",
-        url: "https://example3.com/mcp",
-        transport: "http",
-        auth_type: "none",
-        created_at: "2024-01-03T00:00:00Z",
-        created_by: "user-1",
-        updated_at: "2024-01-03T00:00:00Z",
-        updated_by: "user-1",
         teams: [{ team_id: "team-a", team_alias: "Team A" }],
-        mcp_access_groups: [],
-      },
-    ];
+      }),
+    ]);
 
-    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
-    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+    renderWithProviders(<MCPServers {...defaultProps} />);
 
-    const queryClient = createQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MCPServers {...defaultProps} />
-      </QueryClientProvider>,
-    );
-
-    // Wait for the component to load
-    await waitFor(() => {
-      expect(screen.getByText("MCP Servers")).toBeInTheDocument();
-    });
-
-    // Wait for servers to be rendered
     await waitFor(() => {
       expect(screen.getByText("Team A Server")).toBeInTheDocument();
     });
-
-    // Verify all servers are initially displayed
-    expect(screen.getByText("Team A Server")).toBeInTheDocument();
     expect(screen.getByText("Team B Server")).toBeInTheDocument();
     expect(screen.getByText("Team A Server 2")).toBeInTheDocument();
 
-    // Find the team select by its "Team" label, then the combobox it labels
-    const teamLabel = screen.getByText("Team");
-    const teamSelect = within(teamLabel.parentElement!).getByRole("combobox");
+    await chooseSelectOption(userEvent, selectNextTo("Team"), "Team A");
 
-    await userEvent.click(teamSelect);
-
-    // Pick the "Team A" option once the listbox opens
-    const teamAOption = await screen.findByText("Team A");
-    await userEvent.click(teamAOption);
-
-    // Wait for filtering to complete
     await waitFor(() => {
-      // Team A servers should still be visible
-      expect(screen.getByText("Team A Server")).toBeInTheDocument();
-      expect(screen.getByText("Team A Server 2")).toBeInTheDocument();
+      expect(screen.queryByText("Team B Server")).not.toBeInTheDocument();
     });
-
-    // Team B server should not be visible
-    expect(screen.queryByText("Team B Server")).not.toBeInTheDocument();
+    expect(screen.getByText("Team A Server")).toBeInTheDocument();
+    expect(screen.getByText("Team A Server 2")).toBeInTheDocument();
   });
 
   it("should not trigger an extra health check when the server list changes after deletion", async () => {
-    // Regression test: previously useMCPServerHealth received serverIds derived from the
-    // server list. Deleting a server changed serverIds, which changed the React Query key,
-    // which caused a new health check request for every remaining server.
-    //
-    // Fix: useMCPServerHealth uses a stable, argument-free query key. The component
-    // re-rendering with a shorter server list must NOT produce a second health fetch.
-    const twoServers = [
-      {
-        server_id: "server-1",
-        server_name: "Test Server 1",
-        alias: "test-server-1",
-        url: "https://example.com/mcp",
-        transport: "http",
-        auth_type: "none",
-        created_at: "2024-01-01T00:00:00Z",
-        created_by: "user-1",
-        updated_at: "2024-01-01T00:00:00Z",
-        updated_by: "user-1",
-        teams: [],
-        mcp_access_groups: [],
-      },
-      {
-        server_id: "server-2",
-        server_name: "Test Server 2",
-        alias: "test-server-2",
-        url: "https://example2.com/mcp",
-        transport: "sse",
-        auth_type: "api_key",
-        created_at: "2024-01-02T00:00:00Z",
-        created_by: "user-2",
-        updated_at: "2024-01-02T00:00:00Z",
-        updated_by: "user-2",
-        teams: [],
-        mcp_access_groups: [],
-      },
-    ];
-    const oneServer = twoServers.slice(0, 1);
-
-    // First call returns two servers; second (after deletion) returns one
-    vi.mocked(networking.fetchMCPServers).mockResolvedValueOnce(twoServers).mockResolvedValueOnce(oneServer);
+    // Regression: the health query key must not depend on the server list, or a shorter
+    // list after a deletion would trigger a second health fetch.
+    const twoServers = [makeServer({ server_id: "server-1" }), makeServer({ server_id: "server-2" })];
+    vi.mocked(networking.fetchMCPServers)
+      .mockResolvedValueOnce(twoServers)
+      .mockResolvedValueOnce(twoServers.slice(0, 1));
     vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([
       { server_id: "server-1", status: "healthy" },
       { server_id: "server-2", status: "healthy" },
     ]);
 
-    // Use a shared queryClient with a non-zero gcTime so cached health data survives
-    // the re-render triggered by the server list refresh
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 60_000 } },
-    });
+    const { rerender } = renderWithProviders(<MCPServers {...defaultProps} />);
 
-    const { rerender } = render(
-      <QueryClientProvider client={queryClient}>
-        <MCPServers {...defaultProps} />
-      </QueryClientProvider>,
-    );
-
-    // Wait for the initial health fetch to complete
     await waitFor(() => {
       expect(networking.fetchMCPServerHealth).toHaveBeenCalledTimes(1);
     });
 
-    // Simulate what happens after a server is deleted: the server list query is
-    // refetched (returns oneServer), causing the component to re-render with the
-    // shorter list.
     await act(async () => {
-      await queryClient.invalidateQueries({ queryKey: ["mcpServers"] });
+      await testQueryClient.invalidateQueries({ queryKey: ["mcpServers"] });
+    });
+    rerender(<MCPServers {...defaultProps} />);
+
+    expect(networking.fetchMCPServerHealth).toHaveBeenCalledTimes(1);
+  });
+
+  describe("URL state", () => {
+    beforeEach(() => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue(urlServers);
     });
 
-    rerender(
-      <QueryClientProvider client={queryClient}>
-        <MCPServers {...defaultProps} />
-      </QueryClientProvider>,
-    );
+    it("opens the tab named in the URL and writes the tab the user picks", async () => {
+      const onUrlUpdate = renderPage("?tab=toolsets");
 
-    // The server list refresh must NOT trigger a second health check
-    expect(networking.fetchMCPServerHealth).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("tab", { name: "Toolsets" })).toHaveAttribute("aria-selected", "true");
+
+      await userEvent.click(screen.getByRole("tab", { name: "Network Settings" }));
+
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("tab")).toBe("network");
+      expect(screen.getByRole("tab", { name: "Network Settings" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("drops an admin-only tab from the URL for a non-admin", async () => {
+      const onUrlUpdate = renderPageKeepingMountWrites("?tab=submitted", { userRole: "Internal User" });
+
+      expect(screen.getByRole("tab", { name: "All Servers" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.queryByRole("tab", { name: "Submitted MCPs" })).not.toBeInTheDocument();
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("tab")).toBe(false);
+    });
+
+    it("orders the cards by the sort in the URL", async () => {
+      renderPage("?sort=name_asc");
+
+      await screen.findByText("Alpha");
+      expect(shownServerNames()).toEqual(["Alpha", "Bravo", "Charlie"]);
+      expect(selectNextTo("Sort")).toHaveTextContent("Name (A→Z)");
+    });
+
+    it("falls back to newest first for an unknown sort", async () => {
+      renderPage("?sort=bogus");
+
+      await screen.findByText("Alpha");
+      expect(shownServerNames()).toEqual(["Charlie", "Bravo", "Alpha"]);
+    });
+
+    it("writes the sort the user picks", async () => {
+      const onUrlUpdate = renderPage("");
+      await screen.findByText("Alpha");
+      expect(shownServerNames()).toEqual(["Charlie", "Bravo", "Alpha"]);
+
+      await chooseSelectOption(userEvent, selectNextTo("Sort"), "Name (A→Z)");
+
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("sort")).toBe("name_asc");
+      expect(shownServerNames()).toEqual(["Alpha", "Bravo", "Charlie"]);
+    });
+
+    it("filters by the team and access group in the URL", async () => {
+      renderPage("?team=team-a&access_group=group-x");
+
+      await screen.findByText("Alpha");
+      expect(shownServerNames()).toEqual(["Alpha"]);
+      expect(selectNextTo("Team")).toHaveTextContent("Team A");
+      expect(selectNextTo("Access Group")).toHaveTextContent("group-x");
+    });
+
+    it("writes the team and access group the user picks", async () => {
+      const onUrlUpdate = renderPage("");
+      await screen.findByText("Alpha");
+
+      await chooseSelectOption(userEvent, selectNextTo("Team"), "Team A");
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("team")).toBe("team-a");
+      expect(shownServerNames()).toEqual(["Charlie", "Alpha"]);
+
+      await chooseSelectOption(userEvent, selectNextTo("Access Group"), "group-x");
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("access_group")).toBe("group-x");
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("team")).toBe("team-a");
+      expect(shownServerNames()).toEqual(["Alpha"]);
+
+      await chooseSelectOption(userEvent, selectNextTo("Team"), "All Servers");
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("team")).toBe(false);
+    });
+
+    it("searches by the query in the URL and writes what the user types", async () => {
+      const onUrlUpdate = renderPage("?search=brav");
+
+      await screen.findByText("Bravo");
+      expect(shownServerNames()).toEqual(["Bravo"]);
+      const searchBox = screen.getByPlaceholderText("Search by name, alias, URL, or ID");
+      expect(searchBox).toHaveValue("brav");
+
+      fireEvent.change(searchBox, { target: { value: "charlie" } });
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.get("search")).toBe("charlie"));
+      expect(shownServerNames()).toEqual(["Charlie"]);
+    });
+
+    it("opens the server in the URL even when the filters hide it", async () => {
+      renderPage("?server=bravo&team=team-a");
+
+      expect(await screen.findByText("viewing Bravo")).toBeInTheDocument();
+      expect(screen.getByText("settings read only")).toBeInTheDocument();
+    });
+
+    it("shows the list instead of a placeholder detail for an unknown server", async () => {
+      renderPage("?server=missing");
+
+      await screen.findByText("Alpha");
+      expect(screen.queryByRole("region", { name: "server detail" })).not.toBeInTheDocument();
+    });
+
+    it("pushes the clicked server and clears it on Back", async () => {
+      const onUrlUpdate = renderPage("?team=team-a&tool=stale&tool_search=old");
+
+      await screen.findByText("Charlie");
+      await userEvent.click(cardFor("Charlie"));
+
+      expect(await screen.findByText("viewing Charlie")).toBeInTheDocument();
+      expect(screen.getByText("settings editable")).toBeInTheDocument();
+      const opened = lastUrl(onUrlUpdate);
+      expect(opened?.searchParams.get("server")).toBe("charlie");
+      expect(opened?.searchParams.has("tool")).toBe(false);
+      expect(opened?.searchParams.has("tool_search")).toBe(false);
+      expect(opened?.searchParams.get("team")).toBe("team-a");
+      expect(opened?.options.history).toBe("push");
+
+      await userEvent.click(screen.getByRole("button", { name: "Back to All Servers" }));
+
+      expect(await screen.findByText("Alpha")).toBeInTheDocument();
+      const closed = lastUrl(onUrlUpdate);
+      expect(closed?.searchParams.has("server")).toBe(false);
+      expect(closed?.searchParams.get("team")).toBe("team-a");
+      expect(closed?.options.history).toBe("push");
+    });
+
+    it("opens the env vars modal for fill_env_vars once and drops the key", async () => {
+      const onUrlUpdate = renderPageKeepingMountWrites("?fill_env_vars=bravo&team=team-a");
+
+      expect(await screen.findByText("fill fields for Bravo")).toBeInTheDocument();
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("fill_env_vars")).toBe(false));
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("team")).toBe("team-a");
+
+      await userEvent.click(screen.getByRole("button", { name: "Close env vars" }));
+
+      expect(screen.queryByRole("region", { name: "fill env vars" })).not.toBeInTheDocument();
+    });
+
+    it("returns to the tools tab of the server after a tools OAuth redirect", async () => {
+      setSecureItem(TOOLS_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId: "alpha" }));
+
+      const onUrlUpdate = renderPageKeepingMountWrites("");
+
+      expect(await screen.findByText("viewing Alpha")).toBeInTheDocument();
+      expect(screen.getByText("settings read only")).toBeInTheDocument();
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("server")).toBe("alpha");
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("server_tab")).toBe("tools");
+      expect(window.sessionStorage.getItem(TOOLS_OAUTH_UI_STATE_KEY)).toBeNull();
+    });
+
+    it("returns to the editable settings of the server after an edit OAuth redirect", async () => {
+      setSecureItem(EDIT_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId: "charlie" }));
+
+      const onUrlUpdate = renderPageKeepingMountWrites("");
+
+      expect(await screen.findByText("viewing Charlie")).toBeInTheDocument();
+      expect(screen.getByText("settings editable")).toBeInTheDocument();
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("server")).toBe("charlie");
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("server_tab")).toBe("settings");
+    });
+
+    it("ignores a stored OAuth state without a server id", async () => {
+      setSecureItem(TOOLS_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId: "" }));
+
+      renderPageKeepingMountWrites("");
+
+      await screen.findByText("Alpha");
+      expect(screen.queryByRole("region", { name: "server detail" })).not.toBeInTheDocument();
+    });
   });
 });
