@@ -31,7 +31,7 @@ def split_sap_submode(model: str) -> tuple[SapBackendForm, str]:
     with the `sap/` provider prefix still attached. Tolerating it here keeps both paths agreeing on
     the form, so reasoning params are mapped identically whether or not the provider prefix survived.
     """
-    unprefixed: Final = model[len(_PROVIDER_PREFIX) :] if model.startswith(_PROVIDER_PREFIX) else model
+    unprefixed: Final = model.removeprefix(_PROVIDER_PREFIX)
     if unprefixed.startswith(_DEPLOYMENT_PREFIX):
         return SapBackendForm.DEPLOYMENT, unprefixed[len(_DEPLOYMENT_PREFIX) :]
     return SapBackendForm.ORCHESTRATION, unprefixed

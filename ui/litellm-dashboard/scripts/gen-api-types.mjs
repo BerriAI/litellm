@@ -54,9 +54,11 @@ try {
     stdio: "inherit",
   });
 
-  execFileSync(join(dashboardDir, "node_modules", ".bin", "openapi-typescript"), [specPath, "-o", outPath], {
+  const openapiBin = join(dashboardDir, "node_modules", ".bin", "openapi-typescript" + (process.platform === "win32" ? ".cmd" : ""));
+  execFileSync(openapiBin, [specPath, "-o", outPath], {
     cwd: dashboardDir,
     stdio: "inherit",
+    shell: process.platform === "win32" ? true : undefined,
   });
 } finally {
   rmSync(specDir, { recursive: true, force: true });
