@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Generator
 from types import SimpleNamespace
+from typing import Final, Protocol
 
 import pytest
 
 from litellm.exceptions import APIError
-from litellm.rust_bridge import bindings, runtime
+from litellm.rust_bridge import bindings, configuration, runtime
+from litellm.rust_bridge.catalog import Context, Route, Rule
+from litellm.rust_bridge.configuration import Rollout
 
 
 class RustBridgeDeclined(Exception):
@@ -17,79 +21,203 @@ class RustUpstreamError(Exception):
 
 
 @pytest.fixture(autouse=True)
-def native_exceptions(monkeypatch: pytest.MonkeyPatch) -> None:
-    native = SimpleNamespace(
+def native_exceptions(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    native: Final = SimpleNamespace(
         RustBridgeDeclined=RustBridgeDeclined,
         RustUpstreamError=RustUpstreamError,
     )
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
+    monkeypatch.delenv("LITELLM_RUST", raising=False)
+    configuration.reset_rust_configuration()
+    yield
+    configuration.reset_rust_configuration()
 
 
-def context() -> runtime.BridgeErrorContext:
-    return runtime.BridgeErrorContext(route="messages", provider="anthropic", model="model")
+class NativeFn(Protocol):
+    def __call__(self) -> str: ...
 
 
-def test_invoke_tags_native_decline_before_running_fallback() -> None:
-    calls: list[str] = []
+CONTEXT: Final = Context(Route.MESSAGES, provider="anthropic", model="model")
+RUST: Final = "rust"
+PYTHON: Final = "python"
 
-    def decline() -> object:
-        calls.append("rust")
-        raise RustBridgeDeclined("unsupported")
 
-    value = runtime.invoke(
-        native_call=decline,
-        fallback=lambda: calls.append("python") or "fallback",
-        adapt=str,
-        mode=runtime.FallbackMode.PYTHON,
-        context=context(),
+def binding(native: NativeFn | None) -> bindings.NativeBinding[NativeFn]:
+    bound: Final[bindings.NativeBinding[NativeFn]] = bindings.NativeBinding("_messages", validate=lambda _: None)
+    bound.override(native)
+    return bound
+
+
+def rules(rollout: Rollout) -> tuple[Rule, ...]:
+    return (Rule(Route.MESSAGES, rollout, providers=frozenset({"anthropic"})),)
+
+
+class Recorder:
+    def __init__(self, native_effect: BaseException | None = None) -> None:
+        self._native_effect: Final = native_effect
+        self.calls: tuple[str, ...] = ()
+
+    def rust(self) -> str:
+        self.calls = (*self.calls, RUST)
+        if self._native_effect is not None:
+            raise self._native_effect
+        return RUST
+
+    def python(self) -> str:
+        self.calls = (*self.calls, PYTHON)
+        return PYTHON
+
+
+def recorder(native_effect: BaseException | None = None) -> Recorder:
+    return Recorder(native_effect)
+
+
+def run(rollout: Rollout, calls: Recorder, *, native_missing: bool = False, context: Context = CONTEXT) -> str:
+    return runtime.run(
+        context,
+        binding=binding(None if native_missing else calls.rust),
+        native=lambda fn: fn(),
+        python=calls.python,
+        rules=rules(rollout),
     )
 
-    assert value == "fallback"
-    assert calls == ["rust", "python"]
+
+@pytest.mark.parametrize(
+    ("rollout", "switch", "expected"),
+    (
+        (Rollout.PYTHON_ONLY, None, (PYTHON,)),
+        (Rollout.PYTHON_ONLY, True, (PYTHON,)),
+        (Rollout.RUST_OPT_IN, None, (PYTHON,)),
+        (Rollout.RUST_OPT_IN, True, (RUST,)),
+        (Rollout.RUST_OPT_OUT, None, (RUST,)),
+        (Rollout.RUST_OPT_OUT, False, (PYTHON,)),
+        (Rollout.RUST_REQUIRED, None, (RUST,)),
+        (Rollout.RUST_REQUIRED, False, (RUST,)),
+    ),
+)
+def test_rollout_and_switch_select_native_or_python(
+    rollout: Rollout, switch: bool | None, expected: tuple[str, ...]
+) -> None:
+    calls: Final = recorder()
+    if switch is not None:
+        configuration.rust(switch)
+
+    assert run(rollout, calls) == expected[-1]
+    assert calls.calls == expected
 
 
-def test_invoke_translates_upstream_without_fallback() -> None:
-    def fail() -> object:
-        raise RustUpstreamError(429, "rate limited")
+def test_environment_switch_enables_opt_in_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: Final = recorder()
+    monkeypatch.setenv("LITELLM_RUST", "1")
+
+    assert run(Rollout.RUST_OPT_IN, calls) == "rust"
+    assert calls.calls == (RUST,)
+
+
+def test_context_outside_rule_stays_on_python() -> None:
+    calls: Final = recorder()
+    configuration.rust(True)
+
+    assert run(Rollout.RUST_REQUIRED, calls, context=Context(Route.MESSAGES, provider="openai")) == "python"
+    assert run(Rollout.RUST_REQUIRED, calls, context=Context(Route.EMBEDDING, provider="anthropic")) == "python"
+    assert calls.calls == (PYTHON, PYTHON)
+
+
+def test_native_decline_falls_back_to_python_once() -> None:
+    calls: Final = recorder(RustBridgeDeclined("unsupported"))
+
+    assert run(Rollout.RUST_OPT_OUT, calls) == "python"
+    assert calls.calls == (RUST, PYTHON)
+
+
+def test_unavailable_native_falls_back_to_python() -> None:
+    calls: Final = recorder()
+
+    assert run(Rollout.RUST_OPT_OUT, calls, native_missing=True) == "python"
+    assert calls.calls == (PYTHON,)
+
+
+def test_upstream_error_maps_to_api_error_without_fallback() -> None:
+    calls: Final = recorder(RustUpstreamError(429, "rate limited"))
 
     with pytest.raises(APIError, match="rate limited") as caught:
-        runtime.invoke(
-            native_call=fail,
-            fallback=lambda: pytest.fail("fallback must not run"),
-            adapt=str,
-            mode=runtime.FallbackMode.PYTHON,
-            context=context(),
-        )
+        run(Rollout.RUST_OPT_OUT, calls)
 
     assert caught.value.status_code == 429
+    assert calls.calls == (RUST,)
+
+
+def test_other_native_errors_propagate_without_fallback() -> None:
+    failure: Final = ValueError("admitted")
+    calls: Final = recorder(failure)
+
+    with pytest.raises(ValueError, match="admitted") as caught:
+        run(Rollout.RUST_OPT_OUT, calls)
+
+    assert caught.value is failure
+    assert calls.calls == (RUST,)
+
+
+def test_required_route_rejects_unavailable_bridge() -> None:
+    calls: Final = recorder()
+
+    with pytest.raises(RuntimeError, match="Rust messages bridge is unavailable"):
+        run(Rollout.RUST_REQUIRED, calls, native_missing=True)
+
+    assert PYTHON not in calls.calls
+
+
+def test_required_route_rejects_native_decline() -> None:
+    calls: Final = recorder(RustBridgeDeclined("unsupported"))
+
+    with pytest.raises(RuntimeError, match="declined the request: unsupported"):
+        run(Rollout.RUST_REQUIRED, calls)
+
+    assert PYTHON not in calls.calls
 
 
 @pytest.mark.asyncio
-async def test_ainvoke_handles_native_success() -> None:
-    async def native() -> int:
-        return 3
+@pytest.mark.parametrize(
+    ("native_effect", "native_missing", "expected"),
+    (
+        (None, False, (RUST,)),
+        (RustBridgeDeclined("unsupported"), False, (RUST, PYTHON)),
+        (None, True, (PYTHON,)),
+    ),
+)
+async def test_arun_mirrors_sync_fallback(
+    native_effect: BaseException | None, native_missing: bool, expected: tuple[str, ...]
+) -> None:
+    calls: Final = recorder(native_effect)
 
-    async def fallback() -> str:
-        pytest.fail("fallback must not run")
+    async def native(fn: NativeFn) -> str:
+        return fn()
 
-    assert (
-        await runtime.ainvoke(
-            native_call=native,
-            fallback=fallback,
-            adapt=str,
-            mode=runtime.FallbackMode.PYTHON,
-            context=context(),
-        )
-        == "3"
+    async def python() -> str:
+        return calls.python()
+
+    result: Final = await runtime.arun(
+        CONTEXT,
+        binding=binding(None if native_missing else calls.rust),
+        native=native,
+        python=python,
+        rules=rules(Rollout.RUST_OPT_OUT),
     )
 
+    assert result == expected[-1]
+    assert calls.calls == expected
 
-def test_required_mode_rejects_unavailable_bridge() -> None:
+
+@pytest.mark.asyncio
+async def test_arun_required_route_rejects_unavailable_bridge() -> None:
+    async def python() -> str:
+        pytest.fail("fallback must not run")
+
     with pytest.raises(RuntimeError, match="is unavailable"):
-        runtime.invoke(
-            native_call=None,
-            fallback=lambda: pytest.fail("fallback must not run"),
-            adapt=str,
-            mode=runtime.FallbackMode.RUST_REQUIRED,
-            context=context(),
+        await runtime.arun(
+            CONTEXT,
+            binding=binding(None),
+            native=lambda fn: python(),
+            python=python,
+            rules=rules(Rollout.RUST_REQUIRED),
         )

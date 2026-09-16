@@ -5,7 +5,8 @@ from typing import Final, Literal, Protocol, cast  # noqa: TID251  # native call
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.configuration import rust_ocr_enabled
+from litellm.rust_bridge.catalog import Context, Route, decision
+from litellm.rust_bridge.configuration import Decision
 
 
 class FileReader(Protocol):
@@ -64,10 +65,15 @@ _MIME_TYPE: Final = NativeBinding(
     ),
 )
 _PYTHON_MAX_FILE_BYTES: Final = 50 * 1024 * 1024
+_OCR_HELPERS: Final = Context(Route.OCR)
+
+
+def _native_helpers_selected() -> bool:
+    return decision(_OCR_HELPERS) is not Decision.PYTHON
 
 
 def get_mime_type(file_path: str) -> str:
-    native: Final = _MIME_TYPE.load() if rust_ocr_enabled() else None
+    native: Final = _MIME_TYPE.load() if _native_helpers_selected() else None
     if native is None:
         from litellm.ocr import legacy
 
@@ -76,14 +82,14 @@ def get_mime_type(file_path: str) -> str:
 
 
 def get_max_file_bytes() -> int:
-    limit: Final = _MAX_FILE_BYTES.load() if rust_ocr_enabled() else None
+    limit: Final = _MAX_FILE_BYTES.load() if _native_helpers_selected() else None
     if limit is None:
         return _PYTHON_MAX_FILE_BYTES
     return limit
 
 
 def convert_file_document_to_url_document(document: FileDocument) -> dict[str, str]:
-    native: Final = _FILE_DOCUMENT.load() if rust_ocr_enabled() else None
+    native: Final = _FILE_DOCUMENT.load() if _native_helpers_selected() else None
     if native is None:
         from litellm.ocr import legacy
 
@@ -94,7 +100,7 @@ def convert_file_document_to_url_document(document: FileDocument) -> dict[str, s
 def convert_upload_to_url_document(
     file_content: bytes, filename: str | None, content_type: str | None
 ) -> dict[str, str]:
-    native: Final = _UPLOAD_DOCUMENT.load() if rust_ocr_enabled() else None
+    native: Final = _UPLOAD_DOCUMENT.load() if _native_helpers_selected() else None
     if native is None:
         from litellm.ocr import legacy
 

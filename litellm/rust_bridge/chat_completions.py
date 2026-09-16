@@ -26,17 +26,14 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
-from litellm.rust_bridge.configuration import rust_enabled
+from litellm.rust_bridge.catalog import Context, Delivery, Route, decision
+from litellm.rust_bridge.configuration import Decision
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-
-# Providers whose `/chat/completions` deployments the Rust core can serve. A
-# provider outside this set never reaches the bridge.
-RUST_CHAT_COMPLETIONS_PROVIDERS: Final = frozenset({"anthropic", "bedrock"})
 
 # `litellm_params` values are `object`, so validate the one this module reads
 # rather than narrowing an unparameterized `Mapping` and typing the result Any.
@@ -243,11 +240,13 @@ def rust_chat_completions_accepts(
     capability gate answers the second half; it resolves no credentials and
     performs no I/O.
     """
-    if custom_llm_provider not in RUST_CHAT_COMPLETIONS_PROVIDERS:
-        return False
-    if stream:
-        return False
-    if not rust_enabled():
+    context: Final = Context(
+        Route.CHAT_COMPLETIONS,
+        provider=custom_llm_provider,
+        model=model,
+        delivery=Delivery.STREAMING if stream else Delivery.COMPLETED,
+    )
+    if decision(context) is Decision.PYTHON:
         return False
     if _litellm_metadata_reaches_the_provider(custom_llm_provider, litellm_params):
         verbose_logger.debug("Rust chat completions declined (litellm metadata user_id); using the Python path")

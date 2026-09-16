@@ -7,7 +7,7 @@ import pytest
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr import legacy
-from litellm.rust_bridge import bindings, configuration
+from litellm.rust_bridge import bindings, configuration, runtime
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
 from litellm.rust_bridge.ocr_lifecycle import NATIVE_OCR_LIFECYCLE
 
@@ -143,7 +143,7 @@ def test_public_missing_required_argument_error_does_not_depend_on_native_select
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("enabled", [False, True, None])
+@pytest.mark.parametrize("enabled", [False, None])
 async def test_environment_opt_out_never_loads_native(
     monkeypatch: pytest.MonkeyPatch, asynchronous: bool, enabled: bool | None
 ) -> None:
@@ -196,6 +196,10 @@ class Declined(Exception):
     pass
 
 
+class Upstream(Exception):
+    pass
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("declined", [False, True])
@@ -205,10 +209,7 @@ async def test_only_native_declines_replay_on_legacy(
     failure: Final = Declined("unsupported") if declined else RuntimeError("provider already called")
     native: Final = AsyncMock(side_effect=failure) if asynchronous else Mock(side_effect=failure)
     NATIVE_OCR_LIFECYCLE.override(native)
-    import importlib
-
-    main: Final = importlib.import_module("litellm.ocr.main")
-    monkeypatch.setattr(main, "native_exception_types", lambda: (Declined, RuntimeError))
+    monkeypatch.setattr(runtime, "native_exception_types", lambda: (Declined, Upstream))
     response: Final = OCRResponse(pages=[], model="mistral-ocr-latest")
     fallback: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
     monkeypatch.setattr(legacy, "aocr" if asynchronous else "ocr", fallback)

@@ -6,10 +6,10 @@ import httpx
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr import legacy
 from litellm.ocr.input import convert_file_document_to_url_document, get_mime_type
-from litellm.rust_bridge.bindings import native_exception_types
-from litellm.rust_bridge.configuration import rust_ocr_enabled
+from litellm.rust_bridge.catalog import Context, Route
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
-from litellm.rust_bridge.ocr_lifecycle import select
+from litellm.rust_bridge.ocr_lifecycle import NATIVE_OCR_LIFECYCLE, NativeOcrLifecycle
+from litellm.rust_bridge.runtime import arun, run
 
 __all__ = ("aocr", "convert_file_document_to_url_document", "get_mime_type", "ocr")
 
@@ -48,36 +48,36 @@ def ocr(
     **kwargs: object,  # kwargs-ok: preserve the public OCR call shape
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
     request: Final = _public_request("ocr", args, kwargs)
-    native: Final = select(request) if rust_ocr_enabled() else None
-    if native is not None:
-        try:
-            return cast(  # cast-ok: False selects the synchronous result
-                OCRResponse, native(request, args, kwargs, False)
-            )
-        except _decline_types():
-            pass
     fallback: Final = cast(  # cast-ok: forward the original call shape through the legacy @client decorator
         Callable[..., OCRResponse | Coroutine[object, object, OCRResponse]], legacy.ocr
     )
-    return fallback(*args, **kwargs)
+    if request.kwargs.get("aocr"):
+        return fallback(*args, **kwargs)
+    return run(
+        _context(request),
+        binding=NATIVE_OCR_LIFECYCLE,
+        native=lambda hook: cast(  # cast-ok: False selects the synchronous result
+            OCRResponse, hook(request, args, kwargs, False)
+        ),
+        python=lambda: fallback(*args, **kwargs),
+    )
 
 
 async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: preserve the public OCR call shape
     request: Final = _public_request("aocr", args, kwargs)
-    native: Final = select(request) if rust_ocr_enabled() else None
-    if native is not None:
-        try:
-            return await cast(  # cast-ok: True selects the asynchronous result
-                Awaitable[OCRResponse], native(request, args, kwargs, True)
-            )
-        except _decline_types():
-            pass
     fallback: Final = cast(  # cast-ok: forward the original call shape through the legacy @client decorator
         Callable[..., Awaitable[OCRResponse]], legacy.aocr
     )
-    return await fallback(*args, **kwargs)
+
+    async def native(hook: NativeOcrLifecycle) -> OCRResponse:
+        return await cast(  # cast-ok: True selects the asynchronous result
+            Awaitable[OCRResponse], hook(request, args, kwargs, True)
+        )
+
+    return await arun(
+        _context(request), binding=NATIVE_OCR_LIFECYCLE, native=native, python=lambda: fallback(*args, **kwargs)
+    )
 
 
-def _decline_types() -> tuple[type[BaseException], ...]:
-    exception_types: Final = native_exception_types()
-    return (exception_types[0],) if exception_types is not None else ()
+def _context(request: LiteLLMOcrRequest) -> Context:
+    return Context(Route.OCR, provider=request.custom_llm_provider, model=request.model)
