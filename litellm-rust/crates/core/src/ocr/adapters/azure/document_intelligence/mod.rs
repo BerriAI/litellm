@@ -75,7 +75,6 @@ impl OcrAdapter for AzureDocumentIntelligenceAdapter {
     }
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn map_ocr_params(
     request: &LiteLLMOcrRequest,
 ) -> Result<DocumentIntelligenceParams, OcrRequestError> {
