@@ -5,7 +5,7 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
     AnthropicMessagesConfig,
 )
 
-from ..authenticator import Authenticator
+from ..authenticator import Authenticator, get_authenticator_for_litellm_params
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
@@ -53,7 +53,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         model: str,
         messages: list[Any],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
@@ -68,15 +68,19 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         # session, never the caller-supplied api_base. rstrip so a
         # tenant-specific base with a trailing slash does not yield a
         # double-slash URL once "/v1/messages" is appended downstream.
-        dynamic_api_base: Final = (self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
+        authenticator: Final = get_authenticator_for_litellm_params(
+            default_authenticator=self.authenticator,
+            litellm_params=litellm_params,
+        )
         try:
-            dynamic_api_key: Final = self.authenticator.get_api_key()
+            dynamic_api_key: Final = api_key or authenticator.get_api_key()
         except GetAPIKeyError as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="github_copilot",
                 message=str(e),
             )
+        dynamic_api_base: Final = (authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
 
         # Merge Copilot headers with provided headers
         copilot_headers: Final = get_copilot_default_headers(dynamic_api_key)
@@ -103,7 +107,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -116,7 +120,11 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         reuse it to avoid a second authenticator read, falling back to a fresh
         resolution only if it was not provided.
         """
-        resolved = (api_base or self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
+        authenticator: Final = get_authenticator_for_litellm_params(
+            default_authenticator=self.authenticator,
+            litellm_params=litellm_params,
+        )
+        resolved = (api_base or authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
         if not resolved.endswith("/v1/messages"):
             resolved = f"{resolved}/v1/messages"
         return resolved
