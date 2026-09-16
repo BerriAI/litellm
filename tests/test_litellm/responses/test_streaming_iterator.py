@@ -31,8 +31,15 @@ def _sse_event(payload: dict) -> bytes:
 
 def _mock_config() -> Mock:
     mock_config = Mock(spec=BaseResponsesAPIConfig)
-    mock_responses_api_response = Mock(spec=ResponsesAPIResponse)
-    mock_responses_api_response.id = "resp_ttft"
+    mock_responses_api_response = ResponsesAPIResponse(
+        id="resp_ttft",
+        created_at=0,
+        status="completed",
+        model="gpt-4o-mini",
+        object="response",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+    )
 
     def _transform(model, parsed_chunk, logging_obj):
         evt_type = parsed_chunk.get("type")
@@ -54,6 +61,8 @@ def _make_iterator(
     sse_events: list[bytes],
     logging_obj: LiteLLMLoggingObj,
     trailing_error: Optional[Exception] = None,
+    config: Mock | None = None,
+    request_data: dict | None = None,
 ) -> ResponsesAPIStreamingIterator:
     async def aiter_bytes():
         for evt in sse_events:
@@ -68,10 +77,11 @@ def _make_iterator(
     return ResponsesAPIStreamingIterator(
         response=mock_response,
         model="gpt-4o-mini",
-        responses_api_provider_config=_mock_config(),
+        responses_api_provider_config=config or _mock_config(),
         logging_obj=logging_obj,
         litellm_metadata={},
         custom_llm_provider="openai",
+        request_data=request_data,
     )
 
 
@@ -327,6 +337,86 @@ def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
 
     assert iterator.completed_response._hidden_params["_response_ms"] == 10000.0
     assert "litellm_overhead_time_ms" not in iterator.completed_response._hidden_params
+
+
+def _mock_config_with_completed_response(response: ResponsesAPIResponse) -> Mock:
+    mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+    def _transform(model, parsed_chunk, logging_obj):
+        evt_type = parsed_chunk.get("type")
+        if evt_type == "response.completed":
+            completed = Mock(spec=ResponseCompletedEvent)
+            completed.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+            completed.response = response
+            return completed
+        stub = Mock()
+        stub.type = evt_type
+        if evt_type == "response.output_text.delta":
+            stub.delta = parsed_chunk.get("delta")
+        return stub
+
+    mock_config.transform_streaming_response.side_effect = _transform
+    return mock_config
+
+
+def _responses_api_response_without_usage() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_no_usage",
+        created_at=int(datetime(2025, 1, 1).timestamp()),
+        status="completed",
+        model="gpt-4o-mini",
+        object="response",
+        output=[],
+        usage=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_completed_event_without_usage_gets_text_estimate():
+    """A response.completed event carrying usage: null still bills: the
+    iterator estimates usage from the request input and generated text."""
+    response = _responses_api_response_without_usage()
+    iterator = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_text.delta", "delta": "hello world"}),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=_mock_config_with_completed_response(response),
+        request_data={"input": "count these input tokens please"},
+    )
+
+    async for _ in iterator:
+        pass
+
+    usage = iterator.completed_response.response.usage
+    assert usage is not None
+    assert usage.input_tokens > 0
+    assert usage.output_tokens > 0
+    assert usage.total_tokens == usage.input_tokens + usage.output_tokens
+
+
+@pytest.mark.asyncio
+async def test_completed_event_with_usage_is_left_untouched():
+    """Provider-reported usage on response.completed wins over the estimate."""
+    response = _responses_api_response_with_usage()
+    iterator = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_text.delta", "delta": "hello world"}),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=_mock_config_with_completed_response(response),
+        request_data={"input": "count these input tokens please"},
+    )
+
+    async for _ in iterator:
+        pass
+
+    usage = iterator.completed_response.response.usage
+    assert usage.input_tokens == 20
+    assert usage.output_tokens == 60
+    assert usage.total_tokens == 80
 
 
 def _responses_api_response_with_usage() -> ResponsesAPIResponse:

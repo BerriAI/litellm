@@ -420,6 +420,21 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     self.completed_response = openai_responses_api_chunk
+                    _response_obj: Final[ResponsesAPIResponse | None] = getattr(
+                        openai_responses_api_chunk, "response", None
+                    )
+                    if (
+                        _chunk_type
+                        in (
+                            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                        )
+                        and _response_obj is not None
+                        and _response_obj.usage is None
+                    ):
+                        _response_obj.usage = ResponseAPILoggingUtils.estimate_usage_from_text(
+                            self.model or "", self.request_data.get("input"), self._generated_content
+                        )
                     _stamp_responses_usage_cost(getattr(openai_responses_api_chunk, "response", None), self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
