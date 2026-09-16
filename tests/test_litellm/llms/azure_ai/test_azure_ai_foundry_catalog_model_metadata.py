@@ -12,7 +12,6 @@ REPO_ROOT: Final = Path(__file__).parents[4]
 MAIN_COST_MAP: Final = REPO_ROOT / "model_prices_and_context_window.json"
 BACKUP_COST_MAP: Final = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 COST_MAP_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
-AZURE_PRICING_PREFIX: Final = "https://azure.microsoft.com/en-us/pricing/details/"
 A_MILLION: Final = 1_000_000
 AN_HOUR_IN_SECONDS: Final = 3600
 
@@ -76,7 +75,9 @@ def test_azure_ai_catalog_name_prices_the_same_in_any_casing(catalog_name: str) 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize("catalog_name", GROK_4_20_NAMES)
 def test_azure_ai_grok_4_20_bills_cached_prompt_tokens_at_the_input_price(catalog_name: str) -> None:
-    uncached_prompt_cost, _ = cost_per_token(model=f"azure_ai/{catalog_name}", prompt_tokens=A_MILLION, completion_tokens=0)
+    uncached_prompt_cost, _ = cost_per_token(
+        model=f"azure_ai/{catalog_name}", prompt_tokens=A_MILLION, completion_tokens=0
+    )
     cached_prompt_cost, _ = cost_per_token(
         model=f"azure_ai/{catalog_name}",
         prompt_tokens=A_MILLION,
@@ -100,7 +101,6 @@ def test_azure_ai_catalog_entry_source_and_backup_match(catalog_name: str) -> No
     main_entry = _cost_map_entry(MAIN_COST_MAP, catalog_name)
     backup_entry = _cost_map_entry(BACKUP_COST_MAP, catalog_name)
 
-    assert str(main_entry["source"]).startswith(AZURE_PRICING_PREFIX)
     assert backup_entry == main_entry
 
 

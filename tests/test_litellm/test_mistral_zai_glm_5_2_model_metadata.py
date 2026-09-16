@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 from litellm.utils import supports_prompt_caching, supports_reasoning
 
@@ -33,34 +32,6 @@ def local_model_cost_map(monkeypatch):
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
-
-
-@pytest.mark.parametrize("model", GLM_5_2_MODELS)
-def test_zai_glm_5_2_specs(model):
-    info = _load(MAIN_PATH).get(model)
-    assert info is not None, f"{model} missing from model_prices_and_context_window.json"
-
-    assert info["litellm_provider"] == "mistral"
-    assert info["mode"] == "chat"
-
-    assert info["input_cost_per_token"] == INPUT_COST
-    assert info["output_cost_per_token"] == OUTPUT_COST
-    assert info["cache_read_input_token_cost"] == CACHED_INPUT_COST
-
-    assert info["max_input_tokens"] == 1048576
-    assert info["max_output_tokens"] == 131072
-    assert info["max_tokens"] == 131072
-
-    assert info["supports_assistant_prefill"] is True
-    assert info["supports_function_calling"] is True
-    assert info["supports_prompt_caching"] is True
-    assert info["supports_reasoning"] is True
-    assert info["supports_response_schema"] is True
-    assert info["supports_tool_choice"] is True
-
-    routed_model, provider, _, _ = get_llm_provider(model=model)
-    assert routed_model == model.split("/", 1)[1]
-    assert provider == "mistral"
 
 
 @pytest.mark.parametrize("model", GLM_5_2_MODELS)

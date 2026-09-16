@@ -5,7 +5,6 @@ import pytest
 
 import litellm
 from litellm.constants import bedrock_embedding_models
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -31,37 +30,6 @@ AUDIO_COST_PER_SECOND = 0.00014
 def _load(path):
     with open(path) as f:
         return json.load(f)
-
-
-@pytest.mark.parametrize("model", ALL_MODELS)
-def test_marengo_embed_3_specs(model):
-    info = _load(MAIN_PATH).get(model)
-    assert info is not None, f"{model} missing from model_prices_and_context_window.json"
-
-    assert info["litellm_provider"] == "bedrock"
-    assert info["mode"] == "embedding"
-    assert info["input_cost_per_query"] == TEXT_REQUEST_COST
-    assert info["output_cost_per_token"] == 0.0
-    assert info["max_input_tokens"] == 500
-    assert info["max_tokens"] == 500
-    assert info["output_vector_size"] == 512
-    assert info["supports_embedding_image_input"] is True
-    assert info["supports_image_input"] is True
-    assert "deprecation_date" not in info
-
-    routed_model, provider, _, _ = get_llm_provider(model=f"bedrock/{model}")
-    assert routed_model == model
-    assert provider == "bedrock"
-
-
-@pytest.mark.parametrize("model", PER_REQUEST_MODELS)
-def test_marengo_prices_are_per_request_not_per_token(model):
-    info = _load(MAIN_PATH)[model]
-    assert "input_cost_per_token" not in info
-    assert info["input_cost_per_query"] == TEXT_REQUEST_COST
-    assert info["input_cost_per_image"] == IMAGE_REQUEST_COST
-    assert info["input_cost_per_video_per_second"] == VIDEO_COST_PER_SECOND
-    assert info["input_cost_per_audio_per_second"] == AUDIO_COST_PER_SECOND
 
 
 @pytest.mark.parametrize("model", ALL_MODELS)

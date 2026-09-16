@@ -157,6 +157,7 @@ def _get_spend_logs_metadata(
             user_api_key_team_alias=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
+            user_agent=None,
             additional_usage_values=None,
             applied_guardrails=None,
             status="success",
