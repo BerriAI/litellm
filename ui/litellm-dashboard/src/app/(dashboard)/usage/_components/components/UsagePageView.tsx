@@ -30,6 +30,8 @@ import { ActivityMetrics, processActivityData } from "@/components/activity_metr
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
+import { getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
+import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
   gatewayDailyActivityCall,
@@ -44,6 +46,7 @@ import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
+import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import {
@@ -247,6 +250,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   const loading = aggregatedLoading || paginatedResult.loading;
 
+  // Read through the same range stamp as the tiles, so the export is blocked from the first
+  // render of a new range rather than from whenever the fetch effect gets around to running.
+  const spendFetchState = {
+    coversRange: activeAggregated !== null || paginatedResult.coversRange,
+    cancelled: paginatedResult.cancelled,
+    failed: paginatedResult.failed,
+  };
+  const exportBlockedReason = getExportBlockedReason(spendFetchState);
+
   // Clear isDateChanging when paginated data starts arriving
   useEffect(() => {
     if (aggregatedFailed && !paginatedResult.loading && paginatedResult.data.results.length > 0) {
@@ -426,6 +438,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             metadata: {
               key_alias: metrics.metadata.key_alias,
               team_id: null,
+              user_email: metrics.metadata.user_email,
               tags: metrics.metadata.tags || [],
             },
           };
@@ -445,7 +458,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     return Object.entries(keySpend)
       .map(([api_key, metrics]) => ({
         api_key,
-        key_alias: metrics.metadata.key_alias || "-",
+        key_alias: keyActivityLabel(metrics.metadata),
         tags: metrics.metadata.tags || [],
         spend: metrics.metrics.spend,
       }))
@@ -486,6 +499,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           <PaginationStatusAlerts
             isFetchingMore={paginatedResult.isFetchingMore}
             cancelled={paginatedResult.cancelled}
+            failed={paginatedResult.failed}
             progress={paginatedResult.progress}
             cancel={paginatedResult.cancel}
           />
@@ -522,10 +536,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Sparkles />
                       Ask AI
                     </Button>
-                    <Button variant="outline" onClick={() => setIsGlobalExportModalOpen(true)}>
-                      <Download />
-                      Export Data
-                    </Button>
+                    <span title={exportBlockedReason}>
+                      <Button
+                        variant="outline"
+                        disabled={exportBlockedReason !== undefined}
+                        onClick={() => setIsGlobalExportModalOpen(true)}
+                      >
+                        <Download />
+                        Export Data
+                      </Button>
+                    </span>
                   </div>
                 </div>
                 {/* Cost Panel */}
@@ -571,7 +591,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <CardContent>
                                 <h3 className="text-lg font-medium text-foreground">Total Requests</h3>
                                 <p className="text-2xl font-bold mt-2">
-                                  {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
+                                  {(gatewayActivity
+                                    ? gatewayActivity.total_successful_requests + gatewayActivity.total_failed_requests
+                                    : userSpendData.metadata?.total_api_requests
+                                  )?.toLocaleString() || 0}
                                 </p>
                               </CardContent>
                             </ShadcnCard>
@@ -881,7 +904,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <ActivityMetrics modelMetrics={modelMetrics} />
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
-                  <ActivityMetrics modelMetrics={keyMetrics} />
+                  <KeyActivityPanel keyMetrics={keyMetrics} />
                 </TabsContent>
                 <TabsContent value="mcp" keepMounted>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />

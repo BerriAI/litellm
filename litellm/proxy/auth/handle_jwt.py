@@ -14,7 +14,7 @@ import hashlib
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
@@ -52,13 +52,16 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import can_team_access_model
+from litellm.proxy.auth.resolvers.grants import GrantResolver, UserLookup, canonical_user_id
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.agents import AgentResponse
 
 from .auth_checks import (
     _allowed_routes_check,
@@ -123,6 +126,26 @@ class _UserInfoResponse(Protocol):
     """The OIDC UserInfo endpoint's HTTP response, read for the identity document it carries."""
 
     def json(self) -> dict[str, object]: ...
+
+
+class AgentLookup(Protocol):
+    """The registered-agent lookups a JWT agent claim is matched against."""
+
+    def get_agent_by_id(self, agent_id: str) -> AgentResponse | None:
+        """The agent registered under ``agent_id``, if any."""
+
+    def get_agent_by_name(self, agent_name: str) -> AgentResponse | None:
+        """The agent registered under ``agent_name``, if any."""
+
+
+class _NoRegisteredAgents:
+    """The lookup in force until the proxy binds its agent registry: no agent is registered, so no claim matches."""
+
+    def get_agent_by_id(self, agent_id: str) -> None:
+        return None
+
+    def get_agent_by_name(self, agent_name: str) -> None:
+        return None
 
 
 def _discovery_document(response: _OIDCDiscoveryResponse) -> _OIDCDiscoveryBody:
@@ -196,6 +219,10 @@ class JWTHandler:
         self.leeway = 0
         # Per-cache-key locks so a TTL lapse triggers one refresh instead of one per in-flight request.
         self._refresh_locks: dict[str, asyncio.Lock] = {}  # mutable-ok: lock registry, keyed by JWKS url
+        self.agent_lookup: AgentLookup = _NoRegisteredAgents()
+
+    def bind_agent_lookup(self, agent_lookup: AgentLookup) -> None:
+        self.agent_lookup = agent_lookup
 
     def update_environment(
         self,
@@ -620,6 +647,12 @@ class JWTHandler:
         except KeyError:
             object_id = default_value
         return object_id
+
+    def get_agent_claim(self, token: Mapping[str, object]) -> str | None:
+        if self.litellm_jwtauth.agent_id_jwt_field is None:
+            return None
+        claim: Final[object] = get_nested_value(data=token, key_path=self.litellm_jwtauth.agent_id_jwt_field)
+        return claim if isinstance(claim, str) and claim else None
 
     def get_org_id(self, token: dict, default_value: str | None) -> str | None:
         if self._has_trusted_issuer_normalized_claim(token=token, claim=self.LITELLM_ORG_ID_CLAIM):
@@ -1378,6 +1411,7 @@ class JWTAuthManager:
         api_key: str,
         jwt_valid_token: dict | None = None,
         user_email: str | None = None,
+        agent_id: str | None = None,
     ) -> JWTAuthBuilderResult | None:
         """Check admin status and route access permissions"""
         if not jwt_handler.is_admin(scopes=scopes):
@@ -1407,7 +1441,27 @@ class JWTAuthManager:
             org_id=org_id,
             team_membership=None,
             jwt_claims=jwt_valid_token or {},
+            agent_id=agent_id,
         )
+
+    @staticmethod
+    def resolve_agent_id(
+        jwt_handler: JWTHandler,
+        jwt_valid_token: Mapping[str, object],
+        agent_registry: AgentLookup,
+    ) -> str | None:
+        agent_claim: Final = jwt_handler.get_agent_claim(token=jwt_valid_token)
+        if agent_claim is None:
+            return None
+        agent: Final = agent_registry.get_agent_by_id(agent_id=agent_claim) or agent_registry.get_agent_by_name(
+            agent_name=agent_claim
+        )
+        if agent is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"No registered agent matches JWT claim {jwt_handler.litellm_jwtauth.agent_id_jwt_field}={agent_claim}",
+            )
+        return agent.agent_id
 
     @staticmethod
     async def find_and_validate_specific_team_id(
@@ -1595,7 +1649,7 @@ class JWTAuthManager:
                             model=requested_model,
                             team_object=team_object,
                             llm_router=llm_router,
-                            team_model_aliases=None,
+                            team_model_aliases=team_model_aliases(team_object),
                         )
                     ):
                         is_allowed = allowed_routes_check(
@@ -1655,9 +1709,7 @@ class JWTAuthManager:
         ``get_user_object`` resolved a legacy row with a different ``user_id``,
         use that row's id; otherwise keep the claim. GH #26789.
         """
-        if user_object is not None and user_object.user_id:
-            return user_object.user_id
-        return user_id
+        return canonical_user_id(user_id=user_id, user_object=user_object)
 
     @staticmethod
     async def get_objects(
@@ -1724,22 +1776,23 @@ class JWTAuthManager:
                 code=403,
             )
 
-        user_object: LiteLLM_UserTable | None = None
-        if user_id:
-            user_object = (
-                await get_user_object(
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    user_id_upsert=jwt_handler.is_upsert_user_id(valid_user_email=valid_user_email),
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    user_email=user_email,
-                    sso_user_id=user_id,
-                )
-                if user_id
-                else None
-            )
+        user_object, team_membership_object, effective_user_id = await GrantResolver(
+            prisma_client,
+            user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            load_user=get_user_object,
+            load_team=get_team_object,
+            load_membership=get_team_membership,
+        ).resolve_identity(
+            UserLookup(
+                user_id=user_id,
+                user_email=user_email,
+                sso_user_id=user_id,
+                upsert=jwt_handler.is_upsert_user_id(valid_user_email=valid_user_email),
+            ),
+            team_id=team_id,
+        )
 
         end_user_object: LiteLLM_EndUserTable | None = None
         if end_user_id:
@@ -1756,37 +1809,12 @@ class JWTAuthManager:
                 else None
             )
 
-        # Rebind to resolved DB user_id for team_membership + auth_builder (GH #26789).
-        effective_user_id: Final = JWTAuthManager._canonical_user_id_from_db(user_id=user_id, user_object=user_object)
-        if effective_user_id != user_id:
-            verbose_proxy_logger.debug(
-                "JWT Auth: rebinding user_id %r -> DB user_id %r (email/sso match)",
-                user_id,
-                effective_user_id,
-            )
-        user_id = effective_user_id
-
-        team_membership_object: LiteLLM_TeamMembership | None = None
-        if user_id and team_id:
-            team_membership_object = (
-                await get_team_membership(
-                    user_id=user_id,
-                    team_id=team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-                if user_id and team_id
-                else None
-            )
-
         return (
             user_object,
             org_object,
             end_user_object,
             team_membership_object,
-            user_id,
+            effective_user_id,
         )
 
     @staticmethod
@@ -2132,7 +2160,7 @@ class JWTAuthManager:
                         model=requested_model,
                         team_object=team_object,
                         llm_router=llm_router,
-                        team_model_aliases=None,
+                        team_model_aliases=team_model_aliases(team_object),
                     )
                 except ProxyException:
                     continue
@@ -2292,9 +2320,23 @@ class JWTAuthManager:
             elif rbac_role == LitellmUserRoles.INTERNAL_USER:
                 user_id = object_id
 
+        agent_id: Final = JWTAuthManager.resolve_agent_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_valid_token,
+            agent_registry=jwt_handler.agent_lookup,
+        )
+
         # Check admin access
         admin_result: Final = await JWTAuthManager.check_admin_access(
-            jwt_handler, scopes, route, user_id, org_id, api_key, jwt_valid_token, user_email=user_email
+            jwt_handler,
+            scopes,
+            route,
+            user_id,
+            org_id,
+            api_key,
+            jwt_valid_token,
+            user_email=user_email,
+            agent_id=agent_id,
         )
         if admin_result:
             await JWTAuthManager._attach_team_from_header_for_admin(
@@ -2538,4 +2580,5 @@ class JWTAuthManager:
             token=api_key,
             team_membership=team_membership_object,
             jwt_claims=jwt_valid_token,
+            agent_id=agent_id,
         )

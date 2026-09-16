@@ -17,7 +17,7 @@ test.describe("Internal Users Search", () => {
   test("narrows the table to the matching email, and restores it when cleared", async ({ page }) => {
     await goToInternalUsers(page);
 
-    const search = page.getByPlaceholder("Search by email…");
+    const search = page.getByPlaceholder("Search by email or ID…");
     await expect(search).toBeVisible();
 
     await search.fill("noteam@");

@@ -40,6 +40,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -77,6 +78,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
 )
+from litellm.proxy.common_utils.openai_error_payload import (
+    error_status_code,
+    openai_error_param,
+    openai_error_type,
+)
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
@@ -90,6 +96,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
@@ -310,9 +317,9 @@ async def chat_completion_pass_through_endpoint(
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
+            code=error_status_code(e, 500),
         )
 
 
@@ -321,7 +328,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     def get_response_headers(
         headers: httpx.Headers,
         litellm_call_id: str | None = None,
-        custom_headers: dict | None = None,
+        custom_headers: Mapping[str, str] | None = None,
     ) -> dict:
         # Exclude headers that uvicorn writes itself (server, date) and
         # encoding/length headers that don't survive re-serialization.
@@ -581,8 +588,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
 
         # Set internal keys after merging client-supplied metadata so a request
-        # body that mirrors them cannot clobber the authenticated key or the
-        # real parent span.
+        # body that mirrors them cannot clobber the authenticated key, the real
+        # parent span, or the proxy's own session-id decision.
+        _metadata.pop(SESSION_ID_OMITTED_METADATA_KEY, None)
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
@@ -606,6 +614,12 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata.update(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
+        _request_state: Final = getattr(request, "state", None)
+        deployment_model_info: Final = getattr(
+            _request_state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY, None
+        )
+        if isinstance(deployment_model_info, Mapping):
+            _metadata["model_info"] = dict(deployment_model_info)
 
         kwargs: Final = {
             "litellm_params": {
@@ -866,6 +880,35 @@ async def _log_passthrough_upstream_failure(
                 "pass_through_endpoint: post_call_failure_hook raised for upstream error",
                 exc_info=True,
             )
+
+
+async def _relay_reporting_failures(
+    stream: AsyncGenerator[bytes, None],
+    upstream_status: int,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_payload: dict,  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
+) -> AsyncGenerator[bytes, None]:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    try:
+        async for chunk in stream:
+            yield chunk
+    except Exception as e:
+        if upstream_status >= 400:
+            raise
+        try:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=request_payload,
+                traceback_str=traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
+            )
+        except Exception:  # noqa: BLE001 - a failing logging callback must never mask the upstream error
+            verbose_proxy_logger.warning(
+                "pass_through_endpoint: post_call_failure_hook raised for a mid-stream upstream error",
+                exc_info=True,
+            )
+        raise
 
 
 from litellm.passthrough.timeout_utils import (
@@ -1291,14 +1334,24 @@ async def pass_through_request(
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
                     stream=_own_streamed_managed_ids(
-                        stream=PassThroughStreamingHandler.chunk_processor(
-                            response=response,
-                            request_body=_parsed_body,
-                            litellm_logging_obj=logging_obj,
-                            endpoint_type=endpoint_type,
-                            start_time=start_time,
-                            passthrough_success_handler_obj=pass_through_endpoint_logging,
-                            url_route=str(url),
+                        stream=_relay_reporting_failures(
+                            stream=PassThroughStreamingHandler.chunk_processor(
+                                response=response,
+                                request_body=_parsed_body,
+                                litellm_logging_obj=logging_obj,
+                                endpoint_type=endpoint_type,
+                                start_time=start_time,
+                                passthrough_success_handler_obj=pass_through_endpoint_logging,
+                                url_route=str(url),
+                            ),
+                            upstream_status=response.status_code,
+                            user_api_key_dict=user_api_key_dict,
+                            request_payload=_build_passthrough_failure_request_payload(
+                                parsed_body=_parsed_body,
+                                kwargs=kwargs,
+                                logging_obj=logging_obj,
+                                custom_llm_provider=custom_llm_provider,
+                            ),
                         ),
                         managed_id_provider=_managed_id_provider,
                         request=request,
@@ -1372,14 +1425,24 @@ async def pass_through_request(
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
                     stream=_own_streamed_managed_ids(
-                        stream=PassThroughStreamingHandler.chunk_processor(
-                            response=response,
-                            request_body=_parsed_body,
-                            litellm_logging_obj=logging_obj,
-                            endpoint_type=endpoint_type,
-                            start_time=start_time,
-                            passthrough_success_handler_obj=pass_through_endpoint_logging,
-                            url_route=str(url),
+                        stream=_relay_reporting_failures(
+                            stream=PassThroughStreamingHandler.chunk_processor(
+                                response=response,
+                                request_body=_parsed_body,
+                                litellm_logging_obj=logging_obj,
+                                endpoint_type=endpoint_type,
+                                start_time=start_time,
+                                passthrough_success_handler_obj=pass_through_endpoint_logging,
+                                url_route=str(url),
+                            ),
+                            upstream_status=response.status_code,
+                            user_api_key_dict=user_api_key_dict,
+                            request_payload=_build_passthrough_failure_request_payload(
+                                parsed_body=_parsed_body,
+                                kwargs=kwargs,
+                                logging_obj=logging_obj,
+                                custom_llm_provider=custom_llm_provider,
+                            ),
                         ),
                         managed_id_provider=_managed_id_provider,
                         request=request,
@@ -1677,18 +1740,18 @@ async def pass_through_request(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(getattr(e, "detail", str(e)))),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
                 headers=custom_headers,
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
                 headers=custom_headers,
             )
 
@@ -1946,6 +2009,8 @@ def create_pass_through_route(
                         delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
                     if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
                         delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
+                    if hasattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY):
+                        delattr(request.state, LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY)
 
             # The upstream withholds its response headers until its first token, so
             # the whole time-to-first-token is spent inside _relay with nothing on
@@ -2032,6 +2097,22 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     if rewritten_model == setup_model:
         return text_data
     return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})  # mutable-ok: one-shot json payload
+
+
+def _resolved_vertex_live_setup(
+    setup_data: Mapping[str, object], setup_model_rewriter: Callable[[str], str] | None
+) -> Mapping[str, object]:
+    """
+    Give the model extractor the same fully qualified path the upstream will receive.
+
+    Clients may name a bare gateway alias, which the rewriter turns into a ``projects/...`` path before
+    it reaches Vertex. The extractor only reads a path containing ``/models/``, so running it on the raw
+    frame logs the session as ``unknown`` at no cost, which is precisely the supported client form
+    """
+    setup_model: Final = setup_data.get("model")
+    if setup_model_rewriter is None or not isinstance(setup_model, str):
+        return setup_data
+    return {**setup_data, "model": setup_model_rewriter(setup_model)}
 
 
 def _truncated_close_reason(reason: str) -> str:
@@ -2258,7 +2339,9 @@ async def websocket_passthrough_request(
                                             setup_data,
                                         )
                                         if isinstance(setup_data, dict) and "model" in setup_data:
-                                            extracted_model = _extract_model_from_vertex_ai_setup(setup_data)
+                                            extracted_model = _extract_model_from_vertex_ai_setup(
+                                                _resolved_vertex_live_setup(setup_data, setup_model_rewriter)
+                                            )
                                             if extracted_model:
                                                 kwargs["model"] = extracted_model
                                                 kwargs["custom_llm_provider"] = "vertex_ai-language-models"

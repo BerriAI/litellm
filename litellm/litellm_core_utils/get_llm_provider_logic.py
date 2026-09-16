@@ -238,6 +238,8 @@ def get_llm_provider(
             if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
                 raise Exception(f"dynamic_api_key needs to be a string. Got type={type(dynamic_api_key).__name__}")
             return model, custom_llm_provider, dynamic_api_key, api_base
+        if "/" in model and is_registered_custom_provider(provider_prefix):
+            return model.split("/", 1)[1], provider_prefix, dynamic_api_key, api_base
         # check if api base is a known openai compatible endpoint
         if api_base:
             for endpoint in litellm.openai_compatible_endpoints:
@@ -536,6 +538,10 @@ def get_llm_provider(
             )
 
 
+def is_registered_custom_provider(custom_llm_provider: str | None) -> bool:
+    return any(item["provider"] == custom_llm_provider for item in litellm.custom_provider_map)
+
+
 def _dashscope_family_chat_config(custom_llm_provider: str) -> "litellm.DashScopeChatConfig":
     if custom_llm_provider == "qwencloud":
         return litellm.QwenCloudChatConfig()
@@ -601,12 +607,15 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.GroqChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "bedrock_mantle":
+        from litellm.llms.bedrock_mantle.common_utils import split_mantle_region_prefix
+
         (
             api_base,
             dynamic_api_key,
         ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key, litellm_params=litellm_params, model=model
         )
+        model = split_mantle_region_prefix(model)[1]  # rebind-ok: the prefix is routing only, not a Mantle model id
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret("NVIDIA_NIM_API_BASE") or "https://integrate.api.nvidia.com/v1"

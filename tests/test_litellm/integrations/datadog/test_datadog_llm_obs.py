@@ -12,7 +12,7 @@ spelling of prompt-cache counts (`prompt_tokens_details.cached_tokens`).
 import json
 import os
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Final
 from unittest.mock import patch
 
 import pytest
@@ -20,6 +20,8 @@ import pytest
 import litellm
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import StandardLoggingGuardrailInformation
 
 TOOL_DEFINITION: dict[str, Any] = {
     "type": "function",
@@ -539,24 +541,166 @@ def _span_json(logger_under_test: DataDogLLMObsLogger, payload: dict[str, Any]) 
     return json.loads(safe_dumps(span))
 
 
+SECRET_TOOL_RESULT: Final = '{"city": "Paris", "temp_c": 18, "account_secret": "SECRET-7545"}'
+TOOL_CONVERSATION: Final[list[dict[str, Any]]] = [
+    {"role": "user", "content": "secret prompt"},
+    {"role": "assistant", "content": None, "tool_calls": [ASSISTANT_TOOL_CALL]},
+    {"role": "tool", "tool_call_id": "call_abc123", "content": SECRET_TOOL_RESULT},
+]
+
+
+def _redacted_span_as_the_proxy_builds_it(payload: dict[str, Any]) -> dict[str, Any]:
+    logger_under_test = _redacting_logger(turn_off_message_logging=True)
+    return _span_json(
+        logger_under_test, logger_under_test.redact_standard_logging_payload_from_model_call_details(payload)
+    )
+
+
 def test_redaction_keeps_the_conversation_shape_without_its_content() -> None:
-    """Roles and message count survive so the trace stays legible; contents and tool payloads do not."""
-    result = _span_json(
-        _redacting_logger(turn_off_message_logging=True),
+    result = _redacted_span_as_the_proxy_builds_it(
+        build_payload(
+            messages=TOOL_CONVERSATION,
+            response_message={"role": "assistant", "content": "secret response", "tool_calls": [ASSISTANT_TOOL_CALL]},
+        )
+    )
+
+    redacted_call = {
+        "name": "get_weather",
+        "arguments": "redacted-by-litellm",
+        "tool_id": "call_abc123",
+        "type": "function",
+    }
+    assert result["meta"]["input"]["messages"] == [
+        {"role": "user", "content": "redacted-by-litellm"},
+        {"role": "assistant", "content": "redacted-by-litellm", "tool_calls": [redacted_call]},
+        {
+            "role": "tool",
+            "content": "redacted-by-litellm",
+            "tool_results": [
+                {"name": "get_weather", "result": "redacted-by-litellm", "tool_id": "call_abc123", "type": "function"}
+            ],
+        },
+    ]
+    assert result["meta"]["output"]["messages"] == [
+        {"role": "assistant", "content": "redacted-by-litellm", "tool_calls": [redacted_call]}
+    ]
+    serialized = safe_dumps(result)
+    assert "SECRET-7545" not in serialized
+    assert "Paris" not in serialized
+    assert "secret" not in serialized
+
+
+def test_redaction_counts_tool_result_tokens_before_replacing_them() -> None:
+    payload = build_payload(messages=TOOL_CONVERSATION)
+    payload["standard_logging_object"]["model"] = "claude-sonnet-5"
+
+    result = _redacted_span_as_the_proxy_builds_it(payload)
+
+    expected_tokens = litellm.token_counter(model="claude-sonnet-5", text=SECRET_TOOL_RESULT)
+    assert expected_tokens > 0
+    assert result["metrics"]["tool_output_tokens"] == float(expected_tokens)
+    assert result["metrics"]["input_tokens"] == 4447.0
+
+
+def test_tool_output_tokens_sum_every_result_in_the_request(logger: DataDogLLMObsLogger) -> None:
+    payload = build(
+        logger,
+        messages=[
+            {"role": "tool", "tool_call_id": "call_1", "content": "one two three"},
+            {"role": "tool", "tool_call_id": "call_2", "content": "four five six seven"},
+        ],
+    )
+
+    assert payload["metrics"]["tool_output_tokens"] == float(
+        litellm.token_counter(text="one two three") + litellm.token_counter(text="four five six seven")
+    )
+
+
+def test_a_request_without_tool_results_reports_no_tool_output_tokens(logger: DataDogLLMObsLogger) -> None:
+    payload = build(logger, messages=[{"role": "user", "content": "hi"}])
+
+    assert "tool_output_tokens" not in payload["metrics"]
+    assert "tool_output_tokens" not in _redacted_span_as_the_proxy_builds_it(build_payload())["metrics"]
+
+
+def test_a_tool_that_returned_nothing_still_counts_as_zero_tool_output_tokens(logger: DataDogLLMObsLogger) -> None:
+    payload = build(logger, messages=[{"role": "tool", "tool_call_id": "call_1", "content": ""}])
+
+    assert payload["metrics"]["tool_output_tokens"] == 0.0
+
+
+def test_redaction_keeps_anthropic_tool_blocks_as_structure_only() -> None:
+    result = _redacted_span_as_the_proxy_builds_it(
         build_payload(
             messages=[
-                {"role": "user", "content": "secret prompt"},
-                {"role": "assistant", "content": None, "tool_calls": [ASSISTANT_TOOL_CALL]},
-            ],
-            response_message={"role": "assistant", "content": "secret response"},
-        ),
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": SECRET_TOOL_RESULT}],
+                },
+            ]
+        )
     )
 
     assert result["meta"]["input"]["messages"] == [
-        {"role": "user", "content": "redacted-by-litellm"},
-        {"role": "assistant", "content": "redacted-by-litellm"},
+        {
+            "role": "assistant",
+            "content": "redacted-by-litellm",
+            "tool_calls": [
+                {"name": "get_weather", "arguments": "redacted-by-litellm", "tool_id": "toolu_1", "type": "tool_use"}
+            ],
+        },
+        {
+            "role": "user",
+            "content": "redacted-by-litellm",
+            "tool_results": [
+                {"name": "get_weather", "result": "redacted-by-litellm", "tool_id": "toolu_1", "type": "function"}
+            ],
+        },
     ]
-    assert result["meta"]["output"]["messages"] == [{"role": "assistant", "content": "redacted-by-litellm"}]
+    assert "Paris" not in safe_dumps(result)
+
+
+def test_redaction_blanks_tool_identifiers_that_are_not_strings() -> None:
+    result = _redacted_span_as_the_proxy_builds_it(
+        build_payload(
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": {"leak": "SECRET-7545"}, "type": ["SECRET-7545"], "function": {"name": ["SECRET-7545"]}}
+                    ],
+                }
+            ]
+        )
+    )
+
+    assert result["meta"]["input"]["messages"][0]["tool_calls"] == [
+        {"name": "", "arguments": "redacted-by-litellm", "tool_id": "", "type": ""}
+    ]
+    assert "SECRET-7545" not in safe_dumps(result)
+
+
+def test_the_shared_hook_still_strips_what_redaction_governs_besides_messages() -> None:
+    payload = build_payload(messages=TOOL_CONVERSATION)
+    payload["standard_logging_object"]["classifier_input"] = {"system": "SECRET-7545"}
+    logger_under_test = _redacting_logger(turn_off_message_logging=True)
+
+    with patch.object(  # test-quality-ok: the hook reads this module global with no injection seam
+        litellm, "standard_logging_payload_excluded_fields", ["response"]
+    ):
+        redacted = logger_under_test.redact_standard_logging_payload_from_model_call_details(payload)
+
+    assert "classifier_input" not in redacted["standard_logging_object"]
+    assert "response" not in redacted["standard_logging_object"]
+    assert redacted["standard_logging_object"]["messages"] == TOOL_CONVERSATION
+    assert payload["standard_logging_object"]["classifier_input"] == {"system": "SECRET-7545"}
 
 
 def test_redaction_drops_unrecognized_and_malformed_message_roles() -> None:
@@ -631,8 +775,131 @@ def test_redaction_drops_every_prompt_carrying_metadata_record(logger: DataDogLL
     for record in sensitive_metadata:
         assert record not in redacted["meta"]["metadata"]
         assert record in unredacted["meta"]["metadata"]
-    assert redacted["meta"]["metadata"]["guardrail_information"] is None
+    assert redacted["meta"]["metadata"]["guardrail_information"] == [
+        {"guardrail_name": "g", "guardrail_request": "REDACTED_BY_LITELM"}
+    ]  # the record survives; only the field quoting the prompt is replaced
     assert unredacted["meta"]["metadata"]["guardrail_information"] is not None
+
+
+_AUDIT_RECORD: Final[StandardLoggingGuardrailInformation] = StandardLoggingGuardrailInformation(
+    guardrail_name="bedrock-pii",
+    guardrail_provider="bedrock",
+    guardrail_mode=GuardrailEventHooks.pre_call,
+    guardrail_status="guardrail_intervened",
+    guardrail_response={"action": "MASK", "match": "alice@acme.com"},
+    match_details=[{"pattern": "email", "match": "alice@acme.com"}],
+    classification="the user asked for alice@acme.com",
+    masked_entity_count={"EMAIL": 2},
+    violation_categories=["pii"],
+    duration=0.01,
+)
+
+
+def _payload_with_guardrail_record(guardrail_information: object) -> dict[str, Any]:
+    payload = build_payload()
+    payload["standard_logging_object"]["guardrail_information"] = guardrail_information
+    return payload
+
+
+def test_redaction_keeps_the_guardrail_audit_record(logger: DataDogLLMObsLogger) -> None:
+    """Redaction removes the prompt, not the operator's record that a guardrail intervened."""
+    redacted = _span_json(
+        _redacting_logger(turn_off_message_logging=True),
+        _payload_with_guardrail_record([dict(_AUDIT_RECORD)]),
+    )
+    record = redacted["meta"]["metadata"]["guardrail_information"][0]
+
+    for field in ("guardrail_request", "guardrail_response", "match_details", "classification"):
+        assert record.get(field, "REDACTED_BY_LITELM") == "REDACTED_BY_LITELM"
+    assert record["guardrail_name"] == "bedrock-pii"
+    assert record["guardrail_provider"] == "bedrock"
+    assert record["guardrail_mode"] == "pre_call"
+    assert record["guardrail_status"] == "guardrail_intervened"
+    assert record["masked_entity_count"] == {"EMAIL": 2}
+    assert record["violation_categories"] == ["pii"]
+    assert record["duration"] == 0.01
+    assert "alice@acme.com" not in safe_dumps(redacted["meta"]["metadata"])
+
+
+def test_a_caller_supplied_redaction_header_cannot_blank_the_guardrail_record(
+    logger: DataDogLLMObsLogger,
+) -> None:
+    """Any key may redact its own prompts with the header; none may erase what a guardrail caught."""
+    payload = _payload_with_guardrail_record([dict(_AUDIT_RECORD)])
+    payload["litellm_params"] = {"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}
+
+    span = _span_json(logger, payload)
+    record = span["meta"]["metadata"]["guardrail_information"][0]
+
+    assert span["meta"]["input"]["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert record["guardrail_status"] == "guardrail_intervened"
+    assert record["masked_entity_count"] == {"EMAIL": 2}
+    assert "alice@acme.com" not in safe_dumps(span["meta"]["metadata"])
+
+
+def test_a_guardrails_own_extra_field_never_reaches_a_redacted_span(logger: DataDogLLMObsLogger) -> None:
+    """A guardrail may record whatever it likes; only classified fields survive redaction."""
+    span = _span_json(
+        _redacting_logger(turn_off_message_logging=True),
+        _payload_with_guardrail_record([{**_AUDIT_RECORD, "matched_text": "the caller asked about alice@acme.com"}]),
+    )
+    record = span["meta"]["metadata"]["guardrail_information"][0]
+
+    assert "matched_text" not in record
+    assert record["guardrail_status"] == "guardrail_intervened"
+    assert "alice@acme.com" not in safe_dumps(span["meta"]["metadata"])
+
+
+def test_a_lone_guardrail_record_survives_redaction(logger: DataDogLLMObsLogger) -> None:
+    """A guardrail that writes the metadata key itself leaves one record, not a list of them."""
+    span = _span_json(
+        _redacting_logger(turn_off_message_logging=True),
+        _payload_with_guardrail_record(dict(_AUDIT_RECORD)),
+    )
+    metadata = span["meta"]["metadata"]
+
+    assert metadata["guardrail_information"] == [
+        {
+            "guardrail_name": "bedrock-pii",
+            "guardrail_provider": "bedrock",
+            "guardrail_mode": "pre_call",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_response": "REDACTED_BY_LITELM",
+            "match_details": "REDACTED_BY_LITELM",
+            "classification": "REDACTED_BY_LITELM",
+            "masked_entity_count": {"EMAIL": 2},
+            "violation_categories": ["pii"],
+            "duration": 0.01,
+        }
+    ]
+    assert metadata["latency_metrics"]["guardrail_overhead_time_ms"] == 10.0
+
+
+@pytest.mark.parametrize("guardrail_information", [None, [], 5, "abc", [None, "x"], {}])
+def test_odd_guardrail_shapes_still_produce_a_span(
+    guardrail_information: object,
+) -> None:
+    """The redacted branch replaced an expression that could not fail, so it must not start failing."""
+    span = _span_json(
+        _redacting_logger(turn_off_message_logging=True),
+        _payload_with_guardrail_record(guardrail_information),
+    )
+
+    assert span["meta"]["input"]["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert span["meta"]["metadata"]["guardrail_information"] in (None, [], [{}])
+
+
+def test_a_redacted_span_carries_every_declared_guardrail_field() -> None:
+    """A field added to the record without a redaction decision would be dropped, so it fails here."""
+    declared = dict.fromkeys(StandardLoggingGuardrailInformation.__annotations__, "alice@acme.com")
+    payload = _payload_with_guardrail_record([{**declared, "duration": 0.01}])
+
+    span = _span_json(_redacting_logger(turn_off_message_logging=True), payload)
+    record = span["meta"]["metadata"]["guardrail_information"][0]
+
+    assert set(record) == set(declared)
+    for field in ("guardrail_request", "guardrail_response", "match_details", "classification"):
+        assert record[field] == "REDACTED_BY_LITELM"
 
 
 def test_tool_definitions_accept_the_bare_anthropic_shape(logger: DataDogLLMObsLogger) -> None:

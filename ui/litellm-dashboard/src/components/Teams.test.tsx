@@ -17,6 +17,30 @@ import {
 import Teams from "./Teams";
 import { chooseSelectOption } from "../../tests/test-utils";
 
+vi.mock("./mcp_server_management/MCPServerSelector", () => ({
+  default: ({
+    onChange,
+  }: {
+    onChange: (selection: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="select-mcp-toolset"
+      onClick={() => onChange({ servers: [], accessGroups: [], toolsets: ["ts-1"] })}
+    >
+      Select MCP toolset
+    </button>
+  ),
+}));
+
+vi.mock("./skills/SkillSelector", () => ({
+  default: ({ onChange }: { onChange: (selected: string[]) => void }) => (
+    <button type="button" data-testid="select-private-skill" onClick={() => onChange(["private-skill"])}>
+      Select private skill
+    </button>
+  ),
+}));
+
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
   default: (...args: unknown[]) => can(...args),
@@ -1163,6 +1187,7 @@ describe("Teams - which fields reach the create payload depends on the open sect
       "organization_id",
       "rpm_limit",
       "team_alias",
+      "tpd_limit",
       "tpm_limit",
     ]);
     expect(payload.team_alias).toBe("Closed Sections Team");
@@ -1290,6 +1315,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       budget_duration: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
+      tpd_limit: undefined,
       metadata: undefined,
     });
     expect(wireBody(payload)).toStrictEqual({
@@ -1317,6 +1343,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       budget_duration: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
+      tpd_limit: undefined,
       metadata: undefined,
       team_id: undefined,
       team_member_budget: undefined,
@@ -1341,6 +1368,37 @@ describe("Teams - the exact bytes the create call sends", () => {
       models: ["no-default-models"],
       mcp_tool_permissions: {},
     });
+  });
+
+  it("puts the selected skills into object_permission.skills and drops the form key", async () => {
+    await openCreateModal();
+    await openSection("Skill Settings", /Allowed Skills/);
+    fireEvent.click(screen.getByTestId("select-private-skill"));
+
+    const payload = await submit();
+
+    expect(payload.object_permission).toStrictEqual({ skills: ["private-skill"] });
+    expect(payload).not.toHaveProperty("object_permission_skills");
+  });
+
+  it("sends no object_permission when Skill Settings is opened but nothing is selected", async () => {
+    await openCreateModal();
+    await openSection("Skill Settings", /Allowed Skills/);
+
+    const payload = await submit();
+
+    expect(payload).not.toHaveProperty("object_permission");
+    expect(payload).not.toHaveProperty("object_permission_skills");
+  });
+
+  it("includes selected MCP toolsets in the create object permission", async () => {
+    await openCreateModal();
+    await openSection("MCP Settings", /Allowed MCP Servers/);
+    fireEvent.click(screen.getByTestId("select-mcp-toolset"));
+
+    const payload = await submit();
+
+    expect(payload.object_permission).toStrictEqual({ mcp_toolsets: ["ts-1"] });
   });
 
   it.each([
@@ -1458,6 +1516,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       budget_duration: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
+      tpd_limit: undefined,
       metadata: undefined,
       team_id: undefined,
       team_member_budget: undefined,

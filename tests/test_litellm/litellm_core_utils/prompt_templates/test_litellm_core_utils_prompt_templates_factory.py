@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import re
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -19,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _convert_to_bedrock_tool_call_invoke,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
+    convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
     make_valid_bedrock_tool_name,
     ollama_pt,
@@ -191,8 +193,16 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
         {"type": "thinking", "thinking": "oss reasoning", "signature": None},
         {"type": "thinking", "thinking": "oss reasoning", "signature": ""},
         {"type": "thinking", "thinking": "oss reasoning"},
+        {"type": "thinking", "thinking": "openai reasoning", "signature": "litellm_encrypted_reasoning:gAAAA"},
+        {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:gAAAA"},
     ],
-    ids=["null_signature", "empty_signature", "missing_signature"],
+    ids=[
+        "null_signature",
+        "empty_signature",
+        "missing_signature",
+        "encrypted_reasoning_signature",
+        "encrypted_reasoning_redacted_data",
+    ],
 )
 def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     """Open-source reasoning models (DeepSeek-R1, Qwen, etc.) emit thinking blocks
@@ -219,7 +229,7 @@ def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     assistant = next(m for m in result if m["role"] == "assistant")
     content = assistant["content"]
     assert all(
-        block.get("type") != "thinking" for block in content
+        block.get("type") not in ("thinking", "redacted_thinking") for block in content
     ), f"unsignable thinking block must be dropped, got {content!r}"
     assert any(
         block.get("type") == "text" and block.get("text") == "2+2 equals 4."
@@ -2198,6 +2208,104 @@ def test_bedrock_tool_call_invoke_empty_arguments():
     result = _convert_to_bedrock_tool_call_invoke(tool_calls)
     assert len(result) == 1
     assert result[0]["toolUse"]["input"] == {}
+
+
+_BEDROCK_TOOL_USE_ID_RE = re.compile(r"^[a-zA-Z0-9_.:-]{1,64}$")
+
+
+@pytest.mark.parametrize(
+    "tool_call_id",
+    [
+        "call_" + "x" * 100,
+        "call|with|pipes",
+        "call_" + "y" * 60 + "|end",
+        "call:ok.dots-and_under",
+        "",
+    ],
+)
+def test_bedrock_tool_use_id_is_sanitized_consistently_for_invoke_and_result(tool_call_id):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/34239: client-minted
+    tool_call ids longer than 64 chars or with chars outside [a-zA-Z0-9_.:-] made Bedrock
+    return a 400. The invoke and result paths must produce the same valid toolUseId so the
+    toolUse/toolResult pair still correlates.
+    """
+    invoke = _convert_to_bedrock_tool_call_invoke(
+        [
+            {
+                "id": tool_call_id,
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"location": "Boston"}'},
+            }
+        ]
+    )
+    result = _convert_to_bedrock_tool_call_result(
+        {"tool_call_id": tool_call_id, "role": "tool", "name": "get_weather", "content": "sunny"}
+    )
+    tool_use_id = invoke[0]["toolUse"]["toolUseId"]
+    assert _BEDROCK_TOOL_USE_ID_RE.match(tool_use_id)
+    assert result["toolResult"]["toolUseId"] == tool_use_id
+
+
+def test_bedrock_tool_use_id_valid_ids_pass_through_unchanged():
+    result = _convert_to_bedrock_tool_call_result(
+        {"tool_call_id": "tooluse_Ab.c:1-2_3", "role": "tool", "name": "f", "content": "ok"}
+    )
+    assert result["toolResult"]["toolUseId"] == "tooluse_Ab.c:1-2_3"
+
+
+def test_bedrock_tool_use_id_truncation_keeps_distinct_ids_distinct():
+    prefix = "call_" + "z" * 70
+    ids = {
+        _convert_to_bedrock_tool_call_result(
+            {"tool_call_id": f"{prefix}{suffix}", "role": "tool", "name": "f", "content": "ok"}
+        )["toolResult"]["toolUseId"]
+        for suffix in ("a", "b")
+    }
+    assert len(ids) == 2
+    assert all(len(i) == 64 for i in ids)
+
+
+def test_bedrock_tool_use_id_replaced_chars_do_not_collide_with_existing_ids():
+    ids = {
+        _convert_to_bedrock_tool_call_result({"tool_call_id": i, "role": "tool", "name": "f", "content": "ok"})[
+            "toolResult"
+        ]["toolUseId"]
+        for i in ("call|x", "call_x")
+    }
+    assert len(ids) == 2
+
+
+def test_bedrock_tool_call_invoke_concatenated_json_long_id_stays_within_limit():
+    long_id = "call_" + "q" * 62
+    result = _convert_to_bedrock_tool_call_invoke(
+        [
+            {
+                "id": long_id,
+                "type": "function",
+                "function": {"name": "run", "arguments": '{"cmd":"a"}{"cmd":"b"}'},
+            }
+        ]
+    )
+    ids = [block["toolUse"]["toolUseId"] for block in result]
+    assert len(ids) == 2
+    assert len(set(ids)) == 2
+    assert all(_BEDROCK_TOOL_USE_ID_RE.match(i) for i in ids)
+
+
+@pytest.mark.parametrize(
+    ("tool_call_id", "expected"),
+    [
+        ("call|with|pipes", "call_with_pipes"),
+        ("call:ok.dots", "call_ok_dots"),
+        ("call_" + "x" * 100, "call_" + "x" * 100),
+        ("toolu_01AbC-xyz", "toolu_01AbC-xyz"),
+        ("", "tool_use_id"),
+    ],
+)
+def test_anthropic_tool_use_id_keeps_pattern_only_rewrite_with_no_cap_or_hash(tool_call_id, expected):
+    result = convert_to_anthropic_tool_result({"role": "tool", "tool_call_id": tool_call_id, "content": "ok"})
+    assert result["tool_use_id"] == expected
 
 
 def test_bedrock_tool_call_invoke_concatenated_json():
