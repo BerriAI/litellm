@@ -1,3 +1,4 @@
+import type { VisibilityState } from "@tanstack/react-table";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +10,9 @@ const stored = (tableId: string): unknown => {
   const raw = localStorage.getItem(keyFor(tableId));
   return raw === null ? null : JSON.parse(raw);
 };
+
+const showEveryColumn = (previous: VisibilityState): VisibilityState =>
+  Object.fromEntries(Object.keys(previous).map((column) => [column, true]));
 
 describe("usePersistedColumnVisibility", () => {
   beforeEach(() => {
@@ -55,6 +59,15 @@ describe("usePersistedColumnVisibility", () => {
     expect(stored("keys")).toEqual({ email: false, name: false });
   });
 
+  it("hands a function updater the default-hidden columns, so showing every column sticks", () => {
+    const { result } = renderHook(() => usePersistedColumnVisibility("keys", { spend: false }));
+
+    act(() => result.current.onColumnVisibilityChange(showEveryColumn));
+
+    expect(result.current.columnVisibility).toEqual({ spend: true });
+    expect(stored("keys")).toEqual({ spend: true });
+  });
+
   it.each([
     ["truncated JSON", '{"email":fal'],
     ["a JSON scalar", "42"],
@@ -80,19 +93,72 @@ describe("usePersistedColumnVisibility", () => {
     expect(stored("teams")).toBeNull();
   });
 
+  it("reads and writes the new table's columns after the tableId changes", () => {
+    localStorage.setItem(keyFor("keys"), JSON.stringify({ email: false }));
+    localStorage.setItem(keyFor("teams"), JSON.stringify({ spend: false }));
+    const { result, rerender } = renderHook(({ tableId }) => usePersistedColumnVisibility(tableId), {
+      initialProps: { tableId: "keys" },
+    });
+
+    rerender({ tableId: "teams" });
+    expect(result.current.columnVisibility).toEqual({ spend: false });
+
+    act(() => result.current.onColumnVisibilityChange((previous) => ({ ...previous, name: false })));
+    expect(stored("teams")).toEqual({ spend: false, name: false });
+    expect(stored("keys")).toEqual({ email: false });
+  });
+
+  it("applies new defaults passed after mount", () => {
+    const { result, rerender } = renderHook(({ defaults }) => usePersistedColumnVisibility("keys", defaults), {
+      initialProps: { defaults: { spend: false } },
+    });
+
+    rerender({ defaults: { name: false } });
+
+    expect(result.current.columnVisibility).toEqual({ name: false });
+  });
+
+  it("shows a change another tab saved for the same table", () => {
+    const { result } = renderHook(() => usePersistedColumnVisibility("keys"));
+
+    act(() => {
+      localStorage.setItem(keyFor("keys"), JSON.stringify({ email: false }));
+      window.dispatchEvent(new StorageEvent("storage", { key: keyFor("keys") }));
+    });
+
+    expect(result.current.columnVisibility).toEqual({ email: false });
+  });
+
+  it("keeps a toggle that storage refused, and saves the next one once storage accepts it", () => {
+    localStorage.setItem(keyFor("full"), JSON.stringify({ spend: false }));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(Storage.prototype, "setItem").mockImplementationOnce(() => {
+      throw new Error("QuotaExceededError");
+    });
+    const { result } = renderHook(() => usePersistedColumnVisibility("full"));
+
+    act(() => result.current.onColumnVisibilityChange({ email: false }));
+    expect(result.current.columnVisibility).toEqual({ email: false });
+    expect(stored("full")).toEqual({ spend: false });
+
+    act(() => result.current.onColumnVisibilityChange({ name: false }));
+    expect(result.current.columnVisibility).toEqual({ name: false });
+    expect(stored("full")).toEqual({ name: false });
+  });
+
   it("returns the defaults without throwing when storage is unavailable", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("SecurityError");
     });
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new Error("QuotaExceededError");
+      throw new Error("SecurityError");
     });
 
-    const { result } = renderHook(() => usePersistedColumnVisibility("keys", { spend: false }));
+    const { result } = renderHook(() => usePersistedColumnVisibility("blocked", { spend: false }));
     expect(result.current.columnVisibility).toEqual({ spend: false });
 
-    act(() => result.current.onColumnVisibilityChange({ email: false }));
-    expect(result.current.columnVisibility).toEqual({ email: false });
+    act(() => result.current.onColumnVisibilityChange((previous) => ({ ...previous, email: false })));
+    expect(result.current.columnVisibility).toEqual({ spend: false, email: false });
   });
 });
