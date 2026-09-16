@@ -171,9 +171,12 @@ async def test_stream_with_retry_raises_after_localhost_retries_exhausted():
             api_base="https://agent.example",
             agent_name="test-agent",
         )
+        async def _drain():
+            async for _chunk in stream:
+                pytest.fail("expected retry exhaustion to raise before yielding")
+
         with pytest.raises(
             RuntimeError,
             match="no response received after retry attempts",
         ):
-            async for _chunk in stream:
-                pytest.fail("expected retry exhaustion to raise before yielding")
+            await _drain()

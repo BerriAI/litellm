@@ -8,7 +8,7 @@ import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { ModelSelect, MODEL_SENTINEL_OPTIONS } from "@/components/ModelSelect/ModelSelect";
 import { toast } from "@/lib/toast";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import type { SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
@@ -20,7 +20,12 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { fetchClient } from "@/lib/http/api";
 
 import { buildBody, settingsToForm, type DefaultInternalUserParams, type InternalUserSettings } from "./mapper";
-import { defaultUserSettingsSchema, EMPTY_TEAM_ROW, type DefaultUserSettingsFormValues } from "./schema";
+import {
+  defaultUserSettingsSchema,
+  EMPTY_TEAM_ROW,
+  type DefaultUserSettingsFormValues,
+  type DefaultUserSettingsSubmitValues,
+} from "./schema";
 
 const NO_RESET = "never";
 
@@ -63,7 +68,7 @@ interface RoleOption {
   description: string;
 }
 
-type SettingsControl = Control<DefaultUserSettingsFormValues, unknown, DefaultUserSettingsFormValues>;
+type SettingsControl = Control<DefaultUserSettingsFormValues, unknown, DefaultUserSettingsSubmitValues>;
 
 const TeamPickerField = ({ control, index }: { control: SettingsControl; index: number }) => {
   const [search, setSearch] = React.useState("");
@@ -233,7 +238,7 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
   const { isDirty } = form.formState;
 
   const mutation = useMutation({
-    mutationFn: (values: DefaultUserSettingsFormValues) => updateSettings(buildBody(values)),
+    mutationFn: (values: DefaultUserSettingsSubmitValues) => updateSettings(buildBody(values)),
     onSuccess: (_result, values) => {
       toast.success("Default user settings updated successfully");
       queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY });

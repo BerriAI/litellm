@@ -1,7 +1,4 @@
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.fireworks_ai.completion.transformation import (
     FireworksAITextCompletionConfig,

@@ -18,6 +18,9 @@ import RoutingGroups from "@/components/routing_groups";
 const PROMPT_CACHING_TAB = "prompt_caching";
 const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
 const ANTHROPIC_PROMPT_CACHING_TTL = "anthropic_prompt_caching_ttl";
+const OPENAI_SYSTEM_MESSAGES_FIRST = "openai_system_messages_first";
+
+const isOn = (value: unknown) => value === true || value === "true";
 
 interface GeneralSettingsPageProps {
   accessToken: string | null;
@@ -92,10 +95,7 @@ const SettingValueEditor: React.FC<{
   }
   if (setting.field_type === "Select") {
     return (
-      <Select
-        value={setting.field_value || null}
-        onValueChange={(newValue) => onChange(setting.field_name, newValue ?? "")}
-      >
+      <Select value={setting.field_value ?? null} onValueChange={(newValue) => onChange(setting.field_name, newValue)}>
         <SelectTrigger className="min-w-32">
           <SelectValue placeholder="Default" />
         </SelectTrigger>
@@ -120,14 +120,15 @@ export const PromptCachingPanel: React.FC<{
 }> = ({ accessToken, settings, onChange }) => {
   const enableSetting = settings.find((s) => s.field_name === ENABLE_ANTHROPIC_PROMPT_CACHING);
   const ttlSetting = settings.find((s) => s.field_name === ANTHROPIC_PROMPT_CACHING_TTL);
+  const systemFirstSetting = settings.find((s) => s.field_name === OPENAI_SYSTEM_MESSAGES_FIRST);
 
-  // The two rows come from the same registry the General tab reads; if they
+  // The rows come from the same registry the General tab reads; if they
   // are not loaded yet there is nothing to render.
   if (!enableSetting) {
     return null;
   }
 
-  const enabled = enableSetting.field_value === true || enableSetting.field_value === "true";
+  const enabled = isOn(enableSetting.field_value);
 
   // Apply immediately: a toggle and a dropdown are direct controls, so there is
   // no separate Update button. Clearing the ttl resets it to the provider default.
@@ -148,7 +149,7 @@ export const PromptCachingPanel: React.FC<{
         <div className="mt-6 flex items-start justify-between gap-8">
           <div className="min-w-0 max-w-2xl">
             <p className="font-medium">Automatic Anthropic prompt caching</p>
-            <p className="mt-1 break-words text-xs text-gray-500">{enableSetting.field_description}</p>
+            <p className="mt-1 break-words text-xs text-muted-foreground">{enableSetting.field_description}</p>
           </div>
           <Switch checked={enabled} onCheckedChange={(checked) => persist(ENABLE_ANTHROPIC_PROMPT_CACHING, checked)} />
         </div>
@@ -156,13 +157,13 @@ export const PromptCachingPanel: React.FC<{
         {ttlSetting && (
           <div className="mt-6 flex items-start justify-between gap-8">
             <div className="min-w-0 max-w-2xl">
-              <p className={`font-medium ${enabled ? "" : "text-gray-400"}`}>Cache lifetime (TTL)</p>
-              <p className="mt-1 break-words text-xs text-gray-500">{ttlSetting.field_description}</p>
+              <p className={`font-medium ${enabled ? "" : "text-muted-foreground"}`}>Cache lifetime (TTL)</p>
+              <p className="mt-1 break-words text-xs text-muted-foreground">{ttlSetting.field_description}</p>
             </div>
             <Select
               disabled={!enabled}
-              value={ttlSetting.field_value || null}
-              onValueChange={(newValue) => persist(ANTHROPIC_PROMPT_CACHING_TTL, newValue ?? "")}
+              value={ttlSetting.field_value ?? null}
+              onValueChange={(newValue) => persist(ANTHROPIC_PROMPT_CACHING_TTL, newValue)}
             >
               <SelectTrigger className="min-w-40">
                 <SelectValue placeholder="5m (default)" />
@@ -176,6 +177,20 @@ export const PromptCachingPanel: React.FC<{
                 ))}
               </SelectContent>
             </Select>
+          </div>
+        )}
+
+        {systemFirstSetting && (
+          <div className="mt-6 flex items-start justify-between gap-8">
+            <div className="min-w-0 max-w-2xl">
+              <p className="font-medium">System messages first for OpenAI</p>
+              <p className="mt-1 break-words text-xs text-muted-foreground">{systemFirstSetting.field_description}</p>
+            </div>
+            <Switch
+              aria-label="System messages first for OpenAI"
+              checked={isOn(systemFirstSetting.field_value)}
+              onCheckedChange={(checked) => persist(OPENAI_SYSTEM_MESSAGES_FIRST, checked)}
+            />
           </div>
         )}
       </CardContent>
@@ -209,9 +224,11 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
       return;
     }
 
-    let fieldValue = generalSettings.find((setting) => setting.field_name === fieldName)?.field_value;
+    const setting = generalSettings.find((setting) => setting.field_name === fieldName);
+    const fieldValue = setting?.field_value;
 
-    if (fieldValue == null || fieldValue == undefined) {
+    if (fieldValue == null) {
+      if (setting?.field_type === "Select") handleResetField(fieldName);
       return;
     }
     try {
@@ -261,19 +278,19 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
           <TabsTrigger value="prompt-caching">Prompt Caching</TabsTrigger>
           <TabsTrigger value="general">General</TabsTrigger>
         </TabsList>
-        <TabsContent value="loadbalancing" className="px-8 py-6">
+        <TabsContent value="loadbalancing" className="px-8 py-6" keepMounted>
           <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabsContent>
-        <TabsContent value="routing-groups" className="px-8 py-6">
+        <TabsContent value="routing-groups" className="px-8 py-6" keepMounted>
           <RoutingGroups />
         </TabsContent>
-        <TabsContent value="fallbacks" className="px-8 py-6">
+        <TabsContent value="fallbacks" className="px-8 py-6" keepMounted>
           <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabsContent>
-        <TabsContent value="prompt-caching" className="px-8 py-6">
+        <TabsContent value="prompt-caching" className="px-8 py-6" keepMounted>
           <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
         </TabsContent>
-        <TabsContent value="general" className="px-8 py-6">
+        <TabsContent value="general" className="px-8 py-6" keepMounted>
           <Card>
             <CardContent>
               <Table>
@@ -319,7 +336,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                           <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
                           <span
                             onClick={() => handleResetField(value.field_name)}
-                            className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-red-500"
+                            className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
                           >
                             <Trash2 className="h-5 w-5 shrink-0" />
                           </span>

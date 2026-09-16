@@ -4,7 +4,6 @@
 import asyncio
 import json
 import os
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -19,9 +18,6 @@ import litellm.litellm_core_utils.litellm_logging
 from litellm.utils import ModelResponseListIterator
 from litellm.types.utils import ModelResponseStream
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -951,7 +947,6 @@ def test_vertex_ai_stream(provider):
 
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    import random
 
     test_models = ["gemini-2.5-flash-lite"]
     for model in test_models:
@@ -1173,7 +1168,6 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
     "model, region",
     [
         # ["bedrock/ai21.jamba-instruct-v1:0", "us-east-1"],
-        # ["bedrock/cohere.command-r-plus-v1:0", None],
         ["us.anthropic.claude-sonnet-4-5-20250929-v1:0", None],
         # ["mistral.mistral-7b-instruct-v0:2", None],
         # ["meta.llama3-8b-instruct-v1:0", None],
@@ -1276,7 +1270,7 @@ def test_bedrock_claude_3_streaming():
     "model",
     [
         "claude-haiku-4-5-20251001",
-        "cohere.command-r-plus-v1:0",  # bedrock
+        "bedrock/mistral.mistral-7b-instruct-v0:2",
         "gpt-3.5-turbo",
     ],
 )
@@ -2352,7 +2346,6 @@ def test_success_callback_streaming():
 from typing import List, Optional
 
 #### STREAMING + FUNCTION CALLING ###
-from pydantic import BaseModel
 
 
 class Function(BaseModel):
@@ -2569,7 +2562,6 @@ def test_azure_streaming_and_function_calling():
 
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():
-    from litellm._uuid import uuid
 
     tools = [
         {
@@ -2926,11 +2918,14 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     print(f"expected_chunk_fail: {expected_chunk_fail}")
 
     if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
+        def _drain():
+            for chunk in response:
+                continue
+
         with pytest.raises(
             (litellm.InternalServerError, litellm.exceptions.MidStreamFallbackError)
         ):
-            for chunk in response:
-                continue
+            _drain()
     else:
         for chunk in response:
             continue

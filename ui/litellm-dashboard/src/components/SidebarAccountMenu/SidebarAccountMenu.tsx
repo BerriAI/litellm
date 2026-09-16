@@ -195,10 +195,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
         <div className="flex flex-col px-3 py-2">
           <InfoRow icon={<Crown className="size-[17px]" />} label="Tier">
             {premiumUser ? (
-              <Badge
-                variant="outline"
-                className="gap-1 border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-500"
-              >
+              <Badge variant="outline" className="gap-1 border-warning/30 bg-warning/10 text-warning">
                 <Crown />
                 Premium
               </Badge>

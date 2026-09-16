@@ -1,3 +1,4 @@
+import type React from "react";
 import type { Validate } from "react-hook-form";
 
 import type { MountedFieldControlProps, MountedFormValues } from "@/components/common_components/MountedFormField";
@@ -20,27 +21,58 @@ export const textControl = (control: MountedFieldControlProps) => ({
 });
 
 export const selectControl = <TValue = unknown>(control: MountedFieldControlProps) => ({
-  ...ariaOf(control),
-  value: control.value as TValue,
-  onChange: control.onChange,
+  value: (control.value ?? null) as TValue | null,
+  onValueChange: control.onChange,
 });
 
-export const numberControl = (control: MountedFieldControlProps) => ({
+export const selectTriggerControl = (control: MountedFieldControlProps) => ariaOf(control);
+
+// These fields were antd Selects carrying tokenSeparators={[","]}, and MultiSelect applies that same
+// rule to what an admin types. So this only adapts the stored value: splitting or deduping it here
+// would rewrite stdio argv entries and repeated flags that nobody edited.
+const toTags = (value: unknown): string[] =>
+  (Array.isArray(value) ? value : [value]).filter(
+    (entry): entry is string => typeof entry === "string" && entry !== "",
+  );
+
+export const tagsControl = (control: MountedFieldControlProps) => {
+  const value = toTags(control.value);
+  return {
+    id: control.id,
+    options: [...new Set(value)].map((tag) => ({ label: tag, value: tag })),
+    value,
+    onValueChange: control.onChange,
+    emptyText: "Type to add",
+    allowCustomValues: true,
+  };
+};
+
+const toNumberOrNull = (raw: string, precision: number | undefined): number | null => {
+  if (raw.trim() === "") return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return null;
+  return precision === undefined ? parsed : Number(parsed.toFixed(precision));
+};
+
+export const numberControl = (control: MountedFieldControlProps, precision?: number) => ({
   ...ariaOf(control),
-  value: control.value as number | null | undefined,
-  onChange: control.onChange,
+  name: control.name,
+  type: "number" as const,
+  value: control.value === null || control.value === undefined ? "" : String(control.value),
+  onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+    control.onChange(toNumberOrNull(event.target.value, precision)),
 });
 
 export const switchControl = (control: MountedFieldControlProps) => ({
   ...ariaOf(control),
   checked: control.value === true,
-  onChange: control.onChange,
+  onCheckedChange: (checked: boolean) => control.onChange(checked),
 });
 
 export const invertedSwitchControl = (control: MountedFieldControlProps) => ({
   ...ariaOf(control),
   checked: control.value !== true,
-  onChange: (checked: boolean) => control.onChange(!checked),
+  onCheckedChange: (checked: boolean) => control.onChange(!checked),
 });
 
 export const valueAt = (values: MountedFormValues, path: readonly string[]): unknown =>

@@ -1,7 +1,6 @@
 import copy
 import json
 import time
-from functools import partial
 from typing import TYPE_CHECKING, Any, Final, cast, get_args
 
 import httpx
@@ -35,6 +34,8 @@ from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -287,14 +288,18 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
             completion_response: Final = raw_response.json()
         except Exception:
-            raise BedrockError(message=raw_response.text, status_code=raw_response.status_code)
+            raise BedrockError(
+                message=raw_response.text,
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
         verbose_logger.debug(
             "bedrock invoke response % s",
             json.dumps(completion_response, indent=4, default=str),
@@ -335,6 +340,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     optional_params=optional_params,
                     litellm_params=litellm_params,
                     encoding=encoding,
+                    json_mode=json_mode,
                 )
             elif provider == "twelvelabs":
                 return litellm.AmazonTwelveLabsPegasusConfig().transform_response(
@@ -362,6 +368,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             raise BedrockError(
                 message=f"Error processing={raw_response.text}, Received error={e}",
                 status_code=422,
+                headers=raw_response.headers,
             )
 
         try:
@@ -383,6 +390,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             raise BedrockError(
                 message=f"Error parsing received text={outputText}.\nError-{e}",
                 status_code=raw_response.status_code,
+                headers=raw_response.headers,
             )
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
@@ -430,7 +438,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         return merge_bedrock_invoke_headers(headers, guardrail_headers, metadata_headers, owned_names)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
-        return BedrockError(status_code=status_code, message=error_message)
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     @track_llm_api_timing()
     async def get_async_custom_stream_wrapper(
@@ -446,24 +454,24 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
     ) -> CustomStreamWrapper:
+        completion_stream, response_headers = await make_call(
+            client=client,
+            api_base=api_base,
+            headers=headers,
+            data=json.dumps(data),
+            model=model,
+            messages=messages,
+            logging_obj=logging_obj,
+            fake_stream=True if "ai21" in api_base else False,
+            bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
+            json_mode=json_mode,
+        )
         streaming_response: Final = CustomStreamWrapper(
-            completion_stream=None,
-            make_call=partial(
-                make_call,
-                client=client,
-                api_base=api_base,
-                headers=headers,
-                data=json.dumps(data),
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                fake_stream=True if "ai21" in api_base else False,
-                bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
-                json_mode=json_mode,
-            ),
+            completion_stream=completion_stream,
             model=model,
             custom_llm_provider="bedrock",
             logging_obj=logging_obj,
+            _response_headers=response_headers,
         )
         return streaming_response
 
@@ -481,27 +489,28 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
     ) -> CustomStreamWrapper:
-        if client is None or isinstance(client, AsyncHTTPHandler):
-            client = _get_httpx_client(params={})
+        sync_client: Final = (
+            _get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
+        )
+        completion_stream, response_headers = make_sync_call(
+            client=sync_client,
+            api_base=api_base,
+            headers=headers,
+            data=json.dumps(data),
+            signed_json_body=signed_json_body,
+            model=model,
+            messages=messages,
+            logging_obj=logging_obj,
+            fake_stream=True if "ai21" in api_base else False,
+            bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
+            json_mode=json_mode,
+        )
         streaming_response: Final = CustomStreamWrapper(
-            completion_stream=None,
-            make_call=partial(
-                make_sync_call,
-                client=client,
-                api_base=api_base,
-                headers=headers,
-                data=json.dumps(data),
-                signed_json_body=signed_json_body,
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                fake_stream=True if "ai21" in api_base else False,
-                bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
-                json_mode=json_mode,
-            ),
+            completion_stream=completion_stream,
             model=model,
             custom_llm_provider="bedrock",
             logging_obj=logging_obj,
+            _response_headers=response_headers,
         )
         return streaming_response
 

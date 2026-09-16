@@ -7,9 +7,13 @@ so a read-back reflects the change. Router settings, which mutate global proxy
 state, are exercised with a benign, self-restoring change so a shared proxy is left
 as it was found.
 
-Cache settings are deliberately not covered here; see the rationale on
-mgmt.cache_settings.update.happy_path in coverage_registry/mgmt.yaml before adding
-a test for that route.
+Cache settings and the Vault config override are deliberately not covered here.
+Both routes reconfigure the whole proxy: /cache/settings persists what it receives
+into a row that outranks the YAML cache_params and is re-applied on a timer, and
+/config_overrides/hashicorp_vault swaps the process-wide secret manager. Neither can
+be exercised safely against the shared proxy the suites run on, so they need an
+isolated proxy before a test lands. Do not add a read-then-write-back test for
+either one.
 """
 
 from __future__ import annotations

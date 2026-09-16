@@ -95,7 +95,7 @@ def test_interpolate_headers_returns_independent_copy():
 def test_build_env_var_setup_url_includes_server_id(monkeypatch):
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
     url = _u("build_env_var_setup_url")("abc-123")
-    assert url.startswith("/ui/?page=mcp-servers")
+    assert url.startswith("/ui/mcp-servers?")
     assert "fill_env_vars=abc-123" in url
 
 
@@ -123,7 +123,7 @@ def test_missing_user_env_vars_error_message_is_friendly():
             server_id="abc-123",
             server_name="CorporateDB",
             missing=["CORP_USERNAME", "CORP_PASSWORD"],
-            setup_url="https://proxy.example.com/ui/?page=mcp-servers&fill_env_vars=abc-123",
+            setup_url="https://proxy.example.com/ui/mcp-servers?fill_env_vars=abc-123",
         )
     err = exc_info.value
     text = str(err)
@@ -861,6 +861,7 @@ _SALT_KEY = "test-salt-key-for-env-vars-tests-1234"
 @pytest.fixture
 def env_vars_salt_key(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", _SALT_KEY)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
 
 
 def _mock_env_vars_prisma(row=None):
@@ -1518,9 +1519,16 @@ async def test_create_mcp_server_decrypts_env_vars_when_prisma_returns_json_stri
     assert "s3cr3t-p@ss" not in encrypted_env_vars_str
 
     def _prisma_row_with_json_string_env_vars():
-        row = MagicMock()
-        row.env_vars = encrypted_env_vars_str
-        return row
+        import json
+
+        from prisma.models import LiteLLM_MCPServerTable
+
+        return LiteLLM_MCPServerTable.model_validate({
+            "server_id": "srv-returned", "transport": "http", "mcp_access_groups": [], "allowed_tools": [],
+            "extra_headers": [], "args": [], "allow_all_keys": False, "available_on_public_internet": True,
+            "delegate_auth_to_upstream": False, "oauth_passthrough": False, "per_server_oauth_discovery": False,
+            "is_byok": False, "byok_description": [], "env_vars": json.dumps(encrypted_env_vars_str),
+        })
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable.create = AsyncMock(
@@ -1537,7 +1545,9 @@ async def test_create_mcp_server_decrypts_env_vars_when_prisma_returns_json_stri
         touched_by="test-user",
     )
     assert isinstance(created.env_vars, list)
-    assert created.env_vars[0]["value"] == "s3cr3t-p@ss"
+    assert created.env_vars[0].value == "s3cr3t-p@ss"
+    assert created.env_vars[0].name == "DB_PASSWORD"
+    assert created.env == {}
 
     mock_prisma_upd = MagicMock()
     mock_prisma_upd.db.litellm_mcpservertable.update = AsyncMock(
@@ -1549,7 +1559,9 @@ async def test_create_mcp_server_decrypts_env_vars_when_prisma_returns_json_stri
         touched_by="test-user",
     )
     assert isinstance(updated.env_vars, list)
-    assert updated.env_vars[0]["value"] == "s3cr3t-p@ss"
+    assert updated.env_vars[0].value == "s3cr3t-p@ss"
+    assert updated.env_vars[0].name == "DB_PASSWORD"
+    assert updated.env == {}
 
 
 def test_reencrypt_global_env_var_values_handles_json_string(env_vars_salt_key):
@@ -1694,7 +1706,7 @@ async def test_missing_user_env_vars_error_renders_in_mcp_call_tool():
         server_id="srv-99",
         server_name="CorporateDB",
         missing=["CORP_USERNAME"],
-        setup_url="/ui/?page=mcp-servers&fill_env_vars=srv-99",
+        setup_url="/ui/mcp-servers?fill_env_vars=srv-99",
     )
     # We don't want to spin up the full MCP server framework — just
     # mimic the except-clause behavior the @server.call_tool handler uses.

@@ -14,9 +14,10 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.aws_partition import get_aws_arn_prefix
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 
@@ -25,12 +26,12 @@ if TYPE_CHECKING:
     from litellm.types.rag import RAGIngestOptions
 
 
-def _get_str_or_none(value: Any) -> str | None:
+def _get_str_or_none(value: object) -> str | None:
     """Cast config value to Optional[str]."""
     return str(value) if value is not None else None
 
 
-def _get_int(value: Any, default: int) -> int:
+def _get_int(value: str | float | None, default: int) -> int:
     """Cast config value to int with default."""
     if value is None:
         return default
@@ -52,11 +53,12 @@ def _normalize_principal_arn(caller_arn: str, account_id: str) -> str:
     """
     if ":assumed-role/" in caller_arn:
         # Extract role name from assumed-role ARN
-        # Format: arn:aws:sts::ACCOUNT:assumed-role/ROLE-NAME/SESSION-NAME
+        # Format: arn:PARTITION:sts::ACCOUNT:assumed-role/ROLE-NAME/SESSION-NAME
+        partition: Final = caller_arn.split(":")[1]
         parts: Final = caller_arn.split("/")
         if len(parts) >= 2:
             role_name: Final = parts[1]
-            return f"arn:aws:iam::{account_id}:role/{role_name}"
+            return f"arn:{partition}:iam::{account_id}:role/{role_name}"
     return caller_arn
 
 
@@ -120,7 +122,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         self._config_initialized = False
 
         # Track resources we create (for cleanup if needed)
-        self._created_resources: dict[str, Any] = {}
+        self._created_resources: dict[str, object] = {}
 
     async def _ensure_config_initialized(self):
         """Lazily initialize KB config - either detect from existing or create new."""
@@ -231,7 +233,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         verbose_logger.debug("Creating S3 bucket: %s", bucket_name)
 
-        create_params: Final[dict[str, Any]] = {"Bucket": bucket_name}
+        create_params: Final[dict[str, object]] = {"Bucket": bucket_name}
         if self.aws_region_name != "us-east-1":
             create_params["CreateBucketConfiguration"] = {"LocationConstraint": self.aws_region_name}
 
@@ -294,7 +296,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         normalized_caller_arn: Final = _normalize_principal_arn(caller_arn, account_id)
         verbose_logger.debug("Caller ARN: %s, Normalized: %s", caller_arn, normalized_caller_arn)
 
-        principals = [f"arn:aws:iam::{account_id}:root", normalized_caller_arn]
+        principals = [f"{get_aws_arn_prefix(self.aws_region_name)}iam::{account_id}:root", normalized_caller_arn]
         # Deduplicate in case caller is root
         principals = list(set(principals))
 
@@ -454,7 +456,10 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                     "Condition": {
                         "StringEquals": {"aws:SourceAccount": account_id},
                         "ArnLike": {
-                            "aws:SourceArn": f"arn:aws:bedrock:{self.aws_region_name}:{account_id}:knowledge-base/*"
+                            "aws:SourceArn": (
+                                f"{get_aws_arn_prefix(self.aws_region_name)}bedrock:"
+                                f"{self.aws_region_name}:{account_id}:knowledge-base/*"
+                            )
                         },
                     },
                 }
@@ -475,7 +480,10 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                 {
                     "Effect": "Allow",
                     "Action": ["bedrock:InvokeModel"],
-                    "Resource": [f"arn:aws:bedrock:{self.aws_region_name}::foundation-model/{self.embedding_model}"],
+                    "Resource": [
+                        f"{get_aws_arn_prefix(self.aws_region_name)}bedrock:"
+                        f"{self.aws_region_name}::foundation-model/{self.embedding_model}"
+                    ],
                 },
                 {
                     "Effect": "Allow",
@@ -486,8 +494,8 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                     "Effect": "Allow",
                     "Action": ["s3:GetObject", "s3:ListBucket"],
                     "Resource": [
-                        f"arn:aws:s3:::{self.s3_bucket}",
-                        f"arn:aws:s3:::{self.s3_bucket}/*",
+                        f"{get_aws_arn_prefix(self.aws_region_name)}s3:::{self.s3_bucket}",
+                        f"{get_aws_arn_prefix(self.aws_region_name)}s3:::{self.s3_bucket}/*",
                     ],
                 },
             ],
@@ -517,7 +525,10 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             knowledgeBaseConfiguration={
                 "type": "VECTOR",
                 "vectorKnowledgeBaseConfiguration": {
-                    "embeddingModelArn": f"arn:aws:bedrock:{self.aws_region_name}::foundation-model/{self.embedding_model}",
+                    "embeddingModelArn": (
+                        f"{get_aws_arn_prefix(self.aws_region_name)}bedrock:"
+                        f"{self.aws_region_name}::foundation-model/{self.embedding_model}"
+                    ),
                 },
             },
             storageConfiguration={
@@ -562,7 +573,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             dataSourceConfiguration={
                 "type": "S3",
                 "s3Configuration": {
-                    "bucketArn": f"arn:aws:s3:::{self.s3_bucket}",
+                    "bucketArn": f"{get_aws_arn_prefix(self.aws_region_name)}s3:::{self.s3_bucket}",
                     "inclusionPrefixes": [self.s3_prefix],
                 },
             },

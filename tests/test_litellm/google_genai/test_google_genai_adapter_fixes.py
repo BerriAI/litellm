@@ -3,16 +3,11 @@
 Test to verify the Google GenAI adapter fixes
 """
 import json
-import os
-import sys
 import unittest
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
@@ -219,17 +214,13 @@ def test_stream_transformation_error_handling():
     # Create a wrapper
     mock_wrapper = GoogleGenAIStreamWrapper(completion_stream=iter([]))
 
-    # Try to transform - this should handle errors gracefully
-    try:
-        streaming_chunk = adapter.translate_streaming_completion_to_generate_content(
+    # An empty `choices` leaves nothing to emit, so the adapter drops the chunk
+    assert (
+        adapter.translate_streaming_completion_to_generate_content(
             mock_response, mock_wrapper
         )
-        # If no exception is raised, that's fine - we just want to ensure no crash
-        assert True
-    except Exception as e:
-        # If an exception is raised, it should be a ValueError with appropriate message
-        assert isinstance(e, ValueError)
-        # We won't check the exact message as it might vary
+        is None
+    )
 
 
 def test_non_stream_response_when_stream_requested():

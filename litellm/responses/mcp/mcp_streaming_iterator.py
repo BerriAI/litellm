@@ -22,6 +22,8 @@ from litellm.types.llms.openai import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._types import UserAPIKeyAuth
@@ -511,7 +513,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if self.base_iterator:
             if hasattr(self.base_iterator, "__anext__"):
                 try:
-                    chunk: Final[ResponsesAPIStreamingResponse] = await cast(Any, self.base_iterator).__anext__()
+                    chunk: Final[ResponsesAPIStreamingResponse] = await cast(  # cast-ok: hasattr __anext__ checked
+                        "AsyncIterator[ResponsesAPIStreamingResponse]", self.base_iterator
+                    ).__anext__()
 
                     # Capture the response ID from the first event to ensure consistency
                     if self._cached_response_id is None and hasattr(chunk, "response"):
@@ -569,7 +573,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if not self.base_iterator or not hasattr(self.base_iterator, "__anext__"):
             raise StopAsyncIteration
 
-        chunk: Final[ResponsesAPIStreamingResponse] = await cast(Any, self.base_iterator).__anext__()
+        chunk: Final[ResponsesAPIStreamingResponse] = await cast(  # cast-ok: hasattr __anext__ checked above
+            "AsyncIterator[ResponsesAPIStreamingResponse]", self.base_iterator
+        ).__anext__()
 
         if self._cached_response_id is None and hasattr(chunk, "response"):
             new_response: Final[ResponsesAPIResponse | None] = getattr(chunk, "response", None)
@@ -775,10 +781,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             # Create follow-up input
             if self.collected_response is not None:
+                persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler._is_persistence_disabled(
+                    self.original_request_params
+                )
+
                 follow_up_input: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
                     response=self.collected_response,
                     tool_results=self.tool_results,
                     original_input=self.original_request_params.get("input"),
+                    preserve_reasoning=persistence_disabled,
                 )
 
                 # Make follow-up call with streaming
@@ -834,7 +845,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if not self.is_async:
             try:
                 if self.base_iterator and hasattr(self.base_iterator, "__next__"):
-                    return next(cast(Any, self.base_iterator))
+                    return next(
+                        cast("Iterator[ResponsesAPIStreamingResponse]", self.base_iterator)  # cast-ok: hasattr-checked
+                    )
                 else:
                     raise StopIteration
             except StopIteration:

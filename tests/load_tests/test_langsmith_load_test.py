@@ -1,8 +1,6 @@
-import sys
 
 import os
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import litellm
@@ -60,11 +58,6 @@ def test_langsmith_logging_async():
         assert (
             avg_percentage_diff < 10
         ), f"Average performance difference of {avg_percentage_diff:.2f}% exceeds 10% threshold"
-
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
 
     except litellm.Timeout as e:
         pass

@@ -12,6 +12,7 @@ This test file follows LiteLLM's testing patterns and covers:
 import copy
 import json
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -4619,46 +4620,27 @@ class TestPanwAirsLatestRoleMessageOnly:
 
     @pytest.mark.asyncio
     async def test_anthropic_system_plus_multiturn_no_fallback(self):
-        """Anthropic with top-level system + multi-turn messages[]
-        — latest-user works, no scan-all fallback.
+        """Anthropic with a top-level system prompt and multi-turn messages[]
+        scans only the latest user turn, with no scan-all fallback.
 
-        Key scenario: Anthropic top-level `system` field causes
-        structured_messages to have an injected system entry, but
-        request_data["messages"] does NOT include it.
+        The Anthropic handler hoists the top-level `system` field into both
+        `texts` and `structured_messages`, so the latest-user walk has to
+        count the same entries the framework flattened.
         """
-        handler = PanwPrismaAirsHandler(
-            guardrail_name="test_panw_airs",
-            api_key="test_api_key",
-            profile_name="test_profile",
-            default_on=True,
+        from litellm.llms.anthropic.chat.guardrail_translation.handler import (
+            AnthropicMessagesHandler,
         )
 
-        # Original Anthropic messages (no system in messages array)
-        original_messages = [
-            {"role": "user", "content": "First user turn"},
-            {"role": "assistant", "content": "First assistant turn"},
-            {"role": "user", "content": "Latest user turn"},
-        ]
-
-        # texts extracted from original_messages (3 text entries)
-        texts = ["First user turn", "First assistant turn", "Latest user turn"]
-
-        # structured_messages has an INJECTED system message from translation
-        structured_messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "First user turn"},
-            {"role": "assistant", "content": "First assistant turn"},
-            {"role": "user", "content": "Latest user turn"},
-        ]
-
-        inputs: GenericGuardrailAPIInputs = {
-            "texts": texts,
-            "structured_messages": structured_messages,
-        }
+        handler = make_handler()
         request_data = {
             "litellm_call_id": "test-call-id",
             "model": "anthropic/claude-sonnet-4-20250514",
-            "messages": original_messages,
+            "system": "You are a helpful assistant.",
+            "messages": [
+                {"role": "user", "content": "First user turn"},
+                {"role": "assistant", "content": "First assistant turn"},
+                {"role": "user", "content": "Latest user turn"},
+            ],
             "proxy_server_request": {
                 "url": "http://localhost:4000/v1/messages",
             },
@@ -4669,13 +4651,11 @@ class TestPanwAirsLatestRoleMessageOnly:
         ) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
-            await handler.apply_guardrail(
-                inputs=inputs,
-                request_data=request_data,
-                input_type="request",
+            await AnthropicMessagesHandler().process_input_messages(
+                data=request_data,
+                guardrail_to_apply=handler,
             )
 
-            # Should scan ONLY the latest user message, not fall back to scan-all
             assert mock_api.call_count == 1
             assert mock_api.call_args.kwargs["content"] == "Latest user turn"
 
@@ -5652,7 +5632,7 @@ class TestPanwAirsTimeoutCoercion:
         assert isinstance(params.timeout, float)
 
     def test_litellm_params_rejects_garbage_timeout(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='validation error for LitellmParams'):
             LitellmParams(
                 guardrail="panw_prisma_airs",
                 mode="pre_call",
@@ -5785,7 +5765,14 @@ class TestPanwAirsScanIdExposure:
 
         headers = get_logging_caching_headers(data)
         assert headers["x-litellm-guardrail-scan-id"] == "scan-abc-123"
-        assert "x-litellm-guardrail-scan-metadata" not in headers
+        assert json.loads(headers["x-litellm-guardrail-scan-metadata"]) == [
+            {
+                "guardrail": handler.guardrail_name,
+                "stage": "pre_call",
+                "provider": "panw_prisma_airs",
+                "scan_id": "scan-abc-123",
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_request_and_response_scan_ids_are_both_exposed(self, user_api_key_dict):
@@ -5809,6 +5796,26 @@ class TestPanwAirsScanIdExposure:
 
         headers = get_logging_caching_headers(data)
         assert headers["x-litellm-guardrail-scan-id"] == "scan-abc-123,scan-response-456"
+        assert [(e["stage"], e["scan_id"]) for e in json.loads(headers["x-litellm-guardrail-scan-metadata"])] == [
+            ("pre_call", "scan-abc-123"),
+            ("post_call", "scan-response-456"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_response_scan_is_tagged_post_call(self):
+        from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+
+        handler: Final = self._handler(self.ALLOW_SCAN_RESULT)
+        request_data: Final[dict[str, object]] = {"litellm_call_id": "test-call-id", "model": "gpt-4", "metadata": {}}
+
+        await handler.apply_guardrail(
+            inputs={"texts": ["Hello world"]}, request_data=request_data, input_type="response"
+        )
+
+        headers: Final = get_logging_caching_headers(request_data)
+        assert headers is not None
+        entries: Final = json.loads(headers["x-litellm-guardrail-scan-metadata"])
+        assert [(e["stage"], e["provider"]) for e in entries] == [("post_call", "panw_prisma_airs")]
 
     @pytest.mark.asyncio
     async def test_repeated_scan_id_is_not_duplicated(self, user_api_key_dict):
@@ -5850,6 +5857,8 @@ class TestPanwAirsScanIdExposure:
 
         assert "guardrail_scan_ids" in _UNTRUSTED_METADATA_CONTROL_FIELDS
         assert "guardrail_scan_ids" in _UNTRUSTED_ROOT_CONTROL_FIELDS
+        assert "guardrail_scan_metadata" in _UNTRUSTED_METADATA_CONTROL_FIELDS
+        assert "guardrail_scan_metadata" in _UNTRUSTED_ROOT_CONTROL_FIELDS
 class TestPanwAirsBlockedErrorDetailPassthrough:
     """Regression tests for the full AIRS scan response on blocks.
 
@@ -5902,7 +5911,7 @@ class TestPanwAirsBlockedErrorDetailPassthrough:
         with patch.object(
             base_handler, "_call_panw_api", return_value=copy.deepcopy(self._FULL_BLOCK_RESPONSE)
         ):
-            with pytest.raises(HTTPException) as exc_info:
+            async def _call_hook():
                 if is_response:
                     await base_handler.async_post_call_success_hook(
                         data=safe_prompt_data,
@@ -5916,6 +5925,9 @@ class TestPanwAirsBlockedErrorDetailPassthrough:
                         data=safe_prompt_data,
                         call_type="completion",
                     )
+
+            with pytest.raises(HTTPException) as exc_info:
+                await _call_hook()
 
         error = exc_info.value.detail["error"]
         for field, value in self._FULL_BLOCK_RESPONSE.items():

@@ -6,16 +6,11 @@ since polling logic was moved to the handler.
 """
 
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.black_forest_labs.image_generation.transformation import (
     BlackForestLabsImageGenerationConfig,

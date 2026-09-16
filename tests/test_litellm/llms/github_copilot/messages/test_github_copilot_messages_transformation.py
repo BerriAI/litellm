@@ -1,10 +1,7 @@
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError

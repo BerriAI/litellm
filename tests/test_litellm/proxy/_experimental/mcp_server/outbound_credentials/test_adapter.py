@@ -10,7 +10,10 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
+from litellm.experimental_mcp_client.client import MCPClient
+from litellm.proxy._experimental.mcp_server.exceptions import MCPServerURLCredentialsError
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
     oauth_protected_resource_path,
     raise_public,
@@ -91,6 +94,49 @@ def test_basic_scheme_base64_encodes_the_token():
     assert spec.config.value_prefix == "Basic"
     expected = base64.b64encode(b"user:pass").decode()
     assert spec.config.key_source.value.get_secret_value() == expected
+
+
+@pytest.mark.parametrize(
+    "auth_type, authentication_token, expected_value, expected_header",
+    [
+        (MCPAuth.bearer_token, "Bearer abc", "abc", ("Authorization", "Bearer abc")),
+        (MCPAuth.token, "token abc", "abc", ("Authorization", "token abc")),
+        (MCPAuth.basic, "user:pass", "dXNlcjpwYXNz", ("Authorization", "Basic dXNlcjpwYXNz")),
+        (MCPAuth.basic, "Basic dXNlcjpwYXNz", "dXNlcjpwYXNz", ("Authorization", "Basic dXNlcjpwYXNz")),
+        (MCPAuth.basic, "Basic user:pass", "dXNlcjpwYXNz", ("Authorization", "Basic dXNlcjpwYXNz")),
+    ],
+)
+def test_shared_key_normalizes_schemed_authentication_token(
+    auth_type, authentication_token, expected_value, expected_header
+):
+    spec = to_server_spec(_server(auth_type=auth_type, authentication_token=authentication_token))
+    assert spec is not None and isinstance(spec.config, ApiKeyConfig)
+    assert spec.config.key_source.value.get_secret_value() == expected_value
+    assert spec.config.header(expected_value) == expected_header
+
+
+@pytest.mark.parametrize(
+    "auth_type, authentication_token",
+    [
+        (MCPAuth.bearer_token, "Bearer abc"),
+        (MCPAuth.bearer_token, "abc"),
+        (MCPAuth.token, "token abc"),
+        (MCPAuth.token, "abc"),
+        (MCPAuth.basic, "user:pass"),
+        (MCPAuth.basic, "Basic dXNlcjpwYXNz"),
+        (MCPAuth.basic, "Basic user:pass"),
+    ],
+)
+def test_shared_key_authorization_matches_v1(auth_type, authentication_token):
+    spec = to_server_spec(_server(auth_type=auth_type, authentication_token=authentication_token))
+    assert spec is not None and isinstance(spec.config, ApiKeyConfig)
+
+    client = MCPClient(server_url="https://x", auth_type=auth_type)
+    client.update_auth_value(authentication_token)
+
+    assert spec.config.header(spec.config.key_source.value.get_secret_value())[1] == client._get_auth_headers()[
+        "Authorization"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -397,6 +443,17 @@ def test_raise_public_maps_each_error_to_its_status(error, status):
     assert exc_info.value.status_code == status
 
 
+def test_raise_public_marks_only_url_credentials_error_as_safe_for_preview():
+    with pytest.raises(HTTPException) as generic_exc_info:
+        raise_public(CredError.of_misconfigured("private operator detail"))
+    assert not isinstance(generic_exc_info.value, MCPServerURLCredentialsError)
+
+    error = CredError.of_url_credentials_not_allowed()
+    with pytest.raises(MCPServerURLCredentialsError) as url_exc_info:
+        raise_public(error)
+    assert url_exc_info.value.detail == error.summary
+
+
 def test_raise_public_emits_unauthorized_challenge():
     body = {"error": "byok_auth_required", "server_id": "s1"}
     error = CredError.of_unauthorized("needs key", www_authenticate='Bearer resource_metadata="/x"', body=body)
@@ -419,16 +476,47 @@ def test_raise_public_plain_unauthorized_has_no_challenge():
 
 
 @pytest.mark.parametrize(
-    "root_path, expected_prefix",
+    "root_path",
     [
-        ("/", ""),  # "/" means no prefix
-        ("", ""),  # empty means no prefix
-        ("/api/v1", "/api/v1"),  # a real root path is prepended verbatim
+        "/",  # "/" means no prefix
+        "",  # empty means no prefix
     ],
 )
-def test_oauth_protected_resource_path_honors_root_path(root_path, expected_prefix):
+def test_oauth_protected_resource_path_no_prefix(root_path, monkeypatch):
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     path = oauth_protected_resource_path(root_path, _server(alias="my-srv"))
-    assert path == f"/.well-known/oauth-protected-resource{expected_prefix}/mcp/my-srv"
+    assert path == "/.well-known/oauth-protected-resource/mcp/my-srv"
+
+
+def test_oauth_protected_resource_path_scalar_prefix_uses_rfc8414_insertion(monkeypatch):
+    # A scalar SERVER_ROOT_PATH deployment registers the well-known routes with
+    # the prefix inserted (via well_known_root_suffix at import time). The URL
+    # must match that insertion or a client fetching it 404s.
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/api/v1")
+    path = oauth_protected_resource_path("/api/v1", _server(alias="my-srv"))
+    assert path == "/.well-known/oauth-protected-resource/api/v1/mcp/my-srv"
+
+
+def test_oauth_protected_resource_path_per_request_prefix_goes_before_wellknown(monkeypatch):
+    # Per-request deployment: SERVER_ROOT_PATHS matched /tenant-a for this
+    # request but the scalar SERVER_ROOT_PATH is unset. Routes were registered
+    # without the well-known insertion, so the URL must place the prefix
+    # *before* .well-known — PerRequestRootPathMiddleware strips it and the
+    # router matches the un-inserted route.
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    path = oauth_protected_resource_path("/tenant-a", _server(alias="my-srv"))
+    assert path == "/tenant-a/.well-known/oauth-protected-resource/mcp/my-srv"
+
+
+def test_oauth_protected_resource_path_dynamic_prefix_wins_over_scalar(monkeypatch):
+    # Both env vars configured: the middleware matched a SERVER_ROOT_PATHS
+    # prefix (/tenant-a) that differs from the scalar (/legacy). The URL must
+    # advertise /tenant-a — the prefix the client called — with no /legacy
+    # segment stacked onto it. Same review-fix invariant get_custom_url pins.
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/legacy")
+    path = oauth_protected_resource_path("/tenant-a", _server(alias="my-srv"))
+    assert path == "/tenant-a/.well-known/oauth-protected-resource/mcp/my-srv"
+    assert "/legacy" not in path
 
 
 @pytest.mark.parametrize(
@@ -453,12 +541,30 @@ def test_raise_user_oauth_challenge_points_at_per_server_prm():
     )
 
 
-def test_raise_user_oauth_challenge_includes_server_root_path():
+def test_raise_user_oauth_challenge_includes_server_root_path(monkeypatch):
+    # The scalar deployment: routes are registered with the prefix inserted
+    # (via well_known_root_suffix at import time), so the challenge URL uses
+    # the RFC 8414 §3 insertion form.
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/api/v1")
     with pytest.raises(HTTPException) as exc_info:
         raise_user_oauth_challenge(_server(alias="my-srv"), root_path="/api/v1")
     assert (
         exc_info.value.headers["WWW-Authenticate"]
         == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/my-srv"'
+    )
+
+
+def test_raise_user_oauth_challenge_per_request_prefix_is_routable(monkeypatch):
+    # Per-request deployment (SERVER_ROOT_PATHS matched /tenant-a): the
+    # challenge URL must place /tenant-a before .well-known so the client's
+    # discovery fetch routes through the same middleware strip the original
+    # request went through. The scalar-inserted form would 404 here.
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    with pytest.raises(HTTPException) as exc_info:
+        raise_user_oauth_challenge(_server(alias="my-srv"), root_path="/tenant-a")
+    assert (
+        exc_info.value.headers["WWW-Authenticate"]
+        == 'Bearer resource_metadata="/tenant-a/.well-known/oauth-protected-resource/mcp/my-srv"'
     )
 
 
@@ -478,15 +584,28 @@ def test_raise_token_exchange_challenge_is_rfc9728_invalid_token():
     assert "error_description=" in www
 
 
-def test_raise_token_exchange_challenge_includes_server_root_path():
+def test_raise_token_exchange_challenge_includes_server_root_path(monkeypatch):
     from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
         raise_token_exchange_challenge,
     )
 
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/api/v1")
     with pytest.raises(HTTPException) as exc_info:
         raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="/api/v1")
     www = exc_info.value.headers["WWW-Authenticate"]
     assert 'resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/obo-srv"' in www
+
+
+def test_raise_token_exchange_challenge_per_request_prefix_is_routable(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="/tenant-a")
+    www = exc_info.value.headers["WWW-Authenticate"]
+    assert 'resource_metadata="/tenant-a/.well-known/oauth-protected-resource/mcp/obo-srv"' in www
 
 
 def test_raise_token_exchange_challenge_static_form_is_unchanged_without_step_up():
@@ -532,9 +651,7 @@ def test_id_jag_client_secret_maps_to_config():
     # ID-JAG asserts the user's id_token; the access_token default maps to id_token.
     assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:id_token"
     assert isinstance(spec.config.client_auth, ClientSecretAuth)
-    assert spec.config.client_auth.client_secret.get_secret_value() == (
-        "litellm-client-secret"
-    )
+    assert spec.config.client_auth.client_secret.get_secret_value() == ("litellm-client-secret")
 
 
 def test_id_jag_private_key_maps_to_private_key_jwt_auth():
@@ -560,9 +677,7 @@ def test_id_jag_private_key_wins_over_client_secret():
 
 
 def test_id_jag_honors_explicit_subject_token_type():
-    spec = to_server_spec(
-        _id_jag_server(subject_token_type="urn:ietf:params:oauth:token-type:saml2")
-    )
+    spec = to_server_spec(_id_jag_server(subject_token_type="urn:ietf:params:oauth:token-type:saml2"))
     assert spec is not None and isinstance(spec.config, IdJagConfig)
     assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:saml2"
 
@@ -579,3 +694,111 @@ def test_id_jag_honors_explicit_subject_token_type():
 def test_id_jag_half_configured_defers_to_v1(server):
     # A half-configured server must defer (None) rather than 500 at IdJagConfig construction.
     assert to_server_spec(server) is None
+
+
+def test_client_credentials_uses_admin_entered_token_url_when_issuer_yield_empties_resolved():
+    """A pinned issuer empties the resolved token_url while configured_token_url keeps the
+    admin-entered value; the M2M spec must carry it so egress can mint."""
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            url="https://up.example.com/mcp",
+            token_url=None,
+            configured_token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, ClientCredentialsConfig)
+    assert spec.config.token_url == "https://idp.example.com/token"
+
+
+_M2M_FIELDS = dict(
+    auth_type=MCPAuth.oauth2,
+    oauth2_flow="client_credentials",
+    client_id="cid",
+    client_secret="csec",
+    token_url="https://idp.example.com/token",
+)
+_OBO_FIELDS = dict(
+    auth_type=MCPAuth.oauth2_token_exchange,
+    client_id="cid",
+    client_secret="csec",
+    token_exchange_endpoint="https://idp.example.com/token",
+)
+_ID_JAG_FIELDS = dict(
+    auth_type=MCPAuth.oauth2_id_jag,
+    client_id="cid",
+    client_secret="csec",
+    token_exchange_endpoint="https://idp.example.com/token",
+    id_jag_resource_token_endpoint="https://mcp-as.example.com/token",
+    audience="api://mcp",
+)
+_AUTHZ_CODE_FIELDS = dict(auth_type=MCPAuth.oauth2, url="https://up.example.com/mcp")
+_STATIC_FIELDS = dict(auth_type=MCPAuth.bearer_token, authentication_token="static-tok")
+
+_ARM_FIELDS = (
+    ("client_credentials", _M2M_FIELDS),
+    ("token_exchange", _OBO_FIELDS),
+    ("id_jag", _ID_JAG_FIELDS),
+    ("authorization_code", _AUTHZ_CODE_FIELDS),
+    ("api_key", _STATIC_FIELDS),
+)
+
+
+@pytest.mark.parametrize("name,fields", _ARM_FIELDS, ids=[n for n, _ in _ARM_FIELDS])
+def test_upstream_token_header_reaches_every_arms_config(name, fields):
+    # to_server_spec builds each arm's config from a hand-written kwargs list, so an arm that
+    # forgets to read the field fails silently: the server keeps writing to Authorization.
+    spec = to_server_spec(_server(upstream_token_header="esb-oauth", **fields))
+    assert spec is not None
+    assert spec.config.header_name == "esb-oauth"
+
+
+@pytest.mark.parametrize("name,fields", _ARM_FIELDS, ids=[n for n, _ in _ARM_FIELDS])
+def test_omitting_the_field_keeps_each_arms_shipped_default(name, fields):
+    spec = to_server_spec(_server(**fields))
+    assert spec is not None
+    assert spec.config.header_name == "Authorization"
+
+
+def test_api_key_scheme_default_survives_when_the_field_is_unset():
+    spec = to_server_spec(_server(auth_type=MCPAuth.api_key, authentication_token="k"))
+    assert spec is not None
+    assert spec.config.header_name == "X-API-Key"
+    assert spec.config.value_prefix == ""
+
+
+def test_the_field_overrides_the_api_key_scheme_default():
+    spec = to_server_spec(_server(auth_type=MCPAuth.api_key, authentication_token="k", upstream_token_header="X-Esb"))
+    assert spec is not None
+    assert spec.config.header_name == "X-Esb"
+
+
+@pytest.mark.parametrize("bad", ["with space", "has:colon", "trailing\r\nX-Injected", 'quoted"name'])
+def test_a_malformed_header_name_is_refused_when_the_server_is_built(bad):
+    """Validation belongs at ingestion, not at spec building. Raising inside to_server_spec would
+    abort the whole aggregate tools/list, so one mistyped server would silently empty the tool list
+    for every other server too. Refusing at MCPServer construction fails the config load loudly
+    instead, and means no malformed value can ever reach an arm.
+    """
+    with pytest.raises(ValidationError):
+        _server(upstream_token_header=bad, **_M2M_FIELDS)
+
+
+def test_a_valid_header_name_is_trimmed_at_ingestion():
+    assert _server(upstream_token_header="  esb-oauth  ", **_M2M_FIELDS).upstream_token_header == "esb-oauth"
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_a_blank_header_name_means_unset_rather_than_an_error(blank):
+    """The management API treats a blank as "not supplied" and stores it, so raising here made every
+    later rebuild of that server 500 instead of falling back to the default Authorization behavior.
+    """
+    server = _server(upstream_token_header=blank, **_M2M_FIELDS)
+    assert server.upstream_token_header is None
+    spec = to_server_spec(server)
+    assert spec is not None
+    assert spec.config.header_name == "Authorization"

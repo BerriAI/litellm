@@ -291,13 +291,16 @@ async def test_post_call_stream_guardrail_blocks_anthropic_messages_stream(monke
             yield chunk
 
     delivered = []
-    with pytest.raises(HTTPException) as exc_info:
+    async def _drain():
         async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
             response=fake_stream(),
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
             request_data=request_data,
         ):
             delivered.append(chunk)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _drain()
 
     detail = exc_info.value.detail
     assert detail["guardrail_name"] == "output-filter"
@@ -343,14 +346,14 @@ async def test_post_call_stream_guardrail_keeps_own_iterator_on_chat_completions
 
 
 @pytest.mark.asyncio
-async def test_unified_guardrail_iterator_accepts_explicit_guardrail(monkeypatch):
+async def test_unified_guardrail_iterator_accepts_explicit_guardrail():
     """
     The dispatch passes each guardrail explicitly instead of through a shared
     request_data key, so chaining two unified-routed guardrails cannot drop
-    all but the last one.
+    all but the last one.  The block fires after the deltas were already
+    flushed to the client, so it surfaces as a trailing in-stream error frame
+    rather than a raised HTTPException.
     """
-    from fastapi import HTTPException
-
     from litellm.proxy.utils import unified_guardrail
 
     guardrail = _content_filter_guardrail("BLOCK")
@@ -364,14 +367,19 @@ async def test_unified_guardrail_iterator_accepts_explicit_guardrail(monkeypatch
         for chunk in _anthropic_stream_chunks(["the", " zebra runs"]):
             yield chunk
 
-    with pytest.raises(HTTPException):
-        async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
-            response=fake_stream(),
-            request_data=request_data,
-            guardrail_to_apply=guardrail,
-        ):
-            pass
+    delivered = []
+    async for item in unified_guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
+        response=fake_stream(),
+        request_data=request_data,
+        guardrail_to_apply=guardrail,
+    ):
+        delivered.append(item)
+
+    raw = b"".join(c for c in delivered if isinstance(c, bytes)).decode()
+    assert "event: error" in raw
+    assert "guardrail_error" in raw
+    assert raw.index("guardrail_error") > raw.index(" zebra runs")
 
 
 @pytest.mark.asyncio
@@ -411,13 +419,16 @@ async def test_post_call_stream_guardrail_reroutes_inherited_apply_guardrail(mon
             yield chunk
 
     delivered = []
-    with pytest.raises(HTTPException) as exc_info:
+    async def _drain():
         async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
             response=fake_stream(),
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
             request_data=request_data,
         ):
             delivered.append(chunk)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _drain()
 
     assert exc_info.value.detail["keyword"] == "zebra"
     assert delivered == []
@@ -626,14 +637,14 @@ def test_callback_capabilities_excludes_opted_out_guardrail_from_iterator_overri
     assert [cb for cb, _ in caps.iterator_overrides if cb is opted_out] == []
 
 
-def test_deployment_pre_call_target_stays_native_when_opted_out():
+def test_deployment_hook_target_stays_native_when_opted_out():
     """Model-level guardrails resolve their target here rather than through ProxyLogging."""
-    assert _KeepsNativeHooks()._deployment_pre_call_target() is not None
+    assert _KeepsNativeHooks()._deployment_hook_target() is not None
     opted_out = _KeepsNativeHooks()
-    assert opted_out._deployment_pre_call_target() is opted_out
-    assert _AppliesGuardrail()._deployment_pre_call_target() is not None
+    assert opted_out._deployment_hook_target() is opted_out
+    assert _AppliesGuardrail()._deployment_hook_target() is not None
     routed = _AppliesGuardrail()
-    assert routed._deployment_pre_call_target() is not routed
+    assert routed._deployment_hook_target() is not routed
 
 
 @pytest.mark.asyncio
@@ -658,6 +669,95 @@ async def test_deferred_stream_guardrails_run_native_hook_when_opted_out(monkeyp
 
     assert opted_out.native_hooks_ran == ["post_call"]
     assert routed.native_hooks_ran == []
+
+
+@pytest.mark.asyncio
+async def test_deferred_stream_guardrails_skip_pipeline_managed_native_hook(monkeypatch):
+    """A post_call pipeline step already ran the opted-out guardrail's own hook against
+    the buffered stream, so the deferred audit must not run it a second time."""
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    pipeline_managed = _KeepsNativeHooks(event_hook=GuardrailEventHooks.post_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_managed])
+    pipeline = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="keeps_native", on_fail="block")])
+
+    await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+        captured_data={
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"_guardrail_pipelines": [("response-governance", pipeline)]},
+        },
+        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
+        captured_logging_obj=_streaming_logging_obj(),
+        assembled_response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))]),
+        cache_hit=False,
+    )
+
+    assert pipeline_managed.native_hooks_ran == []
+
+
+@pytest.mark.asyncio
+async def test_deferred_stream_guardrails_run_native_hook_whose_pipeline_could_not_stream(monkeypatch):
+    """A pipeline step with neither streaming interface keeps the whole pipeline off the
+    stream, so the deferred audit is the only place the opted-out guardrail's own hook
+    still runs, the way it did before pipelines ran on streams."""
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    class NeitherHookGuardrail(CustomGuardrail):
+        pass
+
+    pipeline_managed = _KeepsNativeHooks(event_hook=GuardrailEventHooks.post_call, default_on=True)
+    neither = NeitherHookGuardrail(guardrail_name="gr-neither", event_hook=GuardrailEventHooks.post_call)
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_managed, neither])
+    pipeline = GuardrailPipeline(
+        mode="post_call",
+        steps=[
+            PipelineStep(guardrail="keeps_native", on_fail="next"),
+            PipelineStep(guardrail="gr-neither", on_fail="block"),
+        ],
+    )
+
+    await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+        captured_data={
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"_guardrail_pipelines": [("response-governance", pipeline)]},
+        },
+        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
+        captured_logging_obj=_streaming_logging_obj(),
+        assembled_response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))]),
+        cache_hit=False,
+    )
+
+    assert pipeline_managed.native_hooks_ran == ["post_call"]
+
+
+@pytest.mark.asyncio
+async def test_deferred_stream_guardrails_run_native_hook_on_route_without_translation(monkeypatch):
+    """A route with no endpoint guardrail translation cannot gate the stream through its
+    pipelines, so the deferred audit still owes the opted-out guardrail its own hook."""
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    pipeline_managed = _KeepsNativeHooks(event_hook=GuardrailEventHooks.post_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_managed])
+    pipeline = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="keeps_native", on_fail="block")])
+
+    await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+        captured_data={
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"_guardrail_pipelines": [("response-governance", pipeline)]},
+        },
+        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/custom/stream"),
+        captured_logging_obj=_streaming_logging_obj(),
+        assembled_response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))]),
+        cache_hit=False,
+    )
+
+    assert pipeline_managed.native_hooks_ran == ["post_call"]
 
 
 @pytest.mark.asyncio

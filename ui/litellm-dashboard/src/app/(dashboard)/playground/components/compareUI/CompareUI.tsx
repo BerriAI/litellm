@@ -687,12 +687,12 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
   const isUploadedFilePdf = Boolean(uploadedFile?.name.toLowerCase().endsWith(".pdf"));
   const showSuggestedPrompts = !hasMessages && !isAnyComparisonLoading && !hasAttachment;
   return (
-    <div className="w-full h-full p-4 bg-white">
-      <div className="rounded-2xl border border-gray-200 bg-white shadow-xs min-h-[calc(100vh-160px)] flex flex-col">
+    <div className="w-full h-full p-4 bg-card">
+      <div className="rounded-2xl border border-border bg-card shadow-xs min-h-[calc(100vh-160px)] flex flex-col">
         <div className="border-b px-4 py-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-gray-600">Virtual Key Source</span>
+              <span className="text-sm font-medium text-muted-foreground">Virtual Key Source</span>
               <Select
                 value={apiKeySource}
                 onValueChange={(value) => setApiKeySource(value as "session" | "custom")}
@@ -719,7 +719,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
               )}
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-gray-600">Endpoint</span>
+              <span className="text-sm font-medium text-muted-foreground">Endpoint</span>
               <Select value={selectedEndpoint} onValueChange={(value) => setSelectedEndpoint(value as EndpointIdType)}>
                 <SelectTrigger className="w-56" aria-label="Endpoint">
                   <SelectValue>{endpointConfig.label}</SelectValue>
@@ -775,10 +775,10 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
         </div>
         <div className="flex justify-center pb-4">
           <div className="w-full max-w-3xl px-4">
-            <div className="border border-gray-200 shadow-lg rounded-xl bg-white p-4">
+            <div className="border border-border shadow-lg rounded-xl bg-card p-4">
               <div className="flex items-center justify-between gap-4 mb-3 min-h-8">
                 {hasAttachment ? (
-                  <span className="text-sm text-gray-500">Attachment ready to send</span>
+                  <span className="text-sm text-muted-foreground">Attachment ready to send</span>
                 ) : showSuggestedPrompts ? (
                   <div className="flex items-center gap-2 overflow-x-auto">
                     {SUGGESTED_PROMPTS.map((prompt) => (
@@ -786,7 +786,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                         key={prompt}
                         type="button"
                         onClick={() => handleFollowUpSelect(prompt)}
-                        className="shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-100 cursor-pointer"
+                        className="shrink-0 rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent cursor-pointer"
                       >
                         {prompt}
                       </button>
@@ -799,43 +799,43 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
                         key={question}
                         type="button"
                         onClick={() => handleFollowUpSelect(question)}
-                        className="shrink-0 rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-100 cursor-pointer"
+                        className="shrink-0 rounded-full border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent cursor-pointer"
                       >
                         {question}
                       </button>
                     ))}
                   </div>
                 ) : isAnyComparisonLoading ? (
-                  <span className="flex items-center gap-2 text-sm text-gray-500">
-                    <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" aria-hidden />
+                  <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <span className="h-2 w-2 rounded-full bg-info animate-pulse" aria-hidden />
                     {endpointConfig.loadingMessage}
                   </span>
                 ) : (
-                  <span className="text-sm text-gray-500">{endpointConfig.inputPlaceholder}</span>
+                  <span className="text-sm text-muted-foreground">{endpointConfig.inputPlaceholder}</span>
                 )}
               </div>
               {uploadedFile && (
                 <div className="mb-3">
-                  <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="flex items-center gap-3 p-3 bg-muted rounded-lg border border-border">
                     <div className="relative inline-block">
                       {isUploadedFilePdf ? (
-                        <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center text-white">
+                        <div className="w-10 h-10 rounded-md bg-destructive flex items-center justify-center text-destructive-foreground">
                           <FileText className="size-4" aria-label="file-pdf" />
                         </div>
                       ) : (
                         <img
                           src={uploadedFilePreviewUrl || ""}
                           alt="Upload preview"
-                          className="w-10 h-10 rounded-md border border-gray-200 object-cover"
+                          className="w-10 h-10 rounded-md border border-border object-cover"
                         />
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">{uploadedFile.name}</div>
-                      <div className="text-xs text-gray-500">{isUploadedFilePdf ? "PDF" : "Image"}</div>
+                      <div className="text-sm font-medium text-foreground truncate">{uploadedFile.name}</div>
+                      <div className="text-xs text-muted-foreground">{isUploadedFilePdf ? "PDF" : "Image"}</div>
                     </div>
                     <button
-                      className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
+                      className="flex items-center justify-center w-6 h-6 text-muted-foreground hover:text-foreground hover:bg-accent rounded-full transition-colors"
                       onClick={handleRemoveFile}
                       aria-label="Remove attachment"
                     >

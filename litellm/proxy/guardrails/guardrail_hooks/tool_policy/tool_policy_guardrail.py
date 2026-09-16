@@ -20,9 +20,10 @@ Configuration in proxy config YAML:
         mode: post_call
 """
 
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
+from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -37,6 +38,10 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME: Final = "tool_policy"
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
 
 
 def _get_request_object_permission_ids(
@@ -106,7 +111,7 @@ class ToolPolicyGuardrail(CustomGuardrail):
     ToolPolicyRegistry (synced from DB).
     """
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Unpack[_CustomGuardrailOptions]) -> None:
         if "supported_event_hooks" not in kwargs:
             kwargs["supported_event_hooks"] = [
                 GuardrailEventHooks.pre_call,

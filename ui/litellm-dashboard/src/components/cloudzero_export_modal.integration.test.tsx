@@ -139,7 +139,7 @@ describe("CloudZeroExportModal", () => {
 
     await screen.findByLabelText("CloudZero API Key");
     await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("Export to CSV"));
+    await user.click(await screen.findByRole("option", { name: "Export to CSV" }));
 
     expect(screen.queryByLabelText("CloudZero API Key")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Export CSV" }));

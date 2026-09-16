@@ -6,14 +6,11 @@ can be None, causing AttributeError: 'NoneType' object has no attribute 'get'
 in set_llm_deployment_success_metrics.
 """
 
-import os
-import sys
 from datetime import datetime
 
 import pytest
 from prometheus_client import REGISTRY
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.types.integrations.prometheus import UserAPIKeyLabelValues

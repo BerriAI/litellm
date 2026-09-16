@@ -6,7 +6,7 @@ import { CircleAlert, CirclePlus, Copy, Info, KeyRound, Link } from "lucide-reac
 import { parseErrorMessage } from "./shared/errorUtils";
 import { toast } from "@/lib/toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
@@ -93,9 +93,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
             {/* Step 1: SCIM URL */}
             <div>
               <div className="flex items-center mb-2">
-                <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 mr-2">
-                  1
-                </div>
+                <div className="flex items-center justify-center w-6 h-6 rounded-full bg-info/15 text-info mr-2">1</div>
                 <h3 className="text-lg font-medium flex items-center">
                   <Link className="h-5 w-5 mr-2" />
                   SCIM Tenant URL
@@ -118,9 +116,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
             {/* Step 2: SCIM Token */}
             <div>
               <div className="flex items-center mb-2">
-                <div className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 mr-2">
-                  2
-                </div>
+                <div className="flex items-center justify-center w-6 h-6 rounded-full bg-info/15 text-info mr-2">2</div>
                 <h3 className="text-lg font-medium flex items-center">
                   <KeyRound className="h-5 w-5 mr-2" />
                   Authentication Token
@@ -158,12 +154,12 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
                   </form>
                 </div>
               ) : (
-                <Card className="block p-6 border border-yellow-300 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950">
-                  <div className="flex items-center mb-2 text-yellow-800 dark:text-yellow-300">
+                <Card className="block p-6 border border-warning/30 bg-warning/10">
+                  <div className="flex items-center mb-2 text-warning">
                     <CircleAlert className="h-5 w-5 mr-2" />
-                    <h4 className="text-lg font-medium text-yellow-800 dark:text-yellow-300">Your SCIM Token</h4>
+                    <h4 className="text-lg font-medium text-warning">Your SCIM Token</h4>
                   </div>
-                  <p className="text-yellow-800 dark:text-yellow-300 mb-4 font-medium">
+                  <p className="text-warning mb-4 font-medium">
                     Make sure to copy this token now. You will not be able to see it again.
                   </p>
                   <div className="flex items-center">

@@ -63,11 +63,11 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
   };
 
   const renderControl = (setting: AlertingSetting) => {
-    if (setting.field_type === "Integer") {
+    if (setting.field_type === "Integer" || setting.field_type === "Float") {
       return (
         <Input
           type="number"
-          step={1}
+          step={setting.field_type === "Integer" ? 1 : "any"}
           value={setting.field_value ?? ""}
           onChange={(event) => handleNumericChange(setting, event.target.value)}
         />
@@ -123,7 +123,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
               size="icon-sm"
               aria-label={`Reset ${value.field_name}`}
               onClick={() => handleResetField(value.field_name, index)}
-              className="text-red-500"
+              className="text-destructive"
             >
               <Trash2 className="size-5" />
             </Button>

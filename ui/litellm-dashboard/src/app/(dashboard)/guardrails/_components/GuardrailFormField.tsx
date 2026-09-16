@@ -3,7 +3,7 @@
 import { CircleHelp } from "lucide-react";
 import React, { useId } from "react";
 import { useController, type Control, type ControllerRenderProps, type RegisterOptions } from "react-hook-form";
-import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 

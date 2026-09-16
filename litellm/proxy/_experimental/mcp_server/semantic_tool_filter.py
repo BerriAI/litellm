@@ -5,6 +5,7 @@ Filters MCP tools semantically for /chat/completions and /responses endpoints.
 """
 
 import asyncio
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
@@ -74,7 +75,7 @@ class SemanticMCPToolFilter:
         self.router_instance = litellm_router_instance
         self.tool_router: SemanticRouter | None = None
         self.context_window_error: str | None = None
-        self._tool_map: dict[str, Any] = {}  # MCPTool objects or OpenAI function dicts
+        self._tool_map: dict[str, object] = {}  # MCPTool objects or OpenAI function dicts
         self._index_sync_lock = asyncio.Lock()
 
     async def build_router_from_mcp_registry(self) -> None:
@@ -182,11 +183,11 @@ class SemanticMCPToolFilter:
                 return
             raise
 
-    def _has_tools_missing_from_index(self, tools: list[Any]) -> bool:
+    def _has_tools_missing_from_index(self, tools: Sequence[object]) -> bool:
         """Allocation-free check for any named tool not yet in the semantic index."""
         return any(name and name not in self._tool_map for name in (self._extract_tool_info(t)[0] for t in tools))
 
-    def _tools_missing_from_index(self, tools: list[Any]) -> dict[str, Any]:
+    def _tools_missing_from_index(self, tools: Sequence[object]) -> Mapping[str, object]:
         """Map name -> tool for every named tool not yet in the semantic index."""
         return {
             name: tool
@@ -194,7 +195,7 @@ class SemanticMCPToolFilter:
             if name and name not in self._tool_map
         }
 
-    async def _ensure_tools_indexed(self, available_tools: list[Any]) -> None:
+    async def _ensure_tools_indexed(self, available_tools: Sequence[object]) -> None:
         """
         Index request-time tools the startup build never saw.
 
@@ -385,7 +386,7 @@ class SemanticMCPToolFilter:
         separator: Final = client_name[-len(canonical) - 1]
         return separator in ("_", "-")
 
-    def _get_tools_by_names(self, tool_names: list[str], available_tools: list[Any]) -> list[Any]:
+    def _get_tools_by_names(self, tool_names: Sequence[str], available_tools: Sequence[object]) -> list[object]:
         """
         Get tools from available_tools by their names, preserving the
         semantic router's ordering.
@@ -401,14 +402,14 @@ class SemanticMCPToolFilter:
         # Exact matches win over suffix matches when both are present, and
         # each incoming tool is returned at most once even if two canonical
         # names happen to be tail-compatible with the same incoming name.
-        available_by_name: Final[dict[str, Any]] = {}
+        available_by_name: Final[dict[str, object]] = {}
         for tool in available_tools:
             client_name, _ = self._extract_tool_info(tool)
             if client_name and client_name not in available_by_name:
                 available_by_name[client_name] = tool
 
-        matched: Final[list[Any]] = []
-        used_ids: Final[set] = set()
+        matched: Final[list[object]] = []
+        used_ids: Final[set[int]] = set()
         for canonical in tool_names:
             tool = available_by_name.get(canonical)
             if tool is None:
@@ -430,7 +431,7 @@ class SemanticMCPToolFilter:
                 used_ids.add(id(tool))
         return matched
 
-    def extract_user_query(self, messages: list[dict[str, Any]]) -> str:
+    def extract_user_query(self, messages: Sequence[Mapping[str, object]]) -> str:
         """
         Extract user query from messages for /chat/completions or /responses.
 

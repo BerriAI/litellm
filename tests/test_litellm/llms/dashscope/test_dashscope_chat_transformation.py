@@ -5,12 +5,7 @@ These tests validate the DashScopeConfig class which extends OpenAIGPTConfig.
 DashScope is an OpenAI-compatible provider with minor customizations.
 """
 
-import os
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.types.llms.openai import AllMessageValues
 import pytest

@@ -6,7 +6,9 @@ from typing import Final
 
 import anyio
 
-ANTHROPIC_PING_SSE_CHUNK: Final = 'event: ping\ndata: {"type": "ping"}\n\n'
+from litellm.constants import STREAM_SSE_KEEPALIVE_PING_CHUNK
+
+ANTHROPIC_PING_SSE_CHUNK: Final = STREAM_SSE_KEEPALIVE_PING_CHUNK
 SSE_COMMENT_PING: Final = ": ping\n\n"
 SSE_COMMENT_PING_BYTES: Final = SSE_COMMENT_PING.encode()
 # The byte form of proxy_server._SSE_FRAME_DELIMITERS, CR-only included: SSE
@@ -87,6 +89,17 @@ async def _keepalive_ping_stream(
 
 def is_sse_content_type(content_type: str | None) -> bool:
     return content_type is not None and content_type.split(";", 1)[0].strip().lower() == _SSE_MEDIA_TYPE
+
+
+def split_complete_sse_frames(pending: bytes) -> tuple[bytes, bytes]:
+    """Split buffered SSE bytes into ``(complete_frames, unterminated_tail)``."""
+    boundary_end: Final = max(
+        (pending.rfind(delimiter) + len(delimiter) for delimiter in _SSE_FRAME_DELIMITERS if delimiter in pending),
+        default=0,
+    )
+    if boundary_end == 0:
+        return b"", pending
+    return pending[:boundary_end], pending[boundary_end:]
 
 
 def wrap_passthrough_sse_bytes_with_keepalive_pings(

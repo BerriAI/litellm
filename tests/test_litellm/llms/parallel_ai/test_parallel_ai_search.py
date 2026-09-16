@@ -2,13 +2,11 @@
 Tests for Parallel AI Search API integration (v1 endpoint).
 """
 
-import os
-import sys
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 
@@ -33,11 +31,39 @@ MOCK_V1_RESPONSE = {
 }
 
 
-def _mock_response():
+def _mock_response(payload=None):
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_V1_RESPONSE
+    mock_response.json.return_value = payload if payload is not None else MOCK_V1_RESPONSE
     return mock_response
+
+
+@pytest.fixture
+def httpx_transport(monkeypatch):
+    monkeypatch.setattr(  # test-quality-ok: respx needs HTTPX enabled to fake the provider HTTP boundary.
+        litellm,
+        "disable_aiohttp_transport",
+        True,
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.fixture
+def bundled_cost_map(monkeypatch):
+    """Price lookups against the bundled cost map.
+
+    litellm caches model-info lookups, so swapping ``model_cost`` only takes
+    effect once those caches are invalidated -- on the way in and back out.
+    """
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    _invalidate_model_cost_lowercase_map()
+    yield
+    monkeypatch.undo()
+    _invalidate_model_cost_lowercase_map()
 
 
 class TestParallelAISearch:
@@ -138,9 +164,7 @@ class TestParallelAISearch:
             json_data = mock_post.call_args.kwargs.get("json")
             assert json_data["mode"] == "basic"
 
-    @pytest.mark.parametrize(
-        "processor,expected_mode", [("base", "basic"), ("pro", "advanced")]
-    )
+    @pytest.mark.parametrize("processor,expected_mode", [("base", "basic"), ("pro", "advanced")])
     @pytest.mark.asyncio
     async def test_legacy_processor_maps_to_mode(self, processor, expected_mode):
         with patch(
@@ -225,9 +249,7 @@ class TestParallelAISearch:
                 "arxiv.org",
                 "nature.com",
             ]
-            assert advanced_settings["source_policy"]["exclude_domains"] == [
-                "reddit.com"
-            ]
+            assert advanced_settings["source_policy"]["exclude_domains"] == ["reddit.com"]
             assert advanced_settings["excerpt_settings"]["max_chars_per_result"] == 1500
 
             assert "max_results" not in json_data
@@ -309,10 +331,7 @@ class TestParallelAISearch:
             )
 
             call_args = mock_post.call_args
-            assert (
-                call_args.kwargs["url"]
-                == "https://proxy.internal.example.com/v1/search"
-            )
+            assert call_args.kwargs["url"] == "https://proxy.internal.example.com/v1/search"
 
     @pytest.mark.asyncio
     async def test_caller_api_base_without_key_is_refused(self, monkeypatch):
@@ -341,3 +360,147 @@ class TestParallelAISearch:
                 query="AI developments",
                 search_provider="parallel_ai",
             )
+
+    @pytest.mark.asyncio
+    async def test_flat_source_and_fetch_params_nest_under_advanced_settings(self, respx_mock, httpx_transport):
+        route = respx_mock.post("https://api.parallel.ai/v1/search").respond(json=MOCK_V1_RESPONSE)
+
+        await litellm.asearch(
+            query="AI developments",
+            search_provider="parallel_ai",
+            objective="find peer-reviewed AI research",
+            include_domains=["arxiv.org"],
+            after_date="2026-01-01",
+            location="gb",
+            fetch_policy={"max_age_seconds": 600, "disable_cache_fallback": True},
+            client_model="claude-fable-5",
+        )
+
+        json_data = json.loads(route.calls[0].request.content)
+        assert json_data["objective"] == "find peer-reviewed AI research"
+        assert json_data["client_model"] == "claude-fable-5"
+
+        advanced_settings = json_data["advanced_settings"]
+        assert advanced_settings["location"] == "gb"
+        assert advanced_settings["fetch_policy"] == {
+            "max_age_seconds": 600,
+            "disable_cache_fallback": True,
+        }
+        assert advanced_settings["source_policy"]["include_domains"] == ["arxiv.org"]
+        assert advanced_settings["source_policy"]["after_date"] == "2026-01-01"
+
+        assert "include_domains" not in json_data
+        assert "after_date" not in json_data
+        assert "location" not in json_data
+        assert "fetch_policy" not in json_data
+
+    @pytest.mark.asyncio
+    async def test_response_preserves_raw_parallel_fields(self, respx_mock, httpx_transport):
+        respx_mock.post("https://api.parallel.ai/v1/search").respond(json=MOCK_V1_RESPONSE)
+
+        response = await litellm.asearch(
+            query="AI developments",
+            search_provider="parallel_ai",
+        )
+
+        dumped = response.model_dump()
+        assert dumped["search_id"] == "search_abc123"
+        assert dumped["session_id"] == "session_xyz"
+        assert dumped["parallel_usage"] == [{"name": "search_advanced", "count": 1}]
+
+        first = response.results[0].model_dump()
+        assert first["excerpts"] == ["First excerpt.", "Second excerpt."]
+
+    @pytest.mark.asyncio
+    async def test_response_normalizes_null_result_fields(self, respx_mock, httpx_transport):
+        response_payload = {
+            **MOCK_V1_RESPONSE,
+            "results": [{"url": None, "title": None, "publish_date": None, "excerpts": None}],
+        }
+        respx_mock.post("https://api.parallel.ai/v1/search").respond(json=response_payload)
+
+        response = await litellm.asearch(
+            query="AI developments",
+            search_provider="parallel_ai",
+        )
+
+        assert len(response.results) == 1
+        result = response.results[0]
+        assert result.url == ""
+        assert result.title == ""
+        assert result.snippet == ""
+        assert result.date is None
+        assert result.model_dump()["excerpts"] == ()
+
+    @pytest.mark.parametrize(
+        "mode,usage,max_results,expected_cost",
+        [
+            ("turbo", [{"name": "sku_search", "count": 1}], None, 0.001),
+            ("fast", [{"name": "sku_search", "count": 1}], None, 0.001),
+            ("basic", [{"name": "sku_search", "count": 1}], None, 0.005),
+            ("advanced", [{"name": "sku_search", "count": 1}], None, 0.005),
+            (
+                "basic",
+                [
+                    {"name": "sku_search", "count": 1},
+                    {"name": "sku_search_additional_results", "count": 2},
+                ],
+                20,
+                0.007,
+            ),
+            ("basic", None, 20, 0.015),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_search_cost_uses_mode_and_provider_usage(
+        self, mode, usage, max_results, expected_cost, bundled_cost_map, respx_mock, httpx_transport
+    ):
+        response_payload = {**MOCK_V1_RESPONSE, "usage": usage}
+        respx_mock.post("https://api.parallel.ai/v1/search").respond(json=response_payload)
+
+        response = await litellm.asearch(
+            query="AI developments",
+            search_provider="parallel_ai",
+            mode=mode,
+            max_results=max_results,
+        )
+
+        assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+    @pytest.mark.asyncio
+    async def test_search_cost_treats_keyword_queries_as_one_request(
+        self, bundled_cost_map, respx_mock, httpx_transport
+    ):
+        response_payload = {
+            **MOCK_V1_RESPONSE,
+            "usage": [{"name": "sku_search", "count": 1}],
+        }
+        respx_mock.post("https://api.parallel.ai/v1/search").respond(json=response_payload)
+
+        response = await litellm.asearch(
+            query=["AI developments", "machine learning trends"],
+            search_provider="parallel_ai",
+            mode="basic",
+        )
+
+        assert response._hidden_params["response_cost"] == pytest.approx(0.005)
+
+    @pytest.mark.asyncio
+    async def test_caller_cannot_supply_provider_usage(self, bundled_cost_map, respx_mock, httpx_transport):
+        """`_parallel_ai_usage` prices the request, so a caller must not be able to set it.
+
+        The provider reports no usage here, which is the case where a caller-supplied
+        value would otherwise survive into the cost calculation.
+        """
+        response_payload = {k: v for k, v in MOCK_V1_RESPONSE.items() if k != "usage"}
+        route = respx_mock.post("https://api.parallel.ai/v1/search").respond(json=response_payload)
+
+        response = await litellm.asearch(
+            query="AI developments",
+            search_provider="parallel_ai",
+            mode="basic",
+            _parallel_ai_usage=[{"name": "sku_search", "count": 0}],
+        )
+
+        assert response._hidden_params["response_cost"] == pytest.approx(0.005)
+        assert "_parallel_ai_usage" not in json.loads(route.calls[0].request.content)

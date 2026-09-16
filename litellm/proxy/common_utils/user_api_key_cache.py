@@ -1,15 +1,29 @@
 from __future__ import annotations
 
-from typing import Any, Final, TypeVar, cast, overload
+import re
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
 
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+
 T = TypeVar("T", bound=BaseModel)
+
+_HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
+
+
+def is_user_key_cache_key(key: str) -> bool:
+    """Only user-key objects are cached under a bare ``hash_token`` digest; every other object uses a prefixed key."""
+    return _HASHED_TOKEN_CACHE_KEY.fullmatch(key) is not None
 
 
 class UserApiKeyCache(DualCache):
@@ -33,41 +47,86 @@ class UserApiKeyCache(DualCache):
     ``async_set_cache_pipeline`` applies the same untyped Codec pass as omitting
     ``model_type`` on ``async_set_cache`` (so ``BaseModel`` rows are dumped before Redis).
 
+    User-key objects (see ``is_user_key_cache_key``) live in their own in-memory partition,
+    ``key_object_cache``, so churn in the other management objects cannot evict them. Both
+    partitions share the same Redis backend and TTL settings.
+
     ``get_cache`` / ``async_get_cache`` overloads and implementations must be contiguous
     (no other methods in between) so mypy resolves ``@overload`` + implementation correctly.
     """
 
+    def __init__(
+        self,
+        in_memory_cache: InMemoryCache | None = None,
+        redis_cache: RedisCache | None = None,
+        default_in_memory_ttl: float | None = None,
+        default_redis_ttl: float | None = None,
+        key_object_in_memory_cache: InMemoryCache | None = None,
+    ) -> None:
+        super().__init__(
+            in_memory_cache=in_memory_cache,
+            redis_cache=redis_cache,
+            default_in_memory_ttl=default_in_memory_ttl,
+            default_redis_ttl=default_redis_ttl,
+        )
+        self.key_object_cache: Final = DualCache(
+            in_memory_cache=key_object_in_memory_cache or InMemoryCache(),
+            redis_cache=redis_cache,
+            default_in_memory_ttl=default_in_memory_ttl,
+            default_redis_ttl=default_redis_ttl,
+        )
+
+    def in_memory_cache_for(self, key: str) -> InMemoryCache:
+        return self.key_object_cache.in_memory_cache if is_user_key_cache_key(key) else self.in_memory_cache
+
+    def update_cache_ttl(self, default_in_memory_ttl: float | None, default_redis_ttl: float | None) -> None:
+        super().update_cache_ttl(default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl)
+        self.key_object_cache.update_cache_ttl(
+            default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl
+        )
+
+    def attach_redis_cache(
+        self, redis_cache: RedisCache | None = None, *, default_redis_ttl: float | None = None
+    ) -> None:
+        super().attach_redis_cache(redis_cache, default_redis_ttl=default_redis_ttl)
+        self.key_object_cache.attach_redis_cache(redis_cache, default_redis_ttl=default_redis_ttl)
+
     @overload
     def get_cache(
         self,
-        key: Any,
-        parent_otel_span: Any = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         *,
         model_type: type[T],
-        **kwargs: Any,
+        **kwargs: object,
     ) -> T | None: ...
 
     @overload
     def get_cache(
         self,
-        key: Any,
-        parent_otel_span: Any = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
-        **kwargs: Any,
+        model_type: None = None,
+        **kwargs: object,
     ) -> Any: ...
 
     def get_cache(
         self,
-        key,
-        parent_otel_span=None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         model_type: type[BaseModel] | None = None,
-        **kwargs,
-    ) -> Any | BaseModel | None:
+        **kwargs: object,
+    ) -> object:
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        cached: Final = super().get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
+        cached: Final = (
+            self.key_object_cache.get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
+            if is_user_key_cache_key(key)
+            else super().get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
+        )
         if model_type is None:
             return cached
         if cached is None:
@@ -85,35 +144,42 @@ class UserApiKeyCache(DualCache):
     @overload
     async def async_get_cache(
         self,
-        key: Any,
-        parent_otel_span: Any = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         *,
         model_type: type[T],
-        **kwargs: Any,
+        **kwargs: object,
     ) -> T | None: ...
 
     @overload
     async def async_get_cache(
         self,
-        key: Any,
-        parent_otel_span: Any = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
-        **kwargs: Any,
+        model_type: None = None,
+        **kwargs: object,
     ) -> Any: ...
 
     async def async_get_cache(
         self,
-        key,
-        parent_otel_span=None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         model_type: type[BaseModel] | None = None,
-        **kwargs,
-    ) -> Any | BaseModel | None:
+        **kwargs: object,
+    ) -> object:
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        cached: Final = await super().async_get_cache(
-            key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
+        cached: Final = (
+            await self.key_object_cache.async_get_cache(
+                key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
+            )
+            if is_user_key_cache_key(key)
+            else await super().async_get_cache(
+                key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
+            )
         )
         if model_type is None:
             return cached
@@ -129,23 +195,52 @@ class UserApiKeyCache(DualCache):
             return None
         return decoded
 
-    def set_cache(self, key, value, local_only: bool = False, **kwargs):
+    def set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        payload: Final = CacheCodec.serialize(value, model_type=model_type)
+        payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
+        if key is not None and is_user_key_cache_key(key):
+            return self.key_object_cache.set_cache(key=key, value=payload, local_only=local_only, **kwargs)
         return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
-    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
+    async def async_set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        payload: Final = CacheCodec.serialize(value, model_type=model_type)
+        payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
+        if key is not None and is_user_key_cache_key(key):
+            return await self.key_object_cache.async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
         return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
-    async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs) -> None:
+    def delete_cache(self, key: str) -> None:
+        if is_user_key_cache_key(key):
+            self.key_object_cache.delete_cache(key)
+            return
+        super().delete_cache(key)
+
+    async def async_delete_cache(self, key: str) -> None:
+        if is_user_key_cache_key(key):
+            await self.key_object_cache.async_delete_cache(key)
+            return
+        await super().async_delete_cache(key)
+
+    def flush_cache(self) -> None:
+        super().flush_cache()
+        self.key_object_cache.in_memory_cache.flush_cache()
+
+    async def async_set_cache_pipeline(
+        self, cache_list: Sequence[tuple[str, object]], local_only: bool = False, **kwargs: object
+    ) -> None:
         """
         Batch writes with the same Codec boundary as ``async_set_cache`` without
         ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
         """
-        normalized: Final = [(key, CacheCodec.serialize(value, model_type=None)) for key, value in cache_list]
-        return await super().async_set_cache_pipeline(cache_list=normalized, local_only=local_only, **kwargs)
+        normalized: Final = tuple((key, CacheCodec.serialize(value, model_type=None)) for key, value in cache_list)
+        key_object_entries: Final = tuple(entry for entry in normalized if is_user_key_cache_key(entry[0]))
+        other_entries: Final = tuple(entry for entry in normalized if not is_user_key_cache_key(entry[0]))
+        if key_object_entries:
+            await self.key_object_cache.async_set_cache_pipeline(
+                cache_list=key_object_entries, local_only=local_only, **kwargs
+            )
+        if other_entries:
+            await super().async_set_cache_pipeline(cache_list=other_entries, local_only=local_only, **kwargs)
 
 
 #: Value cached under ``user_object_permission_id_cache_key`` when the user links no permission row,
@@ -185,6 +280,32 @@ def tag_registry_cache_key() -> str:
     return "tag_registry"
 
 
+#: Cached under ``model_access_group_registry_cache_key`` when the table exceeds
+#: ``MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-group lookup.
+MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL: Final = "__model_access_group_registry_overflow__"
+
+
+def model_access_group_cache_key(access_group_name: str) -> str:
+    """Cache key one model access group budget row is stored under; shared so auth, spend tracking and the management endpoints cannot drift."""
+    return f"model_access_group:{access_group_name}"
+
+
+def model_access_group_registry_cache_key() -> str:
+    """Cache key for the set of model access group names that have a budget row."""
+    return "model_access_group_registry"
+
+
+def model_access_group_spend_counter_key(access_group_name: str) -> str:
+    """Spend counter key for one model access group; shared so its four owners cannot drift.
+
+    The reservation path writes it up front, the cost callback writes it after the call, auth
+    reads it to enforce ``max_budget``, and the reset job clears it on rollover. A copy that
+    drifts in any one of them silently resets or reads a counter nobody else touches, which shows
+    up as a budget that never trips or never resets.
+    """
+    return f"spend:model_access_group:{access_group_name}"
+
+
 #: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds
 #: ``END_USER_RESTRICTED_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-id fetch.
 END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL: Final = "__end_user_restricted_registry_overflow__"
@@ -198,6 +319,29 @@ def end_user_cache_key(end_user_id: str) -> str:
 def end_user_restricted_registry_cache_key() -> str:
     """Cache key for the set of end-user ids whose row carries a restriction auth enforces."""
     return "end_user_restricted_registry"
+
+
+def team_membership_auth_cache_key(team_id: str, user_id: str) -> str:
+    """Cache key one team member's ``LiteLLM_TeamMembership`` row is stored under for the admission check."""
+    return f"{team_id}_{user_id}"
+
+
+def team_membership_reservation_cache_key(user_id: str, team_id: str) -> str:
+    """Cache key the pre-call budget reservation stores the same ``LiteLLM_TeamMembership`` row under.
+
+    Deliberately not unified with ``team_membership_auth_cache_key``: the two readers wrote independent
+    keys before this file existed, so a fix that invalidates one must invalidate both explicitly rather
+    than assume a single write is visible to both.
+    """
+    return f"team_membership:{user_id}:{team_id}"
+
+
+#: Cached under ``team_membership_reservation_cache_key`` when a member has no ``LiteLLM_TeamMembership``
+#: row, so a session-token member without a per-member budget costs no DB read per request. Lives beside
+#: the key builder because it is part of the same cache protocol: every reader of the key must know that
+#: a plain string here means "no row", distinct from a serialized membership. The two budget readers
+#: already treat a non-model value as "no row", so they need no change to stay correct.
+NO_TEAM_MEMBERSHIP_SENTINEL: Final = "__no_team_membership__"
 
 
 def get_management_object_ttl(cache: DualCache) -> float:

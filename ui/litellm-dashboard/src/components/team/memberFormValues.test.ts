@@ -82,7 +82,7 @@ describe("buildMemberFormValues", () => {
     });
   });
 
-  it("collapses falsy budgets and limits to null and a missing model list to an empty array", () => {
+  it("keeps a stored budget or limit of 0 as 0 because only null means unlimited", () => {
     expect(
       buildMemberFormValues(
         "edit",
@@ -93,12 +93,28 @@ describe("buildMemberFormValues", () => {
       user_email: "a@b.com",
       user_id: "u1",
       role: "user",
+      max_budget_in_team: 0,
+      budget_duration: null,
+      tpm_limit: 0,
+      rpm_limit: 0,
+      allowed_models: [],
+    });
+  });
+
+  it("collapses missing budgets and limits to null and a missing model list to an empty array", () => {
+    const unlimitedMember = {
+      user_email: "a@b.com",
+      user_id: "u1",
+      role: "user",
       max_budget_in_team: null,
       budget_duration: null,
       tpm_limit: null,
       rpm_limit: null,
       allowed_models: [],
-    });
+    };
+    expect(
+      buildMemberFormValues("edit", { user_email: "a@b.com", user_id: "u1", role: "user" }, teamConfig),
+    ).toStrictEqual(unlimitedMember);
   });
 
   it("falls back to the configured default role when the member has none", () => {
@@ -133,11 +149,31 @@ describe("buildMemberFormValues", () => {
 });
 
 describe("emptyMemberFormValues", () => {
-  it("unsets every rendered field so a reset clears the form", () => {
+  it("clears every rendered field to the empty value its control understands", () => {
     expect(emptyMemberFormValues(orgConfig)).toStrictEqual({
-      user_email: undefined,
-      user_id: undefined,
-      role: undefined,
+      user_email: "",
+      user_id: "",
+      role: "",
+    });
+  });
+
+  it("clears numeric, duration and multi-select fields to values their controls accept", () => {
+    expect(
+      emptyMemberFormValues({
+        ...orgConfig,
+        additionalFields: [
+          { name: "max_budget_in_team", label: "Budget", type: "numerical" },
+          { name: "budget_duration", label: "Reset", type: "budget-duration" },
+          { name: "allowed_models", label: "Models", type: "multi-select" },
+        ],
+      }),
+    ).toStrictEqual({
+      user_email: "",
+      user_id: "",
+      role: "",
+      max_budget_in_team: null,
+      budget_duration: null,
+      allowed_models: [],
     });
   });
 });

@@ -6,7 +6,7 @@ import { z } from "zod/v4";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createGuardrailCall, getGuardrailsList } from "@/components/networking";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -112,7 +112,7 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
               href="https://docs.litellm.ai/docs/proxy/headroom"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-600 underline dark:text-blue-400"
+              className="text-info underline"
             >
               Headroom setup docs
             </a>
@@ -134,7 +134,7 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
                   <span
                     className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                       guardrail.litellm_params?.default_on
-                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                        ? "bg-success/15 text-success"
                         : "bg-muted text-muted-foreground"
                     }`}
                   >
@@ -181,8 +181,8 @@ const PromptCompressionTab: React.FC<PromptCompressionTabProps> = ({ accessToken
                   )}
                 </FormField>
               </FieldGroup>
-              <div className="mt-6 mb-4 rounded-lg border border-yellow-200 bg-yellow-50 p-3 dark:border-yellow-800 dark:bg-yellow-950">
-                <p className="text-sm text-yellow-800 dark:text-yellow-300">
+              <div className="mt-6 mb-4 rounded-lg border border-warning/20 bg-warning/10 p-3">
+                <p className="text-sm text-warning">
                   Applying compression to all requests is available to all users. Enabling it selectively per key or
                   team is a LiteLLM Enterprise feature. Get a trial key{" "}
                   <a

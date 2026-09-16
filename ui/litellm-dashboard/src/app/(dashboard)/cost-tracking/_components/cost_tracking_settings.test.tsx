@@ -136,7 +136,7 @@ describe("CostTrackingSettings", () => {
       const addButton = await screen.findByRole("button", { name: /add provider discount/i });
       await user.click(addButton);
 
-      expect(await screen.findByText("Add Provider Discount", { selector: "h2" })).toBeInTheDocument();
+      expect(await screen.findByRole("dialog", { name: "Add Provider Discount" })).toBeInTheDocument();
     });
   });
 
@@ -153,7 +153,7 @@ describe("CostTrackingSettings", () => {
       const addButton = await screen.findByRole("button", { name: /add provider margin/i });
       await user.click(addButton);
 
-      expect(await screen.findByText("Add Provider Margin", { selector: "h2" })).toBeInTheDocument();
+      expect(await screen.findByRole("dialog", { name: "Add Provider Margin" })).toBeInTheDocument();
     });
   });
 

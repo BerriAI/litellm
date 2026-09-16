@@ -137,6 +137,32 @@ class TestLangfuseOtelIntegration:
                     mock_span, "langfuse.environment", test_env
                 )
 
+    def test_set_langfuse_environment_attribute_prefers_dynamic_param(self):
+        """Per-key/team langfuse_environment beats the deployment env var."""
+
+        class _RecordingSpan:
+            def __init__(self):
+                self.attributes = {}
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        span = _RecordingSpan()
+        mock_kwargs = {
+            "standard_callback_dynamic_params": {
+                "langfuse_environment": "team-a-env"
+            }
+        }
+
+        with patch.dict(
+            os.environ, {"LANGFUSE_TRACING_ENVIRONMENT": "deployment-wide"}
+        ):
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                span, mock_kwargs, {}
+            )
+
+        assert span.attributes["langfuse.environment"] == "team-a-env"
+
     def test_extract_langfuse_metadata_basic(self):
         """Ensure metadata is correctly pulled from litellm_params."""
         metadata_in = {"generation_name": "my-gen", "custom": "data"}
@@ -932,6 +958,52 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["call_id"] == "call-abc"
             assert output_data[0]["arguments"]["location"] == "San Francisco"
             assert output_data[0]["arguments"]["unit"] == "celsius"
+
+    def test_responses_api_function_call_with_redacted_arguments(self):
+        """Sentinel arguments (invalid JSON) must not kill the whole observation output."""
+        from openai.types.responses import ResponseFunctionToolCall
+
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+        response_obj = ResponsesAPIResponse(
+            id="response-redacted",
+            created_at=1625247700,
+            output=[
+                ResponseFunctionToolCall(
+                    id="fc-redacted",
+                    type="function_call",
+                    name="get_weather",
+                    call_id="call-redacted",
+                    arguments="redacted-by-litellm",
+                    status="completed",
+                )
+            ],
+        )
+
+        kwargs = {
+            "call_type": "responses",
+            "messages": [{"role": "user", "content": "What's the weather?"}],
+            "model": "gpt-4o",
+            "optional_params": {},
+        }
+
+        mock_span = MagicMock()
+
+        with patch(  # test-quality-ok: the span attribute sink is the observable boundary; sibling tests in this class stub the same seam
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs, response_obj)
+
+            output_calls = [
+                call
+                for call in mock_safe_set_attribute.call_args_list
+                if call.args[1] == LangfuseSpanAttributes.OBSERVATION_OUTPUT.value
+            ]
+
+            assert len(output_calls) > 0, "observation.output should still be set"
+            output_data = json.loads(output_calls[0].args[2])
+            assert output_data[0]["name"] == "get_weather"
+            assert output_data[0]["arguments"] == {}
 
 
 if __name__ == "__main__":

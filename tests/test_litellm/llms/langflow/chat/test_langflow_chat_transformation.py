@@ -46,7 +46,7 @@ def test_langflow_config_get_complete_url():
 
 def test_langflow_config_get_complete_url_requires_api_base():
     config = LangFlowConfig()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='api_base is required for LangFlow\\. Set it via'):
         config.get_complete_url(
             api_base=None,
             api_key=None,
@@ -233,7 +233,7 @@ def test_langflow_extra_body_cannot_inject_tweaks_into_run_payload():
         return resp
 
     with patch.object(HTTPHandler, "post", side_effect=fake_post):
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.BadRequestError):
             litellm.completion(
                 model="langflow/my-flow",
                 messages=[{"role": "user", "content": "hello"}],

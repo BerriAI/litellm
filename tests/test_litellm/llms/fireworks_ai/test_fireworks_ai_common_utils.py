@@ -1,9 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.llms.fireworks_ai.common_utils import resolve_fireworks_resource_name
 

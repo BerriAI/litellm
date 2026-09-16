@@ -137,7 +137,7 @@ describe("AttachmentTable", () => {
     const idElement = screen.getByText("att-abcdef1234567");
     expect(idElement).toHaveClass("font-mono");
     expect(idElement).toHaveClass("truncate");
-    expect(idElement).not.toHaveClass("bg-blue-50");
+    expect(idElement).not.toHaveClass("bg-info/10");
   });
 
   it("should render model chips when the attachment has models", () => {

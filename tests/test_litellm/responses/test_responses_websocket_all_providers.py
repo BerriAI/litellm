@@ -17,6 +17,9 @@ from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPICon
 from litellm.llms.databricks.responses.transformation import (
     DatabricksResponsesAPIConfig,
 )
+from litellm.llms.fireworks_ai.responses.transformation import (
+    FireworksAIResponsesAPIConfig,
+)
 from litellm.llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
 )
@@ -84,7 +87,7 @@ class TestResponsesAPIWebSocketSupport:
 
     def test_azure_websocket_url_requires_api_base(self):
         config = AzureOpenAIResponsesAPIConfig()
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='api_base is required for Azure WebSocket'):
             config.get_websocket_url(api_base=None, litellm_params={})
 
     def test_azure_model_not_in_websocket_url(self):
@@ -101,6 +104,12 @@ class TestResponsesAPIWebSocketSupport:
 
     def test_openai_model_in_websocket_url_default(self):
         assert OpenAIResponsesAPIConfig().model_in_websocket_url() is True
+
+    def test_fireworks_ai_uses_managed_websocket(self):
+        """Fireworks AI should use managed websocket handler"""
+        assert (
+            FireworksAIResponsesAPIConfig().supports_native_websocket() is False
+        ), "Fireworks AI should use managed websocket handler"
 
     def test_xai_uses_managed_websocket(self):
         """XAI should use managed websocket handler"""

@@ -6,6 +6,7 @@ from openai.types.responses import ResponseReasoningItem
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import *
@@ -28,6 +29,14 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.AZURE
+
+    @staticmethod
+    def _supports_reasoning_effort_none(model: str) -> bool:
+        return AzureOpenAIGPT5Config._supports_reasoning_effort_level(model, "none")
+
+    @staticmethod
+    def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
+        return AzureOpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -96,7 +105,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Then filter out status from message items
         if isinstance(validated_input, list):
-            filtered_input: Final[list[Any]] = []
+            filtered_input: Final[list[object]] = []
             for item in validated_input:
                 if isinstance(item, dict) and item.get("type") == "message":
                     # Filter out status field from message items
@@ -123,7 +132,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if "tools" in response_api_optional_request_params and isinstance(
             response_api_optional_request_params["tools"], list
         ):
-            new_tools: Final[list[dict[str, Any]]] = []
+            new_tools: Final[list[dict[str, object]]] = []
             for tool in response_api_optional_request_params["tools"]:
                 if isinstance(tool, dict) and "function" in tool:
                     new_tool: dict[str, Any] = deepcopy(tool)
@@ -291,7 +300,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         url: Final = self._construct_url_for_response_id_in_path(
             api_base=api_base, response_id=response_id, path_suffix="/input_items"
         )
-        params: Final[dict[str, Any]] = {}
+        params: Final[dict[str, str | int]] = {}
         if after is not None:
             params["after"] = after
         if before is not None:

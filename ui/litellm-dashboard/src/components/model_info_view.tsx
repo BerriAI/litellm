@@ -2,29 +2,26 @@ import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap"
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useQueryClient } from "@tanstack/react-query";
 import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
-import { InfoCircleOutlined } from "@ant-design/icons";
 import { KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Button as AntdButton, Modal } from "antd";
 import { applyPtuModelInfo } from "../utils/ptuModelInfo";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
-import { ArrowLeft, CheckIcon, CopyIcon } from "lucide-react";
+import { ArrowLeft, CheckIcon, CopyIcon, Info } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
-import { AutoRouterTestTarget, buildAutoRouterTestTargets } from "./add_model/build_auto_router_test_targets";
-import { normalizeTierModels, resolveComplexityDefaultModel } from "./add_model/complexity_router_tiers";
+import { AutoRouterTestTarget, buildComplexityRouterTestTargets } from "./add_model/build_auto_router_test_targets";
 import {
   hasAutoRouterEditor,
   isAutoRouterDeployment,
   isComplexityRouter as isComplexityRouterParams,
 } from "./add_model/auto_router_strategies";
-import { canModifyModel } from "@/utils/modelPermissions";
+import { canEditAutoRouter, canModifyModel } from "@/utils/modelPermissions";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
@@ -47,6 +44,7 @@ import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField } from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -54,65 +52,10 @@ interface ModelInfoViewProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
+  isViewOnly: boolean;
   onModelUpdate?: (updatedModel: any) => void;
   modelAccessGroups: string[] | null;
 }
-
-interface ComplexityRouterTierConfig {
-  tiers?: {
-    SIMPLE?: unknown;
-    MEDIUM?: unknown;
-    COMPLEX?: unknown;
-    REASONING?: unknown;
-  };
-  semantic_keyword_matching?: boolean;
-  embedding_model?: string;
-  default_model?: string;
-}
-
-interface ComplexityRouterModelData {
-  litellm_params?: {
-    complexity_router_config?: ComplexityRouterTierConfig | string;
-    complexity_router_default_model?: string;
-  };
-}
-
-const buildComplexityRouterTestTargets = (
-  modelData: ComplexityRouterModelData | null | undefined,
-): AutoRouterTestTarget[] => {
-  const rawConfig = modelData?.litellm_params?.complexity_router_config;
-  let config: ComplexityRouterTierConfig = {};
-  if (typeof rawConfig === "string") {
-    try {
-      config = JSON.parse(rawConfig);
-    } catch {
-      config = {};
-    }
-  } else if (rawConfig) {
-    config = rawConfig;
-  }
-
-  const tiers = {
-    SIMPLE: normalizeTierModels(config.tiers?.SIMPLE),
-    MEDIUM: normalizeTierModels(config.tiers?.MEDIUM),
-    COMPLEX: normalizeTierModels(config.tiers?.COMPLEX),
-    REASONING: normalizeTierModels(config.tiers?.REASONING),
-  };
-
-  // Mirrors init_complexity_router_deployment (litellm/router.py): litellm_params wins, otherwise
-  // pure tier-derivation. complexity_router_config.default_model is a UI-only marker the backend
-  // never reads — folding it in here could point Test Connection at a model the router never
-  // calls (see PR #36615 discussion).
-  const effectiveDefaultModel = modelData?.litellm_params?.complexity_router_default_model || undefined;
-
-  const testTargetParams = {
-    tiers,
-    semanticMatchingEnabled: Boolean(config.semantic_keyword_matching),
-    embeddingModel: config.embedding_model,
-    defaultModel: resolveComplexityDefaultModel(tiers, effectiveDefaultModel),
-  };
-  return buildAutoRouterTestTargets(testTargetParams);
-};
 
 export default function ModelInfoView({
   modelId,
@@ -120,6 +63,7 @@ export default function ModelInfoView({
   accessToken,
   userID,
   userRole,
+  isViewOnly,
   onModelUpdate,
   modelAccessGroups,
 }: ModelInfoViewProps) {
@@ -170,11 +114,22 @@ export default function ModelInfoView({
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
 
-  const canEditModel = canModifyModel({ userRole, userID }, teams ?? null, {
+  const teamAlias = teams?.find((team) => team.team_id === modelData?.model_info?.team_id)?.team_alias || null;
+  const rawModelInfoEntries = Object.entries(modelData?.model_info ?? {}).flatMap((entry) =>
+    entry[0] === "team_id" && teamAlias ? [entry, ["team_alias", teamAlias]] : [entry],
+  );
+  const rawModelData = modelData && { ...modelData, model_info: Object.fromEntries(rawModelInfoEntries) };
+
+  const isAdmin = userRole === "Admin";
+  const actor = { userRole, userID, isViewOnly };
+  const origin = {
     teamId: modelData?.model_info?.team_id,
     isDbModel: modelData?.model_info?.db_model === true,
-  });
-  const isAdmin = userRole === "Admin";
+    createdBy: modelData?.model_info?.created_by,
+    model: modelData?.litellm_params?.model,
+  };
+  const canEditModel = canModifyModel(actor, teams ?? null, origin);
+  const canEditRouter = canEditAutoRouter(actor, teams ?? null, origin);
   // Editor-aware on purpose: an adaptive or quality router must not offer Edit Auto Router.
   const isAutoRouterModel = hasAutoRouterEditor(modelData?.litellm_params);
   // Broader than the editor check: adaptive and quality routers equally have no upstream
@@ -600,65 +555,69 @@ export default function ModelInfoView({
           <h2 className="text-xl font-semibold">Public Model Name: {getDisplayModelName(modelData)}</h2>
           <div className="flex items-center cursor-pointer">
             <span className="text-sm text-muted-foreground font-mono">{modelData.model_info.id}</span>
-            <AntdButton
-              type="text"
-              size="small"
-              icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            <Button
+              variant="ghost"
+              size="icon-xs"
               aria-label="Copy model ID"
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
+              className={`left-2 z-raised transition-all duration-200 ${
                 copiedStates["model-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
+                  ? "text-success bg-success/10 border-success/20"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted"
               }`}
-            />
+            >
+              {copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            </Button>
           </div>
         </div>
         <div className="flex gap-2">
           {(!isAnyAutoRouter || isComplexityRouterModel) && (
-            <AntdButton
-              icon={<RefreshIcon className="h-4 w-4" />}
+            <Button
+              variant="outline"
               onClick={handleTestConnection}
               className="flex items-center gap-2"
               data-testid="test-connection-button"
             >
+              <RefreshIcon className="h-4 w-4" />
               Test Connection
-            </AntdButton>
+            </Button>
           )}
 
           {!isAnyAutoRouter && (
             <>
-              <AntdButton
-                icon={<KeyIcon className="h-4 w-4" />}
+              <Button
+                variant="outline"
                 onClick={() => setIsUpdateCredentialsModalOpen(true)}
                 className="flex items-center"
                 disabled={!canEditModel}
                 data-testid="update-api-key-button"
               >
+                <KeyIcon className="h-4 w-4" />
                 Update API Key
-              </AntdButton>
+              </Button>
 
-              <AntdButton
-                icon={<KeyIcon className="h-4 w-4" />}
+              <Button
+                variant="outline"
                 onClick={() => setIsCredentialModalOpen(true)}
                 className="flex items-center"
                 disabled={!isAdmin}
                 data-testid="reuse-credentials-button"
               >
+                <KeyIcon className="h-4 w-4" />
                 Re-use Credentials
-              </AntdButton>
+              </Button>
             </>
           )}
-          <AntdButton
-            danger
-            icon={<TrashIcon className="h-4 w-4" />}
+          <Button
+            variant="destructive"
             onClick={() => setIsDeleteModalOpen(true)}
             className="flex items-center"
             disabled={!canEditModel}
             data-testid="delete-model-button"
           >
+            <TrashIcon className="h-4 w-4" />
             {deleteLabel}
-          </AntdButton>
+          </Button>
         </div>
       </div>
 
@@ -740,7 +699,7 @@ export default function ModelInfoView({
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Model Settings</h3>
                 <div className="flex gap-2">
-                  {isAutoRouterModel && canEditModel && !isEditing && (
+                  {isAutoRouterModel && canEditRouter && !isEditing && (
                     <Button onClick={() => setIsAutoRouterModalOpen(true)} className="flex items-center">
                       Edit Auto Router
                     </Button>
@@ -753,7 +712,7 @@ export default function ModelInfoView({
                     )
                   ) : (
                     <SimpleTooltip content="Only DB models can be edited. You must be an admin or the creator of the model to edit it.">
-                      <InfoCircleOutlined />
+                      <Info className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                   )}
                 </div>
@@ -762,6 +721,7 @@ export default function ModelInfoView({
                 <ModelInfoEditForm
                   localModelData={localModelData}
                   modelData={modelData}
+                  teamAlias={teamAlias}
                   accessToken={accessToken}
                   isEditing={isEditing}
                   isSaving={isSaving}
@@ -785,7 +745,9 @@ export default function ModelInfoView({
 
           <TabsContent value="raw" keepMounted>
             <Card className="block p-6">
-              <pre className="bg-muted p-4 rounded-sm text-xs overflow-auto">{JSON.stringify(modelData, null, 2)}</pre>
+              <pre className="bg-muted p-4 rounded-sm text-xs overflow-auto">
+                {JSON.stringify(rawModelData, null, 2)}
+              </pre>
             </Card>
           </TabsContent>
         </div>
@@ -829,13 +791,19 @@ export default function ModelInfoView({
           setIsCredentialModalOpen={setIsCredentialModalOpen}
         />
       ) : (
-        <Modal
-          open={isCredentialModalOpen}
-          onCancel={() => setIsCredentialModalOpen(false)}
-          title="Using Existing Credential"
-        >
-          <p className="text-sm">{modelData.litellm_params.litellm_credential_name}</p>
-        </Modal>
+        <Dialog open={isCredentialModalOpen} onOpenChange={(open) => !open && setIsCredentialModalOpen(false)}>
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Using Existing Credential</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm">{modelData.litellm_params.litellm_credential_name}</p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsCredentialModalOpen(false)}>
+                Cancel
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
 
       {isUpdateCredentialsModalOpen && accessToken && (
@@ -858,23 +826,28 @@ export default function ModelInfoView({
         modelData={localModelData || modelData}
         accessToken={accessToken || ""}
         userRole={userRole || ""}
+        isMemberManaged={!canEditModel}
       />
 
-      <Modal
-        title="Connection Test Results"
-        open={isAutoRouterTestModalOpen}
-        onCancel={() => setIsAutoRouterTestModalOpen(false)}
-        footer={[
-          <AntdButton key="close" onClick={() => setIsAutoRouterTestModalOpen(false)}>
-            Close
-          </AntdButton>,
-        ]}
-        width={700}
-      >
-        {isAutoRouterTestModalOpen && accessToken && (
-          <AutoRouterConnectionTest key={autoRouterTestId} accessToken={accessToken} targets={autoRouterTestTargets} />
-        )}
-      </Modal>
+      <Dialog open={isAutoRouterTestModalOpen} onOpenChange={(open) => !open && setIsAutoRouterTestModalOpen(false)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
+          <DialogHeader>
+            <DialogTitle>Connection Test Results</DialogTitle>
+          </DialogHeader>
+          {isAutoRouterTestModalOpen && accessToken && (
+            <AutoRouterConnectionTest
+              key={autoRouterTestId}
+              accessToken={accessToken}
+              targets={autoRouterTestTargets}
+            />
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsAutoRouterTestModalOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

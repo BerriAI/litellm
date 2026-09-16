@@ -5,6 +5,8 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import DeletedKeysPage from "./DeletedKeysPage";
 import { useDeletedKeys, DeletedKeyResponse } from "@/app/(dashboard)/hooks/keys/useKeys";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useDeletedKeys: vi.fn(),
 }));

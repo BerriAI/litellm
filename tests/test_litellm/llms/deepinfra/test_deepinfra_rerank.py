@@ -4,14 +4,11 @@ Tests for DeepInfra rerank functionality following repository patterns.
 
 import asyncio
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 # Add litellm to path
-sys.path.insert(0, os.path.abspath("../../../.."))
 import litellm
 
 
@@ -303,15 +300,10 @@ def test_deepinfra_rerank_models():
     ]
 
     for model in models:
-        # This should not raise any validation errors
-        try:
-            litellm.get_llm_provider(model=model)
-        except Exception as e:
-            # We expect this to potentially fail due to missing api_base/key
-            # but the model format should be recognized
-            assert "api_base" in str(e) or "API key" in str(
-                e
-            ), f"Unexpected error for model {model}: {e}"
+        resolved_model, provider, _, api_base = litellm.get_llm_provider(model=model)
+        assert provider == "deepinfra"
+        assert resolved_model == model.removeprefix("deepinfra/")
+        assert api_base == "https://api.deepinfra.com/v1/openai"
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")

@@ -20,7 +20,6 @@ const SSO_PROVIDERS = {
 
 const TEST_DATA = {
   MODAL_TITLE: "Edit SSO Settings",
-  MODAL_WIDTH: "800",
   SUCCESS_MESSAGE: "SSO settings updated successfully",
   ERROR_MESSAGE_PREFIX: "Failed to save SSO settings:",
   BUTTON_TEXT: {
@@ -31,8 +30,6 @@ const TEST_DATA = {
 } as const;
 
 const TEST_IDS = {
-  MODAL: "modal",
-  BUTTON: "button",
   BASE_SSO_FORM: "base-sso-form",
   TRIGGER_FORM_SUBMIT: "trigger-form-submit",
 } as const;
@@ -125,16 +122,6 @@ const createMockHooks = (): {
 
 let lastSeededForm: any;
 
-vi.mock("antd", () => ({
-  Modal: ({ children, open, title, footer, onCancel, width, ...props }: any) => (
-    <div data-testid={TEST_IDS.MODAL} data-open={open} data-title={title} data-width={width} {...props}>
-      <div data-testid="modal-content">{children}</div>
-      <div data-testid="modal-footer">{footer}</div>
-      <button data-testid="modal-cancel" onClick={onCancel} />
-    </div>
-  ),
-}));
-
 vi.mock("./BaseSSOSettingsForm", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./BaseSSOSettingsForm")>()),
   default: ({ form, onFormSubmit }: any) => {
@@ -199,9 +186,9 @@ const renderComponent = (props: Partial<React.ComponentProps<typeof EditSSOSetti
   };
 };
 
-const getButtons = () => within(screen.getByTestId("modal-footer")).getAllByRole("button");
-const getCancelButton = () => getButtons()[0];
-const getSaveButton = () => getButtons()[1];
+const getDialog = () => screen.getByRole("dialog");
+const getCancelButton = () => within(getDialog()).getByRole("button", { name: TEST_DATA.BUTTON_TEXT.CANCEL });
+const getSaveButton = () => within(getDialog()).getByRole("button", { name: /^(Save|Saving)/ });
 
 const seededValuesFor = (ssoData: SSOData) => toSSOFormValues(ssoData.values as SSOSettingsValues);
 
@@ -219,17 +206,15 @@ describe("EditSSOSettingsModal", () => {
     it("displays modal with correct configuration", () => {
       renderComponent();
 
-      const modal = screen.getByTestId(TEST_IDS.MODAL);
-      expect(modal).toHaveAttribute("data-open", "true");
-      expect(modal).toHaveAttribute("data-title", TEST_DATA.MODAL_TITLE);
-      expect(modal).toHaveAttribute("data-width", TEST_DATA.MODAL_WIDTH);
+      expect(within(getDialog()).getByText(TEST_DATA.MODAL_TITLE)).toBeInTheDocument();
+      expect(screen.getByTestId(TEST_IDS.BASE_SSO_FORM)).toBeInTheDocument();
     });
 
     it("displays modal as closed when not visible", () => {
       renderComponent({ isVisible: false });
 
-      const modal = screen.getByTestId(TEST_IDS.MODAL);
-      expect(modal).toHaveAttribute("data-open", "false");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.queryByText(TEST_DATA.MODAL_TITLE)).not.toBeInTheDocument();
     });
   });
 
@@ -237,10 +222,8 @@ describe("EditSSOSettingsModal", () => {
     it("renders cancel and save buttons", () => {
       renderComponent();
 
-      const buttons = getButtons();
-      expect(buttons).toHaveLength(2);
-      expect(buttons[0]).toHaveTextContent(TEST_DATA.BUTTON_TEXT.CANCEL);
-      expect(buttons[1]).toHaveTextContent(TEST_DATA.BUTTON_TEXT.SAVE);
+      expect(getCancelButton()).toBeInTheDocument();
+      expect(getSaveButton()).toHaveTextContent(TEST_DATA.BUTTON_TEXT.SAVE);
     });
 
     it("calls onCancel and resets form when cancel button is clicked", () => {
@@ -481,7 +464,8 @@ describe("EditSSOSettingsModal", () => {
 
         renderComponent({ isVisible: false });
 
-        expect(screen.getByTestId(TEST_IDS.MODAL)).toHaveAttribute("data-open", "false");
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(screen.queryByTestId(TEST_IDS.BASE_SSO_FORM)).not.toBeInTheDocument();
       });
 
       it("skips initialization when SSO data is unavailable", () => {

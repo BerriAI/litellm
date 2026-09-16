@@ -128,6 +128,20 @@ def test_v1_model_info_no_model_list_error(client, auth_as, null_router, path):
     assert "LLM Model List not loaded" in response.text
 
 
+
+def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
+    """``GET /v1/model/info`` enriches each deployment through ``_get_proxy_model_info``; a registry
+    entry declaring parallel function calling must land in ``model_info`` instead of null."""
+    enriched = proxy_server._get_proxy_model_info(
+        model={
+            "model_name": "glm-5.3-flash",
+            "litellm_params": {"model": "together_ai/zai-org/GLM-5.3-Flash"},
+            "model_info": {"id": "glm-deployment", "db_model": False},
+        }
+    )
+    assert enriched["model_info"]["supports_parallel_function_calling"] is True
+
+
 def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
     from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
     from litellm.proxy.auth import model_checks
@@ -438,3 +452,92 @@ async def test_model_info_v2_query_sentinel_does_not_filter(monkeypatch, mixed_a
     )
 
     assert "tri-tier-router" in [m["model_name"] for m in resp["data"]]
+
+
+# ---------------------------------------------------------------------------
+# GET /v2/model/info?access_group / ?wildcard_only
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def access_group_router(monkeypatch):
+    """Router with one sales-team deployment, one wildcard sales-team deployment and one ungrouped one."""
+    model_list = [
+        {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": {"model": "openai/gpt-4o-mini"},
+            "model_info": {"id": "sales-1", "db_model": False, "access_groups": ["sales-team"]},
+        },
+        {
+            "model_name": "openai/*",
+            "litellm_params": {"model": "openai/*"},
+            "model_info": {"id": "sales-wildcard", "db_model": False, "access_groups": ["sales-team", "eng"]},
+        },
+        {
+            "model_name": "claude-opus",
+            "litellm_params": {"model": "anthropic/claude-opus-4-6"},
+            "model_info": {"id": "plain-1", "db_model": False},
+        },
+    ]
+    from unittest.mock import AsyncMock
+
+    router = MagicMock()
+    router.model_list = model_list
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        proxy_server,
+        "_apply_search_filter_to_models",
+        AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
+    )
+    monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
+
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(mlh, "append_agents_to_model_info", AsyncMock(side_effect=lambda models, **kw: models))
+    yield router
+
+
+def test_v2_model_info_without_new_filters_returns_everything(client, auth_as, access_group_router):
+    with auth_as():
+        response = client.get("/v2/model/info")
+    payload = response.json()
+    assert payload["total_count"] == 3
+    assert len(payload["data"]) == 3
+
+
+def test_v2_model_info_access_group_filters_rows_and_total(client, auth_as, access_group_router):
+    """The table pages off total_count, so the filter must shrink the total, not only the page."""
+    with auth_as():
+        response = client.get("/v2/model/info", params={"access_group": "sales-team"})
+    payload = response.json()
+    assert _model_names(payload) == ["gpt-4o-mini", "openai/*"]
+    assert payload["total_count"] == 2
+
+
+def test_v2_model_info_unknown_access_group_is_empty(client, auth_as, access_group_router):
+    with auth_as():
+        response = client.get("/v2/model/info", params={"access_group": "nobody"})
+    payload = response.json()
+    assert payload["data"] == []
+    assert payload["total_count"] == 0
+
+
+def test_v2_model_info_wildcard_only_filters_rows_and_total(client, auth_as, access_group_router):
+    with auth_as():
+        response = client.get("/v2/model/info", params={"wildcard_only": "true"})
+    payload = response.json()
+    assert _model_names(payload) == ["openai/*"]
+    assert payload["total_count"] == 1
+
+
+def test_v2_model_info_access_group_paginates_over_the_filtered_set(client, auth_as, access_group_router):
+    with auth_as():
+        response = client.get("/v2/model/info", params={"access_group": "sales-team", "page": 2, "size": 1})
+    payload = response.json()
+    assert _model_names(payload) == ["openai/*"]
+    assert payload["total_count"] == 2
+    assert payload["total_pages"] == 2

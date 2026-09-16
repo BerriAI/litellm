@@ -500,9 +500,7 @@ describe("LoggingSettings", () => {
     expect(screen.queryByPlaceholderText("e.g., 7d, 30d")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save Settings" })).not.toBeInTheDocument();
 
-    // eslint-disable-next-line local/no-antd-class-selectors -- antd Skeleton exposes no role, label or aria-busy to query the loading affordance by
-    const skeletons = document.querySelectorAll(".ant-skeleton");
-    expect(skeletons.length).toBeGreaterThan(0);
+    expect(document.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(0);
   });
 
   it("should report an error and not claim success when clearing a field fails", async () => {

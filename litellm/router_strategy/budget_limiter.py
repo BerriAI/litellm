@@ -20,13 +20,15 @@ anthropic:
 
 import asyncio
 import builtins
+import logging
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import RedisPipelineIncrementOperation
+from litellm.caching.redis_cache import RedisCache, RedisPipelineIncrementOperation, log_redis_failure
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
@@ -54,19 +56,19 @@ class _LiteLLMParamsDictView:
 
     __slots__ = ("_params",)
 
-    def __init__(self, params: dict[str, Any]):
+    def __init__(self, params: Mapping[str, object]):
         self._params = params
 
-    def __getattr__(self, key: str) -> Any:
+    def __getattr__(self, key: str) -> object:
         return self._params.get(key)
 
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key: str) -> object:
         return self._params.get(key)
 
     def __contains__(self, key: str) -> bool:
         return key in self._params
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: object = None) -> object:
         return self._params.get(key, default)
 
     def keys(self):
@@ -84,11 +86,18 @@ class _LiteLLMParamsDictView:
     def __len__(self) -> int:
         return len(self._params)
 
-    def dict(self) -> dict[str, Any]:
+    def dict(self) -> builtins.dict[str, object]:
         return dict(self._params)
 
-    def model_dump(self) -> builtins.dict[str, Any]:
+    def model_dump(self) -> builtins.dict[str, object]:
         return dict(self._params)
+
+
+async def _push_increments_to_redis(redis_cache: RedisCache, queued: list[RedisPipelineIncrementOperation]) -> None:
+    try:
+        await redis_cache.async_increment_pipeline(increment_list=queued)
+    except Exception as e:
+        log_redis_failure(verbose_router_logger, logging.ERROR, "Error syncing in-memory cache with Redis", e)
 
 
 class RouterBudgetLimiting(CustomLogger):
@@ -535,17 +544,13 @@ class RouterBudgetLimiting(CustomLogger):
                 "Pushing Redis Increment Pipeline for queue: %s",
                 self.redis_increment_operation_queue,
             )
-            if len(self.redis_increment_operation_queue) > 0:
-                asyncio.create_task(
-                    self.dual_cache.redis_cache.async_increment_pipeline(
-                        increment_list=self.redis_increment_operation_queue,
-                    )
-                )
-
+            queued: Final = self.redis_increment_operation_queue
             self.redis_increment_operation_queue = []
+            if queued:
+                asyncio.create_task(_push_increments_to_redis(self.dual_cache.redis_cache, queued))
 
         except Exception as e:
-            verbose_router_logger.error("Error syncing in-memory cache with Redis: %s", e)
+            log_redis_failure(verbose_router_logger, logging.ERROR, "Error syncing in-memory cache with Redis", e)
 
     async def _sync_in_memory_spend_with_redis(self):
         """
@@ -600,7 +605,7 @@ class RouterBudgetLimiting(CustomLogger):
                         verbose_router_logger.debug("Updated in-memory cache for %s: %s", key, value)
 
         except Exception as e:
-            verbose_router_logger.error("Error syncing in-memory cache with Redis: %s", e)
+            log_redis_failure(verbose_router_logger, logging.ERROR, "Error syncing in-memory cache with Redis", e)
 
     def _get_budget_config_for_deployment(
         self,

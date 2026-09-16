@@ -1,19 +1,21 @@
+import { Info } from "lucide-react";
 import React from "react";
-import { Input, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
-import { antdRequired } from "@/components/common_components/antdFormRules";
+import { requiredRule } from "@/components/common_components/formRules";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Input } from "@/components/ui/input";
 import { requiredWhenSiblingSet, textControl } from "./mcpFieldRules";
 
-const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
+const fieldClassName = "rounded-lg border-border focus:border-info focus:ring-ring";
 
 const FieldLabel: React.FC<{ label: string; tooltip: string }> = ({ label, tooltip }) => (
-  <span className="text-sm font-medium text-gray-700 flex items-center">
+  <span className="text-sm font-medium text-foreground flex items-center">
     {label}
-    <Tooltip title={tooltip}>
-      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-    </Tooltip>
+    <SimpleTooltip content={tooltip}>
+      <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+    </SimpleTooltip>
   </span>
 );
 
@@ -22,13 +24,13 @@ const SECRET_KEY_PATH = ["credentials", "aws_secret_access_key"] as const;
 
 const AwsSigV4Fields: React.FC = () => (
   <>
-    <p className="text-sm text-gray-500 mb-2">
+    <p className="text-sm text-muted-foreground mb-2">
       For MCP servers hosted on AWS Bedrock AgentCore.{" "}
       <a
         href="https://docs.litellm.ai/docs/mcp_aws_sigv4"
         target="_blank"
         rel="noopener noreferrer"
-        className="text-blue-500 hover:text-blue-700"
+        className="text-info hover:text-info/80"
       >
         View docs &rarr;
       </a>
@@ -37,7 +39,7 @@ const AwsSigV4Fields: React.FC = () => (
       label={<FieldLabel label="AWS Region" tooltip="AWS region for SigV4 signing (e.g., us-east-1)" />}
       name={["credentials", "aws_region_name"]}
       required
-      rules={{ validate: { required: antdRequired("AWS region is required for SigV4 auth") } }}
+      rules={{ validate: { required: requiredRule("AWS region is required for SigV4 auth") } }}
     >
       {(control) => <Input {...textControl(control)} placeholder="us-east-1" className={fieldClassName} />}
     </MountedFormField>
@@ -71,10 +73,10 @@ const AwsSigV4Fields: React.FC = () => (
       }}
     >
       {(control) => (
-        <Input.Password
+        <PasswordInput
           {...textControl(control)}
           placeholder="AKIA... (optional — uses IAM role if blank)"
-          className={fieldClassName}
+          groupClassName={fieldClassName}
         />
       )}
     </MountedFormField>
@@ -94,10 +96,10 @@ const AwsSigV4Fields: React.FC = () => (
       }}
     >
       {(control) => (
-        <Input.Password
+        <PasswordInput
           {...textControl(control)}
           placeholder="Enter secret key (optional — uses IAM role if blank)"
-          className={fieldClassName}
+          groupClassName={fieldClassName}
         />
       )}
     </MountedFormField>
@@ -106,10 +108,10 @@ const AwsSigV4Fields: React.FC = () => (
       name={["credentials", "aws_session_token"]}
     >
       {(control) => (
-        <Input.Password
+        <PasswordInput
           {...textControl(control)}
           placeholder="Enter session token (optional)"
-          className={fieldClassName}
+          groupClassName={fieldClassName}
         />
       )}
     </MountedFormField>

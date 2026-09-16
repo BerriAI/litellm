@@ -2,7 +2,7 @@
 Mistral OCR transformation implementation.
 """
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -14,6 +14,9 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRResponse,
 )
 from litellm.secret_managers.main import get_secret_str
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 MISTRAL_OCR_API_KEY_ENV_VAR: Final = "MISTRAL_API_KEY"
 
@@ -198,7 +201,7 @@ class MistralOCRConfig(BaseOCRConfig):
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         **kwargs,
     ) -> OCRResponse:
         """

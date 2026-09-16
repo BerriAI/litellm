@@ -430,6 +430,25 @@ class TestGeminiVideoConfig:
         assert result.usage["video_resolution"] == "1080p"
         assert result.usage["duration_seconds"] == 8.0
 
+    def test_transform_video_create_response_usage_includes_video_count(self):
+        """Regression for LIT-6896: sampleCount (number of generated videos) is copied into usage for billing."""
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {"name": "operations/generate_1234567890"}
+        request_data = {
+            "instances": [{"prompt": "Test"}],
+            "parameters": {"durationSeconds": 8, "sampleCount": 3},
+        }
+        result = self.config.transform_video_create_response(
+            model="gemini/veo-3.1-fast-generate-preview",
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="gemini",
+            request_data=request_data,
+        )
+        assert result.usage is not None
+        assert result.usage["video_count"] == 3
+        assert result.usage["duration_seconds"] == 8.0
+
     def test_transform_video_create_response_cost_tracking_with_different_durations(
         self,
     ):

@@ -1,10 +1,9 @@
 import React, { useState } from "react";
-import { Modal } from "antd";
 import { CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
 import { toast } from "@/lib/toast";
 import { registerClaudeCodePlugin } from "@/components/networking";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -27,9 +26,11 @@ import {
   parseKeywords,
   parseSkillSource,
   isValidSubPath,
+  isValidSha256,
   SkillSourcePreview,
 } from "@/components/claude_code_plugins/helpers";
 import { PluginAuthor, PluginSource, SkillRegisterRequest } from "@/components/claude_code_plugins/types";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddPluginFormProps {
   visible: boolean;
@@ -39,13 +40,14 @@ interface AddPluginFormProps {
 }
 
 const addPluginShape = {
-  skillUrl: z.string().min(1, "Please enter a repository URL"),
+  skillUrl: z.string().min(1, "Please enter a repository or zip archive URL"),
   subPath: z
     .string()
     .refine(
       (value) => !value || isValidSubPath(value),
       "Subfolder must be a relative path like plugins/my-skill (letters, numbers, dots, hyphens, underscores)",
     ),
+  sha256: z.string().refine(isValidSha256, "SHA-256 must be a 64-character hex digest"),
   name: z
     .string()
     .min(1, "Please enter skill name")
@@ -53,7 +55,7 @@ const addPluginShape = {
   domain: z.string(),
   namespace: z.string(),
   description: z.string(),
-  category: z.string(),
+  category: z.string().nullable(),
   keywords: z.string(),
   version: z.string(),
   authorName: z.string(),
@@ -69,11 +71,12 @@ type AddPluginFormValues = z.infer<typeof addPluginSchema>;
 const EMPTY_VALUES: AddPluginFormValues = {
   skillUrl: "",
   subPath: "",
+  sha256: "",
   name: "",
   domain: "",
   namespace: "",
   description: "",
-  category: "",
+  category: null,
   keywords: "",
   version: "",
   authorName: "",
@@ -89,11 +92,19 @@ const buildAuthor = (values: AddPluginFormValues): PluginAuthor | undefined => {
   return email ? { name, email } : { name };
 };
 
+const archiveUrlOf = (preview: SkillSourcePreview | null): string | undefined =>
+  preview?.parsed.source === "archive" ? preview.parsed.url : undefined;
+
+const withArchiveDigest = (source: PluginSource, sha256: string): PluginSource => {
+  const digest = sha256.trim();
+  return source.source === "archive" && digest ? { ...source, sha256: digest.toLowerCase() } : source;
+};
+
 const buildRegisterRequest = (values: AddPluginFormValues, source: PluginSource): SkillRegisterRequest => {
   const author = buildAuthor(values);
   return {
     name: values.name.trim(),
-    source,
+    source: withArchiveDigest(source, values.sha256),
     ...(values.version ? { version: values.version.trim() } : {}),
     ...(values.description ? { description: values.description.trim() } : {}),
     ...(author ? { author } : {}),
@@ -115,6 +126,16 @@ const PREDEFINED_CATEGORIES = [
   "Documentation",
 ];
 
+const SUB_PATH_LOCK_REASON = {
+  "git-subdir": "The URL already points to a subfolder, so this field is disabled",
+  archive: "A zip archive is installed as a whole, so this field is disabled",
+} as const;
+
+type SubPathLock = keyof typeof SUB_PATH_LOCK_REASON;
+
+const subPathLockFor = (source: PluginSource["source"] | undefined): SubPathLock | null =>
+  source === "git-subdir" || source === "archive" ? source : null;
+
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
     {label}
@@ -129,15 +150,18 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
   const form = useZodForm(addPluginSchema, { defaultValues: EMPTY_VALUES });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [urlPreview, setUrlPreview] = useState<SkillSourcePreview | null>(null);
-  const [urlEncodesSubdir, setUrlEncodesSubdir] = useState(false);
+  const [subPathLock, setSubPathLock] = useState<SubPathLock | null>(null);
 
   const recomputePreview = (skillUrl: string, subPath: string) => {
-    const encodesSubdir = parseSkillSource(skillUrl)?.parsed.source === "git-subdir";
-    setUrlEncodesSubdir(encodesSubdir);
-    if (encodesSubdir && form.getValues("subPath")) {
+    const lock = subPathLockFor(parseSkillSource(skillUrl)?.parsed.source);
+    setSubPathLock(lock);
+    if (lock && form.getValues("subPath")) {
       form.setValue("subPath", "");
     }
-    const preview = parseSkillSource(skillUrl, encodesSubdir ? undefined : subPath);
+    const preview = parseSkillSource(skillUrl, lock ? undefined : subPath);
+    if (archiveUrlOf(preview) !== archiveUrlOf(urlPreview) && form.getValues("sha256")) {
+      form.setValue("sha256", "");
+    }
     setUrlPreview(preview);
     if (preview && !form.getValues("name")) {
       form.setValue("name", preview.suggestedName);
@@ -151,7 +175,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
     }
 
     if (!urlPreview) {
-      toast.error("Please enter a valid repository URL");
+      toast.error("Please enter a valid repository or zip archive URL");
       return;
     }
 
@@ -176,7 +200,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
       toast.success("Skill registered successfully");
       form.reset(EMPTY_VALUES);
       setUrlPreview(null);
-      setUrlEncodesSubdir(false);
+      setSubPathLock(null);
       onSuccess();
       onClose();
     } catch (error) {
@@ -190,199 +214,213 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
   const handleCancel = () => {
     form.reset(EMPTY_VALUES);
     setUrlPreview(null);
-    setUrlEncodesSubdir(false);
+    setSubPathLock(null);
     onClose();
   };
 
   return (
-    <Modal title="Add New Skill" open={visible} onCancel={handleCancel} footer={null} width={700} className="top-8">
-      <TooltipProvider>
-        <form onSubmit={form.handleSubmit(handleSubmit)} noValidate className="mt-4">
-          <FieldGroup>
-            <FormField
-              control={form.control}
-              name="skillUrl"
-              label={labelWithHint(
-                "Repository URL",
-                "Paste an HTTPS git repository URL from GitHub, GitLab, Bitbucket, or a self-hosted host. E.g. github.com/org/repo, gitlab.com/org/repo, or github.com/org/repo/tree/main/my-skill",
-              )}
-            >
-              {({ ref, onChange, ...field }) => (
-                <Input
-                  {...field}
-                  ref={ref}
-                  placeholder="https://github.com/org/repo or https://gitlab.com/org/repo"
-                  className="rounded-lg"
-                  onChange={(event) => {
-                    onChange(event);
-                    recomputePreview(event.target.value, form.getValues("subPath"));
-                  }}
-                />
-              )}
-            </FormField>
-
-            <FormField
-              control={form.control}
-              name="subPath"
-              label={labelWithHint(
-                "Subfolder path (Optional)",
-                "Path within the repository where the skill lives (e.g., plugins/my-skill). Leave empty if the skill is at the repo root.",
-              )}
-              description={
-                urlEncodesSubdir ? "The URL already points to a subfolder, so this field is disabled" : undefined
-              }
-            >
-              {({ ref, onChange, ...field }) => (
-                <Input
-                  {...field}
-                  ref={ref}
-                  placeholder="plugins/my-skill"
-                  className="rounded-lg"
-                  onChange={(event) => {
-                    onChange(event);
-                    recomputePreview(form.getValues("skillUrl"), event.target.value);
-                  }}
-                  disabled={urlEncodesSubdir}
-                />
-              )}
-            </FormField>
-
-            {urlPreview && (
-              <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300">
-                Detected: {urlPreview.label}
-              </div>
-            )}
-
-            <FormField
-              control={form.control}
-              name="name"
-              label={labelWithHint("Skill Name", "Unique identifier in kebab-case format (e.g., my-skill)")}
-            >
-              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="my-skill" className="rounded-lg" />}
-            </FormField>
-
-            <div className="flex gap-4">
+    <Dialog open={visible} onOpenChange={(open) => !open && handleCancel()}>
+      <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[700px]">
+        <DialogHeader>
+          <DialogTitle>Add New Skill</DialogTitle>
+        </DialogHeader>
+        <TooltipProvider>
+          <form onSubmit={form.handleSubmit(handleSubmit)} noValidate className="mt-4">
+            <FieldGroup>
               <FormField
                 control={form.control}
-                name="domain"
-                label={labelWithHint("Domain (Optional)", "Top-level grouping in the Skill Hub (e.g., Productivity)")}
-                className="flex-1"
+                name="skillUrl"
+                label={labelWithHint(
+                  "Source URL",
+                  "Paste an HTTPS git repository URL from GitHub, GitLab, Bitbucket, or a self-hosted host (e.g. github.com/org/repo or github.com/org/repo/tree/main/my-skill), or an HTTPS link to a .zip archive of the skill hosted on S3 or any static file server.",
+                )}
               >
-                {({ ref, ...field }) => (
-                  <Input {...field} ref={ref} placeholder="Productivity" className="rounded-lg" />
+                {({ ref, onChange, ...field }) => (
+                  <Input
+                    {...field}
+                    ref={ref}
+                    placeholder="https://github.com/org/repo or https://bucket.s3.amazonaws.com/my-skill.zip"
+                    className="rounded-lg"
+                    onChange={(event) => {
+                      onChange(event);
+                      recomputePreview(event.target.value, form.getValues("subPath"));
+                    }}
+                  />
                 )}
               </FormField>
+
               <FormField
                 control={form.control}
-                name="namespace"
-                label={labelWithHint("Namespace (Optional)", "Sub-grouping within domain (e.g., workflows)")}
-                className="flex-1"
+                name="subPath"
+                label={labelWithHint(
+                  "Subfolder path (Optional)",
+                  "Path within the repository where the skill lives (e.g., plugins/my-skill). Leave empty if the skill is at the repo root.",
+                )}
+                description={subPathLock ? SUB_PATH_LOCK_REASON[subPathLock] : undefined}
               >
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="workflows" className="rounded-lg" />}
-              </FormField>
-            </div>
-
-            <FormField
-              control={form.control}
-              name="description"
-              label={labelWithHint("Description (Optional)", "Brief description of what the skill does")}
-            >
-              {({ ref, ...field }) => (
-                <Textarea
-                  {...field}
-                  ref={ref}
-                  rows={3}
-                  placeholder="A skill that helps with..."
-                  maxLength={500}
-                  className="rounded-lg"
-                />
-              )}
-            </FormField>
-
-            <FormField
-              control={form.control}
-              name="category"
-              label={labelWithHint("Category (Optional)", "Select a category or enter a custom one")}
-            >
-              {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                <Combobox
-                  items={PREDEFINED_CATEGORIES}
-                  value={value === "" ? null : value}
-                  onValueChange={(category: string | null) => onChange(category ?? "")}
-                >
-                  <ComboboxInput
-                    id={id}
-                    aria-invalid={ariaInvalid}
-                    aria-describedby={ariaDescribedBy}
-                    placeholder="Select or type a category"
-                    className="w-full rounded-lg"
-                    showClear={value !== ""}
+                {({ ref, onChange, ...field }) => (
+                  <Input
+                    {...field}
+                    ref={ref}
+                    placeholder="plugins/my-skill"
+                    className="rounded-lg"
+                    onChange={(event) => {
+                      onChange(event);
+                      recomputePreview(form.getValues("skillUrl"), event.target.value);
+                    }}
+                    disabled={subPathLock !== null}
                   />
-                  <ComboboxContent>
-                    <ComboboxEmpty>No matching categories</ComboboxEmpty>
-                    <ComboboxList>
-                      {(category: string) => (
-                        <ComboboxItem key={category} value={category}>
-                          {category}
-                        </ComboboxItem>
-                      )}
-                    </ComboboxList>
-                  </ComboboxContent>
-                </Combobox>
+                )}
+              </FormField>
+
+              {urlPreview?.parsed.source === "archive" && (
+                <FormField
+                  control={form.control}
+                  name="sha256"
+                  label={labelWithHint(
+                    "Archive SHA-256 (Optional)",
+                    "Hex digest of the zip file. Claude Code refuses to install the archive if its checksum does not match.",
+                  )}
+                >
+                  {({ ref, ...field }) => (
+                    <Input {...field} ref={ref} placeholder="64 hex characters" className="rounded-lg font-mono" />
+                  )}
+                </FormField>
               )}
-            </FormField>
 
-            <FormField
-              control={form.control}
-              name="keywords"
-              label={labelWithHint("Keywords (Optional)", "Comma-separated list of keywords for search")}
-            >
-              {({ ref, ...field }) => (
-                <Input {...field} ref={ref} placeholder="search, web, api" className="rounded-lg" />
+              {urlPreview && (
+                <div className="rounded-lg border border-info/20 bg-info/10 px-3 py-2 text-sm text-info">
+                  Detected: {urlPreview.label}
+                </div>
               )}
-            </FormField>
 
-            <FormField
-              control={form.control}
-              name="version"
-              label={labelWithHint("Version (Optional)", "Semantic version (e.g., 1.0.0)")}
-            >
-              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="1.0.0" className="rounded-lg" />}
-            </FormField>
+              <FormField
+                control={form.control}
+                name="name"
+                label={labelWithHint("Skill Name", "Unique identifier in kebab-case format (e.g., my-skill)")}
+              >
+                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="my-skill" className="rounded-lg" />}
+              </FormField>
 
-            <FormField
-              control={form.control}
-              name="authorName"
-              label={labelWithHint("Author Name (Optional)", "Name of the skill author or organization")}
-            >
-              {({ ref, ...field }) => (
-                <Input {...field} ref={ref} placeholder="Your Name or Organization" className="rounded-lg" />
-              )}
-            </FormField>
+              <div className="flex gap-4">
+                <FormField
+                  control={form.control}
+                  name="domain"
+                  label={labelWithHint("Domain (Optional)", "Top-level grouping in the Skill Hub (e.g., Productivity)")}
+                  className="flex-1"
+                >
+                  {({ ref, ...field }) => (
+                    <Input {...field} ref={ref} placeholder="Productivity" className="rounded-lg" />
+                  )}
+                </FormField>
+                <FormField
+                  control={form.control}
+                  name="namespace"
+                  label={labelWithHint("Namespace (Optional)", "Sub-grouping within domain (e.g., workflows)")}
+                  className="flex-1"
+                >
+                  {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="workflows" className="rounded-lg" />}
+                </FormField>
+              </div>
 
-            <FormField
-              control={form.control}
-              name="authorEmail"
-              label={labelWithHint("Author Email (Optional)", "Contact email for the skill author")}
-            >
-              {({ ref, ...field }) => (
-                <Input {...field} ref={ref} type="email" placeholder="author@example.com" className="rounded-lg" />
-              )}
-            </FormField>
-          </FieldGroup>
+              <FormField
+                control={form.control}
+                name="description"
+                label={labelWithHint("Description (Optional)", "Brief description of what the skill does")}
+              >
+                {({ ref, ...field }) => (
+                  <Textarea
+                    {...field}
+                    ref={ref}
+                    rows={3}
+                    placeholder="A skill that helps with..."
+                    maxLength={500}
+                    className="rounded-lg"
+                  />
+                )}
+              </FormField>
 
-          <div className="mt-6 flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={handleCancel} disabled={isSubmitting}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={isSubmitting} aria-busy={isSubmitting}>
-              {isSubmitting && <UiLoadingSpinner className="size-4" />}
-              {isSubmitting ? "Adding..." : "Add Skill"}
-            </Button>
-          </div>
-        </form>
-      </TooltipProvider>
-    </Modal>
+              <FormField
+                control={form.control}
+                name="category"
+                label={labelWithHint("Category (Optional)", "Select a category or enter a custom one")}
+              >
+                {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                  <Combobox items={PREDEFINED_CATEGORIES} value={value} onValueChange={onChange}>
+                    <ComboboxInput
+                      id={id}
+                      aria-invalid={ariaInvalid}
+                      aria-describedby={ariaDescribedBy}
+                      placeholder="Select or type a category"
+                      className="w-full rounded-lg"
+                      showClear={value != null && value !== ""}
+                    />
+                    <ComboboxContent>
+                      <ComboboxEmpty>No matching categories</ComboboxEmpty>
+                      <ComboboxList>
+                        {(category: string) => (
+                          <ComboboxItem key={category} value={category}>
+                            {category}
+                          </ComboboxItem>
+                        )}
+                      </ComboboxList>
+                    </ComboboxContent>
+                  </Combobox>
+                )}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="keywords"
+                label={labelWithHint("Keywords (Optional)", "Comma-separated list of keywords for search")}
+              >
+                {({ ref, ...field }) => (
+                  <Input {...field} ref={ref} placeholder="search, web, api" className="rounded-lg" />
+                )}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="version"
+                label={labelWithHint("Version (Optional)", "Semantic version (e.g., 1.0.0)")}
+              >
+                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="1.0.0" className="rounded-lg" />}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="authorName"
+                label={labelWithHint("Author Name (Optional)", "Name of the skill author or organization")}
+              >
+                {({ ref, ...field }) => (
+                  <Input {...field} ref={ref} placeholder="Your Name or Organization" className="rounded-lg" />
+                )}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="authorEmail"
+                label={labelWithHint("Author Email (Optional)", "Contact email for the skill author")}
+              >
+                {({ ref, ...field }) => (
+                  <Input {...field} ref={ref} type="email" placeholder="author@example.com" className="rounded-lg" />
+                )}
+              </FormField>
+            </FieldGroup>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={handleCancel} disabled={isSubmitting}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSubmitting} aria-busy={isSubmitting}>
+                {isSubmitting && <UiLoadingSpinner className="size-4" />}
+                {isSubmitting ? "Adding..." : "Add Skill"}
+              </Button>
+            </div>
+          </form>
+        </TooltipProvider>
+      </DialogContent>
+    </Dialog>
   );
 };
 
