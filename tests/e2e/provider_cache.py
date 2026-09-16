@@ -52,6 +52,9 @@ BEDROCK_SUFFIXES: Final = (
     BEDROCK_INVOKE_STREAM_SUFFIX,
 )
 EVENTSTREAM_PRELUDE_BYTES: Final = 4
+CUT_SHORT: Final = "cut_short"
+INCOMPLETE: Final = "incomplete"
+UNREACHABLE: Final = "unreachable"
 EVENT_TYPE_HEADER: Final = ":event-type"
 EVENTSTREAM_HEADERS: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict[str, str])
 OPENAI_JSON_PATHS: Final = frozenset({"/v1/chat/completions", "/v1/messages", "/v1/embeddings", "/v1/responses"})
@@ -551,7 +554,7 @@ class CacheEdge:
             )
         prepared: Final = prepare_forward(method, url, self.outbound(mount, method, url, headers, body), body)
         if isinstance(prepared, NetworkError):
-            self.count(mount, "rejected")
+            self.reject(mount, UNREACHABLE)
             return prepared
         identity: Final = request_identity(
             self.secret, test_key, method, url, self.keyed(mount, prepared.headers), body,
@@ -575,7 +578,7 @@ class CacheEdge:
             return head
         if isinstance(head, NetworkError):
             self.store.release(key, capture_slot)
-            self.count(mount, "rejected")
+            self.reject(mount, UNREACHABLE)
             return head
         return StreamHead(
             head.status_code, head.headers, primed_steps(self.capture(mount, key, capture_slot, url, head)),
@@ -585,25 +588,45 @@ class CacheEdge:
         self, mount: str, key: str, lease: CaptureLease, url: str, head: StreamHead,
     ) -> Generator[StreamStep, None, None]:
         capture: Final = ResponseCapture()
+        reason = CUT_SHORT  # rebind-ok: a consumer that walks away never reaches the settle call below
         try:
             with closing(head.steps):
                 yield StreamChunk(b"")
                 for step in head.steps:
                     yield step
                     capture.observe(step)
-            chunks: Final = capture.chunks() if capture.eligible else ()
-            headers: Final = {
-                name: value for name, value in head.headers.items() if name.lower() not in UNRECORDED_RESPONSE_HEADERS
-            }
-            if not capture.eligible or not successful_response(mount, url, head.status_code, headers, b"".join(chunks)):
-                self.count(mount, "rejected")
-                return
-            response: Final = CachedResponse(
-                request_key=key, status_code=head.status_code, headers=headers,
-                chunks=tuple(base64.b64encode(chunk).decode("ascii") for chunk in chunks),
-            )
-            published: Final = self.store.publish(key, lease, encode_response(self.secret, response))
-            self.count(mount, "writes" if published else "write_failures")
+            reason = self.settle(mount, key, lease, url, head, capture)
         finally:
+            self.reject(mount, reason)
             self.store.release(key, lease)
             capture.buffer.close()
+
+    def settle(
+        self, mount: str, key: str, lease: CaptureLease, url: str, head: StreamHead, capture: ResponseCapture,
+    ) -> str | None:
+        """None once the response is stored, otherwise the reason it was not."""
+        if not capture.eligible:
+            return CUT_SHORT
+        headers: Final = {
+            name: value for name, value in head.headers.items() if name.lower() not in UNRECORDED_RESPONSE_HEADERS
+        }
+        chunks: Final = capture.chunks()
+        if not successful_response(mount, url, head.status_code, headers, b"".join(chunks)):
+            return INCOMPLETE
+        response: Final = CachedResponse(
+            request_key=key, status_code=head.status_code, headers=headers,
+            chunks=tuple(base64.b64encode(chunk).decode("ascii") for chunk in chunks),
+        )
+        published: Final = self.store.publish(key, lease, encode_response(self.secret, response))
+        self.count(mount, "writes" if published else "write_failures")
+        return None
+
+    def reject(self, mount: str, reason: str | None) -> None:
+        """A flat rejection count cannot separate a connection that went away from
+        a body the provider finished sending and the rules turned down, and the two
+        have opposite fixes. A mount whose rejections are nearly all one or the
+        other is a different problem, so the report has to be able to say which."""
+        if reason is None:
+            return
+        self.count(mount, "rejected")
+        self.count(mount, f"rejected_{reason}")
