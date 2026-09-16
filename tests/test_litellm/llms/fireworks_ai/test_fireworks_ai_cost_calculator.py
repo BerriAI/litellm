@@ -1,5 +1,6 @@
 import math
 from datetime import datetime, timezone
+from typing import Final
 
 import pytest
 
@@ -51,13 +52,16 @@ STANDARD_CACHE_READ_COST = 1.5e-08
 def _register_off_peak_model(
     off_peak_pricing: OffPeakPricing, cache_read_cost: float | None = STANDARD_CACHE_READ_COST
 ) -> None:
-    litellm.model_cost[f"fireworks_ai/{OFF_PEAK_MODEL}"] = {
-        "litellm_provider": "fireworks_ai",
-        "mode": "chat",
-        "input_cost_per_token": STANDARD_INPUT_COST,
-        "output_cost_per_token": STANDARD_OUTPUT_COST,
-        "off_peak_pricing": off_peak_pricing,
-        **({} if cache_read_cost is None else {"cache_read_input_token_cost": cache_read_cost}),
+    litellm.model_cost = {  # test-quality-ok: the save/restore conftest returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
+        **litellm.model_cost,
+        f"fireworks_ai/{OFF_PEAK_MODEL}": {
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+            "input_cost_per_token": STANDARD_INPUT_COST,
+            "output_cost_per_token": STANDARD_OUTPUT_COST,
+            "off_peak_pricing": off_peak_pricing,
+            **({} if cache_read_cost is None else {"cache_read_input_token_cost": cache_read_cost}),
+        },
     }
 
 
@@ -145,20 +149,19 @@ COMPONENT_AUDIO_OUT_COST = 6e-06
 
 
 def test_cache_write_reasoning_and_audio_tokens_are_billed_at_their_component_rates():
-    """Regression (LIT-7837): the hand-rolled fireworks_ai calculator billed every
-    cache-creation, reasoning and audio token at $0. The shared calculator treats the
-    prompt detail counts as subsets of prompt_tokens and the completion detail counts as
-    subsets of completion_tokens, billing each remainder at the text rate."""
-    litellm.model_cost[f"fireworks_ai/{COMPONENT_MODEL}"] = {
-        "litellm_provider": "fireworks_ai",
-        "mode": "chat",
-        "input_cost_per_token": COMPONENT_INPUT_COST,
-        "output_cost_per_token": COMPONENT_OUTPUT_COST,
-        "cache_read_input_token_cost": COMPONENT_CACHE_READ_COST,
-        "cache_creation_input_token_cost": COMPONENT_CACHE_CREATION_COST,
-        "output_cost_per_reasoning_token": COMPONENT_REASONING_COST,
-        "input_cost_per_audio_token": COMPONENT_AUDIO_IN_COST,
-        "output_cost_per_audio_token": COMPONENT_AUDIO_OUT_COST,
+    litellm.model_cost = {  # test-quality-ok: the save/restore conftest returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
+        **litellm.model_cost,
+        f"fireworks_ai/{COMPONENT_MODEL}": {
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+            "input_cost_per_token": COMPONENT_INPUT_COST,
+            "output_cost_per_token": COMPONENT_OUTPUT_COST,
+            "cache_read_input_token_cost": COMPONENT_CACHE_READ_COST,
+            "cache_creation_input_token_cost": COMPONENT_CACHE_CREATION_COST,
+            "output_cost_per_reasoning_token": COMPONENT_REASONING_COST,
+            "input_cost_per_audio_token": COMPONENT_AUDIO_IN_COST,
+            "output_cost_per_audio_token": COMPONENT_AUDIO_OUT_COST,
+        },
     }
     usage = Usage(
         prompt_tokens=1000,
@@ -188,3 +191,20 @@ def test_cache_write_reasoning_and_audio_tokens_are_billed_at_their_component_ra
     )
     assert prompt_cost == pytest.approx(expected_prompt_cost)
     assert completion_cost == pytest.approx(expected_completion_cost)
+
+
+def test_an_entry_without_an_input_rate_gets_no_cache_read_fallback():
+    litellm.model_cost = {  # test-quality-ok: the save/restore conftest returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
+        **litellm.model_cost,  # pyright: ignore[reportUnknownMemberType]  # the SDK types model_cost as dict[Unknown, Unknown]
+        "fireworks_ai/accounts/fireworks/models/no-input-rate-test": {
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+            "output_cost_per_token": 2e-06,
+        },
+    }
+    usage: Final = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
+
+    prompt_cost, completion_cost = cost_per_token(model="accounts/fireworks/models/no-input-rate-test", usage=usage)
+
+    assert prompt_cost == 0
+    assert completion_cost == 200 * 2e-06
