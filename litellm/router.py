@@ -384,6 +384,16 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
     return False
 
 
+def _count_embedding_input_tokens(items: Sequence[object]) -> int | None:
+    if all(isinstance(item, str) for item in items):
+        return litellm.token_counter(text=[item for item in items if isinstance(item, str)])
+    if all(isinstance(item, int) for item in items):
+        return len(items)
+    if all(isinstance(item, Sequence) and all(isinstance(token, int) for token in item) for item in items):
+        return sum(len(item) for item in items if isinstance(item, Sequence))
+    return None
+
+
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
@@ -12104,6 +12114,10 @@ class Router:
         Prompt content the message list never carries is read from `request_kwargs`:
         `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
         Anthropic Messages top-level `system` block.
+
+        Embeddings send `input` as one of the `AllEmbeddingInputValues` shapes: a `list[str]` batch,
+        counted as text, or pre-tokenized `list[int]` / `list[list[int]]`, whose token count is its
+        own length. None of those are Responses input items, so they never reach the transform.
         """
         from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
             anthropic_system_to_openai_message,
@@ -12123,6 +12137,11 @@ class Router:
             counted_messages: Final = (system_message, *messages) if system_message is not None else messages
             return litellm.token_counter(messages=counted_messages, tools=tools)
         if input is not None:
+            if isinstance(input, list):
+                embedding_tokens: Final = _count_embedding_input_tokens(input)
+                if embedding_tokens is not None:
+                    return embedding_tokens
+
             from openai.types.responses.response_create_params import ResponseInputParam
 
             from litellm.responses.litellm_completion_transformation.transformation import (

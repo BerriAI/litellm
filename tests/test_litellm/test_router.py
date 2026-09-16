@@ -15704,3 +15704,81 @@ async def test_an_open_circuit_breaker_skips_the_session_binding_without_a_warni
     assert binding is None
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+def test_count_pre_call_check_tokens_counts_embedding_batches():
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "embed-test", "litellm_params": {"model": "vertex_ai/text-embedding-005"}}
+        ]
+    )
+
+    batch = router._count_pre_call_check_tokens(messages=None, input=["hello world", "second string"])
+    single = router._count_pre_call_check_tokens(messages=None, input=["hello world"])
+    assert batch > single > 0, "a batch must cost more than one of its own entries"
+
+    assert router._count_pre_call_check_tokens(messages=None, input="single string") > 0
+    assert router._count_pre_call_check_tokens(messages=None, input=[{"role": "user", "content": "hi"}]) > 0
+    assert router._count_pre_call_check_tokens(messages=[{"role": "user", "content": "hi"}], input=None) > 0
+
+
+def test_count_pre_call_check_tokens_counts_pre_tokenized_embedding_input():
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {"model_name": "embed-test", "litellm_params": {"model": "vertex_ai/text-embedding-005"}}
+        ]
+    )
+
+    assert router._count_pre_call_check_tokens(messages=None, input=[15496, 2159, 0]) == 3
+    assert router._count_pre_call_check_tokens(messages=None, input=[[15496, 2159], [0, 1, 2]]) == 5
+    assert router._count_pre_call_check_tokens(messages=None, input=[]) == 0
+
+
+def test_count_embedding_input_tokens_shape_dispatch():
+    from litellm.router import _count_embedding_input_tokens
+
+    assert _count_embedding_input_tokens([15496, 2159, 0]) == 3
+    assert _count_embedding_input_tokens([[15496, 2159], [0, 1, 2]]) == 5
+    assert _count_embedding_input_tokens(["hello world", "second string"]) > 0
+
+    # `str` is itself a Sequence, so the text branch has to win or "ab" would count as 2 token ids
+    assert _count_embedding_input_tokens(["ab"]) == 1
+
+    # anything that is not an embedding shape defers to the Responses transform
+    assert _count_embedding_input_tokens([{"role": "user", "content": "hi"}]) is None
+    assert _count_embedding_input_tokens([1, "a"]) is None
+    assert _count_embedding_input_tokens([["a"]]) is None
+
+
+def test_pre_call_checks_filters_embedding_over_context_window():
+    from litellm.router import Router
+
+    over_limit = ["token " * 50, "token " * 50]
+    router = Router(
+        model_list=[
+            {
+                "model_name": "embed-test",
+                "litellm_params": {"model": "vertex_ai/text-embedding-005"},
+                "model_info": {"id": "small", "base_model": "vertex_ai/text-embedding-005", "max_input_tokens": 8},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    deployments = router.model_list
+
+    with pytest.raises(litellm.exceptions.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="embed-test",
+            healthy_deployments=deployments,
+            messages=None,
+            input=over_limit,
+        )
+
+    kept = router._pre_call_checks(
+        model="embed-test", healthy_deployments=deployments, messages=None, input=["hi"]
+    )
+    assert len(kept) == 1, "a batch inside the limit must survive the filter"
