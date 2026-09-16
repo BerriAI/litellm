@@ -3561,7 +3561,9 @@ async def test_add_litellm_data_to_request_defaults_trace_id_to_otel_server_span
     of the proxy's server span, so a trace in the OTel backend can be looked up
     in the Logs UI and vice versa."""
     otel_trace_id: Final = 0x4BF92F3577B34DA6A3CE929D0E0E4736
-    user_api_key_dict: Final = UserAPIKeyAuth(api_key="hashed-key", parent_otel_span=_otel_span_with_trace_id(otel_trace_id))
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="hashed-key", parent_otel_span=_otel_span_with_trace_id(otel_trace_id)
+    )
 
     data: Final = await add_litellm_data_to_request(
         data={"model": "gpt-5.6", "messages": [{"role": "user", "content": "hi"}]},
@@ -3606,6 +3608,29 @@ async def test_add_litellm_data_to_request_otel_span_does_not_override_caller_tr
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+async def test_add_litellm_data_to_request_otel_span_does_not_override_body_trace_id_on_litellm_metadata_routes(path):
+    """On routes that keep LiteLLM state in litellm_metadata, the caller's body
+    metadata.trace_id is only promoted into litellm_metadata later in the
+    pipeline, so the OTel fallback must look at the requester metadata too or
+    it would claim the slot first and the caller's id would be lost."""
+    request_mock: Final = _request_mock_without_trace_headers()
+    request_mock.url.path = path
+    request_mock.url.__str__.return_value = f"http://localhost{path}"
+    data: Final = await add_litellm_data_to_request(
+        data={"model": "gpt-5.6", "metadata": {"trace_id": "body-trace"}},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="hashed-key", parent_otel_span=_otel_span_with_trace_id(0x4BF92F3577B34DA6A3CE929D0E0E4736)
+        ),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    assert "litellm_trace_id" not in data
+    assert data["litellm_metadata"]["trace_id"] == "body-trace"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("empty_trace_id", [None, ""])
 async def test_add_litellm_data_to_request_otel_span_fills_empty_body_trace_id(empty_trace_id):
     """A serialized-but-empty litellm_trace_id in the body (null or "") carries
@@ -3614,7 +3639,9 @@ async def test_add_litellm_data_to_request_otel_span_fills_empty_body_trace_id(e
     data: Final = await add_litellm_data_to_request(
         data={"model": "gpt-5.6", "litellm_trace_id": empty_trace_id},
         request=_request_mock_without_trace_headers(),
-        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", parent_otel_span=_otel_span_with_trace_id(otel_trace_id)),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="hashed-key", parent_otel_span=_otel_span_with_trace_id(otel_trace_id)
+        ),
         proxy_config=MagicMock(),
         general_settings={},
     )

@@ -124,7 +124,8 @@ def add_otel_trace_id_to_request(
     if data.get("litellm_trace_id"):
         return
     metadata: Final = data.get(_metadata_variable_name)
-    if isinstance(metadata, dict) and metadata.get("trace_id"):
+    requester_metadata: Final = data.get("metadata")
+    if any(isinstance(m, dict) and m.get("trace_id") for m in (metadata, requester_metadata)):
         return
     trace_id: Final = _trace_id_from_otel_span(parent_otel_span)
     if trace_id is None:
