@@ -13047,6 +13047,35 @@ async def test_moderations_failure_log_carries_the_callers_litellm_call_id(caplo
 
 
 @pytest.mark.asyncio
+async def test_moderations_unparseable_body_bills_the_callers_litellm_call_id():
+    """LIT-7836: a body that fails to parse must still hand the failure hook the
+    litellm_call_id the response header answers with, so the spend row is findable."""
+    from litellm.proxy._types import ProxyException
+
+    call_id = "moderations-early-7836"
+
+    request = MagicMock()
+    request.headers = {"x-litellm-call-id": call_id}
+    request.body = AsyncMock(return_value=b'{"input": ')
+    fake_logging = MagicMock()
+    fake_logging.post_call_failure_hook = AsyncMock()
+
+    with (
+        patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
+        pytest.raises(ProxyException) as raised,
+    ):
+        await proxy_server_module.moderations(
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", spend=0.0),
+        )
+
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+    hook_request_data = fake_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+    assert hook_request_data["litellm_call_id"] == call_id
+
+
+@pytest.mark.asyncio
 async def test_moderations_already_shaped_failure_answers_with_the_callers_litellm_call_id():
     """LIT-7836: a ProxyException raised inside /v1/moderations is re-raised unwrapped but still
     answers with the caller's x-litellm-call-id so the client can join it to the error log."""

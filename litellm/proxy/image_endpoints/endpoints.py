@@ -94,12 +94,12 @@ async def image_generation(
         version,
     )
 
-    data = {}
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+    data = {"litellm_call_id": litellm_call_id}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body: Final = await request.body()
-        data = orjson.loads(body)
+        data = orjson.loads(body) | data
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -110,7 +110,6 @@ async def image_generation(
             version=version,
             proxy_config=proxy_config,
         )
-        data["litellm_call_id"] = litellm_call_id
 
         if isinstance(model, str):
             reject_url_valued_destination("model", model)

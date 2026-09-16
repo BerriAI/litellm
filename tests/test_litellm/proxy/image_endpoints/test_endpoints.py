@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
 from typing import Any, Dict
 
@@ -279,3 +279,52 @@ async def test_failure_log_carries_the_callers_litellm_call_id(
     record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
     assert record.litellm_call_id == call_id
     assert call_id in record.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_failure_before_the_provider_call_bills_the_callers_litellm_call_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LIT-7836: when the request is rejected while it is still being prepared, the
+    failure hook must see the same litellm_call_id the response header answers with,
+    otherwise the spend row is stored under a freshly minted id nobody can look up."""
+    call_id = "images-early-7836"
+    hook_request_data: list[Mapping[str, object]] = []
+
+    async def rejecting_add_litellm_data_to_request(**_: object) -> object:
+        raise HTTPException(status_code=400, detail={"error": "tag not allowed"})
+
+    async def fake_post_call_failure_hook(*, request_data: Mapping[str, object], **_: object) -> None:
+        hook_request_data.append(request_data)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", rejecting_add_litellm_data_to_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        SimpleNamespace(post_call_failure_hook=fake_post_call_failure_hook),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
+
+    body = orjson.dumps({"model": "dall-e-3", "prompt": "a lighthouse at dusk", "litellm_call_id": "from-the-body"})
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/images/generations",
+            "headers": [(b"x-litellm-call-id", call_id.encode())],
+        },
+        receive,
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await endpoints.image_generation(request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth())
+
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+    assert [data["litellm_call_id"] for data in hook_request_data] == [call_id]
