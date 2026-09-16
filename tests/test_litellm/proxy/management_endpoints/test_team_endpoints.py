@@ -15079,6 +15079,69 @@ async def test_update_team_team_admin_changes_tpm_limit_once_a_proxy_admin_enabl
 
 
 @pytest.mark.asyncio
+async def test_update_team_holds_a_team_admin_to_the_org_tpm_limit(disable_audit_logging_for_mocked_team):
+    """The org ceiling lives on the org's budget row, so /team/update must load it to enforce the cap."""
+    import contextlib
+
+    capped_org = LiteLLM_OrganizationTable(
+        organization_id="capped-org",
+        budget_id="capped-budget",
+        created_by="admin",
+        updated_by="admin",
+        litellm_budget_table=LiteLLM_BudgetTable(tpm_limit=10000),
+    )
+
+    async def org_lookup(**kwargs):
+        return capped_org if kwargs.get("include_budget_table") else capped_org.model_copy(
+            update={"litellm_budget_table": None}
+        )
+
+    org_team = MagicMock()
+    org_team.metadata = {}
+    org_team.organization_id = "capped-org"
+    org_team.model_dump.return_value = {
+        "team_id": "test_team_id",
+        "team_alias": "test_team",
+        "organization_id": "capped-org",
+        "metadata": {},
+        "members_with_roles": [{"user_id": "team-admin", "role": "admin"}],
+    }
+
+    with contextlib.ExitStack() as stack:
+        prisma = _wire_update_team(stack, {})
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=org_team)
+        stack.enter_context(_team_admin_may_edit("tpm_limit"))
+        stack.enter_context(
+            patch(  # test-quality-ok: the org-admin lookup needs a real prisma client this file's MagicMock cannot provide
+                "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+                AsyncMock(return_value=False),
+            )
+        )
+        stack.enter_context(
+            patch(  # test-quality-ok: update_team reads orgs through this module-level import; no seam to inject
+                "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+                AsyncMock(side_effect=org_lookup),
+            )
+        )
+        with pytest.raises(ProxyException) as over_cap:
+            await update_team(
+                data=UpdateTeamRequest(team_id="test_team_id", tpm_limit=20000),
+                http_request=_update_request_stub(),
+                user_api_key_dict=_TEAM_ADMIN_CALLER,
+            )
+        await update_team(
+            data=UpdateTeamRequest(team_id="test_team_id", tpm_limit=8000),
+            http_request=_update_request_stub(),
+            user_api_key_dict=_TEAM_ADMIN_CALLER,
+        )
+
+    assert str(over_cap.value.code) == "400"
+    assert "exceeds organization's tpm_limit (10000)" in str(over_cap.value.message)
+    assert prisma.db.litellm_teamtable.update.await_count == 1
+    assert prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["tpm_limit"] == 8000
+
+
+@pytest.mark.asyncio
 async def test_update_team_org_admin_is_not_filtered_by_the_team_admin_field_list(
     disable_audit_logging_for_mocked_team,
 ):
