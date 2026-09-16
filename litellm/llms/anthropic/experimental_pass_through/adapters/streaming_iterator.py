@@ -1042,14 +1042,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             "stop_reason": "refusal",
             "stop_details": refusal_stop_details(self._refusal_text),
         }
-        if "context_management" in processed_chunk:
-            return MessageBlockDelta(
-                type="message_delta",
-                delta=refusal_delta,
-                usage=processed_chunk["usage"],
-                context_management=processed_chunk["context_management"],
-            )
-        return MessageBlockDelta(type="message_delta", delta=refusal_delta, usage=processed_chunk["usage"])
+        refusal_chunk: Final[MessageBlockDelta] = {**processed_chunk, "delta": refusal_delta}
+        return refusal_chunk
 
     @staticmethod
     def _delta_has_content(processed_chunk: Mapping[str, object]) -> bool:
