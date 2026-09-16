@@ -8,14 +8,11 @@ the tests don't hit AWS.
 
 from __future__ import annotations
 
-import os
-import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.bedrock.batches.handler import (  # noqa: E402
     BedrockBatchesHandler,
@@ -153,12 +150,62 @@ def test_handle_model_invocation_job_status_completed(patched_boto3):
     assert batch.completed_at == int(END_TIME.timestamp())
     assert batch.failed_at is None
     assert batch.cancelled_at is None
-    # Per-record counts aren't reported by GetModelInvocationJob, so we leave
-    # them zeroed; consumers should parse manifest.json.out for accurate counts.
-    assert batch.request_counts.total == 0
+    assert batch.request_counts is None
     assert batch.metadata["job_arn"] == JOB_ARN
     assert batch.metadata["output_file_uri"] == expected_out
     assert batch.metadata["output_s3_uri"] == OUTPUT_PREFIX
+
+
+@pytest.mark.parametrize("success_count,error_count", [(100, 0), (86, 14)])
+def test_completed_job_maps_provider_record_counts(patched_boto3, success_count, error_count):
+    fake_client, _ = patched_boto3
+    fake_client.get_model_invocation_job.return_value = {
+        **_fake_boto3_response(),
+        "totalRecordCount": 100,
+        "successRecordCount": success_count,
+        "errorRecordCount": error_count,
+    }
+
+    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+
+    assert batch.request_counts is not None
+    assert (batch.request_counts.total, batch.request_counts.completed, batch.request_counts.failed) == (
+        100,
+        success_count,
+        error_count,
+    )
+
+
+def test_missing_record_counts_leave_request_counts_none(patched_boto3):
+    fake_client, _ = patched_boto3
+    fake_client.get_model_invocation_job.return_value = _fake_boto3_response()
+
+    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+
+    assert batch.request_counts is None
+
+
+def test_total_without_success_count_leaves_request_counts_none(patched_boto3):
+    fake_client, _ = patched_boto3
+    fake_client.get_model_invocation_job.return_value = {**_fake_boto3_response(), "totalRecordCount": 100}
+
+    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+
+    assert batch.request_counts is None
+
+
+def test_missing_error_count_maps_to_zero_failed(patched_boto3):
+    fake_client, _ = patched_boto3
+    fake_client.get_model_invocation_job.return_value = {
+        **_fake_boto3_response(),
+        "totalRecordCount": 100,
+        "successRecordCount": 100,
+    }
+
+    batch = BedrockBatchesHandler._handle_model_invocation_job_status(batch_id=JOB_ARN)
+
+    assert batch.request_counts is not None
+    assert (batch.request_counts.total, batch.request_counts.completed, batch.request_counts.failed) == (100, 100, 0)
 
 
 @pytest.mark.parametrize(
@@ -433,3 +480,93 @@ def test_litellm_cancel_batch_dispatches_to_bedrock(patched_boto3):
 
     fake_client.stop_model_invocation_job.assert_called_once_with(jobIdentifier=JOB_ARN)
     assert batch.status == "cancelled"
+
+
+class _TagGatedSTSClient:
+    """Stands in for STS behind a trust policy that only admits sessions carrying ``tags``."""
+
+    def __init__(self, tags: list[dict[str, str]], access_key_id: str) -> None:
+        self._tags = tags
+        self._access_key_id = access_key_id
+
+    def get_caller_identity(self):
+        return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+    def assume_role(self, **params):
+        from botocore.exceptions import ClientError
+
+        if list(params.get("Tags", ())) != self._tags:
+            raise ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:TagSession"}},
+                "AssumeRole",
+            )
+        return {
+            "Credentials": {
+                "AccessKeyId": self._access_key_id,
+                "SecretAccessKey": "assumed-secret",
+                "SessionToken": "assumed-session-token",
+                "Expiration": datetime.now(timezone.utc) + timedelta(minutes=30),
+            }
+        }
+
+
+def test_handle_model_invocation_job_status_builds_the_client_from_the_tagged_session(monkeypatch):
+    """Status polling must assume the role with the deployment's session tags, like every other call."""
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    tags = [{"Key": "team", "Value": "genai"}]
+    bedrock_client_kwargs: list[dict] = []
+    fake_bedrock = MagicMock()
+    fake_bedrock.get_model_invocation_job.return_value = _fake_boto3_response()
+
+    def boto3_client(service_name, **kwargs):
+        if service_name == "sts":
+            return _TagGatedSTSClient(tags, "ASIABATCHSTATUSTAGGED")
+        bedrock_client_kwargs.append(kwargs)
+        return fake_bedrock
+
+    with patch("boto3.client", side_effect=boto3_client):
+        batch = BedrockBatchesHandler._handle_model_invocation_job_status(
+            batch_id=JOB_ARN,
+            aws_access_key_id="AKIABATCHSTATUSCALLER",
+            aws_secret_access_key="pod-caller-secret",
+            aws_role_name="arn:aws:iam::999999999999:role/litellm-batch-role",
+            aws_session_name="litellm-batch-session",
+            aws_session_tags=tags,
+        )
+
+    assert batch.status == "completed"
+    assert [kwargs["aws_access_key_id"] for kwargs in bedrock_client_kwargs] == ["ASIABATCHSTATUSTAGGED"]
+
+
+def test_cancel_batch_stops_and_polls_the_job_with_the_tagged_session(monkeypatch):
+    """Cancelling on a tag-gated role must forward the deployment's session tags to both the stop and status calls."""
+    import litellm
+
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    tags = [{"Key": "team", "Value": "genai"}]
+    bedrock_client_kwargs: list[dict] = []
+    fake_bedrock = MagicMock()
+    fake_bedrock.get_model_invocation_job.return_value = _fake_boto3_response(status="Stopped")
+
+    def boto3_client(service_name, **kwargs):
+        if service_name == "sts":
+            return _TagGatedSTSClient(tags, "ASIABATCHCANCELTAGGED")
+        bedrock_client_kwargs.append(kwargs)
+        return fake_bedrock
+
+    with patch("boto3.client", side_effect=boto3_client):
+        batch = litellm.cancel_batch(
+            batch_id=JOB_ARN,
+            custom_llm_provider="bedrock",
+            aws_access_key_id="AKIABATCHCANCELCALLER",
+            aws_secret_access_key="pod-caller-secret",
+            aws_role_name="arn:aws:iam::999999999999:role/litellm-batch-role",
+            aws_session_name="litellm-batch-session",
+            aws_session_tags=tags,
+        )
+
+    fake_bedrock.stop_model_invocation_job.assert_called_once_with(jobIdentifier=JOB_ARN)
+    assert batch.status == "cancelled"
+    assert [kwargs["aws_access_key_id"] for kwargs in bedrock_client_kwargs] == ["ASIABATCHCANCELTAGGED"] * 2

@@ -1,10 +1,7 @@
 import io
-import os
-import sys
 
 from typing import Optional, Union
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import gzip

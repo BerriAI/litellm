@@ -193,11 +193,15 @@ describe("CreateProjectModal submit payload", () => {
     fireEvent.change(screen.getByPlaceholderText("Model name (e.g. gpt-4)"), { target: { value: "gpt-4" } });
     fireEvent.change(screen.getByPlaceholderText("TPM Limit"), { target: { value: "100" } });
     fireEvent.change(screen.getByPlaceholderText("RPM Limit"), { target: { value: "20" } });
+    fireEvent.change(screen.getByPlaceholderText("Input TPM Limit"), { target: { value: "60" } });
+    fireEvent.change(screen.getByPlaceholderText("Output TPM Limit"), { target: { value: "40" } });
     await submit(user);
 
     await waitFor(() => expect(mutate).toHaveBeenCalled());
     expect(params().model_tpm_limit).toStrictEqual({ "gpt-4": 100 });
     expect(params().model_rpm_limit).toStrictEqual({ "gpt-4": 20 });
+    expect(params().model_itpm_limit).toStrictEqual({ "gpt-4": 60 });
+    expect(params().model_otpm_limit).toStrictEqual({ "gpt-4": 40 });
   });
 
   it("sends metadata pairs as an object", async () => {

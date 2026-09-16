@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   Combobox,
   ComboboxChip,
+  ComboboxClear,
   ComboboxChips,
   ComboboxChipsInput,
   ComboboxContent,
@@ -33,6 +34,12 @@ interface MultiSelectProps {
   allowCustomValues?: boolean;
   className?: string;
 }
+
+const splitOnCommas = (raw: string): string[] =>
+  raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
 
 const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
   const normalizedQuery = query.trim().toLowerCase();
@@ -78,15 +85,22 @@ export function MultiSelect({
       ? [...safeOptions, { label: `Create "${customOption}"`, value: customOption }]
       : safeOptions;
 
+  const canClear = (selected: MultiSelectOption[]) => selected.length > 0 && !disabled && !loading;
+
+  const handleValueChange = (selected: MultiSelectOption[]) => {
+    const next = allowCustomValues
+      ? selected.flatMap((option) => (value.includes(option.value) ? [option.value] : splitOnCommas(option.value)))
+      : selected.map((option) => option.value);
+    onValueChange(Array.from(new Set(next)));
+    setQuery("");
+  };
+
   return (
     <Combobox
       multiple
       items={items}
       value={selectedOptions}
-      onValueChange={(selected: MultiSelectOption[]) => {
-        onValueChange(selected.map((option) => option.value));
-        setQuery("");
-      }}
+      onValueChange={handleValueChange}
       inputValue={query}
       onInputValueChange={setQuery}
       isItemEqualToValue={(option: MultiSelectOption, selected: MultiSelectOption) => option.value === selected.value}
@@ -109,6 +123,7 @@ export function MultiSelect({
                 className="min-w-24"
                 aria-label={placeholder || undefined}
               />
+              {canClear(selected) && <ComboboxClear className="ml-auto self-center" aria-label="Clear all" />}
             </>
           )}
         </ComboboxValue>

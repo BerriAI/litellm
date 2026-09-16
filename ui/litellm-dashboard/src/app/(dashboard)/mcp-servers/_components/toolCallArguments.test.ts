@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { InputSchema } from "@/components/mcp_tools/types";
+import { InputSchema, InputSchemaProperty } from "@/components/mcp_tools/types";
 import {
   ToolArgumentField,
   argumentsFormKey,
   buildToolCallArguments,
   hasNestedParamsSchema,
   initialArgumentValues,
+  resolveSchemaProperty,
   toolArgumentFields,
   toolArgumentsResolver,
   validateToolArgument,
@@ -330,5 +331,121 @@ describe("argumentsFormKey", () => {
     const two: InputSchema = { type: "object", properties: { a: { type: "string", default: "x" } } };
 
     expect(argumentsFormKey(one)).toBe(argumentsFormKey(two));
+  });
+});
+
+describe("union-typed properties", () => {
+  const optionalArray: InputSchemaProperty = {
+    anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+    default: null,
+  };
+  const optionalObject: InputSchemaProperty = {
+    anyOf: [{ type: "object", properties: { id: { type: "string" } } }, { type: "null" }],
+    default: null,
+  };
+  const unionField = (key: string, prop: InputSchemaProperty, required = false): ToolArgumentField => ({
+    key,
+    prop,
+    required,
+  });
+
+  describe("resolveSchemaProperty", () => {
+    it("collapses an optional array to the array member", () => {
+      expect(resolveSchemaProperty(optionalArray)).toMatchObject({ type: "array", items: { type: "string" } });
+    });
+
+    it("carries the outer description and default onto the resolved member", () => {
+      const resolved = resolveSchemaProperty({
+        anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+        description: "outer text",
+        default: ["a"],
+      });
+
+      expect(resolved).toMatchObject({ type: "array", description: "outer text", default: ["a"] });
+    });
+
+    it("keeps the enum of a resolved string member so the select still renders", () => {
+      expect(resolveSchemaProperty({ anyOf: [{ type: "string", enum: ["a", "b"] }, { type: "null" }] })).toMatchObject({
+        type: "string",
+        enum: ["a", "b"],
+      });
+    });
+
+    it("resolves oneOf the same way as anyOf", () => {
+      expect(resolveSchemaProperty({ oneOf: [{ type: "object" }, { type: "null" }] })).toMatchObject({
+        type: "object",
+      });
+    });
+
+    it("leaves a property that already declares a type untouched", () => {
+      const plain: InputSchemaProperty = { type: "string", anyOf: [{ type: "array" }, { type: "null" }] };
+
+      expect(resolveSchemaProperty(plain)).toBe(plain);
+    });
+
+    it("leaves a genuine multi-type union unresolved", () => {
+      const multi: InputSchemaProperty = { anyOf: [{ type: "string" }, { type: "integer" }, { type: "null" }] };
+
+      expect(resolveSchemaProperty(multi)).toBe(multi);
+    });
+  });
+
+  describe("validateToolArgument", () => {
+    it("reports an object supplied to an optional array parameter", () => {
+      expect(validateToolArgument(unionField("tags", optionalArray), '{"k":1}')).toBe("Please enter a JSON array");
+    });
+
+    it("reports an array supplied to an optional object parameter", () => {
+      expect(validateToolArgument(unionField("payload", optionalObject), "[1,2]")).toBe("Please enter a JSON object");
+    });
+
+    it("reports the comma-separated text a plain input would have produced as invalid JSON", () => {
+      expect(validateToolArgument(unionField("tags", optionalArray), "a,b")).toBe("Invalid JSON");
+    });
+
+    it("accepts a well-formed value and an empty optional value", () => {
+      expect(validateToolArgument(unionField("tags", optionalArray), '["a","b"]')).toBeUndefined();
+      expect(validateToolArgument(unionField("tags", optionalArray), "")).toBeUndefined();
+    });
+  });
+
+  describe("buildToolCallArguments", () => {
+    it("sends a real array for an optional array parameter", () => {
+      expect(buildToolCallArguments([unionField("tags", optionalArray)], ['["a","b"]'])).toEqual({
+        tags: ["a", "b"],
+      });
+    });
+
+    it("sends a real object for an optional object parameter", () => {
+      expect(buildToolCallArguments([unionField("payload", optionalObject)], ['{"id":"x"}'])).toEqual({
+        payload: { id: "x" },
+      });
+    });
+  });
+
+  describe("initialArgumentValues", () => {
+    it("leaves a null-defaulted optional parameter blank so it is not submitted at all", () => {
+      const fields = [unionField("tags", optionalArray), unionField("payload", optionalObject)];
+
+      expect(initialArgumentValues(fields)).toEqual(["", ""]);
+      expect(buildToolCallArguments(fields, initialArgumentValues(fields))).toEqual({});
+    });
+
+    it("builds a sample item from the resolved item schema when the union declares no default", () => {
+      const prop: InputSchemaProperty = { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] };
+
+      expect(initialArgumentValues([unionField("tags", prop)])).toEqual([JSON.stringify([""], null, 2)]);
+    });
+
+    it("seeds a nested optional array inside an object from the resolved member", () => {
+      const [payload] = initialArgumentValues([
+        unionField("payload", {
+          type: "object",
+          properties: { tags: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] } },
+        }),
+      ]);
+
+      expect(payload).toBe(JSON.stringify({ tags: [""] }, null, 2));
+    });
   });
 });

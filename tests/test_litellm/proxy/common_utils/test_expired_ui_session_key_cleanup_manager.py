@@ -2,15 +2,12 @@
 Test expired UI session key cleanup manager functionality.
 """
 
-import os
-import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, status
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.constants import (
     EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,

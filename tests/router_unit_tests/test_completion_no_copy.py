@@ -5,11 +5,8 @@ Verifies that spreading deployment["litellm_params"] directly (without copy)
 doesn't cause side effects that mutate the deployment in router.model_list.
 """
 
-import sys
-import os
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm import Router
 from unittest.mock import AsyncMock, Mock, patch

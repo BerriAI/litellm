@@ -26,14 +26,14 @@ export interface TableIconActionButtonBaseProps {
 }
 
 export const TableIconActionButtonMap: Record<string, TableIconActionButtonBaseProps> = {
-  Edit: { icon: PencilAltIcon, className: "hover:text-blue-600" },
-  Delete: { icon: TrashIcon, className: "hover:text-red-600" },
-  Test: { icon: PlayIcon, className: "hover:text-blue-600" },
-  Regenerate: { icon: RefreshIcon, className: "hover:text-green-600" },
-  Up: { icon: ChevronUpIcon, className: "hover:text-blue-600" },
-  Down: { icon: ChevronDownIcon, className: "hover:text-blue-600" },
-  Open: { icon: ExternalLinkIcon, className: "hover:text-green-600" },
-  Copy: { icon: ClipboardCopyIcon, className: "hover:text-blue-600" },
+  Edit: { icon: PencilAltIcon, className: "hover:text-info" },
+  Delete: { icon: TrashIcon, className: "hover:text-destructive" },
+  Test: { icon: PlayIcon, className: "hover:text-info" },
+  Regenerate: { icon: RefreshIcon, className: "hover:text-success" },
+  Up: { icon: ChevronUpIcon, className: "hover:text-info" },
+  Down: { icon: ChevronDownIcon, className: "hover:text-info" },
+  Open: { icon: ExternalLinkIcon, className: "hover:text-success" },
+  Copy: { icon: ClipboardCopyIcon, className: "hover:text-info" },
 };
 
 export default function TableIconActionButton({

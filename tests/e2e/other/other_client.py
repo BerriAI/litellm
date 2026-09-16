@@ -1,11 +1,14 @@
 """Client for the `other` holding-pen suite: the auth gate (master key vs an
-invalid key on an admin route) and the process-lifecycle health probes
-(liveness, public readiness, authenticated readiness diagnostics).
+invalid key on an admin route), JWT auth against the suite's Keycloak realm
+(idp.py), and the process-lifecycle health probes (liveness, public readiness,
+authenticated readiness diagnostics).
 
 Holds the shared ProxyClient so `resources` / `scoped_key` still clean up, and
 adds only the routes these behaviors need. The health probes deliberately send
 no auth header (public routes), so they go through the transport with an empty
-headers model rather than a bearer.
+headers model rather than a bearer. JWT tests reach the identity provider
+through `idp`, which provisions identities and mints tokens through Keycloak's
+own endpoints, so no test ever holds a signing key.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from e2e_http import NoBody, ProbeResult, Result
+from idp import Keycloak, keycloak_from_env
 from models import (
     ReadinessDetailsResponse,
     ReadinessResponse,
@@ -25,6 +29,11 @@ from proxy_client import ProxyClient
 @dataclass(frozen=True, slots=True)
 class OtherClient:
     proxy: ProxyClient
+
+    @property
+    def idp(self) -> Keycloak:
+        """Resolved per use, so the suite's non-JWT tests never need the IdP env."""
+        return keycloak_from_env()
 
     def liveness(self) -> ProbeResult:
         """GET /health/liveliness. Unauthenticated; the probe returns status +

@@ -1,5 +1,7 @@
 """Tests for litellm/a2a_protocol/main.py non-streaming send behavior."""
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -13,7 +15,8 @@ from a2a.compat.v0_3.types import (
 )
 
 import litellm
-from litellm.a2a_protocol.main import _send_message, _stream_messages, create_a2a_client
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.a2a_protocol.main import _send_message, _stream_messages, asend_message, create_a2a_client
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
 from litellm.llms.custom_httpx.http_handler import (
@@ -176,10 +179,62 @@ _AGENT_A_HEADERS = {"x-agent-token": "token-for-a", "x-tenant": "tenant-a"}
 _AGENT_B_HEADERS = {"x-agent-token": "token-for-b", "x-tenant": "tenant-b"}
 
 
+_LANGGRAPH_TASK_REPLY = {
+    "jsonrpc": "2.0",
+    "id": "reply",
+    "result": {
+        "kind": "task",
+        "id": "run-1:task-1",
+        "contextId": "thread-1",
+        "history": [
+            {
+                "kind": "message",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "hi"}],
+                "messageId": "m-user",
+                "taskId": "run-1:task-1",
+                "contextId": "thread-1",
+            },
+            {
+                "kind": "message",
+                "role": "agent",
+                "parts": [{"kind": "text", "text": "langgraph echo: hi"}],
+                "messageId": "m-agent",
+                "taskId": "run-1:task-1",
+                "contextId": "thread-1",
+            },
+        ],
+        "status": {"state": "completed", "timestamp": "2026-08-24T00:00:00+00:00"},
+        "artifacts": [
+            {
+                "artifactId": "art-1",
+                "name": "Assistant Response",
+                "parts": [{"kind": "text", "text": "langgraph echo: hi"}],
+            }
+        ],
+    },
+}
+
+
+_LOWERCASE_BINDING_CARD = {
+    "name": "langgraph-agent",
+    "version": "1.0.0",
+    "capabilities": {"streaming": True},
+    "defaultInputModes": ["text/plain"],
+    "defaultOutputModes": ["text/plain"],
+    "skills": [],
+    "supportedInterfaces": [
+        {"url": "http://127.0.0.1:9/", "protocolBinding": "jsonrpc", "protocolVersion": "1.0"}
+    ],
+}
+
+
 class _RequestRecorder:
     """Records the headers httpx put on the wire, per outbound request."""
 
-    def __init__(self):
+    def __init__(self, card=_AGENT_CARD, rpc_reply=_RPC_REPLY):
+        self.card = card
+        self.rpc_reply = rpc_reply
         self.card_requests = []
         self.rpc_requests = []
         self.client = None
@@ -188,23 +243,23 @@ class _RequestRecorder:
         headers = {k.lower(): v for k, v in request.headers.items()}
         if request.method == "GET":
             self.card_requests.append(headers)
-            return httpx.Response(200, json=_AGENT_CARD)
+            return httpx.Response(200, json=self.card)
         self.rpc_requests.append(headers)
-        return httpx.Response(200, json=_RPC_REPLY)
+        return httpx.Response(200, json=self.rpc_reply)
 
 
 def _a2a_client_cache_key(timeout: float) -> str:
     return "async_httpx_client" + f"timeout_{timeout}" + httpxSpecialProvider.A2AProvider
 
 
-async def _seed_shared_a2a_client() -> _RequestRecorder:
+async def _seed_shared_a2a_client(card=_AGENT_CARD, rpc_reply=_RPC_REPLY) -> _RequestRecorder:
     """Put the one A2A client the cache will hand out behind a mock transport.
 
     Seeding has to happen on the test's own event loop, because the client cache keys on
     it. The injected client is a real httpx.AsyncClient, so the merge of per-request
     headers over client defaults, which is what these tests are about, stays real.
     """
-    recorder = _RequestRecorder()
+    recorder = _RequestRecorder(card=card, rpc_reply=rpc_reply)
     handler = AsyncHTTPHandler(timeout=DEFAULT_A2A_AGENT_TIMEOUT)
     owned_client = handler.client
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
@@ -312,6 +367,25 @@ async def test_streaming_send_carries_only_its_own_caller_headers(isolated_clien
 
 
 @pytest.mark.asyncio
+async def test_lowercase_protocol_binding_card_round_trips_the_langgraph_dialect(isolated_client_cache):
+    """LangGraph Platform serves cards with protocolBinding "jsonrpc" and answers in the
+    A2A 0.3 JSON dialect ("kind"-discriminated) while declaring protocolVersion "1.0".
+    Without binding normalization client creation raises ValueError("no compatible
+    transports found."); without the version downgrade the SDK's strict v1 transport
+    rejects the reply with 'Message type "lf.a2a.v1.Task" has no field named "kind"'."""
+    await _seed_shared_a2a_client(card=_LOWERCASE_BINDING_CARD, rpc_reply=_LANGGRAPH_TASK_REPLY)
+
+    a2a_client = await create_a2a_client(base_url="http://127.0.0.1:9")
+    response = await _send_message(a2a_client, _send_request("lc"))
+
+    assert type(response.root.result).__name__ == "Task"
+    assert response.root.result.artifacts[0].parts[0].root.text == "langgraph echo: hi"
+    interface = a2a_client._litellm_agent_card.supported_interfaces[0]
+    assert interface.protocol_binding == "JSONRPC"
+    assert interface.protocol_version == "0.3"
+
+
+@pytest.mark.asyncio
 async def test_agent_card_fetch_carries_the_callers_headers(isolated_client_cache):
     """Agent cards can sit behind the same auth as the agent, so the card fetch must stay
     authenticated once the headers stop living on the client."""
@@ -342,3 +416,51 @@ async def test_the_pooled_a2a_client_arrives_with_cookie_persistence_disabled(is
 
     assert dict(handler.client.cookies) == {}, "the pooled A2A client kept an upstream's cookie"
     await handler.close()
+
+
+class _UsageRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.logged = asyncio.Event()
+        self.payload = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.payload = kwargs["standard_logging_object"]
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+async def test_asend_message_counts_usage_off_the_event_loop(monkeypatch):
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer("gpt-5.6-luna")
+    recorder = _UsageRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+
+    reply = _conv.pb2_v10.StreamResponse()
+    reply.message.message_id = "reply-1"
+    reply.message.role = _conv.pb2_v10.Role.ROLE_AGENT
+    reply.message.parts.add().text = text * 100
+    request = SendMessageRequest(
+        id="r1",
+        params=MessageSendParams(
+            message={"messageId": "m1", "role": "user", "parts": [{"kind": "text", "text": text * 100}]}
+        ),
+    )
+
+    response, took, lags = await timed_with_loop_lags(
+        lambda: asend_message(a2a_client=_FakeClient(reply), request=request)
+    )
+
+    assert response.id == "r1"
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+    assert recorder.payload["prompt_tokens"] > 100_000
+    assert recorder.payload["completion_tokens"] > 100_000
+    assert_loop_stayed_free(took, lags)

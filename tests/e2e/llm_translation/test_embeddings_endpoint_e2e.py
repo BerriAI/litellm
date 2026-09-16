@@ -1,4 +1,4 @@
-"""Live e2e: POST /embeddings returns a real vector across OpenAI, Bedrock, Vertex.
+"""Live e2e: POST /embeddings returns a real vector across OpenAI, Bedrock, Vertex, Cohere.
 
 Each test registers the deployment it needs at runtime (deleted on teardown) and
 asserts a non-empty, non-zero vector came back. The LIT-3167 guard in
@@ -9,7 +9,7 @@ covered by tests/e2e/quota_management/spend_tracking/.
 from __future__ import annotations
 
 import pytest
-from e2e_config import unique_marker
+from e2e_config import provider_edge_base, unique_marker
 from e2e_http import (
     assert_client_error,
     require_successful_call,
@@ -27,7 +27,20 @@ class _OptionalEmbeddingsBody(BaseModel):
     input: str | list[str] | None = None
 
 
+def _openai_embeddings_params() -> LiteLLMParamsBody:
+    """The OpenAI embeddings deployment, wired through the record/replay edge when a
+    fixture mode is active and straight at OpenAI otherwise (LIT-5974). Bedrock and
+    Vertex stay live: SigV4 signs the Host header, and neither has an edge mount."""
+    base = provider_edge_base("openai")
+    return LiteLLMParamsBody(
+        model="openai/text-embedding-3-small",
+        api_key="os.environ/OPENAI_API_KEY",
+        api_base=None if base is None else f"{base}/v1",
+    )
+
+
 class TestEmbeddingsEndpoint:
+    @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.basic.nonstream.works")
     def test_embeddings_returns_vector(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -35,9 +48,7 @@ class TestEmbeddingsEndpoint:
         model = f"e2e-embeddings-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(
-                model="openai/text-embedding-3-small", api_key="os.environ/OPENAI_API_KEY"
-            ),
+            _openai_embeddings_params(),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
@@ -75,6 +86,26 @@ class TestEmbeddingsEndpoint:
             f"embedding vector is all zeros: {result.body[:300]}"
         )
 
+    @pytest.mark.covers("llm.embeddings.cohere.basic.nonstream.works")
+    def test_cohere_embeddings_returns_vector(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-embeddings-cohere-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(model="cohere/embed-v4.0", api_key="os.environ/COHERE_API_KEY"),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+
+        result = endpoints_client.embeddings(key, model, "Say this is a test!")
+        require_successful_call(result)
+        parsed = EmbeddingsResult.model_validate_json(result.body)
+        assert parsed.first_vector, f"/embeddings returned no vector: {result.body[:300]}"
+        assert any(component != 0.0 for component in parsed.first_vector), (
+            f"embedding vector is all zeros: {result.body[:300]}"
+        )
+
     @pytest.mark.covers("llm.embeddings.vertex.basic.nonstream.works")
     def test_vertex_embeddings_returns_vector(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -99,6 +130,7 @@ class TestEmbeddingsEndpoint:
             f"embedding vector is all zeros: {result.body[:300]}"
         )
 
+    @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.basic.nonstream.works")
     def test_array_input_returns_vectors(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -106,9 +138,7 @@ class TestEmbeddingsEndpoint:
         model = f"e2e-embeddings-array-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(
-                model="openai/text-embedding-3-small", api_key="os.environ/OPENAI_API_KEY"
-            ),
+            _openai_embeddings_params(),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()
@@ -121,6 +151,7 @@ class TestEmbeddingsEndpoint:
         parsed = EmbeddingsResult.model_validate_json(result.body)
         assert len(parsed.data) == 3, f"expected 3 vectors: {result.body[:300]}"
 
+    @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.input_validation.nonstream.works")
     def test_missing_model_returns_client_error(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -133,6 +164,7 @@ class TestEmbeddingsEndpoint:
         )
         assert_client_error(result, "embeddings missing model")
 
+    @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.input_validation.nonstream.works")
     def test_missing_input_returns_error(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -140,9 +172,7 @@ class TestEmbeddingsEndpoint:
         model = f"e2e-embeddings-missin-{unique_marker()}"
         model_id = endpoints_client.create_model(
             model,
-            LiteLLMParamsBody(
-                model="openai/text-embedding-3-small", api_key="os.environ/OPENAI_API_KEY"
-            ),
+            _openai_embeddings_params(),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()

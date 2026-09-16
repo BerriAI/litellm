@@ -4,10 +4,9 @@ import { useHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOverrides
 import { useUpdateHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOverrides/useUpdateHashicorpVaultConfig";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { toast } from "@/lib/toast";
-import { Modal } from "antd";
 import React, { useMemo } from "react";
 import { z } from "zod/v4";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Button } from "@/components/ui/button";
@@ -16,6 +15,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Separator } from "@/components/ui/separator";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { SENSITIVE_FIELDS, FIELD_LABELS } from "./constants";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface VaultFieldGroup {
   title: string;
@@ -142,34 +142,34 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({ isVis
   };
 
   return (
-    <Modal
-      title="Edit Hashicorp Vault Configuration"
-      open={isVisible}
-      width={700}
-      footer={
-        <div className="flex items-center justify-end gap-2">
-          <Button type="button" variant="outline" onClick={handleCancel} disabled={isPending}>
-            Cancel
-          </Button>
-          <Button type="button" disabled={isPending} onClick={() => void form.handleSubmit(handleSubmit)()}>
-            {isPending && <UiLoadingSpinner className="size-4 mr-1" />}
-            {isPending ? "Saving..." : "Save"}
-          </Button>
-        </div>
-      }
-      onCancel={handleCancel}
-    >
-      <form onSubmit={form.handleSubmit(handleSubmit)}>
-        {FIELD_GROUPS.map((group, index) => (
-          <div key={group.title}>
-            {index > 0 && <Separator className="my-6" />}
-            <h5 className="mb-1 text-base font-semibold text-foreground">{group.title}</h5>
-            {group.subtitle && <p className="mb-4 text-sm text-muted-foreground">{group.subtitle}</p>}
-            <FieldGroup>{group.fields.map(renderField)}</FieldGroup>
+    <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
+        <DialogHeader>
+          <DialogTitle>Edit Hashicorp Vault Configuration</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={form.handleSubmit(handleSubmit)}>
+          {FIELD_GROUPS.map((group, index) => (
+            <div key={group.title}>
+              {index > 0 && <Separator className="my-6" />}
+              <h5 className="mb-1 text-base font-semibold text-foreground">{group.title}</h5>
+              {group.subtitle && <p className="mb-4 text-sm text-muted-foreground">{group.subtitle}</p>}
+              <FieldGroup>{group.fields.map(renderField)}</FieldGroup>
+            </div>
+          ))}
+        </form>
+        <DialogFooter>
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="outline" onClick={handleCancel} disabled={isPending}>
+              Cancel
+            </Button>
+            <Button type="button" disabled={isPending} onClick={() => void form.handleSubmit(handleSubmit)()}>
+              {isPending && <UiLoadingSpinner className="size-4 mr-1" />}
+              {isPending ? "Saving..." : "Save"}
+            </Button>
           </div>
-        ))}
-      </form>
-    </Modal>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

@@ -1,10 +1,11 @@
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import AddAgentForm from "./add_agent_form";
 import * as networking from "@/components/networking";
 import type { AgentCreateInfo } from "@/components/networking";
+import { chooseSelectOption, renderWithProviders as render } from "../../../../../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   createAgentCall: vi.fn(),
@@ -309,8 +310,7 @@ describe("AddAgentForm submit payload", () => {
 
     await user.type(await screen.findByLabelText("Allowed Models"), "gpt-4o,");
     await user.keyboard("{Escape}");
-    await user.click(screen.getByLabelText("Allowed Agents (Sub-Agents)"));
-    await user.click(await screen.findByTitle("Sub Agent One"));
+    await chooseSelectOption(user, screen.getByLabelText("Allowed Agents (Sub-Agents)"), "Sub Agent One");
     await user.keyboard("{Escape}");
     await user.click(screen.getByText(/Configure which models, agents, and MCP tools/));
     await user.click(screen.getByRole("button", { name: /^Next/ }));
@@ -350,5 +350,34 @@ describe("AddAgentForm submit payload", () => {
     );
     expect(await screen.findByText("Agent Created!")).toBeInTheDocument();
     expect(within(screen.getByText("Agent Created!").parentElement!).getByText("created-agent")).toBeInTheDocument();
+  });
+  it("blocks creation after clearing the existing key and assigns the reselected key", async () => {
+    vi.mocked(networking.keyListCall).mockResolvedValue({
+      keys: [{ token: "key-maple", key_alias: "Maple key" }],
+    });
+    const user = userEvent.setup();
+    renderForm();
+    await user.type(await screen.findByLabelText("Agent Name"), "key-selection-agent");
+    await user.type(screen.getByLabelText("Display Name"), "Key selection");
+    await user.type(screen.getByPlaceholderText("Describe what this agent does..."), "d");
+    for (let step = 0; step < 3; step++) {
+      await user.click(screen.getByRole("button", { name: /^Next/ }));
+    }
+    await user.click(screen.getByRole("radio", { name: "Assign an existing key" }));
+    const keySelector = await screen.findByPlaceholderText("Search by key name…");
+    await chooseSelectOption(user, keySelector, "Maple key");
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await user.click(screen.getByRole("button", { name: /Create Agent/ }));
+    expect(networking.createAgentCall).not.toHaveBeenCalled();
+    expect(networking.keyUpdateCall).not.toHaveBeenCalled();
+    await chooseSelectOption(user, keySelector, "Maple key");
+    await user.click(screen.getByRole("button", { name: /Create Agent/ }));
+    await waitFor(() =>
+      expect(networking.keyUpdateCall).toHaveBeenCalledWith("tok", {
+        key: "key-maple",
+        agent_id: "agent-1",
+      }),
+    );
+    expect(networking.createAgentCall).toHaveBeenCalledTimes(1);
   });
 });

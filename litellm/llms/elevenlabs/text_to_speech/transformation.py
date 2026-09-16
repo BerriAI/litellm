@@ -80,8 +80,8 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def _resolve_voice_id(
         self,
-        voice: str | dict[str, Any] | None,
-        params: dict[str, Any],
+        voice: str | dict[str, object] | None,
+        params: dict[str, object],
     ) -> str:
         """
         Determine the ElevenLabs voice_id based on provided voice input or parameters.
@@ -115,17 +115,17 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         optional_params: dict,
         voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: dict[str, Any] | None = None,
+        kwargs: dict[str, object] | None = None,
     ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to ElevenLabs TTS parameters
         """
-        mapped_params: Final[dict[str, Any]] = {}
-        query_params: Final[dict[str, Any]] = {}
+        mapped_params: Final[dict[str, object]] = {}
+        query_params: Final[dict[str, object]] = {}
 
         # Work on a copy so we don't mutate the caller's dictionary
         params: Final = dict(optional_params) if optional_params else {}
-        passthrough_kwargs: Final[dict[str, Any]] = kwargs if kwargs is not None else {}
+        passthrough_kwargs: Final[dict[str, object]] = kwargs if kwargs is not None else {}
 
         # Extract voice identifier
         mapped_voice: Final = self._resolve_voice_id(voice, params)
@@ -205,7 +205,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         params: Final = dict(optional_params) if optional_params else {}
         extra_body: Final = params.pop("extra_body", None)
 
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "text": input,
             "model_id": model,
         }
@@ -229,10 +229,10 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
     def _add_elevenlabs_specific_params(
         self,
         mapped_voice: str,
-        query_params: dict[str, Any],
-        mapped_params: dict[str, Any],
-        kwargs: dict[str, Any] | None,
-        remaining_params: dict[str, Any],
+        query_params: dict[str, object],
+        mapped_params: dict[str, object],
+        kwargs: dict[str, object] | None,
+        remaining_params: dict[str, object],
     ) -> None:
         if kwargs is None:
             kwargs = {}

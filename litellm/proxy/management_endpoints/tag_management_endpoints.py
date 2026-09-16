@@ -369,10 +369,10 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
 
         # Prisma returns litellm_params as dict (already parsed from JSON)
         existing_params = db_model.litellm_params
-        if isinstance(existing_params, str):
+        if isinstance(existing_params, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json stub is str
             # If it's a string, parse it
             existing_params = json.loads(existing_params)
-        elif not isinstance(existing_params, dict):
+        elif not isinstance(existing_params, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json stub
             raise Exception(f"Unexpected litellm_params type: {type(existing_params)}")
 
         # Add tag to tags array (preserve encryption of other fields)
@@ -438,6 +438,7 @@ async def update_tag(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
+            budget_duration_cleared="budget_duration" in tag.model_fields_set and tag.budget_duration is None,
         )
 
         # Get model names for model_info

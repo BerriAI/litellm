@@ -7,14 +7,16 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField, type FormFieldControlProps } from "@/components/shared/form/FormField";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import type { InputSchemaProperty } from "@/components/mcp_tools/types";
 import {
   ToolArgumentField,
   ToolArgumentsFormValues,
   buildToolCallArguments,
   initialArgumentValues,
+  resolveSchemaProperty,
   toolArgumentsResolver,
 } from "./toolCallArguments";
 
@@ -44,9 +46,10 @@ const booleanTitle = (value: unknown): string | undefined => {
 
 const JsonArgumentControl: React.FC<{
   field: ToolArgumentField;
+  prop: InputSchemaProperty;
   control: FormFieldControlProps<ToolArgumentsFormValues, `args.${number}`>;
-}> = ({ field, control }) => {
-  const isObject = field.prop.type === "object";
+}> = ({ field, prop, control }) => {
+  const isObject = prop.type === "object";
   const fallbackPlaceholder = isObject ? `Enter JSON object for ${field.key}` : `Enter JSON array for ${field.key}`;
   return (
     <div className="space-y-2">
@@ -54,7 +57,7 @@ const JsonArgumentControl: React.FC<{
         {...control}
         rows={isObject ? 6 : 4}
         value={(control.value as string) ?? ""}
-        placeholder={field.prop.description || fallbackPlaceholder}
+        placeholder={prop.description || fallbackPlaceholder}
         spellCheck={false}
         data-testid={`textarea-${field.key}`}
         className="rounded-lg font-mono"
@@ -70,41 +73,46 @@ const ToolArgumentControl: React.FC<{
   field: ToolArgumentField;
   control: FormFieldControlProps<ToolArgumentsFormValues, `args.${number}`>;
 }> = ({ field, control }) => {
-  if (field.prop.type === "string" && field.prop.enum) {
+  const prop = resolveSchemaProperty(field.prop);
+
+  if (prop.type === "string" && prop.enum) {
     return (
       <select
         {...control}
-        value={(control.value as string) ?? ""}
+        value={control.value == null ? -1 : prop.enum.indexOf(String(control.value))}
+        onChange={(event) => control.onChange(prop.enum?.[Number(event.target.value)] ?? null)}
         className="w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm shadow-xs transition-colors focus:border-ring focus:ring-3 focus:ring-ring/50 focus:outline-hidden"
       >
-        {!field.required && <option value="">Select {field.key}</option>}
-        {field.prop.enum.map((option) => (
-          <option key={option} value={option}>
-            {option}
+        <option value={-1} disabled={field.required}>
+          Select {field.key}
+        </option>
+        {prop.enum.map((option, index) => (
+          <option key={option} value={index}>
+            {option === "" ? "Empty string" : option}
           </option>
         ))}
       </select>
     );
   }
 
-  if (field.prop.type === "number" || field.prop.type === "integer") {
+  if (prop.type === "number" || prop.type === "integer") {
     return (
       <Input
         {...control}
         type="number"
-        step={field.prop.type === "integer" ? 1 : "any"}
+        step={prop.type === "integer" ? 1 : "any"}
         value={(control.value as number | string) ?? ""}
-        placeholder={field.prop.description || `Enter ${field.key}`}
+        placeholder={prop.description || `Enter ${field.key}`}
         className="rounded-lg"
       />
     );
   }
 
-  if (field.prop.type === "boolean") {
+  if (prop.type === "boolean") {
     return (
       <Select
-        items={field.required ? BOOLEAN_ITEMS : [{ value: "", label: `Select ${field.key}` }, ...BOOLEAN_ITEMS]}
-        value={control.value ?? ""}
+        items={field.required ? BOOLEAN_ITEMS : [{ value: null, label: `Select ${field.key}` }, ...BOOLEAN_ITEMS]}
+        value={control.value ?? null}
         onValueChange={control.onChange}
       >
         <SelectTrigger
@@ -116,7 +124,7 @@ const ToolArgumentControl: React.FC<{
           <SelectValue placeholder={`Select ${field.key}`} />
         </SelectTrigger>
         <SelectContent>
-          {!field.required && <SelectItem value="">Select {field.key}</SelectItem>}
+          {!field.required && <SelectItem value={null}>Select {field.key}</SelectItem>}
           <SelectItem value={true}>True</SelectItem>
           <SelectItem value={false}>False</SelectItem>
         </SelectContent>
@@ -124,15 +132,15 @@ const ToolArgumentControl: React.FC<{
     );
   }
 
-  if (field.prop.type === "object" || field.prop.type === "array") {
-    return <JsonArgumentControl field={field} control={control} />;
+  if (prop.type === "object" || prop.type === "array") {
+    return <JsonArgumentControl field={field} prop={prop} control={control} />;
   }
 
   return (
     <Input
       {...control}
       value={(control.value as string) ?? ""}
-      placeholder={field.prop.description || `Enter ${field.key}`}
+      placeholder={prop.description || `Enter ${field.key}`}
       className="rounded-lg"
     />
   );

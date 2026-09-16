@@ -6,15 +6,10 @@ especially ensuring that encoding_format is not included when not provided.
 """
 
 import json
-import os
-import sys
 from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.hosted_vllm.embedding.transformation import (

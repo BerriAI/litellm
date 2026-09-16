@@ -11,7 +11,7 @@ import sys
 import traceback
 from collections.abc import Callable
 
-EXTRAS_ONLY_MODULES = ("fastapi", "uvicorn")
+EXTRAS_ONLY_MODULES = ("fastapi", "uvicorn", "keyring")
 
 
 def _require(condition: bool, message: str) -> None:

@@ -40,6 +40,7 @@ from litellm.llms.vertex_ai.files.transformation import (
     _openai_batch_jsonl_entry_to_vertex_rows,
 )
 from litellm.types.llms.openai import CreateFileRequest
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 
 
 def _upload_stream(transformed) -> BaseFileUploadStream:
@@ -561,7 +562,7 @@ class TestStreamingMediaUpload:
 
     async def test_failed_upload_raises(self):
         raw = _make_openai_jsonl_bytes(80)
-        with pytest.raises(Exception):
+        with pytest.raises(VertexAIError):
             await self._run(raw, status=403)
 
     async def test_request_timeout_is_forwarded(self):

@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 from collections.abc import Coroutine
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -22,19 +22,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import CallTypes, LlmProviders, ModelResponse
 
 from ..chat.transformation import AnthropicConfig
-from ..common_utils import AnthropicModelInfo
-
-# Map Anthropic error types to HTTP status codes
-ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = {
-    "invalid_request_error": 400,
-    "authentication_error": 401,
-    "permission_error": 403,
-    "not_found_error": 404,
-    "rate_limit_error": 429,
-    "api_error": 500,
-    "overloaded_error": 503,
-    "timeout_error": 504,
-}
+from ..common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP, AnthropicModelInfo
 
 
 class AnthropicFilesHandler:
@@ -128,7 +116,7 @@ class AnthropicFilesHandler:
         api_key: str | None = None,
         timeout: float | httpx.Timeout = 600.0,
         max_retries: int | None = None,
-    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
+    ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
         """
         Retrieve file content from Anthropic.
 

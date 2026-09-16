@@ -1,10 +1,11 @@
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class LangfuseLoggingConfig(TypedDict):
     langfuse_secret: str | None
     langfuse_public_key: str | None
     langfuse_host: str | None
+    langfuse_environment: ReadOnly[str | None]
 
 
 class LangfuseUsageDetails(TypedDict):

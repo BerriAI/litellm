@@ -2,6 +2,7 @@ import { mapDisplayToInternalNames } from "../callback_info_helpers";
 import { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
 import type { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
 import type { BudgetWindowEntry } from "../key_team_helpers/BudgetWindowsEditor";
+import type { ModelMaxBudget } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { tagRowsToLimits, type TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
 
 export interface KeyLoggingSetting {
@@ -28,6 +29,7 @@ export interface KeyCreateInput {
   readonly budgetLimits: BudgetWindowEntry[];
   readonly tagRateLimits: TagRateLimitEntry[];
   readonly budgetFallbacks: Record<string, string[]>;
+  readonly modelMaxBudget: ModelMaxBudget;
 }
 
 export type KeyPayloadResult =
@@ -110,6 +112,7 @@ interface PermissionSources {
   readonly toolPermissions: unknown | undefined;
   readonly extraMcpAccessGroups: unknown[] | undefined;
   readonly agents: AgentSelection | undefined;
+  readonly skills: unknown[] | undefined;
 }
 
 const readPermissionSources = (values: Record<string, unknown>): PermissionSources => ({
@@ -118,6 +121,7 @@ const readPermissionSources = (values: Record<string, unknown>): PermissionSourc
   toolPermissions: readToolPermissions(values.mcp_tool_permissions),
   extraMcpAccessGroups: nonEmptyList(values.allowed_mcp_access_groups),
   agents: readAgentSelection(values.allowed_agents_and_groups),
+  skills: nonEmptyList(values.allowed_skills),
 });
 
 const buildObjectPermission = ({
@@ -126,6 +130,7 @@ const buildObjectPermission = ({
   toolPermissions,
   extraMcpAccessGroups,
   agents,
+  skills,
 }: PermissionSources): Record<string, unknown> | undefined => {
   const permission: Record<string, unknown> = {
     ...(vectorStores && { vector_stores: vectorStores }),
@@ -136,6 +141,7 @@ const buildObjectPermission = ({
     ...(extraMcpAccessGroups && { mcp_access_groups: extraMcpAccessGroups }),
     ...(agents?.agents && { agents: agents.agents }),
     ...(agents?.accessGroups && { agent_access_groups: agents.accessGroups }),
+    ...(skills && { skills }),
   };
   return Object.keys(permission).length > 0 ? permission : undefined;
 };
@@ -146,6 +152,7 @@ const consumedSourceKeys = (
 ): ReadonlySet<string> =>
   new Set<string>([
     "mcp_tool_permissions",
+    "allowed_skills",
     ...(values.disable_global_guardrails ? [] : ["disable_global_guardrails"]),
     ...(vectorStores ? ["allowed_vector_store_ids"] : []),
     ...(mcp ? ["allowed_mcp_servers_and_groups"] : []),
@@ -195,6 +202,8 @@ export const buildKeyCreatePayload = (input: KeyCreateInput): KeyPayloadResult =
     endpoint: input.keyOwner === "service_account" ? "service_account" : "standard",
     payload: {
       ...withoutKeys(values, dropped),
+      ...(values.organization_id === null && { organization_id: undefined }),
+      ...(values.project_id === null && { project_id: undefined }),
       ...(input.keyOwner === "you" && { user_id: input.userID }),
       ...(input.keyOwner === "agent" && { agent_id: input.selectedAgentId }),
       ...(input.autoRotationEnabled && { auto_rotate: true, rotation_interval: input.rotationInterval }),
@@ -206,6 +215,7 @@ export const buildKeyCreatePayload = (input: KeyCreateInput): KeyPayloadResult =
       ...(validWindows.length > 0 && { budget_limits: validWindows }),
       ...(Object.keys(tag_rpm_limit).length > 0 && { tag_rpm_limit }),
       ...(Object.keys(input.budgetFallbacks).length > 0 && { budget_fallbacks: input.budgetFallbacks }),
+      ...(Object.keys(input.modelMaxBudget).length > 0 && { model_max_budget: input.modelMaxBudget }),
       ...(values.budget_duration === NEVER_RESETS_BUDGET_DURATION && { budget_duration: null }),
     },
   };
