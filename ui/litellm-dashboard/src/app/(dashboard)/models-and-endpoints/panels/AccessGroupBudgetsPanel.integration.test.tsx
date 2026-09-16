@@ -186,6 +186,20 @@ describe("AccessGroupBudgetsPanel", () => {
       expect(groupNamesInOrder()).toEqual(["shared", "premium"]);
     });
 
+    it("sorts by deployment count when the URL names it", async () => {
+      GET.mockResolvedValue({
+        data: {
+          access_groups: [BUDGETED_GROUP, FREE_GROUP, { ...FREE_GROUP, access_group: "a-many", deployment_count: 3 }],
+        },
+      });
+
+      renderPanel({ searchParams: "?ag_budgets_sort_by=deployment_count&ag_budgets_sort_order=asc" });
+
+      await screen.findByText("a-many");
+
+      expect(groupNamesInOrder()).toEqual(["premium", "shared", "a-many"]);
+    });
+
     it("writes a header sort to the URL", async () => {
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
       renderPanel({ onUrlUpdate });

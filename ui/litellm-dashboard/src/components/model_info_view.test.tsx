@@ -187,10 +187,15 @@ describe("ModelInfoView", () => {
     mockCredentialCreateCall.mockResolvedValue({});
   });
 
-  const wrapperWithUrl = (searchParams = "", onUrlUpdate?: OnUrlUpdateFunction) =>
+  const wrapperWithUrl = (searchParams = "", onUrlUpdate?: OnUrlUpdateFunction, keepMountUpdates = false) =>
     function UrlWrapper({ children }: { children: ReactNode }) {
       return (
-        <NuqsTestingAdapter searchParams={searchParams} onUrlUpdate={onUrlUpdate} hasMemory>
+        <NuqsTestingAdapter
+          searchParams={searchParams}
+          onUrlUpdate={onUrlUpdate}
+          hasMemory
+          resetUrlUpdateQueueOnMount={!keepMountUpdates}
+        >
           <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
         </NuqsTestingAdapter>
       );
@@ -446,6 +451,33 @@ describe("ModelInfoView", () => {
 
       expect(onClose).toHaveBeenCalledTimes(1);
       await waitFor(() => expect(lastUrl(onUrlUpdate).has("model_tab")).toBe(false));
+    });
+
+    it("drops the tab from the URL after deleting the model", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      const onClose = vi.fn();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} onClose={onClose} />, {
+        wrapper: wrapperWithUrl("?model=123&model_tab=raw", onUrlUpdate),
+      });
+
+      await user.click(await screen.findByTestId("delete-model-button"));
+      await user.click(await screen.findByRole("button", { name: /^delete$/i }));
+
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(mockModelDeleteCall).toHaveBeenCalledWith("test-token", "123");
+      await waitFor(() => expect(lastUrl(onUrlUpdate).has("model_tab")).toBe(false));
+    });
+
+    it("opens on Overview and clears a tab value it does not know", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, {
+        wrapper: wrapperWithUrl("?model=123&model_tab=bogus", onUrlUpdate, true),
+      });
+
+      expect(await screen.findByRole("tab", { name: /overview/i })).toHaveAttribute("aria-selected", "true");
+      await waitFor(() => expect(lastUrl(onUrlUpdate).has("model_tab")).toBe(false));
+      expect(lastUrl(onUrlUpdate).get("model")).toBe("123");
     });
   });
 

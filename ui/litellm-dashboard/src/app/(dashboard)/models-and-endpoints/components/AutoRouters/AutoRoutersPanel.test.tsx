@@ -128,6 +128,12 @@ const A_FULL_PAGE_AND_TWO_MORE = Array.from({ length: 12 }, (_, index) => ({
   },
 }));
 
+const JUST_CREATED_ROUTER = {
+  ...A_FULL_PAGE_AND_TWO_MORE[0],
+  model_name: "router-13-just-created",
+  model_info: { id: "bulk-13", db_model: true, created_at: "2026-08-13T00:00:00.000000+00:00" },
+};
+
 /** Row order as rendered, header row dropped. */
 const routerNamesInOrder = () =>
   screen
@@ -341,6 +347,23 @@ describe("AutoRoutersPanel", () => {
       expect(await screen.findByRole("button", { name: "router-01-oldest" })).toBeInTheDocument();
       expect(routerNamesInOrder()).toEqual(["router-2", "router-01-oldest"]);
       expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+    });
+
+    it("returns to the first page after a create so the new router is in view", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      modelInfoCall.mockResolvedValue(pageOf(A_FULL_PAGE_AND_TWO_MORE));
+      renderPanel(true, { searchParams: "?auto_routers_page=2", onUrlUpdate });
+
+      await screen.findByRole("button", { name: "router-01-oldest" });
+      modelInfoCall.mockResolvedValue(pageOf([...A_FULL_PAGE_AND_TWO_MORE, JUST_CREATED_ROUTER]));
+
+      await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
+      await user.click(await screen.findByRole("button", { name: "Submit auto router" }));
+
+      expect(await screen.findByRole("button", { name: "router-13-just-created" })).toBeInTheDocument();
+      await waitFor(() => expect(lastUrl(onUrlUpdate).has("auto_routers_page")).toBe(false));
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
     });
 
     it("sorts by the column and direction named in the URL", async () => {

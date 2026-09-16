@@ -112,8 +112,17 @@ const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, 
     const selectedEndpoint = findPassThroughEndpoint(generalSettings, endpointKey);
 
     if (!selectedEndpoint) {
-      return <div>Endpoint not found</div>;
+      return (
+        <div className="p-4">
+          <Button onClick={closeEndpoint} className="mb-4">
+            ← Back
+          </Button>
+          <div>Endpoint not found</div>
+        </div>
+      );
     }
+
+    const editableOnDashboard = Boolean(selectedEndpoint.id) && !selectedEndpoint.is_from_config;
 
     return (
       <PassThroughInfoView
@@ -121,7 +130,7 @@ const PassThroughSettings: React.FC<PassThroughSettingsProps> = ({ accessToken, 
         endpointData={selectedEndpoint}
         onClose={closeEndpoint}
         accessToken={accessToken}
-        isAdmin={userRole === "Admin" || userRole === "admin"}
+        isAdmin={(userRole === "Admin" || userRole === "admin") && editableOnDashboard}
         premiumUser={premiumUser}
         onEndpointUpdated={handleEndpointUpdated}
       />

@@ -17,8 +17,16 @@ vi.mock("../add_pass_through", () => ({
 }));
 
 vi.mock("../pass_through_info", () => ({
-  default: ({ endpointData, onClose }: { endpointData: { id?: string; path: string }; onClose: () => void }) => (
-    <div data-testid="endpoint-info" data-path={endpointData.path}>
+  default: ({
+    endpointData,
+    onClose,
+    isAdmin,
+  }: {
+    endpointData: { id?: string; path: string };
+    onClose: () => void;
+    isAdmin: boolean;
+  }) => (
+    <div data-testid="endpoint-info" data-path={endpointData.path} data-admin={String(isAdmin)}>
       {endpointData.id}
       <button type="button" onClick={onClose}>
         close-endpoint
@@ -156,11 +164,42 @@ describe("PassThroughSettings", () => {
       expect(await screen.findByTestId("endpoint-info")).toHaveAttribute("data-path", "/from-config");
     });
 
-    it("says the endpoint is not found when the URL names one that does not exist", async () => {
-      renderWithProviders(<PassThroughSettings {...defaultProps} />, { searchParams: "?endpoint=ep-gone" });
+    it("says the endpoint is not found when the URL names one that does not exist, with a way back", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<PassThroughSettings {...defaultProps} />, {
+        searchParams: "?endpoint=ep-gone&endpoint_tab=settings",
+        onUrlUpdate,
+      });
 
       expect(await screen.findByText("Endpoint not found")).toBeInTheDocument();
       expect(screen.queryByTestId("endpoint-info")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: /back/i }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.has("endpoint")).toBe(false));
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.has("endpoint_tab")).toBe(false);
+      expect(await screen.findByTestId("endpoints-table")).toBeInTheDocument();
+    });
+
+    it("offers admins the edit view for a dashboard endpoint", async () => {
+      renderWithProviders(<PassThroughSettings {...defaultProps} />, { searchParams: "?endpoint=ep-1" });
+
+      expect(await screen.findByTestId("endpoint-info")).toHaveAttribute("data-admin", "true");
+    });
+
+    it.each([
+      ["a config endpoint without an id", "%2Ffrom-config", { path: "/from-config" }],
+      ["a config endpoint with an id", "cfg-1", { id: "cfg-1", path: "/cfg", is_from_config: true }],
+    ])("keeps admins read-only on %s, which the dashboard cannot edit", async (_label, param, configFields) => {
+      const configEndpoint = { target: "https://config.example.com", headers: {}, ...configFields };
+      mockGetEndpoints.mockResolvedValue({ endpoints: [endpoint, configEndpoint] });
+
+      renderWithProviders(<PassThroughSettings {...defaultProps} />, { searchParams: `?endpoint=${param}` });
+
+      const info = await screen.findByTestId("endpoint-info");
+      expect(info).toHaveAttribute("data-path", configEndpoint.path);
+      expect(info).toHaveAttribute("data-admin", "false");
     });
 
     it("pushes the opened endpoint to the URL and drops a stale detail tab", async () => {

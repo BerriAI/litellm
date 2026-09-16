@@ -3,7 +3,7 @@ import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/test
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { chooseSelectOption, render, screen, waitFor } from "@/../tests/test-utils";
+import { act, chooseSelectOption, render, screen, waitFor } from "@/../tests/test-utils";
 
 import ModelRetrySettingsPanel from "./ModelRetrySettingsPanel";
 
@@ -30,6 +30,7 @@ const MODEL_GROUPS = ["claude-opus", "gpt-5"];
 
 const loadedGroups = () => ({ availableModelGroups: MODEL_GROUPS, isLoading: false });
 const loadingGroups = () => ({ availableModelGroups: [], isLoading: true });
+const failedGroups = () => ({ availableModelGroups: [], isLoading: false });
 
 const renderPanel = (searchParams = "", onUrlUpdate?: OnUrlUpdateFunction) =>
   render(<ModelRetrySettingsPanel />, {
@@ -83,6 +84,17 @@ describe("ModelRetrySettingsPanel retry_scope", () => {
 
     expect(screen.getByRole("heading", { name: "Retry Policy for gpt-5" })).toBeInTheDocument();
     await waitFor(() => expect(getCallbacksCall).toHaveBeenCalled());
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+  });
+
+  it("keeps a model group scope in the URL when the model groups fail to load", async () => {
+    dashboardData.mockImplementation(failedGroups);
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderPanel("?retry_scope=gpt-5", onUrlUpdate);
+
+    expect(screen.getByRole("heading", { name: "Retry Policy for gpt-5" })).toBeInTheDocument();
+    await waitFor(() => expect(getCallbacksCall).toHaveBeenCalled());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
     expect(onUrlUpdate).not.toHaveBeenCalled();
   });
 

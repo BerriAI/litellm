@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { type ModelWriteScope } from "@/utils/modelPermissions";
 import { Team } from "@/components/networking";
 
-import { AutoRoutersTable } from "./AutoRoutersTable";
+import { AutoRoutersTable, useAutoRoutersTableState } from "./AutoRoutersTable";
 import { AutoRouterRow, toAutoRouterRows } from "./autoRouterRows";
 
 interface AutoRoutersPanelProps {
@@ -42,6 +42,7 @@ export function AutoRoutersPanel({
   // router gets the full ModelInfoView: Model Settings, Edit Settings, Edit Auto Router and
   // Delete. A separate detail view here would be a worse copy of it.
   const { openModel } = useModelDetailRouting();
+  const { onPaginationChange } = useAutoRoutersTableState();
   const [isCreating, setIsCreating] = useState(false);
   const [deletingRouter, setDeletingRouter] = useState<AutoRouterRow | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -53,6 +54,7 @@ export function AutoRoutersPanel({
 
   const handleCreated = () => {
     setIsCreating(false);
+    onPaginationChange((page) => ({ ...page, pageIndex: 0 }));
     void invalidateAutoRouters();
   };
 

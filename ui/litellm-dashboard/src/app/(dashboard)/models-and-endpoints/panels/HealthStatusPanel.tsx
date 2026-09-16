@@ -17,7 +17,12 @@ export default function HealthStatusPanel() {
   const { data: modelCostMapData } = useModelCostMap();
   const { openModel } = useModelDetailRouting();
   const { pagination, onPaginationChange } = useHealthTableUrlState();
-  const { data: healthModelDataResponse, isLoading } = useModelsInfo(pagination.pageIndex + 1, pagination.pageSize);
+  const {
+    data: healthModelDataResponse,
+    isLoading,
+    isError,
+  } = useModelsInfo(pagination.pageIndex + 1, pagination.pageSize);
+  const pageUnavailable = isLoading || (isError && !healthModelDataResponse);
 
   const getProviderFromModel = useCallback(
     (model: string) => {
@@ -52,7 +57,7 @@ export default function HealthStatusPanel() {
       getDisplayModelName={getDisplayModelName}
       setSelectedModelId={openModel}
       teams={teams ?? null}
-      isLoading={isLoading}
+      isLoading={pageUnavailable}
       pagination={pagination}
       onPaginationChange={onPaginationChange}
       rowCount={healthModelDataResponse?.total_count ?? 0}

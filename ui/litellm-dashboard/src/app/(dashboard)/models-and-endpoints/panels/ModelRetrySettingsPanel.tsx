@@ -29,13 +29,13 @@ interface RouterSettings {
 
 export default function ModelRetrySettingsPanel() {
   const { accessToken, userId: userID, userRole } = useAuthorized();
-  const { availableModelGroups, isLoading: isLoadingModelGroups } = useModelDashboardData();
+  const { availableModelGroups } = useModelDashboardData();
   const updateRetryPolicy = useUpdateRetryPolicy(accessToken);
 
   const [requestedScope] = useQueryState(RETRY_SCOPE_KEY, parseAsString.withDefault(GLOBAL_SCOPE));
   const allowedScopes = useMemo(
-    () => [GLOBAL_SCOPE, ...(isLoadingModelGroups ? [requestedScope] : availableModelGroups)],
-    [isLoadingModelGroups, requestedScope, availableModelGroups],
+    () => [GLOBAL_SCOPE, ...(availableModelGroups.length > 0 ? availableModelGroups : [requestedScope])],
+    [requestedScope, availableModelGroups],
   );
   const [retryScope, setRetryScope] = useUrlTab(allowedScopes, GLOBAL_SCOPE, RETRY_SCOPE_KEY);
   const selectRetryScope = useCallback((scope: string | null) => setRetryScope(scope ?? GLOBAL_SCOPE), [setRetryScope]);

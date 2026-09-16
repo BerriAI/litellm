@@ -2,7 +2,12 @@
 
 import { useMemo } from "react";
 
-import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
+import {
+  DataTable,
+  useUrlTableState,
+  type UrlTableState,
+  type UrlTableStateOptions,
+} from "@/components/shared/DataTable";
 import { AutoRouterIcon } from "@/components/shared/table_cells";
 
 import { getAutoRoutersTableColumns } from "./AutoRoutersTableColumns";
@@ -29,6 +34,10 @@ const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
 
 const byName = (a: AutoRouterRow, b: AutoRouterRow) => a.name.localeCompare(b.name);
 
+export function useAutoRoutersTableState(): UrlTableState {
+  return useUrlTableState(TABLE_STATE_OPTIONS);
+}
+
 function EmptyState({ canModify }: { canModify: boolean }) {
   return (
     <div className="flex flex-col items-center gap-1 py-6">
@@ -52,7 +61,7 @@ export function AutoRoutersTable({
   onRouterClick,
   onDeleteClick,
 }: AutoRoutersTableProps) {
-  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useAutoRoutersTableState();
   const columns = useMemo(
     () => getAutoRoutersTableColumns({ canModify, onRouterClick, onDeleteClick }),
     [canModify, onRouterClick, onDeleteClick],

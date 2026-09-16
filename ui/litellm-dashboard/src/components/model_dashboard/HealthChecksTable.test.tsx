@@ -178,7 +178,31 @@ describe("HealthChecksTable URL sort state", () => {
     expect(lastUrl(onUrlUpdate).get("health_sort_by")).toBe("model_name");
     expect(lastUrl(onUrlUpdate).get("health_page")).toBe("3");
     expect(lastUrl(onUrlUpdate).get("health_page_size")).toBe("25");
+    expect(rowIds()).toEqual(["checking-row", "healthy-row", "unhealthy-row", "weird-row"]);
   });
+
+  const sortableRow = (suffix: string, healthStatus: string, checkedAt: string): HealthCheckData => {
+    const fields = {
+      id: `row-${suffix}`,
+      model_name: `model-${suffix}`,
+      model_info: { id: `row-${suffix}`, team_id: `team-${suffix}` },
+      health_status: healthStatus,
+      last_check: checkedAt,
+      last_success: checkedAt,
+    };
+    return makeRow(fields);
+  };
+  const newerRow = sortableRow("a", "healthy", "2024-06-01T10:00:00Z");
+  const olderRow = sortableRow("b", "unhealthy", "2024-01-01T10:00:00Z");
+
+  it.each(["model_id", "model_name", "team_id", "health_status", "last_check", "last_success"])(
+    "sorts by %s when the URL names it",
+    (column) => {
+      renderWithProviders(<Harness data={[olderRow, newerRow]} />, { searchParams: `?health_sort_by=${column}` });
+
+      expect(rowIds()).toEqual(["row-a", "row-b"]);
+    },
+  );
 });
 
 describe("HealthChecksTable rows", () => {
