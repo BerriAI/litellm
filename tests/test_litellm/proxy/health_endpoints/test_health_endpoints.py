@@ -3707,7 +3707,7 @@ class TestConfigBaseForHealthCheck:
         assert "sk-configured" not in str(base)
 
     def test_every_custom_pricing_field_is_excluded_from_the_connection_list(self):
-        from litellm.proxy.auth.auth_utils import _CONNECTION_OVERRIDE_REQUEST_PARAMS
+        from litellm.proxy.health_endpoints._health_endpoints import _CONNECTION_OVERRIDE_REQUEST_PARAMS
         from litellm.types.utils import CustomPricingLiteLLMParams
 
         connection_params = set(_CONNECTION_OVERRIDE_REQUEST_PARAMS)
@@ -3718,7 +3718,7 @@ class TestConfigBaseForHealthCheck:
             )
 
     def test_connection_list_keeps_the_real_credential_and_endpoint_fields(self):
-        from litellm.proxy.auth.auth_utils import _CONNECTION_OVERRIDE_REQUEST_PARAMS
+        from litellm.proxy.health_endpoints._health_endpoints import _CONNECTION_OVERRIDE_REQUEST_PARAMS
 
         connection_params = set(_CONNECTION_OVERRIDE_REQUEST_PARAMS)
         for field in ("api_base", "base_url", "azure_ad_token", "vertex_credentials", "user_config"):
