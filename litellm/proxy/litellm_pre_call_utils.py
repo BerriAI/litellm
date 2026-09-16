@@ -108,6 +108,31 @@ def _trace_id_from_traceparent(traceparent: str) -> str | None:
     return trace_id if trace_id != "0" * 32 else None
 
 
+def _trace_id_from_otel_span(span: "OtelSpan | None") -> str | None:
+    if span is None:
+        return None
+    span_context: Final = span.get_span_context()
+    if not span_context.is_valid:
+        return None
+    return format(span_context.trace_id, "032x")
+
+
+def add_otel_trace_id_to_request(
+    data: dict[str, object], _metadata_variable_name: str, parent_otel_span: "OtelSpan | None"
+) -> None:
+    if "litellm_trace_id" in data:
+        return
+    metadata: Final = data.get(_metadata_variable_name)
+    if isinstance(metadata, dict) and metadata.get("trace_id"):
+        return
+    trace_id: Final = _trace_id_from_otel_span(parent_otel_span)
+    if trace_id is None:
+        return
+    data["litellm_trace_id"] = trace_id  # rebind-ok: data is an out-param
+    if isinstance(metadata, dict):
+        metadata["trace_id"] = trace_id
+
+
 def _session_id_from_baggage(baggage: str) -> str | None:
     """Extract a session.id entry from a W3C Baggage header
     (https://www.w3.org/TR/baggage/), e.g. "session.id=abc-123,user.id=42"."""
@@ -173,6 +198,8 @@ _ENABLE_TEAM_STALE_ALIAS_BYPASS: bool | None = None
 
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span as OtelSpan
+
     from litellm.integrations.otel.model.destination import OtelDestination
     from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
@@ -2041,6 +2068,11 @@ async def add_litellm_data_to_request(
         headers=_headers,
         data=data,
         _metadata_variable_name=_metadata_variable_name,
+    )
+    add_otel_trace_id_to_request(
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+        parent_otel_span=user_api_key_dict.parent_otel_span,
     )
     apply_missing_session_id_policy(
         data=data,
