@@ -211,3 +211,57 @@ class TestUnmappedModelBudgetEnforcement:
 
         result = _is_model_cost_zero(model="paid-model", llm_router=mock_router)
         assert result is False
+
+
+class TestModelGroupAliasZeroCost:
+    """model_group_alias names must resolve to their target group before the
+    zero-cost check, for both the string form and the hidden dict form."""
+
+    def setup_method(self):
+        """Snapshot litellm.model_cost before each test."""
+        self._saved_model_cost = copy.deepcopy(litellm.model_cost)
+
+    def teardown_method(self):
+        """Restore litellm.model_cost after each test."""
+        litellm.model_cost = self._saved_model_cost
+
+    def _router(self) -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "ollama/llama2",
+                        "api_base": "http://localhost:11434",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"},
+                },
+            ],
+            model_group_alias={
+                "free-alias": "free-model",
+                "free-hidden": {"model": "free-model", "hidden": True},
+                "paid-alias": "paid-model",
+                "paid-hidden": {"model": "paid-model", "hidden": True},
+            },
+        )
+
+    def test_visible_alias_to_free_model_bypasses_budget(self):
+        router = self._router()
+        assert _is_model_cost_zero(model="free-alias", llm_router=router) is True
+
+    def test_hidden_alias_to_free_model_bypasses_budget(self):
+        router = self._router()
+        assert _is_model_cost_zero(model="free-hidden", llm_router=router) is True
+
+    def test_visible_alias_to_paid_model_enforces_budget(self):
+        router = self._router()
+        assert _is_model_cost_zero(model="paid-alias", llm_router=router) is False
+
+    def test_hidden_alias_to_paid_model_enforces_budget(self):
+        router = self._router()
+        assert _is_model_cost_zero(model="paid-hidden", llm_router=router) is False
