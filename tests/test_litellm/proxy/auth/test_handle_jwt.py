@@ -7111,8 +7111,6 @@ def test_check_scope_based_access_denial_hides_scope_allowlist_from_client():
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == {"error": _JWT_DENIED_CLIENT_MESSAGE}
     assert exc_info.value.internal_message == "model=gpt-5.6 not allowed. Allowed_models=['gpt-5.6-mini']"
-||||||| 24153b5f29
-=======
 
 
 @pytest.mark.asyncio
