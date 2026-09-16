@@ -53,6 +53,14 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
             param=None,
             code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
         )
+    if isinstance(e, ModelAccessDeniedHTTPException):
+        return ModelAccessDeniedProxyException(
+            message=str(e.detail),
+            internal_message=e.internal_message,
+            type=ProxyErrorTypes.auth_error,
+            param="None",
+            code=e.status_code,
+        )
     if isinstance(e, HTTPException):
         return ProxyException(
             message=getattr(e, "detail", f"Authentication Error({e})"),
@@ -75,14 +83,6 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
         param=getattr(e, "param", "None"),
         code=status.HTTP_401_UNAUTHORIZED,
     )
-
-
-def _model_access_denied_internal_message(e: Exception) -> str | None:
-    if not litellm.model_access_denied_message:
-        return None
-    if not isinstance(e, (ModelAccessDeniedProxyException, ModelAccessDeniedHTTPException)):
-        return None
-    return e.internal_message.replace("\r", "").replace("\n", "")
 
 
 def _get_user_agent(request: Request) -> str | None:
@@ -176,9 +176,6 @@ class UserAPIKeyAuthExceptionHandler:
             # survives a raising callback pipeline. Classify and route malformed virtual-key
             # rejections to WARNING on stdout (suppressible via LITELLM_LOG=ERROR).
             log_extra: Final = {"requester_ip": requester_ip}
-            denied_internal_message: Final = _model_access_denied_internal_message(e)
-            if denied_internal_message is not None:
-                verbose_proxy_logger.warning(denied_internal_message, extra=log_extra)
             is_invalid_virtual_key: Final = is_invalid_virtual_key_error(e)
             is_quiet_log: Final = is_invalid_virtual_key and not litellm.log_client_error_tracebacks
             logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger

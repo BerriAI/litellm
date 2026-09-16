@@ -1022,7 +1022,9 @@ def _denied_jwt_exception() -> ModelAccessDeniedHTTPException:
         pytest.param(_denied_jwt_exception, id="jwt_http_exception"),
     ],
 )
-async def test_handle_authentication_error_logs_sanitized_model_access_denial_once(monkeypatch, make_denial, caplog):
+async def test_handle_authentication_error_keeps_internal_message_on_model_access_denial(
+    monkeypatch, make_denial, caplog
+):
     monkeypatch.setattr(litellm, "model_access_denied_message", _DENIED_MESSAGE_TEMPLATE)
     handler = UserAPIKeyAuthExceptionHandler()
     denial = make_denial()
@@ -1041,17 +1043,14 @@ async def test_handle_authentication_error_logs_sanitized_model_access_denial_on
             {"allow_requests_on_db_unavailable": False},
         ),
         caplog.at_level("WARNING", logger="LiteLLM Proxy"),
-        pytest.raises(ProxyException) as exc_info,
+        pytest.raises(ModelAccessDeniedProxyException) as exc_info,
     ):
         await handler._handle_authentication_error(denial, MagicMock(), {}, "/v1/chat/completions", None, "sk-bad-key")
 
     assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
     assert "internal-models" not in str(exc_info.value.message)
-    denial_records = [r for r in caplog.records if "internal-models" in r.getMessage()]
-    assert len(denial_records) == 1
-    assert denial_records[0].levelname == "WARNING"
-    assert "\n" not in denial_records[0].getMessage()
-    assert "gpt-5.6WARNING forged log line" in denial_records[0].getMessage()
+    assert exc_info.value.internal_message == denial.internal_message
+    assert [r for r in caplog.records if r.levelname == "WARNING" and "internal-models" in r.getMessage()] == []
 
 
 @pytest.mark.asyncio
