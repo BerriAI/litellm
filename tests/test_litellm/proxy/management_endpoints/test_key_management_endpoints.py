@@ -18138,6 +18138,83 @@ async def _generate_key_and_get_persisted_row(data: GenerateKeyRequest, mock_ins
 
 
 @pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_fills_unset(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data = _wire_key_generation_prisma(monkeypatch)
+
+    response = await generate_key_fn(
+        data=GenerateKeyRequest(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key="sk-internal",
+            user_id="internal-user",
+        ),
+        litellm_changed_by=None,
+    )
+
+    assert response is not None
+    key_call = next(c for c in mock_insert_data.call_args_list if c.kwargs["table_name"] == "key")
+    assert key_call.kwargs["data"]["allowed_routes"] == ["llm_api_routes", "/key/spend/report"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_keeps_explicit_value(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data = _wire_key_generation_prisma(monkeypatch)
+
+    key_row = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(allowed_routes=["info_routes"]),
+        mock_insert_data,
+    )
+
+    assert key_row["allowed_routes"] == ["info_routes"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_key_type_preset_wins(monkeypatch):
+    from litellm.proxy._types import LiteLLMKeyType
+
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data = _wire_key_generation_prisma(monkeypatch)
+
+    key_row = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API),
+        mock_insert_data,
+    )
+
+    assert key_row["allowed_routes"] == ["llm_api_routes"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_empty_list_treated_as_unset(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data = _wire_key_generation_prisma(monkeypatch)
+
+    key_row = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(allowed_routes=[]),
+        mock_insert_data,
+    )
+
+    assert key_row["allowed_routes"] == ["llm_api_routes", "/key/spend/report"]
+
+
+@pytest.mark.asyncio
 async def test_key_generate_explicit_null_budget_duration_beats_default_key_generate_params(monkeypatch):
     """An explicit `"budget_duration": null` asks for a budget that never resets.
 
