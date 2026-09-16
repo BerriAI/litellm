@@ -6071,6 +6071,30 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         )
 
 
+def _resolve_vercel_or_cloudflare_embedding_credentials(
+    custom_llm_provider: str,
+    api_base: str | None,
+    api_key: str | None,
+) -> tuple[str | None, str | None]:
+    if custom_llm_provider == "cloudflare":
+        resolved_api_key: Final = (
+            api_key or litellm.cloudflare_api_key or litellm.api_key or get_secret_str("CLOUDFLARE_API_KEY")
+        )
+        if resolved_api_key is None:
+            raise ValueError("Missing Cloudflare API Key - no key is set in the environment or request parameters")
+        return api_base or litellm.api_base or get_secret_str("CLOUDFLARE_API_BASE"), resolved_api_key
+    return (
+        api_base
+        or litellm.api_base
+        or get_secret_str("VERCEL_AI_GATEWAY_API_BASE")
+        or "https://ai-gateway.vercel.sh/v1",
+        api_key
+        or litellm.api_key
+        or get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
+        or get_secret_str("VERCEL_OIDC_TOKEN"),
+    )
+
+
 # fmt: off
 
 # Overload for when aembedding=True (returns coroutine)
@@ -6531,21 +6555,10 @@ def embedding(
                 litellm_params=litellm_params_dict,
                 headers=headers,
             )
-        elif custom_llm_provider == "vercel_ai_gateway":
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("VERCEL_AI_GATEWAY_API_BASE")
-                or "https://ai-gateway.vercel.sh/v1"
+        elif custom_llm_provider in ("vercel_ai_gateway", "cloudflare"):
+            api_base, api_key = _resolve_vercel_or_cloudflare_embedding_credentials(
+                custom_llm_provider, api_base, api_key
             )
-
-            api_key = (
-                api_key
-                or litellm.api_key
-                or get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
-                or get_secret_str("VERCEL_OIDC_TOKEN")
-            )
-
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
