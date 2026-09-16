@@ -42,14 +42,13 @@ from litellm.litellm_core_utils.cli_token_utils import (
 
 from .claude_settings import (
     STARTING_MODEL_ROLE,
-    ApiKeyHelper,
     ClaudeSettingsError,
     KeepModel,
+    StaticToken,
     claude_settings_path,
     configure_claude_settings,
     configure_state_path,
     refuse_while_owned,
-    resolve_api_key_helper,
     settings_file_owners,
 )
 from .pkce_login import (
@@ -784,13 +783,16 @@ def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
             return None
 
 
-def _configure_claude_code(base_url: str) -> None:
-    """Point Claude Code at base_url by patching the settings.json it reads, undoable with `lite unconfigure claude`."""
+def _configure_claude_code(base_url: str, api_key: str) -> None:
+    """Write the key this login just minted into Claude Code's settings.json as a static token, undoable with
+    `lite unconfigure claude`. The key expires with the login, so the flag is the re-wire step of each login
+    rather than a one-time setup: no apiKeyHelper is written, since Claude Code would spawn `lite` (and its
+    keychain probe) on every credential refresh to keep one fresh."""
     settings_path: Final = claude_settings_path(os.environ)
     try:
         configure_claude_settings(
             base_url,
-            ApiKeyHelper(resolve_api_key_helper(base_url)),
+            StaticToken(api_key),
             KeepModel(),
             settings_path,
             configure_state_path(settings_path),
@@ -800,22 +802,28 @@ def _configure_claude_code(base_url: str) -> None:
         raise click.ClickException(f"Logged in, but could not configure Claude Code: {e}")
     click.echo(f"\nConfigured Claude Code: {settings_path} now routes through {base_url.rstrip('/')}.")
     click.echo(
+        "This login's key is stored in the file, so run `lite login --config-claude` again after it expires. "
         "Your other Claude Code settings were left untouched. Restart Claude Code to pick this up. "
         f"Undo with `lite unconfigure claude`; `lite configure claude --model` sets {STARTING_MODEL_ROLE}."
     )
 
 
 def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: SecretSave) -> None:
+    """Claude Code is configured from the key in hand, so it does not wait on the CLI's own store: a login whose
+    token file or keychain refused it still has a usable key, and `--config-claude` asked for exactly that
+    key to be written into settings.json."""
     from litellm.proxy.client.cli.interface import show_commands
 
     click.echo("\nLogin successful!")
     click.echo(f"JWT Token: {api_key[:20]}...")
     click.echo(storage_notice(stored))
+    if config_claude:
+        _configure_claude_code(base_url, api_key)
     if isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
+        if config_claude:
+            click.echo("Claude Code was configured with this key even though the CLI itself could not keep it.")
         return
     click.echo("You can now use the CLI without specifying --api-key")
-    if config_claude:
-        _configure_claude_code(base_url)
     click.echo("\n" + "=" * 60)
     show_commands()
 
@@ -850,8 +858,8 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
     is_flag=True,
     default=False,
     help=(
-        "After logging in, update ~/.claude/settings.json so Claude Code routes through this proxy. "
-        "Unrelated settings are preserved."
+        "After logging in, write this login's key into ~/.claude/settings.json so Claude Code routes through "
+        "this proxy; run it again after the key expires. Unrelated settings are preserved."
     ),
 )
 @click.option(

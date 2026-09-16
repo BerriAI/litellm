@@ -191,6 +191,7 @@ if MCP_AVAILABLE:
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
         filter_tools_by_key_team_permissions,
+        fire_mcp_tool_call_failure_logging,
     )
 
     ########################################################
@@ -231,6 +232,20 @@ if MCP_AVAILABLE:
             verbose_logger.warning("MCP tool call logging failed (continuing): %s", outcome)
             return result
         return outcome
+
+    async def _safe_fire_mcp_tool_call_failure_logging(
+        logging_obj: "LiteLLMLoggingObj | None",
+        exception: Exception,
+        start_time: datetime,
+        user_api_key_auth: UserAPIKeyAuth,
+        request_data: Mapping[str, object],
+    ) -> None:
+        try:
+            await fire_mcp_tool_call_failure_logging(
+                logging_obj, exception, start_time, user_api_key_auth, request_data
+            )
+        except Exception as logging_error:
+            verbose_logger.warning("MCP tool call failure logging failed (continuing): %s", logging_error)
 
     def _relay_upstream_auth_http_exception(e: MCPUpstreamAuthError, request: Request) -> HTTPException:
         """Convert a client-forwarded pass-through upstream 401 into an HTTPException that preserves the
@@ -310,26 +325,39 @@ if MCP_AVAILABLE:
             )
         # MCP_TOOL_CALL_TOOL_NAME: run the same pre-call pipeline as the normal path so the tool
         # execution is spend-logged and guardrail-checked.
-        (_, virtual_logging_obj) = await ProxyBaseLLMRequestProcessing(data=data).common_processing_pre_call_logic(
-            request=request,
-            user_api_key_dict=user_api_key_dict,
-            proxy_config=proxy_config,
-            route_type=CallTypes.call_mcp_tool.value,
-            proxy_logging_obj=proxy_logging_obj,
-            general_settings=general_settings,
-        )
-        _tool_start_time: Final = datetime.now()
-        result: Final = await handle_mcp_tool_call(
-            tool_name=tool_arguments.get("tool_name", ""),
-            arguments=tool_arguments.get("arguments") or {},
-            user_api_key_dict=user_api_key_dict,
-            client_ip=rest_client_ip,
-            mcp_auth_header=virtual_mcp_auth_header,
-            mcp_server_auth_headers=virtual_mcp_server_auth_headers,
-            oauth2_headers=virtual_oauth2_headers,
-            raw_headers=virtual_raw_headers,
-            litellm_logging_obj=virtual_logging_obj,
-        )
+        virtual_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+        _request_start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the tool start time below
+        try:
+            (_, virtual_logging_obj) = await virtual_processor.common_processing_pre_call_logic(
+                request=request,
+                user_api_key_dict=user_api_key_dict,
+                proxy_config=proxy_config,
+                route_type=CallTypes.call_mcp_tool.value,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings=general_settings,
+            )
+            _tool_start_time: Final = datetime.now()
+            result: Final = await handle_mcp_tool_call(
+                tool_name=tool_arguments.get("tool_name", ""),
+                arguments=tool_arguments.get("arguments") or {},
+                user_api_key_dict=user_api_key_dict,
+                client_ip=rest_client_ip,
+                mcp_auth_header=virtual_mcp_auth_header,
+                mcp_server_auth_headers=virtual_mcp_server_auth_headers,
+                oauth2_headers=virtual_oauth2_headers,
+                raw_headers=virtual_raw_headers,
+                litellm_logging_obj=virtual_logging_obj,
+            )
+        except Exception as e:
+            virtual_request_data: Final = virtual_processor.data
+            await _safe_fire_mcp_tool_call_failure_logging(
+                virtual_request_data.get("litellm_logging_obj"),
+                e,
+                _request_start_time,
+                user_api_key_dict,
+                virtual_request_data,
+            )
+            raise
         return await _safe_fire_mcp_tool_call_logging(
             virtual_logging_obj,
             result,
@@ -965,7 +993,9 @@ if MCP_AVAILABLE:
                             apply_tool_filters=apply_tool_filters,
                         )
                     except Exception as e:
-                        verbose_logger.exception("Error getting tools from %s: %s", server.name, e)
+                        verbose_logger.warning(
+                            "Error getting tools from %s: %s", server.name, classify_list_exception(e).tag
+                        )
                         return (), classify_list_exception(e)
                     return tools_result, ServerListOk(tool_count=len(tools_result))
 
@@ -1079,65 +1109,73 @@ if MCP_AVAILABLE:
                 )
 
             proxy_base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
-            (
-                data,
-                logging_obj,
-            ) = await proxy_base_llm_response_processor.common_processing_pre_call_logic(
-                request=request,
-                user_api_key_dict=user_api_key_dict,
-                proxy_config=proxy_config,
-                route_type=CallTypes.call_mcp_tool.value,
-                proxy_logging_obj=proxy_logging_obj,
-                general_settings=general_settings,
-            )
+            _request_start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the tool start time below
+            try:
+                (
+                    data,
+                    logging_obj,
+                ) = await proxy_base_llm_response_processor.common_processing_pre_call_logic(
+                    request=request,
+                    user_api_key_dict=user_api_key_dict,
+                    proxy_config=proxy_config,
+                    route_type=CallTypes.call_mcp_tool.value,
+                    proxy_logging_obj=proxy_logging_obj,
+                    general_settings=general_settings,
+                )
 
-            # Extract MCP auth headers from request and add to data dict
-            (
-                mcp_auth_header,
-                mcp_server_auth_headers,
-                raw_headers_from_request,
-            ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
-            if mcp_auth_header:
-                data["mcp_auth_header"] = mcp_auth_header
-            if mcp_server_auth_headers:
-                data["mcp_server_auth_headers"] = mcp_server_auth_headers
-            data["raw_headers"] = raw_headers_from_request
+                # Extract MCP auth headers from request and add to data dict
+                (
+                    mcp_auth_header,
+                    mcp_server_auth_headers,
+                    raw_headers_from_request,
+                ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
+                if mcp_auth_header:
+                    data["mcp_auth_header"] = mcp_auth_header
+                if mcp_server_auth_headers:
+                    data["mcp_server_auth_headers"] = mcp_server_auth_headers
+                data["raw_headers"] = raw_headers_from_request
 
-            # Extract user_api_key_auth from metadata and add to top level
-            # call_mcp_tool expects user_api_key_auth as a top-level parameter
-            if "metadata" in data and "user_api_key_auth" in data["metadata"]:
-                data["user_api_key_auth"] = data["metadata"]["user_api_key_auth"]
+                # Extract user_api_key_auth from metadata and add to top level
+                # call_mcp_tool expects user_api_key_auth as a top-level parameter
+                if "metadata" in data and "user_api_key_auth" in data["metadata"]:
+                    data["user_api_key_auth"] = data["metadata"]["user_api_key_auth"]
 
-            # Resolve allowed MCP servers with IP filtering
-            (
-                allowed_mcp_servers,
-                canonical_server_id,
-            ) = await _resolve_allowed_mcp_servers_with_ip_filter(request, user_api_key_dict, server_id)
+                # Resolve allowed MCP servers with IP filtering
+                (
+                    allowed_mcp_servers,
+                    canonical_server_id,
+                ) = await _resolve_allowed_mcp_servers_with_ip_filter(request, user_api_key_dict, server_id)
 
-            # Look up per-user OAuth headers for this server (mirrors list_tool_rest_api).
-            user_oauth_extra_headers: dict[str, str] | None = None
-            target_server: Final = next(
-                (s for s in allowed_mcp_servers if s.server_id == canonical_server_id),
-                None,
-            )
-            if target_server is not None:
-                user_oauth_extra_headers = await _get_user_oauth_extra_headers(target_server, user_api_key_dict)
+                # Look up per-user OAuth headers for this server (mirrors list_tool_rest_api).
+                user_oauth_extra_headers: dict[str, str] | None = None
+                target_server: Final = next(
+                    (s for s in allowed_mcp_servers if s.server_id == canonical_server_id),
+                    None,
+                )
+                if target_server is not None:
+                    user_oauth_extra_headers = await _get_user_oauth_extra_headers(target_server, user_api_key_dict)
 
-            # Call execute_mcp_tool directly (permission checks already done)
-            _tool_start_time: Final = datetime.now()
-            result: Final = await execute_mcp_tool(
-                name=tool_name,
-                arguments=tool_arguments,
-                allowed_mcp_servers=allowed_mcp_servers,
-                start_time=_tool_start_time,
-                user_api_key_auth=data.get("user_api_key_auth"),
-                mcp_auth_header=data.get("mcp_auth_header"),
-                mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
-                oauth2_headers=user_oauth_extra_headers or data.get("oauth2_headers"),
-                raw_headers=data.get("raw_headers"),
-                litellm_logging_obj=data.get("litellm_logging_obj"),
-                requested_server_id=canonical_server_id,
-            )
+                # Call execute_mcp_tool directly (permission checks already done)
+                _tool_start_time: Final = datetime.now()
+                result: Final = await execute_mcp_tool(
+                    name=tool_name,
+                    arguments=tool_arguments,
+                    allowed_mcp_servers=allowed_mcp_servers,
+                    start_time=_tool_start_time,
+                    user_api_key_auth=data.get("user_api_key_auth"),
+                    mcp_auth_header=data.get("mcp_auth_header"),
+                    mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
+                    oauth2_headers=user_oauth_extra_headers or data.get("oauth2_headers"),
+                    raw_headers=data.get("raw_headers"),
+                    litellm_logging_obj=data.get("litellm_logging_obj"),
+                    requested_server_id=canonical_server_id,
+                )
+            except Exception as e:
+                request_data: Final = proxy_base_llm_response_processor.data
+                await _safe_fire_mcp_tool_call_failure_logging(
+                    request_data.get("litellm_logging_obj"), e, _request_start_time, user_api_key_dict, request_data
+                )
+                raise
             return await _safe_fire_mcp_tool_call_logging(
                 logging_obj,
                 result,

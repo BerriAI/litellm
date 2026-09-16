@@ -4,11 +4,12 @@ import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple
 
 import httpx
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     Json,
@@ -40,8 +41,14 @@ from litellm.types.mcp import (
     MCPTransportType,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.proxy.carried_budget_state import (
+    OrgBudgetSnapshot,
+    TeamBudgetSnapshot,
+    UserBudgetSnapshot,
+)
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.router import RouterErrors, UpdateRouterConfig
+from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
     CallTypes,
@@ -239,6 +246,7 @@ class Litellm_EntityType(enum.Enum):
     TEAM = "team"
     TEAM_MEMBER = "team_member"
     ORGANIZATION = "organization"
+    ORGANIZATION_MEMBER = "organization_member"
     PROJECT = "project"
     TAG = "tag"
     AGENT = "agent"
@@ -279,6 +287,7 @@ class KeyManagementRoutes(str, enum.Enum):
     # team's `team_member_permissions`, non-admin members of that team may set
     # `access_group_ids` on keys they create/update. Default-deny.
     KEY_ACCESS_GROUP_ASSIGNMENT = "/key/access_group_assignment"
+    AUTO_ROUTER_MANAGE = "/auto_router/manage"
 
     # info and health routes
     KEY_INFO = "/key/info"
@@ -477,6 +486,7 @@ class LiteLLMRoutes(enum.Enum):
         "/milvus",
         "/gigachat",
         "/watsonx",
+        "/nvidia_nim",
     ]
 
     #########################################################
@@ -645,15 +655,18 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
         KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value,
+        KeyManagementRoutes.AUTO_ROUTER_MANAGE.value,
     ]
 
     management_routes = (
         [
             # user
             "/user/new",
+            "/management/v1/users/bulk",
             "/user/update",
             "/user/bulk_update",
             "/user/delete",
+            "/management/v1/users/bulk_delete",
             "/user/info",
             "/user/list",
             "/user/daily/activity",
@@ -833,6 +846,7 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
+        "/management/v1/teams/{team_id}/members/bulk_delete",
         "/team/member_update",
         "/team/{team_id}/member/{user_id}/reset_spend",
         "/team/permissions_list",
@@ -859,6 +873,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/daily/activity",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         "/user/list",  # org admins checked in endpoint; non-admins get 403
+        "/management/v1/users/bulk_delete",  # proxy admins delete anyone, org admins only their orgs' users; others 403
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
@@ -880,6 +895,9 @@ class LiteLLMRoutes(enum.Enum):
         # proxy admin, or team admin naming their own team via team_id
         "/auto_router/test_routing",
         "/auto_router/validate_complexity_router_config",
+        # Per-session auto-router read - the endpoint scopes the row to the caller's own key hash
+        "/auto_router/session",
+        "/cost/predict-cache",
         # Agent registry - reads are role-scoped and writes are proxy-admin-gated
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,
@@ -1190,6 +1208,7 @@ class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
 
 class KeyRequestBase(GenerateRequestBase):
     key: str | None = None
+    tpd_limit: int | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     budget_id: str | None = None
@@ -1299,6 +1318,11 @@ class UpdateKeyRequest(KeyRequestBase):
     auto_rotate: bool | None = None
     rotation_interval: str | None = None
     organization_id: str | None = None
+
+    project_id: str | None = Field(
+        default=None,
+        description="Omit to retain the project, or send null to detach. Assigning a different project is not supported.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1870,6 +1894,9 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     )
     tpm_limit: int | None = Field(default=None, description="Max tokens per minute, allowed for this budget id.")
     rpm_limit: int | None = Field(default=None, description="Max requests per minute, allowed for this budget id.")
+    tpd_limit: int | None = Field(
+        default=None, description="Max tokens per day, charged by batch submissions, allowed for this budget id."
+    )
     budget_duration: str | None = Field(
         default=None,
         description="Max duration budget should be set for (e.g. '1hr', '1d', '28d')",
@@ -1968,8 +1995,14 @@ class OrgMember(MemberBase):
 
 from litellm.models.team import TeamBase as TeamBase  # noqa: E402
 
+RouterSettingsDict = Annotated[
+    dict[str, object],
+    BeforeValidator(validate_router_settings_dict, json_schema_input_type=UpdateRouterConfig),
+]
+
 
 class NewTeamRequest(TeamBase):
+    router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
     tags: list | None = None
     guardrails: list[str] | None = None
@@ -2040,6 +2073,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     metadata: dict | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    tpd_limit: int | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
     models: list | None = None
@@ -2067,7 +2101,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     enforced_batch_output_expires_after: dict | None = None
     enforced_file_expires_after: dict | None = None
-    router_settings: dict | None = None
+    router_settings: RouterSettingsDict | None = None
     access_group_ids: list[str] | None = None
     budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
     default_team_member_models: list[str] | None = None  # default allowed_models seeded onto new team members
@@ -2602,6 +2636,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     global_max_parallel_requests: int | None = Field(
         None, description="global max parallel requests to allow for a proxy instance."
     )
+    user_api_key_cache_max_size: int | None = Field(
+        None,
+        gt=0,
+        description=(
+            "max number of entries (virtual keys, teams, users, end users, memberships, ...) each worker keeps in "
+            "its in-memory auth cache. Defaults to 200. Raise this if you have more active keys than that or auth "
+            "lookups keep hitting the DB"
+        ),
+    )
     max_request_size_mb: int | None = Field(
         None,
         description="max request size in MB, if a request is larger than this size it will be rejected",
@@ -2614,9 +2657,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider",
     )
+    allowed_file_extensions: tuple[str, ...] | None = Field(
+        None,
+        description="the only file extensions (e.g. ['.jsonl', '.pdf', '.txt']) accepted on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Files with any other extension, or none, are rejected. An empty list rejects every upload. Unset means no allowlist is applied",
+    )
     blocked_file_extensions: tuple[str, ...] | None = Field(
         None,
-        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename",
+        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename. Deprecated in favour of allowed_file_extensions; still enforced, after the allowlist, when set",
     )
     max_response_size_mb: int | None = Field(
         None,
@@ -2848,6 +2895,25 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "UI username/password login. Default is False."
         ),
     )
+    disable_responses_id_security: bool | None = Field(
+        None,
+        description=(
+            "If True, disables ownership enforcement on Responses API ids. "
+            "Keys may then retrieve, cancel, delete, and chain from any response id, "
+            "including ids belonging to another user or team and ids this proxy never issued. "
+            "WARNING: this removes tenant isolation on /v1/responses"
+        ),
+    )
+    allow_unmanaged_response_ids: bool | None = Field(
+        None,
+        description=(
+            "If True, lets keys address Responses API ids that this proxy did not issue "
+            "(raw provider ids, or ids issued before response-id encryption was configured). "
+            "Such an id carries no owner, so no ownership check can run on it; ids this proxy "
+            "did issue keep full ownership enforcement. Off by default, in which case an "
+            "unrecognized response id is rejected with 403"
+        ),
+    )
     disable_env_credential_login: bool | None = Field(
         None,
         description=(
@@ -2963,6 +3029,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_alias: str | None = None
     team_tpm_limit: int | None = None
     team_rpm_limit: int | None = None
+    team_tpd_limit: int | None = None
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
     team_models: list = []
@@ -2982,6 +3049,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_id: str | None = None
     end_user_tpm_limit: int | None = None
     end_user_rpm_limit: int | None = None
+    end_user_tpd_limit: int | None = None
     end_user_max_budget: float | None = None
     end_user_model_max_budget: dict | None = None
 
@@ -3076,6 +3144,9 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
+    team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
+    user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
+    org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: Any | None = None  # Expanded user object when expand=user is used
@@ -3777,6 +3848,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key_team_alias: str | None
     spend_logs_metadata: dict | None  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: str | None
+    user_agent: ReadOnly[str | None]
     litellm_call_id: str | None
     applied_guardrails: list[str] | None
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
@@ -3839,6 +3911,7 @@ class SpendLogsPayload(TypedDict):
     session_id: str | None
     request_duration_ms: int | None
     status: Literal["success", "failure"]
+    litellm_call_id: ReadOnly[str | None]
 
 
 class SpanAttributes(str, enum.Enum):
@@ -4358,13 +4431,21 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     agent_ids: tuple[str, ...] = ()
 
 
+class TeamInfoMember(Member):
+    user_alias: str | None = None
+
+
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
+    members_with_roles: tuple[TeamInfoMember, ...] = ()
     team_member_budget_table: LiteLLM_BudgetTableFull | None = None
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
+    # Parent org's model ceiling, reported only to callers who can manage the team.
+    # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
+    organization_models: list[str] | None = None
 
 
 class TeamInfoResponseObject(TypedDict):
@@ -4407,12 +4488,14 @@ class CreateJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
     jwt_claim_name: str
     jwt_claim_value: str
     key: str
+    jwt_issuer: str | None = None
     description: str | None = None
 
 
 class UpdateJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
     id: str
     key: str | None = None
+    jwt_issuer: str | None = None
     description: str | None = None
     is_active: bool | None = None
 
@@ -4423,6 +4506,7 @@ class DeleteJWTKeyMappingRequest(LiteLLMPydanticObjectBase):
 
 class JWTKeyMappingResponse(LiteLLMPydanticObjectBase):
     id: str
+    jwt_issuer: str | None = None
     jwt_claim_name: str
     jwt_claim_value: str
     description: str | None = None
@@ -4532,7 +4616,6 @@ class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
     )
     metadata_doc_str = """Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }"""
     max_parallel_requests_doc_str = """Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x."""
-    soft_budget_doc_str = """Optional[float] - Get alerts when user crosses given budget, doesn't block requests."""
     model_max_budget_doc_str = """Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)"""
     model_rpm_limit_doc_str = """Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)"""
     model_tpm_limit_doc_str = """Optional[float] - Model-specific tpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)"""
@@ -4646,6 +4729,7 @@ class JWTAuthBuilderResult(TypedDict):
     org_id: str | None
     team_membership: LiteLLM_TeamMembership | None
     jwt_claims: dict  # Decoded JWT token claims (avoids re-decoding)
+    agent_id: ReadOnly[str | None]
 
 
 class ClientSideFallbackModel(TypedDict, total=False):
@@ -4789,6 +4873,14 @@ class JWTIssuerConfig(BaseModel):
         default=None,
         description="Issuer-specific claim path to normalize into LiteLLM's end-user id.",
     )
+    virtual_key_claim_field: str | None = Field(
+        default=None,
+        description="Issuer-specific claim path used for the virtual key mapping lookup. Falls back to the global field.",
+    )
+    unregistered_jwt_client_behavior: UnregisteredJWTClientBehavior | None = Field(
+        default=None,
+        description="Issuer-specific policy when the virtual key claim has no mapping. Falls back to the global policy.",
+    )
 
     model_config = {
         "extra": "forbid",
@@ -4876,6 +4968,14 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     user_allowed_roles: list[str] | None = None
     user_id_upsert: bool = Field(default=False, description="If user doesn't exist, upsert them into the db.")
     end_user_id_jwt_field: str | None = None
+    agent_id_jwt_field: str | None = Field(
+        default=None,
+        description=(
+            "The field in the JWT token that identifies the calling agent (e.g. 'azp' for a Microsoft Entra ID "
+            "app token). Supports dot notation. The value is matched against a registered agent's agent_id, "
+            "then agent_name, and the request is rejected when it matches neither."
+        ),
+    )
     public_key_ttl: float = 600
     public_key_stale_ttl: float = Field(
         default=DEFAULT_JWKS_STALE_TTL,
@@ -5015,6 +5115,28 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
 
         super().__init__(**kwargs)
 
+    def get_issuer_config(self, issuer: str | None) -> JWTIssuerConfig | None:
+        if issuer is None or self.issuers is None:
+            return None
+        return next((config for config in self.issuers if config.issuer == issuer), None)
+
+    def is_virtual_key_mapping_configured(self) -> bool:
+        if self.virtual_key_claim_field is not None:
+            return True
+        return any(config.virtual_key_claim_field is not None for config in self.issuers or ())
+
+    def get_virtual_key_claim_field(self, issuer: str | None) -> str | None:
+        issuer_config: Final = self.get_issuer_config(issuer)
+        if issuer_config is not None and issuer_config.virtual_key_claim_field is not None:
+            return issuer_config.virtual_key_claim_field
+        return self.virtual_key_claim_field
+
+    def get_unregistered_jwt_client_behavior(self, issuer: str | None) -> UnregisteredJWTClientBehavior:
+        issuer_config: Final = self.get_issuer_config(issuer)
+        if issuer_config is not None and issuer_config.unregistered_jwt_client_behavior is not None:
+            return issuer_config.unregistered_jwt_client_behavior
+        return self.unregistered_jwt_client_behavior
+
 
 class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     model_name: str
@@ -5098,6 +5220,8 @@ class BaseDailySpendTransaction(TypedDict):
     api_requests: int
     successful_requests: int
     failed_requests: int
+    total_response_time_ms: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
+    timed_requests: NotRequired[int]  # writable-ok: the rollup queue accumulates into this key in place
 
 
 class DailyTeamSpendTransaction(BaseDailySpendTransaction):
@@ -5136,6 +5260,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_list_transactions: dict[str, float] | None
     team_member_list_transactions: dict[str, float] | None
     org_list_transactions: dict[str, float] | None
+    org_member_list_transactions: ReadOnly[dict[str, float] | None]
     tag_list_transactions: dict[str, float] | None
     agent_list_transactions: dict[str, float] | None
     model_access_group_list_transactions: ReadOnly[dict[str, float] | None]

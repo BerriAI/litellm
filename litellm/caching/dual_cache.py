@@ -22,8 +22,8 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 
 from .base_cache import BaseCache
-from .in_memory_cache import InMemoryCache
-from .redis_cache import RedisCache, log_redis_failure
+from .in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
+from .redis_cache import RedisCache, RedisCircuitBreakerOpenError, log_redis_failure
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -82,6 +82,9 @@ class DualCache(BaseCache):
 
         if default_redis_ttl is not None:
             self.default_redis_ttl = default_redis_ttl
+
+    def update_in_memory_max_size(self, max_size: int | None) -> None:
+        self.in_memory_cache.max_size_in_memory = DEFAULT_MAX_SIZE_IN_MEMORY if max_size is None else max_size
 
     def attach_redis_cache(
         self,
@@ -206,9 +209,12 @@ class DualCache(BaseCache):
                 redis_result: Final = self.redis_cache.batch_get_cache(
                     key_list=sublist_keys, parent_otel_span=parent_otel_span
                 )
-            except Exception:
+            except Exception as e:
                 # Do not throttle subsequent callers if the Redis read fails.
                 self._rollback_redis_batch_key_reservations(previous_access_times)
+                if isinstance(e, RedisCircuitBreakerOpenError):
+                    verbose_logger.debug("LiteLLM Cache: batch_get_cache served from memory only: %s", e)
+                    return result
                 raise
 
             if self.in_memory_cache is not None:
@@ -325,9 +331,12 @@ class DualCache(BaseCache):
                         redis_result: Final = await self.redis_cache.async_batch_get_cache(
                             sublist_keys, parent_otel_span=parent_otel_span
                         )
-                    except Exception:
+                    except Exception as e:
                         # Do not throttle subsequent callers if the Redis read fails.
                         self._rollback_redis_batch_key_reservations(previous_access_times)
+                        if isinstance(e, RedisCircuitBreakerOpenError):
+                            verbose_logger.debug("LiteLLM Cache: async_batch_get_cache served from memory only: %s", e)
+                            return result
                         raise
 
                     # Short-circuit if redis_result is None or contains only None values
@@ -370,7 +379,9 @@ class DualCache(BaseCache):
             )
 
     # async_batch_set_cache
-    async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs):
+    async def async_set_cache_pipeline(
+        self, cache_list: Sequence[tuple[str, object]], local_only: bool = False, **kwargs
+    ):
         """
         Batch write values to the cache
         """

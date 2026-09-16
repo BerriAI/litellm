@@ -38,30 +38,28 @@ def _trace_functions(
     python_functions: Final[dict[str, PythonFunctionIdentity]] = {}
     rust_functions: Final[dict[str, RustFunctionIdentity]] = {}
     for scenario in suite.scenarios:
-        for mode in scenario.modes:
-            route: Final = RouteSpec(
-                route=suite.route.route,
-                python_entrypoints=suite.route.python_entrypoints,
-                rust_entrypoints=suite.route.rust_entrypoints,
-                fixture=scenario.fixture,
-            )
-            python_trace: Final = collect_trace(route, "python", asynchronous=mode == "async")
-            rust_trace: Final = collect_trace(route, "rust", asynchronous=mode == "async")
-            if isinstance(python_trace, TraceExecutionFailure):
-                raise ValueError(f"Python trace discovery failed for {scenario.name}/{mode}: {python_trace.message}")
-            if isinstance(rust_trace, TraceExecutionFailure):
-                raise ValueError(f"Rust trace discovery failed for {scenario.name}/{mode}: {rust_trace.message}")
-            mappings: Final = scenario.mappings_for(mode)
-            python_projection: Final = pipeline_projection("python", python_trace, mappings)
-            rust_projection: Final = pipeline_projection("rust", rust_trace, mappings)
-            for step in python_projection.steps:
-                if step.span in spec.trace_spans:
-                    function: Final = PythonFunctionIdentity.from_trace(step.raw)
-                    python_functions[function.raw] = function
-            for step in rust_projection.steps:
-                if step.span in spec.trace_spans:
-                    function: Final = RustFunctionIdentity.from_trace(step.raw)
-                    rust_functions[step.raw] = function
+        route: Final = RouteSpec(
+            route=suite.route.route,
+            python_entrypoints=suite.route.python_entrypoints,
+            rust_entrypoints=suite.route.rust_entrypoints,
+            fixture=scenario.fixture,
+        )
+        python_trace: Final = collect_trace(route, "python", asynchronous=scenario.asynchronous)
+        rust_trace: Final = collect_trace(route, "rust", asynchronous=scenario.asynchronous)
+        if isinstance(python_trace, TraceExecutionFailure):
+            raise ValueError(f"Python trace discovery failed for {scenario.name}: {python_trace.message}")
+        if isinstance(rust_trace, TraceExecutionFailure):
+            raise ValueError(f"Rust trace discovery failed for {scenario.name}: {rust_trace.message}")
+        python_projection: Final = pipeline_projection("python", python_trace, scenario.mappings)
+        rust_projection: Final = pipeline_projection("rust", rust_trace, scenario.mappings)
+        for step in python_projection.steps:
+            if step.span in spec.trace_spans:
+                function: Final = PythonFunctionIdentity.from_trace(step.raw)
+                python_functions[function.raw] = function
+        for step in rust_projection.steps:
+            if step.span in spec.trace_spans:
+                function: Final = RustFunctionIdentity.from_trace(step.raw)
+                rust_functions[step.raw] = function
     if not python_functions or not rust_functions:
         raise ValueError(f"Python trace discovery found no functions for spans: {', '.join(spec.trace_spans)}")
     return (

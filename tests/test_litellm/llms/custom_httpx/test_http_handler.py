@@ -1612,3 +1612,66 @@ async def test_a_retried_put_stays_a_put_and_still_refuses_redirects():
         assert attempts == [("PUT", "/first"), ("PUT", "/first")]
     finally:
         await handler.client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["https://example.com/final.json?next=1", "https://other.example/final.json?next=1"])
+async def test_bounded_get_preserves_sdk_redirect_auth_and_query_handling(respx_mock, monkeypatch, target):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    respx_mock.get("https://example.com/spec.json?original=1").respond(302, headers={"location": target})
+    destination = respx_mock.get(target).respond(200, json={"paths": {}})
+    handler = AsyncHTTPHandler()
+    try:
+        response = await handler.get(
+            "https://example.com/spec.json?original=1", max_response_bytes=100, follow_redirects=True,
+            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"}, timeout=2.0,
+        )
+    finally:
+        await handler.close()
+    assert response.json() == {"paths": {}}
+    request = destination.calls[0].request
+    assert request.headers.get("authorization") == (None if "other.example" in target else "Bearer sentinel")
+    assert request.headers["accept-encoding"] == "identity"
+    assert str(request.url) == target
+    assert request.extensions["timeout"]["read"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_stops_redirect_loops(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route = respx_mock.get("https://example.com/spec.json").respond(302, headers={"location": "/spec.json"})
+    handler = AsyncHTTPHandler()
+    try:
+        with pytest.raises(ValueError, match="Too many redirects"):
+            await handler.get("https://example.com/spec.json", max_response_bytes=100, follow_redirects=True)
+    finally:
+        await handler.close()
+    assert route.call_count == 11
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_closes_stream_on_cancellation(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    started = asyncio.Event()
+    closed = asyncio.Event()
+
+    class SlowStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"x"
+            started.set()
+            await asyncio.Event().wait()
+
+        async def aclose(self):
+            closed.set()
+
+    respx_mock.get("https://example.com/slow.json").respond(200, stream=SlowStream())
+    handler = AsyncHTTPHandler()
+    try:
+        task = asyncio.create_task(handler.get("https://example.com/slow.json", max_response_bytes=100))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        await handler.close()
+    assert closed.is_set()

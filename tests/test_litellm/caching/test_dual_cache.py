@@ -677,3 +677,85 @@ async def test_a_real_redis_failure_still_logs_an_error(caplog):
     errors = [record for record in caplog.records if record.levelno == logging.ERROR]
     assert [record.getMessage() for record in errors] == ["LiteLLM Cache: exception in async_get_cache: redis is down"]
     assert errors[0].exc_info is not None
+
+
+def _dual_cache_with_open_breaker_and_a_memory_hit() -> DualCache:
+    in_memory = InMemoryCache()
+    in_memory.set_cache("k1", "v1")
+    return DualCache(in_memory_cache=in_memory, redis_cache=_OpenBreakerRedis(), default_redis_batch_cache_expiry=10)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+
+
+def test_open_breaker_keeps_sync_batch_read_memory_hits_and_releases_reservations():
+    """A refused Redis batch read must still answer with the in-memory hits and hold no reservation.
+
+    The refusal was logged and turned into a bare None, so a caller lost its in-memory hits
+    for as long as the breaker stayed open, and the reserved keys stayed throttled until
+    the batch expiry passed even though nothing was ever read for them.
+    """
+    cache = _dual_cache_with_open_breaker_and_a_memory_hit()
+
+    assert list(cache.batch_get_cache(["k1", "k2"])) == ["v1", None]
+    assert "k2" not in cache.last_redis_batch_access_time
+
+
+@pytest.mark.asyncio
+async def test_open_breaker_keeps_async_batch_read_memory_hits_and_releases_reservations():
+    cache = _dual_cache_with_open_breaker_and_a_memory_hit()
+
+    assert list(await cache.async_batch_get_cache(["k1", "k2"])) == ["v1", None]
+    assert "k2" not in cache.last_redis_batch_access_time
+
+
+@pytest.mark.asyncio
+async def test_redis_timeouts_falling_back_to_memory_log_once_per_interval(caplog, monkeypatch):
+    """The first fallback WARNING of a timeout streak logs, the rest stay at DEBUG until the summary."""
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching import redis_cache as redis_cache_module
+    from litellm.caching.redis_cache import _RedisTimeoutLogThrottle
+
+    clock = MagicMock(return_value=1_000.0)
+    monkeypatch.setattr(
+        redis_cache_module, "_redis_timeout_log_throttle", _RedisTimeoutLogThrottle(interval=5.0, clock=clock)
+    )
+
+    class _TimingOutRedis:
+        async def async_increment_pipeline(self, increment_list, **kwargs):
+            raise RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
+
+        async def async_increment(self, key, value, **kwargs):
+            raise RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
+
+    cache = DualCache(
+        in_memory_cache=InMemoryCache(),
+        redis_cache=_TimingOutRedis(),  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    )
+    increments = [RedisPipelineIncrementOperation(key="k", increment_value=1.0, ttl=60)]
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        for _ in range(100):
+            await cache.async_increment_cache_pipeline(increment_list=increments)
+            await cache.async_increment_cache("k", 1.0)
+
+    visible = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert [(r.levelno, r.getMessage()) for r in visible] == [
+        (
+            logging.WARNING,
+            "Redis async_increment_cache_pipeline failed, falling back to in-memory result:"
+            " Timeout reading from 127.0.0.1:6379",
+        )
+    ]
+    assert visible[0].filename == "dual_cache.py"
+    assert sum("Timeout reading from" in r.getMessage() for r in caplog.records) == 200
+
+    caplog.clear()
+    clock.return_value += 5.0
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await cache.async_increment_cache("k", 1.0)
+    assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
+        (
+            logging.WARNING,
+            "Redis async_increment_cache failed, falling back to in-memory result: Timeout reading from 127.0.0.1:6379"
+            " (199 more Redis timeouts since the previous Redis timeout line were logged at DEBUG)",
+        )
+    ]

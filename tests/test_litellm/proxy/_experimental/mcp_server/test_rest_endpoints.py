@@ -2595,6 +2595,79 @@ class TestCallToolRestAPI:
 
         assert result == masked_result
 
+    async def test_success_logging_start_time_excludes_pre_call_processing(self, monkeypatch):
+        """Pre-call hook latency (guardrails, header resolution) must not inflate the tool call's
+        logged duration on success."""
+        from litellm.proxy import proxy_server
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+            auth_type = None
+
+        stub_server = StubServer()
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        pre_call_finished_at = {}
+
+        async def slow_pre_call_hook(user_api_key_dict, data, call_type):
+            await asyncio.sleep(0.05)
+            pre_call_finished_at["value"] = datetime.now()
+            return data
+
+        captured = {}
+
+        async def fake_execute_mcp_tool(**kwargs):
+            captured.update(kwargs)
+            return {"result": "ok"}
+
+        fire_logging = AsyncMock(return_value={"result": "ok"})
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", slow_pre_call_hook)
+        monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", fake_execute_mcp_tool, raising=False)
+        monkeypatch.setattr(rest_endpoints, "_fire_mcp_tool_call_logging", fire_logging, raising=False)
+
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
+        )
+
+        await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=UserAPIKeyAuth())
+
+        logged_start_time = fire_logging.await_args.args[2]
+        assert captured["start_time"] >= pre_call_finished_at["value"]
+        assert logged_start_time == captured["start_time"]
+
     async def test_success_logging_guardrail_rejection_propagates(self, monkeypatch):
         """A guardrail rejecting the tool result must not be swallowed as a logging failure,
         otherwise the unguarded result would still be returned to the caller."""
@@ -2765,6 +2838,139 @@ class TestCallToolRestAPI:
         info_messages = [_rendered_log_message(c) for c in mock_logger.info.call_args_list if c.args]
         assert not any("relaying upstream" in m for m in info_messages)
 
+    @pytest.mark.parametrize("raise_site", ["pre_call_hook", "execute_mcp_tool"])
+    async def test_guardrail_block_runs_failure_logging_before_http_translation(self, monkeypatch, raise_site):
+        """A pre_mcp_call guardrail block, whether raised by the pre-call hook or from inside
+        execute_mcp_tool, must reach proxy_logging_obj.post_call_failure_hook (the only path that
+        writes the failure spend-log row) with the logging object's failure payload already built,
+        and the REST caller must still get the same 400 it got before."""
+        from litellm.proxy import proxy_server
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+            auth_type = None
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        guardrail_error = HTTPException(
+            status_code=400,
+            detail={"error": "Content blocked: keyword 'confidential' detected", "keyword": "confidential"},
+        )
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+            return data
+
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+            raise guardrail_error
+
+        async def fake_execute_mcp_tool(**kwargs):
+            raise guardrail_error
+
+        async def passthrough_execute_mcp_tool(**kwargs):
+            return []
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: StubServer() if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(
+            proxy_server.proxy_logging_obj,
+            "pre_call_hook",
+            blocking_pre_call_hook if raise_site == "pre_call_hook" else passthrough_pre_call_hook,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "execute_mcp_tool",
+            fake_execute_mcp_tool if raise_site == "execute_mcp_tool" else passthrough_execute_mcp_tool,
+            raising=False,
+        )
+        post_call_failure_hook = AsyncMock(return_value=None)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "post_call_failure_hook", post_call_failure_hook)
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", request_route="/mcp-rest/tools/call")
+        request = _build_request(
+            headers={"x-mcp-deepwiki-authorization": "Bearer upstream-secret"},
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {"q": "confidential"}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=user_api_key_dict)
+
+        assert exc_info.value is guardrail_error
+
+        post_call_failure_hook.assert_awaited_once()
+        hook_kwargs = post_call_failure_hook.await_args.kwargs
+        assert hook_kwargs["original_exception"] is guardrail_error
+        assert hook_kwargs["user_api_key_dict"] is user_api_key_dict
+        assert hook_kwargs["route"] == "/mcp/call_tool"
+        request_data = hook_kwargs["request_data"]
+        assert "raw_headers" not in request_data
+        assert "mcp_server_auth_headers" not in request_data
+        standard_logging_object = request_data["litellm_logging_obj"].model_call_details["standard_logging_object"]
+        assert standard_logging_object["status"] == "failure"
+        assert standard_logging_object["error_str"] == str(guardrail_error)
+
+    async def test_failure_logging_error_does_not_replace_guardrail_error(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
+        guardrail_error = HTTPException(status_code=400, detail={"error": "Content blocked"})
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+            raise guardrail_error
+
+        failure_logging = AsyncMock(side_effect=RuntimeError("spend log db down"))
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", blocking_pre_call_hook)
+        monkeypatch.setattr(rest_endpoints, "fire_mcp_tool_call_failure_logging", failure_logging, raising=False)
+
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {"q": "confidential"}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(
+                request, user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", request_route="/mcp-rest/tools/call")
+            )
+
+        assert exc_info.value is guardrail_error
+        failure_logging.assert_awaited_once()
+
     async def test_success_logging_cancellation_propagates(self, monkeypatch):
         fire_logging = AsyncMock(side_effect=asyncio.CancelledError())
         monkeypatch.setattr(
@@ -2801,7 +3007,7 @@ class TestCallToolRestAPI:
 
         class _FakePreCall:
             def __init__(self, data):
-                pass
+                self.data = data
 
             async def common_processing_pre_call_logic(self, **kwargs):
                 return None, MagicMock()
@@ -2834,6 +3040,58 @@ class TestCallToolRestAPI:
         assert exc_info.value.status_code == upstream_status
         assert exc_info.value.headers is not None
         assert exc_info.value.headers.get("www-authenticate") == challenge
+
+    async def test_virtual_mcp_tool_call_guardrail_block_runs_failure_logging(self, monkeypatch):
+        """A pre_mcp_call guardrail block on the virtual mcp_tool_call branch must write a failure
+        spend log, same as the direct tool call branch, and still raise the original error."""
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        guardrail_error = HTTPException(status_code=400, detail={"error": "Content blocked"})
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+            raise guardrail_error
+
+        failure_logging = AsyncMock()
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", blocking_pre_call_hook)
+        monkeypatch.setattr(rest_endpoints, "fire_mcp_tool_call_failure_logging", failure_logging, raising=False)
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            request_route="/mcp-rest/tools/call",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="search-scope",
+                mcp_tool_search_enabled=True,
+            ),
+        )
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"name": "mcp_tool_call", "arguments": {"tool_name": "x", "arguments": {"q": "confidential"}}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=user_api_key_dict)
+
+        assert exc_info.value is guardrail_error
+        failure_logging.assert_awaited_once()
+        logging_obj, exception, _start_time, user_api_key_auth, request_data = failure_logging.await_args.args
+        assert exception is guardrail_error
+        assert user_api_key_auth is user_api_key_dict
+        assert logging_obj is request_data.get("litellm_logging_obj")
+        assert logging_obj is not None
 
 
 class TestGetToolsForSingleServer:
