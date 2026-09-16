@@ -371,10 +371,9 @@ async def _extract_jwt_user_id(request: Request, token: str) -> str | None:
             identity_only=True,
         )
         resolved_user: Final = identity["user_object"]
-        if resolved_user is None:
+        if resolved_user is not None and isinstance(_active_user_record(resolved_user), str):
             return None
-        owner: Final = _active_user_record(resolved_user)
-        return None if isinstance(owner, str) else identity["user_id"]
+        return identity["user_id"]
     except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated identities never write credentials
         verbose_logger.debug("OAuth JWT identity could not be validated (%s)", type(exc).__name__)
         return None

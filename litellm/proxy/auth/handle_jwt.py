@@ -62,6 +62,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.agents import AgentResponse
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
 from .auth_checks import (
     _allowed_routes_check,
@@ -2343,21 +2344,26 @@ class JWTAuthManager:
         )
 
         if identity_only:
-            identity_user, _, _, _, identity_user_id = await JWTAuthManager.get_objects(
-                user_id=user_id,
-                user_email=user_email,
-                org_id=None,
-                end_user_id=None,
-                team_id=None,
-                valid_user_email=valid_user_email,
-                jwt_handler=jwt_handler,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                route=route,
-                user_id_upsert=False,
-            )
+            try:
+                identity_user, _, _, _, identity_user_id = await JWTAuthManager.get_objects(
+                    user_id=user_id,
+                    user_email=user_email,
+                    org_id=None,
+                    end_user_id=None,
+                    team_id=None,
+                    valid_user_email=valid_user_email,
+                    jwt_handler=jwt_handler,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    route=route,
+                    user_id_upsert=False,
+                )
+            except UserNotFoundError:
+                if not jwt_handler.is_admin(scopes=scopes):
+                    raise
+                identity_user, identity_user_id = None, user_id
             return JWTAuthBuilderResult(
                 is_proxy_admin=False,
                 # Admin admission uses the claim ID; other callers use the canonical DB ID.
