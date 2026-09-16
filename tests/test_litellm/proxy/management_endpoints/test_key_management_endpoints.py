@@ -38,11 +38,10 @@ from litellm.proxy._types import (
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
-    _project_cache_key,
     jwt_key_mapping_cache_key,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_org_key_limits,
@@ -18951,7 +18950,7 @@ async def test_regenerate_key_repoints_live_membership_not_the_key_row_it_read(
 async def _cache_with_project(project_id: str, project_models: list[str]) -> UserApiKeyCache:
     user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key=_project_cache_key(project_id),
+        key=project_cache_key(project_id),
         value=LiteLLM_ProjectTableCachedObj(project_id=project_id, team_id="team-lit-5823", models=project_models),
         model_type=LiteLLM_ProjectTableCachedObj,
     )
