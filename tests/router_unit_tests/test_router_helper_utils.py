@@ -1110,6 +1110,57 @@ async def test_increment_deployment_usage_for_response_skips_session_wrappers():
 
 
 @pytest.mark.asyncio
+async def test_increment_deployment_usage_writes_only_positive_deltas_for_limited_deployments():
+    router = _rpm_tpm_router("lit-3058-delta")
+    unlimited = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-fake"},
+                "model_info": {"id": "lit-3058-unlimited"},
+            }
+        ]
+    )
+
+    tpm_key = await router._increment_deployment_usage(
+        deployment_id="lit-3058-delta",
+        deployment_name="gpt-5-mini",
+        model_group="gpt-5-mini",
+        total_tokens=25,
+        rpm_increment=1,
+        parent_otel_span=None,
+    )
+    assert tpm_key is not None
+    assert await router.get_model_group_usage("gpt-5-mini") == (25, 1)
+
+    assert (
+        await router._increment_deployment_usage(
+            deployment_id="lit-3058-delta",
+            deployment_name="gpt-5-mini",
+            model_group="gpt-5-mini",
+            total_tokens=0,
+            rpm_increment=0,
+            parent_otel_span=None,
+        )
+        is None
+    )
+    assert await router.get_model_group_usage("gpt-5-mini") == (25, 1)
+
+    assert (
+        await unlimited._increment_deployment_usage(
+            deployment_id="lit-3058-unlimited",
+            deployment_name="gpt-5-mini",
+            model_group="gpt-5-mini",
+            total_tokens=25,
+            rpm_increment=1,
+            parent_otel_span=None,
+        )
+        is None
+    )
+    assert await unlimited.get_model_group_usage("gpt-5-mini") == (None, None)
+
+
+@pytest.mark.asyncio
 async def test_get_model_group_io_token_usage_sums_across_deployments():
     """
     get_model_group_io_token_usage must sum ITPM/OTPM across every deployment
