@@ -2559,7 +2559,13 @@ class LiteLLMCompletionResponsesConfig:
                 message = choice.message
                 reasoning_content: str = getattr(message, "reasoning_content", None) or ""
                 encrypted_content = LiteLLMCompletionResponsesConfig._encode_thinking_blocks(message)
-                if reasoning_content or encrypted_content:
+                # Only signed (encrypted) reasoning produces a standalone reasoning
+                # output item. Unsigned plain-text reasoning from providers like
+                # hosted_vllm (GLM, DeepSeek) is attached to the message item
+                # instead, so agent clients that iterate output items and only
+                # handle message/function_call do not see an unfamiliar
+                # reasoning item and stop processing mid-loop.
+                if encrypted_content:
                     # Only check the first choice for reasoning content
                     return [
                         GenericResponseOutputItem(
