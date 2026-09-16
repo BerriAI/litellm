@@ -22,6 +22,12 @@ Do not give cache credentials to candidate deployments. Counter artifacts contai
 
 Tests that require real provider timing, limits or state use `@pytest.mark.provider_live`. The marker keeps newly registered models on live routes without weakening their assertions. Ordinary assertion failures still fail E2E. The shared cache does not modify provider response IDs or make the proxy aware of replay
 
+## Recorded response semantics
+
+Replay preserves the original response ID, usage and end-to-end headers. The proxy can therefore deduplicate repeated provider IDs when storing spend-log rows, just as it does when a live upstream returns the same ID twice. One spend-log row per invocation is not guaranteed for identical recorded responses. Existing spend reconciliation requests use distinct prompt markers and retain their distinct-ID and row-count assertions; accounting tests are not automatically excluded from caching
+
+Provider remaining-quota headers describe the captured response. Metrics derived from them are historical on a cache hit, not a measurement of current provider capacity. Gateway-generated API-key quota headers are a separate contract. A test of fresh provider quota or timing must use the live-provider policy; replay can still exercise how the proxy processes the recorded headers
+
 ## Qualification
 
 `tests/code_coverage_tests/test_provider_cache.py` exercises local HTTP providers and disposable real Redis. CI runs these checks with the existing provider-edge and replay harness tests. These component checks do not establish Buildkite deployment, full-suite cross-build reuse or a genuine 24-hour expiry observation; those require separate runtime evidence
