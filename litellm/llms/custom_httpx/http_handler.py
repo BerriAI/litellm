@@ -1631,7 +1631,7 @@ class HTTPHandler:
 
 
 def get_async_httpx_client(
-    llm_provider: LlmProviders | httpxSpecialProvider,
+    llm_provider: LlmProviders | httpxSpecialProvider | str,
     params: dict | None = None,
     shared_session: Optional["ClientSession"] = None,
 ) -> AsyncHTTPHandler:

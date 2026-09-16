@@ -67,12 +67,16 @@ jobs:
       # further up the stack are modified. The suppression is scoped to this one
       # file/rule pair via SARIF post-filtering so every other callsite of
       # py/weak-sensitive-data-hashing in the repository continues to be analyzed.
-      - name: Filter SARIF (OCI sha256)
+      # provider_affinity.py temporarily masks a configured affinity header while
+      # input callbacks run, then restores it. Affinity-enabled paths receive a new
+      # header mapping, but CodeQL traces legacy provider defaults through the guard.
+      - name: Filter SARIF (intentional operations)
         if: matrix.language == 'python'
         uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
         with:
           patterns: |
             -litellm/llms/oci/common_utils.py:py/weak-sensitive-data-hashing
+            -litellm/litellm_core_utils/provider_affinity.py:py/modification-of-default-value
           input: sarif-results/python.sarif
           output: sarif-results/python.sarif
 
