@@ -502,8 +502,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
                 if text_format:
-                    responses_api_request["text"] = {  # mutable-ok: API request payload
-                        **(responses_api_request.get("text") or {}),  # mutable-ok: API request payload
+                    responses_api_request["text"] = {  # mutable-ok: optional fields accumulate across mapping branches
+                        **(responses_api_request.get("text") or {}),  # mutable-ok: preserve existing text fields
                         **text_format,
                     }
             elif key == "tool_choice":
@@ -513,8 +513,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 if stream_options is not None:
                     responses_api_request["stream_options"] = stream_options
             elif key == "verbosity":
-                responses_api_request["text"] = {  # mutable-ok: API request payload
-                    **(responses_api_request.get("text") or {}),  # mutable-ok: API request payload
+                responses_api_request["text"] = {  # mutable-ok: optional fields accumulate across mapping branches
+                    **(responses_api_request.get("text") or {}),  # mutable-ok: preserve existing text fields
                     "verbosity": value,
                 }
             elif key in ResponsesAPIOptionalRequestParams.__annotations__:

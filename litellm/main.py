@@ -5442,11 +5442,11 @@ def completion(
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
         allowed_openai_params: Final[list[str] | None] = (
-            [  # mutable-ok: API parameter list
+            [
                 *(kwargs.get("allowed_openai_params") or []),
                 "reasoning_effort",
                 "verbosity",
-            ]
+            ]  # mutable-ok: filtering needs list
             if bridges_to_responses_api
             else kwargs.get("allowed_openai_params")
         )
