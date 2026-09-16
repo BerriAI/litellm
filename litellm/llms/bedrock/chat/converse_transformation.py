@@ -228,7 +228,9 @@ class AmazonConverseConfig(BaseConfig):
             function = tool_call.get("function") or {}
             name = function.get("name") or "unknown_tool"
             arguments = function.get("arguments") or ""
-            return f"[tool call: {name}({arguments})]"
+            call_id = tool_call.get("id")
+            label = f"tool call {call_id}" if call_id else "tool call"
+            return f"[{label}: {name}({arguments})]"
 
         def _result_text(message: AllMessageValues) -> str:
             rendered = convert_content_list_to_str(message).strip()

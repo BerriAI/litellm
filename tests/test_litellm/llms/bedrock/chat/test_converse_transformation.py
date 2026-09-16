@@ -6467,7 +6467,8 @@ def test_neutralize_orphaned_tool_blocks_rewrites_when_no_tools():
     # '{"city": "Paris"}' is escaped, so assert on quote-free tokens that survive.
     assert "city" in serialized and "Paris" in serialized
     assert "Sunny, 25C" in serialized
-    assert "call_abc" in serialized  # tool_call_id correlation preserved
+    assert "[tool call call_abc: get_weather(" in result[1]["content"]
+    assert "[tool result for call_abc: Sunny, 25C]" in result[2]["content"]
 
 
 @pytest.mark.parametrize("tools_value", [[], None])
