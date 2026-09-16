@@ -46,13 +46,13 @@ def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
 
 
 @contextmanager
-def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str]) -> Iterator[Gateway]:
+def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str], *, config: Path | None = None, remove_environment: tuple[str, ...] = ()) -> Iterator[Gateway]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port: Final = reserve.getsockname()[1]
     root: Final = Path(__file__).resolve().parents[3]
     environment: Final = {
-        **os.environ,
+        **{name: value for name, value in os.environ.items() if name not in remove_environment},
         "LITELLM_MASTER_KEY": gateway.key,
         "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
         "STORE_MODEL_IN_DB": "True",
@@ -67,7 +67,7 @@ def owned_proxy(gateway: Gateway, directory: Path, overrides: Mapping[str, str])
                 "-m",
                 "integration._support.proxy",
                 "--config",
-                "tests/integration/proxy_config.yaml",
+                str(config or "tests/integration/proxy_config.yaml"),
                 "--host",
                 "127.0.0.1",
                 "--port",
