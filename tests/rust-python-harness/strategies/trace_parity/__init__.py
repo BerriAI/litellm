@@ -7,7 +7,6 @@ from ...shared.reporting.strategy import (
     ModuleCaseSpec,
     NotImplementedCaseSpec,
     RunnerArgumentDefinition,
-    RunnerOptionDefinition,
     StrategyDefinition,
 )
 from .reporting import render_trace_results
@@ -72,20 +71,12 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
     ),
     CaseDefinition(
         "messages",
-        ModuleCaseSpec(
-            coverage=Coverage.PARTIAL,
-            module="tests.rust-python-harness.strategies.trace_parity.gateway.messages.case",
-            note="Anthropic/Azure provider routes plus a fully consumed downstream streaming path.",
-        ),
+        NotImplementedCaseSpec(reason="No gateway Messages trace-parity case is registered."),
         surface="gateway",
     ),
     CaseDefinition(
         "responses",
-        ModuleCaseSpec(
-            coverage=Coverage.PARTIAL,
-            module="tests.rust-python-harness.strategies.trace_parity.gateway.responses.case",
-            note="Native OpenAI non-streaming and fully consumed downstream streaming paths.",
-        ),
+        NotImplementedCaseSpec(reason="No gateway Responses trace-parity case is registered."),
         surface="gateway",
     ),
     CaseDefinition(
@@ -95,11 +86,7 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
     ),
     CaseDefinition(
         "chat_completions",
-        ModuleCaseSpec(
-            coverage=Coverage.PARTIAL,
-            module="tests.rust-python-harness.strategies.trace_parity.gateway.chat_completions.case",
-            note="Anthropic non-streaming and fully consumed downstream streaming paths.",
-        ),
+        NotImplementedCaseSpec(reason="No gateway chat trace-parity case is registered."),
         surface="gateway",
     ),
     CaseDefinition(
@@ -113,7 +100,7 @@ STRATEGY: Final = StrategyDefinition(
     id="trace_parity",
     order=20,
     label="Traces",
-    description="Print Python profiler frames and Rust spans for representative pipeline scenarios.",
+    description="Print Python profiler frames for representative pipeline scenarios.",
     directory=Path(__file__).parent,
     runnable_spec=ModuleCaseSpec,
     cases=CASES,
@@ -124,12 +111,5 @@ STRATEGY: Final = StrategyDefinition(
         option="--scenario",
         metavar="NAME",
         help="run only this named trace scenario; repeat to select more than one",
-    ),
-    runner_options=(
-        RunnerOptionDefinition(
-            option="--engine",
-            choices=("python", "rust"),
-            help="show only this engine's trace; omit to print both engines",
-        ),
     ),
 )

@@ -317,13 +317,28 @@ _TWO_HEURISTIC_V2_ROUTERS_YAML = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("license_limit", [1, None])
-async def test_ProxyConfig_load_config_takes_the_heuristic_v2_limit_from_the_license_only(
-    tmp_path, monkeypatch, license_limit: int | None
+@pytest.mark.parametrize("classifier_type", ["heuristic_v2", "capability", "llm_v2"])
+async def test_ProxyConfig_load_config_takes_the_classifier_limit_from_the_license_only(
+    tmp_path, monkeypatch, license_limit: int | None, classifier_type: str
 ) -> None:
     """`router_settings.auto_router_capability_limit` is managed outside config.yaml: an operator
     cannot grant the entitlement by editing the config, and a licensed proxy boots both routers."""
     f = tmp_path / "c.yaml"
-    f.write_text(_TWO_HEURISTIC_V2_ROUTERS_YAML)
+    forecast_settings = {
+        "capability": (
+            "        classifier_llm_config: {model: gpt-4o-mini}\n"
+            "        capability_classifier_config: {efficient_tier: SIMPLE, capable_tier: REASONING, base_threshold: 0.7}\n"
+        ),
+        "llm_v2": (
+            "        classifier_llm_config: {model: gpt-4o-mini}\n"
+            "        adaptive: false\n"
+            "        llm_v2_config: {efficient_profile: Small solver, capable_profile: Large solver, harness: One attempt, max_quality_gap: 0.05}\n"
+        ),
+    }
+    config_yaml = _TWO_HEURISTIC_V2_ROUTERS_YAML.replace(
+        "classifier_type: heuristic_v2\n", f"classifier_type: {classifier_type}\n{forecast_settings.get(classifier_type, '')}"
+    ).replace("tiers: {SIMPLE: gpt-4o-mini}", "tiers: {SIMPLE: gpt-4o-mini, REASONING: gpt-4o}")
+    f.write_text(config_yaml)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
@@ -3762,6 +3777,55 @@ async def test_ProxyConfig__init_agents_in_db_keeps_config_defined_agents(clean_
         "config-agent",
         "db-agent",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agents_source", ["config", "db", "api"])
+async def test_ProxyStartupEvent_jwt_auth_resolves_agent_claims_against_live_registry(
+    clean_agent_registry, agents_source
+):
+    """A JWT agent claim must resolve against every agent the proxy knows, including ones created after startup."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.types.agents import AgentResponse
+
+    original_lookup = proxy_server.jwt_handler.agent_lookup
+    try:
+        proxy_server.ProxyStartupEvent._initialize_jwt_auth(
+            general_settings={"litellm_jwtauth": {"agent_id_jwt_field": "appid"}},
+            prisma_client=None,
+            user_api_key_cache=UserApiKeyCache(),
+        )
+        if agents_source == "config":
+            await ProxyConfig()._init_non_llm_configs(
+                config={"agents": [_config_agent("loaded-agent")]},
+                config_file_path=None,
+            )
+        elif agents_source == "db":
+            prisma_client = MagicMock()
+            prisma_client.db.litellm_agentstable.find_many = AsyncMock(
+                return_value=[_FakeAgentRow("db-id", "loaded-agent")]
+            )
+            await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
+        else:
+            clean_agent_registry.register_agent(
+                agent_config=AgentResponse(agent_id="api-id", **_config_agent("loaded-agent"))
+            )
+
+        resolved = JWTAuthManager.resolve_agent_id(
+            jwt_handler=proxy_server.jwt_handler,
+            jwt_valid_token={"appid": "loaded-agent"},
+            agent_registry=proxy_server.jwt_handler.agent_lookup,
+        )
+    finally:
+        proxy_server.jwt_handler.bind_agent_lookup(original_lookup)
+        proxy_server.jwt_handler.update_environment(
+            prisma_client=None, user_api_key_cache=UserApiKeyCache(), litellm_jwtauth=LiteLLM_JWTAuth()
+        )
+
+    assert resolved == clean_agent_registry.get_agent_by_name(agent_name="loaded-agent").agent_id
 
 
 @pytest.mark.asyncio

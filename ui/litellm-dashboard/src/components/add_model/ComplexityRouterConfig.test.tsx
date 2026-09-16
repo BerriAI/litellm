@@ -959,7 +959,7 @@ describe("ComplexityRouterConfig affinity panel", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     fireEvent.click(screen.getByText("Advanced: Affinity"));
 
-    expect(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Pin one model deployment per tier" })).toBeChecked();
     expect(screen.queryByRole("switch", { name: "Pin a session to its first model" })).not.toBeInTheDocument();
   });
 
@@ -968,7 +968,7 @@ describe("ComplexityRouterConfig affinity panel", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
     fireEvent.click(screen.getByText("Advanced: Affinity"));
 
-    fireEvent.click(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Pin one model deployment per tier" }));
 
     expect(onChange).toHaveBeenCalledWith({ ...defaultValue, deployment_affinity: false });
   });
@@ -979,7 +979,7 @@ describe("ComplexityRouterConfig affinity panel", () => {
     );
     fireEvent.click(screen.getByText("Advanced: Affinity"));
 
-    expect(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Pin one model deployment per tier" })).not.toBeChecked();
   });
 
   it("writes an idle TTL on blur and keeps the partial input as a draft while typing", () => {

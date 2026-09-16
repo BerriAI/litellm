@@ -2610,12 +2610,6 @@ class PrometheusLogger(CustomLogger):
             StandardLoggingPayloadSetup,
         )
 
-        if self._should_skip_metrics_for_invalid_key(
-            user_api_key_dict=user_api_key_dict,
-            exception=original_exception,
-        ):
-            return
-
         status_code: Final = self._extract_status_code(exception=original_exception)
 
         try:
@@ -2633,7 +2627,7 @@ class PrometheusLogger(CustomLogger):
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
                 user_email=user_api_key_dict.user_email,
-                hashed_api_key=user_api_key_dict.api_key,
+                hashed_api_key=None if status_code == 401 else user_api_key_dict.api_key,
                 api_key_alias=user_api_key_dict.key_alias,
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,

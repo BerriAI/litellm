@@ -12,6 +12,7 @@ export interface Team {
   budget_duration: string | null;
   tpm_limit: number | null;
   rpm_limit: number | null;
+  tpd_limit?: number | null;
   organization_id: string;
   metadata?: Record<string, unknown> | null;
   budget_reset_at?: string | null;
@@ -22,6 +23,7 @@ export interface Team {
   keys_count?: number;
   members_count?: number;
   members_with_roles: Member[];
+  team_member_permissions?: string[] | null;
   spend: number;
   access_group_ids?: string[];
   access_group_models?: string[];
@@ -49,6 +51,7 @@ export interface KeyResponse {
   metadata: Record<string, unknown>;
   tpm_limit: number;
   rpm_limit: number;
+  tpd_limit?: number | null;
   duration: string;
   budget_duration: string;
   budget_reset_at: string;

@@ -73,6 +73,57 @@ describe("Cost column", () => {
     expect(screen.queryByText("$0.010000")).not.toBeInTheDocument();
     expect(screen.getByText("session total")).toBeInTheDocument();
   });
+
+  it("does not label the per-call spend a session total when the aggregate is unavailable", () => {
+    const rowWithoutAggregate: Partial<LogEntry> = {
+      request_id: "req-session-no-aggregate",
+      spend: 0.01,
+      session_id: "sess-1",
+      session_total_count: 3,
+    };
+    renderRows([logEntry(rowWithoutAggregate)]);
+
+    expect(screen.getByText("$0.010000")).toBeInTheDocument();
+    expect(screen.queryByText("session total")).not.toBeInTheDocument();
+  });
+});
+
+describe("Duration column", () => {
+  const sessionRow: Partial<LogEntry> = {
+    request_id: "req-session-duration",
+    request_duration_ms: 1200,
+    session_id: "sess-1",
+    session_total_count: 3,
+  };
+
+  it("shows the summed session duration, not the representative call's duration, for a multi-round session", () => {
+    const aggregatedRow: Partial<LogEntry> = { ...sessionRow, session_total_duration_ms: 5400 };
+    renderRows([logEntry(aggregatedRow)]);
+
+    expect(screen.getByText("5.40")).toBeInTheDocument();
+    expect(screen.queryByText("1.20")).not.toBeInTheDocument();
+    expect(screen.getByText("session total")).toBeInTheDocument();
+  });
+
+  it("does not label the per-call duration a session total when the aggregate is unavailable", () => {
+    renderRows([logEntry(sessionRow)]);
+
+    expect(screen.getByText("1.20")).toBeInTheDocument();
+    expect(screen.queryByText("session total")).not.toBeInTheDocument();
+  });
+
+  it("shows the call's own duration for a single-call session", () => {
+    const singleCallRow: Partial<LogEntry> = {
+      ...sessionRow,
+      request_id: "req-single-duration",
+      session_id: "sess-2",
+      session_total_count: 1,
+      session_total_duration_ms: 1200,
+    };
+    renderRows([logEntry(singleCallRow)]);
+
+    expect(screen.getByText("1.20")).toBeInTheDocument();
+  });
 });
 
 describe("Tokens column", () => {

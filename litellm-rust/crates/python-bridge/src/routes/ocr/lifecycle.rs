@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
-use litellm_core::auth::ResolvedCredential;
+use litellm_auth::ResolvedCredential;
 use litellm_core::ocr::hooks::{OcrDuringCallRequest, OcrPostCallRequest, OcrPreCallRequest};
 use litellm_core::ocr::{OcrAdmission, OcrCall, OcrClient, OcrHostOperation, OcrHostResult};
 use litellm_python_interop::{
@@ -179,8 +179,12 @@ impl PythonRoute for PythonOcrHost {
         OcrHostResult::Lifecycle(Ok(()))
     }
 
-    fn map_error(error: litellm_core::Error) -> PyErr {
+    fn map_error(error: litellm_core::ocr::Error) -> PyErr {
         ocr_error_to_pyerr(error)
+    }
+
+    fn host_error(message: String) -> litellm_core::ocr::Error {
+        litellm_core::ocr::Error::InvalidRequest(message)
     }
 
     fn invoke(&mut self, py: Python<'_>, operation: OcrHostOperation) -> PyResult<OcrHostResult> {

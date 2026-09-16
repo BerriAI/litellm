@@ -137,6 +137,21 @@ async def test_update_budget_success(client_and_mocks, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_new_and_update_budget_persist_tpd_limit(client_and_mocks):
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post("/budget/new", json={"budget_id": "budget_tpd", "tpd_limit": 250000})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["tpd_limit"] == 250000
+    assert mock_table.create.await_args.kwargs["data"]["tpd_limit"] == 250000
+
+    resp = client.post("/budget/update", json={"budget_id": "budget_tpd", "tpd_limit": 500000})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["tpd_limit"] == 500000
+    assert mock_table.update.await_args.kwargs["data"]["tpd_limit"] == 500000
+
+
+@pytest.mark.asyncio
 async def test_update_budget_missing_id(client_and_mocks, monkeypatch):
     client, mock_prisma, mock_table = client_and_mocks
 

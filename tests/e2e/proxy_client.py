@@ -8,6 +8,7 @@ ProxyClient's key/customer methods for cleanup. Read-backs are eventually consis
 
 from __future__ import annotations
 
+import os
 import time
 import warnings
 from collections.abc import Callable, Mapping
@@ -26,6 +27,7 @@ from e2e_config import (
     PROXY_REPLICA_URLS,
     REQUEST_TIMEOUT,
     SLOW_PROVIDER_TIMEOUT_SECONDS,
+    provider_edge_base,
     settle_propagation,
 )
 from e2e_http import (
@@ -77,6 +79,8 @@ from models import (
     ModelUpdateBody,
     OcrBody,
     OcrResponse,
+    RouterCurrentValues,
+    RouterSettingsResponse,
     SpendLogRow,
     SpendLogs,
     SpendLogsPage,
@@ -91,6 +95,7 @@ from models import (
     UserDeleteBody,
     UserDeleteResponse,
 )
+from provider_cache_routing import route_cache_model
 from pydantic import BaseModel
 from transport import HttpTransport, SplitTransport, Transport, is_control_plane_path
 
@@ -565,6 +570,18 @@ class ProxyClient:
             )
         ).data
 
+    def router_settings(self) -> RouterCurrentValues:
+        """The router knobs the proxy is running with, for a test whose behavior
+        needs one of them switched on in the proxy config."""
+        return unwrap(
+            self.transport.get(
+                "/router/settings",
+                headers=self.transport.master,
+                params=NoBody(),
+                response_type=RouterSettingsResponse,
+            )
+        ).current_values
+
     def model_cost_map(self) -> dict[str, CostMapEntry]:
         return unwrap(
             self.transport.get(
@@ -631,7 +648,10 @@ class ProxyClient:
             self.transport.post(
                 "/model/new",
                 headers=self.management_headers(),
-                json=body,
+                json=body.model_copy(update={"litellm_params": route_cache_model(
+                    body.litellm_params, provider_edge_base,
+                    enabled=os.environ.get("E2E_PROVIDER_CACHE", "0") == "1", mode=body.model_info.mode,
+                )}),
                 response_type=ModelNewResponse,
             )
         ).model_id
