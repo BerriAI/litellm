@@ -985,7 +985,7 @@ async def pass_through_request(
             headers=headers,
             forward_headers=forward_headers,
         )
-        headers = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
+        upstream_headers: Final = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
 
         requested_query_params: dict | None = query_params or dict(request.query_params)
 
@@ -1019,7 +1019,7 @@ async def pass_through_request(
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
-            headers,
+            upstream_headers,
             _parsed_body,
         )
 
@@ -1257,7 +1257,7 @@ async def pass_through_request(
             additional_args={
                 "complete_input_dict": _parsed_body,
                 "api_base": str(logging_url),
-                "headers": headers,
+                "headers": upstream_headers,
             },
         )
         stream = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
@@ -1274,7 +1274,7 @@ async def pass_through_request(
                     request=request,
                     async_client=async_client,
                     url=url,
-                    headers=headers,
+                    headers=upstream_headers,
                     requested_query_params=requested_query_params,
                     stream=True,
                 )
@@ -1286,7 +1286,7 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=headers,
+                        headers=upstream_headers,
                         content=state_raw_body,
                     )
                     if state_raw_body is not None
@@ -1294,7 +1294,7 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=headers,
+                        headers=upstream_headers,
                         json=_parsed_body,
                     )
                 )
@@ -1371,7 +1371,7 @@ async def pass_through_request(
             raw_body_request: Final = async_client.build_request(
                 request.method,
                 url,
-                headers=headers,
+                headers=upstream_headers,
                 params=requested_query_params,
                 content=state_raw_body,
             )
@@ -1381,7 +1381,7 @@ async def pass_through_request(
                 request=request,
                 async_client=async_client,
                 url=url,
-                headers=headers,
+                headers=upstream_headers,
                 requested_query_params=requested_query_params,
                 _parsed_body=_parsed_body,
                 forward_multipart=is_multipart,
