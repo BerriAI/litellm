@@ -1,6 +1,7 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { vi, it, expect, beforeEach, MockedFunction } from "vitest";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { vi, it, expect, beforeEach, MockedFunction, type Mock } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import DeletedTeamsPage from "./DeletedTeamsPage";
 import { useDeletedTeams, DeletedTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -106,4 +107,88 @@ it("should show skeleton rows while the initial load is pending", () => {
   renderWithProviders(<DeletedTeamsPage />);
 
   expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+});
+
+const deletedTeamsResult = (teams: DeletedTeam[], total: number) =>
+  ({ data: { teams, total }, isLoading: false }) as unknown as ReturnType<typeof useDeletedTeams>;
+
+const SORT_TEAMS: DeletedTeam[] = [
+  { ...mockDeletedTeam, team_id: "team-cheap", team_alias: "cheap-team", spend: 1, deleted_at: "2024-06-01T10:00:00Z" },
+  {
+    ...mockDeletedTeam,
+    team_id: "team-pricey",
+    team_alias: "pricey-team",
+    spend: 9,
+    deleted_at: "2024-01-01T10:00:00Z",
+  },
+];
+
+const rowAliases = (aliases: string[]) =>
+  screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => aliases.find((alias) => within(row).queryByText(alias) !== null));
+
+const lastUrl = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
+it("requests the page and page size named by the deleted_teams_ URL keys", () => {
+  renderWithProviders(<DeletedTeamsPage />, {
+    searchParams: { deleted_teams_page: "3", deleted_teams_page_size: "50" },
+  });
+
+  expect(mockUseDeletedTeams).toHaveBeenLastCalledWith(3, 50);
+});
+
+it("ignores the unprefixed and deleted_keys_ page keys", () => {
+  renderWithProviders(<DeletedTeamsPage />, { searchParams: { page: "3", deleted_keys_page: "4" } });
+
+  expect(mockUseDeletedTeams).toHaveBeenLastCalledWith(1, 25);
+});
+
+it("writes deleted_teams_page when the next page is requested", async () => {
+  const user = userEvent.setup();
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  mockUseDeletedTeams.mockReturnValue(deletedTeamsResult([mockDeletedTeam], 137));
+  renderWithProviders(<DeletedTeamsPage />, { onUrlUpdate });
+
+  await user.click(screen.getByTestId("pagination-next"));
+
+  await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("deleted_teams_page")).toBe("2"));
+  expect(lastUrl(onUrlUpdate)?.has("page")).toBe(false);
+  expect(mockUseDeletedTeams).toHaveBeenLastCalledWith(2, 25);
+});
+
+it.each([
+  ["asc", ["cheap-team", "pricey-team"]],
+  ["desc", ["pricey-team", "cheap-team"]],
+])("sorts the loaded page by deleted_teams_sort_by=spend in %s order", (order, expected) => {
+  mockUseDeletedTeams.mockReturnValue(deletedTeamsResult(SORT_TEAMS, 2));
+  renderWithProviders(<DeletedTeamsPage />, {
+    searchParams: { deleted_teams_sort_by: "spend", deleted_teams_sort_order: order },
+  });
+
+  expect(rowAliases(expected)).toEqual(expected);
+});
+
+it("falls back to deleted_at descending when deleted_teams_sort_by is not a sortable column", () => {
+  mockUseDeletedTeams.mockReturnValue(deletedTeamsResult(SORT_TEAMS, 2));
+  renderWithProviders(<DeletedTeamsPage />, { searchParams: { deleted_teams_sort_by: "team_alias" } });
+
+  expect(rowAliases(["cheap-team", "pricey-team"])).toEqual(["cheap-team", "pricey-team"]);
+});
+
+it("writes deleted_teams_sort_by and a direction that matches the rendered order when a header is clicked", async () => {
+  const user = userEvent.setup();
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  mockUseDeletedTeams.mockReturnValue(deletedTeamsResult(SORT_TEAMS, 2));
+  renderWithProviders(<DeletedTeamsPage />, { onUrlUpdate });
+
+  await user.click(screen.getByTestId("sort-header-spend"));
+
+  await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("deleted_teams_sort_by")).toBe("spend"));
+  const ascending = lastUrl(onUrlUpdate)?.get("deleted_teams_sort_order") === "asc";
+  expect(rowAliases(["cheap-team", "pricey-team"])).toEqual(
+    ascending ? ["cheap-team", "pricey-team"] : ["pricey-team", "cheap-team"],
+  );
+  expect(lastUrl(onUrlUpdate)?.has("sort_by")).toBe(false);
 });
