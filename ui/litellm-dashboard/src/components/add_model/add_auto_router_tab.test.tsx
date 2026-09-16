@@ -167,6 +167,124 @@ describe("AddAutoRouterTab", () => {
     mockFetchAllModelDeployments.mockResolvedValue([]);
   });
 
+  it.each(["Capability", "Fuse v2"])(
+    "creates %s from its dedicated tab without complexity templates",
+    async (label) => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockResolvedValue([
+        { model_group: "efficient", mode: "chat" },
+        { model_group: "capable", mode: "chat" },
+        { model_group: "judge", mode: "chat" },
+      ]);
+      renderWithProviders(<Harness />);
+      await user.type(screen.getByLabelText("Auto Router Name"), "forecast-router");
+      await user.click(screen.getByRole("tab", { name: label, exact: true }));
+      expect(screen.getByLabelText("Auto Router Name")).toHaveValue("forecast-router");
+      expect(screen.queryByTestId("template-selector")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("detailed-configuration-toggle")).not.toBeInTheDocument();
+      expect(screen.queryByText("Complexity Tier Configuration")).not.toBeInTheDocument();
+      expect(screen.queryByText("Advanced: Classification Method")).not.toBeInTheDocument();
+      expect(screen.queryByText("Advanced: Adaptive Routing")).not.toBeInTheDocument();
+      const capability = label === "Capability";
+      for (const [role, model] of [
+        ["Efficient", "efficient"],
+        ["Capable", "capable"],
+      ]) {
+        await user.click(
+          screen.getByRole("combobox", {
+            name: capability ? `Select ${role.toLowerCase()} solver models` : `${role} solver`,
+          }),
+        );
+        await user.click(await screen.findByRole("option", { name: model, exact: true }));
+        if (capability) await user.keyboard("{Escape}");
+      }
+      await user.click(screen.getByRole("combobox", { name: "Judge model" }));
+      await user.click(await screen.findByRole("option", { name: "judge", exact: true }));
+      expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+      if (capability) {
+        fireEvent.change(screen.getByLabelText("Solve probability threshold"), { target: { value: "0.7" } });
+      } else {
+        fireEvent.change(screen.getByLabelText("Efficient solver profile"), { target: { value: "Small solver" } });
+        fireEvent.change(screen.getByLabelText("Capable solver profile"), { target: { value: "Large solver" } });
+        fireEvent.change(screen.getByLabelText("Harness and budget"), { target: { value: "One attempt" } });
+        fireEvent.change(screen.getByLabelText("Maximum quality gap"), { target: { value: "0.05" } });
+      }
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Advanced routing options" }));
+      for (const label of ["Adaptive Routing", "Context Window Escalation", "Escalation Keywords"]) {
+        expect(screen.queryByText(`Advanced: ${label}`)).not.toBeInTheDocument();
+      }
+      expect(screen.getByText("Advanced: Stalled Task Escalation")).toBeInTheDocument();
+      expect(screen.getByText("Advanced: Response Format")).toBeInTheDocument();
+      expect(screen.queryByText("Advanced: Classification Method")).not.toBeInTheDocument();
+      expect(screen.getByText("Advanced: Affinity")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledTimes(1));
+      const expected = {
+        classifier_type: capability ? "capability" : "llm_v2",
+        adaptive: false,
+        enable_context_window_escalation: false,
+        escalation_keywords: [],
+        tiers: { SIMPLE: ["efficient"], REASONING: ["capable"] },
+        classifier_llm_config: { model: "judge" },
+      };
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject(expected);
+    },
+  );
+
+  it("restores the automatic/template/detail flow on the Complexity tab", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    renderWithProviders(<Harness />);
+    await screen.findByTestId("configure-automatically-button");
+    await user.click(screen.getByRole("tab", { name: "Capability", exact: true }));
+    expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Complexity", exact: true }));
+    expect(screen.getByTestId("configure-automatically-button")).toBeInTheDocument();
+    expect(screen.getByTestId("template-selector")).toBeInTheDocument();
+    expandDetailedConfiguration();
+    expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
+    for (const label of ["Adaptive Routing", "Context Window Escalation", "Escalation Keywords"]) {
+      expect(screen.getByText(`Advanced: ${label}`)).toBeInTheDocument();
+    }
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.queryByRole("radio", { name: /^Capability/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /^Fuse v2/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /^Heuristic \(default/ })).toBeChecked();
+  });
+
+  it.each(["Capability", "Fuse v2"])(
+    "retries failed model loading on %s without losing entered settings",
+    async (label) => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockRejectedValueOnce(new Error("Model list unavailable")).mockResolvedValue([
+        { model_group: "efficient", mode: "chat" },
+        { model_group: "capable", mode: "chat" },
+        { model_group: "judge", mode: "chat" },
+      ]);
+      renderWithProviders(<Harness />);
+      await user.click(screen.getByRole("tab", { name: label, exact: true }));
+      await user.type(screen.getByLabelText("Auto Router Name"), "forecast-retry");
+      const capability = label === "Capability";
+      const policyField = capability ? "Solve probability threshold" : "Efficient solver profile";
+      fireEvent.change(screen.getByLabelText(policyField), {
+        target: { value: capability ? "0.7" : "Small solver" },
+      });
+      expect(await screen.findByText("Could not load available models.")).toBeVisible();
+      expect(screen.queryByTestId("template-selector")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Retry", exact: true }));
+      await waitFor(() => expect(screen.queryByText("Could not load available models.")).not.toBeInTheDocument());
+      expect(screen.getByRole("tab", { name: label, exact: true })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByLabelText("Auto Router Name")).toHaveValue("forecast-retry");
+      expect(screen.getByLabelText(policyField)).toHaveValue(capability ? 0.7 : "Small solver");
+      await user.click(screen.getByRole("combobox", { name: "Judge model" }));
+      expect(await screen.findByRole("option", { name: "judge", exact: true })).toBeVisible();
+      expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2);
+    },
+  );
+
   // Detailed Configuration starts collapsed so the modal opens onto just Name + Template; a caller
   // opts into the full tier/classifier form rather than always seeing it up front.
   it("keeps Detailed Configuration collapsed until a caller opens it", () => {
