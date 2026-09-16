@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -43,6 +43,7 @@ from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsR
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
+from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
 from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     CallTypes,
@@ -56,6 +57,9 @@ from litellm.types.utils import (
     VectorStoreSearchResponse,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 
 def _get_max_string_length_prompt_in_db() -> int:
@@ -339,12 +343,36 @@ def _sl_attribution_fallback(
     return standard_logging_payload.get(field) or ""
 
 
+def _deployment_provider(deployment: DeploymentTypedDict) -> str | None:
+    litellm_params: Final = LiteLLM_Params.model_validate(deployment["litellm_params"])
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(
+            model=litellm_params.model, custom_llm_provider=litellm_params.custom_llm_provider
+        )
+    except litellm.exceptions.BadRequestError:
+        return None
+    return provider or None
+
+
+def _model_group_provider(model_group: str, llm_router: "Router | None") -> str | None:
+    if llm_router is None or not model_group:
+        return None
+    providers: Final = frozenset(
+        provider
+        for deployment in llm_router.get_model_list(model_name=model_group) or ()
+        if (provider := _deployment_provider(deployment)) is not None
+    )
+    return next(iter(providers)) if len(providers) == 1 else None
+
+
 def _looks_like_model_name(model: str) -> bool:
     candidate: Final = model.removeprefix(MCP_SPEND_LOG_MODEL_PREFIX)
     return len(candidate) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in candidate)
 
 
-def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
+def get_logging_payload(
+    kwargs, response_obj, start_time, end_time, llm_router: "Router | None" = None
+) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
 
@@ -443,7 +471,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     custom_llm_provider: Final = (
         kwargs.get("custom_llm_provider")
         or _sl_attribution_fallback(standard_logging_payload, "custom_llm_provider")
-        or None
+        or _model_group_provider(_model_group, llm_router)
     )
     raw_model: Final = cast(str, kwargs.get("model") or "")
     resolved_model: Final = (
