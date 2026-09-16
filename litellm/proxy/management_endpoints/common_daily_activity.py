@@ -991,7 +991,7 @@ async def _aggregate_spend_records(
 # current grouping set's key), 0 when the column is part of the key.
 _GROUP_GRAND_TOTAL: Final = 127  # 0b1111111 — all rolled up
 _GROUP_DATE: Final = 63  # 0b0111111 — only date kept
-_API_KEY_ROLLED_UP_BIT: Final = 32  # 0b0100000 — api_key position in the 7-bit mask
+_API_KEY_ROLLED_UP_BIT: Final = 32  # 0b0100000
 _GROUP_DATE_API_KEY: Final = 31  # 0b0011111
 _GROUP_DATE_MODEL: Final = 47  # 0b0101111
 _GROUP_DATE_MODEL_API_KEY: Final = 15  # 0b0001111
