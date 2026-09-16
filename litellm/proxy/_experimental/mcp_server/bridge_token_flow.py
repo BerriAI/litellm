@@ -243,6 +243,10 @@ async def load_active_user_by_id(user_id: str) -> "LiteLLM_UserTable | _KeyResol
         return "no_active_key"
     if user_object is None:
         return "no_active_key"
+    return _active_user_record(user_object)
+
+
+def _active_user_record(user_object: "LiteLLM_UserTable") -> "LiteLLM_UserTable | Literal['no_active_key']":
     if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
         return "no_active_key"
     return user_object
@@ -300,16 +304,117 @@ async def _revalidate_active_subject(identity: "EnvelopeIdentity") -> "_KeyResol
             assert_never(identity.subject_type)
 
 
-async def _extract_user_id_from_request(request: Request) -> str | None:
-    """The litellm ``user_id`` for the token request, so a per-user token is stored under the same
-    identity the egress later reads it by. Storage is best-effort, so every non-resolved outcome
-    (including a transient DB outage) collapses to ``None`` here and the caller simply skips the store;
-    the bridge mint, which must status those outcomes differently, consumes
-    :func:`_resolve_active_litellm_key` directly."""
-    resolved: Final = await _resolve_active_litellm_key(request)
-    if not isinstance(resolved, _ResolvedKey):
+async def _extract_user_id_from_request(request: Request, server_id: str | None = None) -> str | None:
+    """Resolve identity for binding, or authorize the credential-write action for a target server."""
+    from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+
+    token: Final = _litellm_key_from_request(request)
+    # The OAuth relay is public; the optional server-side write is the same protected action
+    # as the direct credential endpoint. Authorize that action without rewriting the Request.
+    write_route: Final = f"/v1/mcp/server/{server_id}/oauth-user-credential" if server_id is not None else None
+    resolved: Final = (
+        await _resolve_jwt_auth(request, token, write_route)
+        if token is not None and JWTHandler.is_jwt(token)
+        else await _resolve_active_litellm_key(request)
+    )
+    auth: Final = resolved.key if isinstance(resolved, _ResolvedKey) else resolved
+    if not isinstance(auth, UserAPIKeyAuth) or not _active_key_user_id(auth):
         return None
-    return _active_key_user_id(resolved.key)
+    if server_id is not None and not await can_store_oauth_credential(request, auth, server_id):
+        return None
+    return auth.user_id
+
+
+async def can_store_oauth_credential(request: Request, auth: "UserAPIKeyAuth", server_id: str) -> bool:
+    """Apply the same write policy to request credentials and verified signed-callback users."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # registry imports auth helpers
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+        can_access_mcp_server,  # noqa: PLC0415  # proxy import cycle
+    )
+    from litellm.proxy.auth.route_checks import RouteChecks  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
+        _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse admission policy for the credential-write action
+    )
+
+    write_route: Final = f"/v1/mcp/server/{server_id}/oauth-user-credential"
+    try:
+        RouteChecks.is_virtual_key_allowed_to_call_route(route=write_route, valid_token=auth, request=request)
+        await _run_centralized_common_checks(
+            user_api_key_auth_obj=auth,
+            request=request,
+            request_data={},
+            route=write_route,
+        )
+        return await can_access_mcp_server(auth, server_id, global_mcp_server_manager.get_allowed_mcp_servers)
+    except Exception as exc:  # noqa: BLE001  # authorization failure must never write credentials
+        verbose_logger.debug("OAuth credential write not authorized (%s)", type(exc).__name__)
+        return False
+
+
+async def _resolve_jwt_auth(
+    request: Request,
+    token: str,
+    write_route: str | None,
+) -> "UserAPIKeyAuth | None":
+    from litellm.proxy._types import UserAPIKeyAuth  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
+        _resolve_jwt_to_virtual_key,  # pyright: ignore[reportPrivateUsage]  # reuse admission mapping policy without provisioning a new key
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # proxy globals initialized at startup
+        general_settings,
+        jwt_handler,
+        premium_user,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if general_settings.get("enable_jwt_auth") is not True or premium_user is not True or prisma_client is None:
+        return None
+    try:
+        if jwt_handler.litellm_jwtauth.is_virtual_key_mapping_configured():
+            claims: Final = await jwt_handler.auth_jwt(token=token)
+            validate: Final = jwt_handler.litellm_jwtauth.custom_validate
+            if validate is not None and not validate(claims):
+                return None
+            mapped: Final = await _resolve_jwt_to_virtual_key(
+                jwt_claims=claims,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if isinstance(mapped, UserAPIKeyAuth):
+                return None if await _key_owner_scim_deactivated(mapped) or not _active_key_user_id(mapped) else mapped
+            if mapped is not None:
+                return None
+        identity: Final = await JWTAuthManager.auth_builder(
+            api_key=token,
+            jwt_handler=jwt_handler,
+            request_data={},
+            general_settings=general_settings,
+            route=write_route or request.url.path,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+            request_headers=dict(request.headers),
+            request_method=request.method,
+            identity_only=write_route is None,
+            allow_provisioning=False,
+        )
+        resolved_user: Final = identity["user_object"]
+        if resolved_user is not None and isinstance(_active_user_record(resolved_user), str):
+            return None
+        return JWTAuthManager.user_api_key_auth_from_result(identity)
+    except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated identities never write credentials
+        verbose_logger.debug("OAuth JWT identity could not be validated (%s)", type(exc).__name__)
+        return None
 
 
 _UpstreamGrantRejection = Literal["no_access_token", "expired_lifetime"]
