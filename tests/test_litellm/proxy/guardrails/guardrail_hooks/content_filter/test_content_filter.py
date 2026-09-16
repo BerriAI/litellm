@@ -1010,6 +1010,33 @@ class TestContentFilterGuardrail:
         assert [d["keyword"] for d in entry["guardrail_response"]] == [phrase]
 
     @pytest.mark.asyncio
+    async def test_streaming_hook_blocks_keyword_longer_than_scan_context(self):
+        """
+        A blocked keyword longer than the default retained context arrives after
+        enough text that the buffer has already been trimmed at least once. The
+        retained tail must be wide enough that the keyword's start is still in the
+        buffer when its end arrives, so the stream is blocked.
+        """
+        phrase = " ".join(f"token{i:03d}" for i in range(80))
+        assert len(phrase) > CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-keyword-wider-than-context",
+            blocked_words=[BlockedWord(keyword=phrase, action=ContentFilterAction.BLOCK)],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        filler = "plain filler sentence. " * (3 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS // 23)
+        text = filler + phrase + " and that is all."
+        chunks = [text[i : i + 16] for i in range(0, len(text), 16)]
+        request_data = {"messages": [], "model": "gpt-4o", "metadata": {}}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._collect_streamed_text(guardrail, chunks, request_data)
+
+        assert exc_info.value.detail["keyword"] == phrase
+        entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert entry["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.asyncio
     async def test_streaming_hook_masks_every_email_in_long_stream_and_logs_once(
         self,
     ):
