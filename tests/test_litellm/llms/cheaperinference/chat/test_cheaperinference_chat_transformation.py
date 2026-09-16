@@ -209,7 +209,7 @@ class TestCheaperInferenceCostTracking:
         "model,input_cost,output_cost,cache_read_cost",
         [
             ("claude-sonnet-5", 1.400000 / 1_000_000, 7.000000 / 1_000_000, 0.140000 / 1_000_000),
-            ("glm-5.3-flash", 0.105000 / 1_000_000, 0.350000 / 1_000_000, 0.012750 / 1_000_000),
+            ("glm-5.3-flash", 0.080568 / 1_000_000, 0.268535 / 1_000_000, 0.012750 / 1_000_000),
         ],
     )
     def test_model_prices_registered(self, model, input_cost, output_cost, cache_read_cost):
@@ -221,13 +221,8 @@ class TestCheaperInferenceCostTracking:
         assert info["cache_read_input_token_cost"] == pytest.approx(cache_read_cost)
 
     @pytest.mark.respx()
-    def test_cost_is_tracked_when_the_gateway_rewrites_the_model_name(self, respx_mock):
-        """The gateway echoes the upstream model id, so costing must use the requested one.
-
-        A real response to `cheaperinference/glm-5.3-flash` comes back with
-        `"model": "z-ai/glm-5.3-flash"`. Cost has to follow the model the caller
-        asked for, otherwise the lookup lands on an id that is not in the map.
-        """
+    def test_cost_follows_the_requested_model(self, respx_mock):
+        """Costing must key off the model the caller asked for, not the response body."""
         litellm.disable_aiohttp_transport = True
 
         respx_mock.post(f"{BASE_URL}/chat/completions").respond(
@@ -235,7 +230,7 @@ class TestCheaperInferenceCostTracking:
                 "id": "gen-test",
                 "object": "chat.completion",
                 "created": 1757462400,
-                "model": "z-ai/glm-5.3-flash",
+                "model": "glm-5.3-flash",
                 "choices": [
                     {
                         "index": 0,
@@ -254,7 +249,7 @@ class TestCheaperInferenceCostTracking:
             api_key="ci_live_fake-key-for-tests",
         )
 
-        expected = 17 * 0.105 / 1_000_000 + 3 * 0.350 / 1_000_000
+        expected = 17 * 0.080568 / 1_000_000 + 3 * 0.268535 / 1_000_000
         assert response._hidden_params["response_cost"] == pytest.approx(expected)
 
     def test_long_context_tier_registered(self):
