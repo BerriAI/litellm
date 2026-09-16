@@ -422,6 +422,8 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         messages: list[AllAnthropicPassThroughMessageValues],
         model: str | None = None,
+        *,
+        preserve_midturn_system: bool = False,
     ) -> list:
         new_messages: Final[list[AllMessageValues]] = []
         replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
@@ -430,8 +432,12 @@ class LiteLLMAnthropicMessagesAdapter:
             len(replayable_messages),
         )
         ordered_messages: Final = (
-            *replayable_messages[:leading_count],
-            *convert_mid_conversation_system_turns(replayable_messages[leading_count:]),
+            replayable_messages
+            if preserve_midturn_system
+            else (
+                *replayable_messages[:leading_count],
+                *convert_mid_conversation_system_turns(replayable_messages[leading_count:]),
+            )
         )
         for m in ordered_messages:
             user_message: ChatCompletionUserMessage | None = None
@@ -1166,6 +1172,7 @@ class LiteLLMAnthropicMessagesAdapter:
         anthropic_message_request: AnthropicMessagesRequest,
         *,
         custom_llm_provider: str | None = None,
+        preserve_midturn_system: bool = False,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
         This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
@@ -1187,6 +1194,7 @@ class LiteLLMAnthropicMessagesAdapter:
         new_messages = self.translate_anthropic_messages_to_openai(
             messages=messages_list,
             model=anthropic_message_request.get("model"),
+            preserve_midturn_system=preserve_midturn_system,
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
         self._add_system_message_to_messages(new_messages, anthropic_message_request)
