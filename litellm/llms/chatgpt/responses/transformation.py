@@ -104,7 +104,11 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "truncation",
         }
 
-        return {k: v for k, v in request.items() if k in allowed_keys}
+        return {
+            k: "priority" if k == "service_tier" and v == "fast" else v
+            for k, v in request.items()
+            if k in allowed_keys or (k == "service_tier" and v in ("default", "priority", "fast"))
+        }
 
     def transform_response_api_response(
         self,
