@@ -4994,6 +4994,26 @@ class TestStrategyRouterWriteValidation:
 
     _V2 = {"classifier_type": "heuristic_v2", "tiers": {"SIMPLE": "gpt-4o-mini"}}
     _V1 = {"classifier_type": "heuristic", "tiers": {"SIMPLE": "gpt-4o-mini"}}
+    _FORECAST_BASE = {
+        "classifier_llm_config": {"model": "gpt-4o-mini"},
+        "tiers": {"SIMPLE": "gpt-4o-mini", "REASONING": "gpt-4o"},
+    }
+    _CAPABILITY = {
+        **_FORECAST_BASE,
+        "classifier_type": "capability",
+        "capability_classifier_config": {
+            "efficient_tier": "SIMPLE", "capable_tier": "REASONING", "base_threshold": 0.7,
+        },
+    }
+    _FUSE = {
+        **_FORECAST_BASE,
+        "classifier_type": "llm_v2",
+        "adaptive": False,
+        "llm_v2_config": {
+            "efficient_profile": "Small solver", "capable_profile": "Large solver",
+            "harness": "One attempt", "max_quality_gap": 0.05,
+        },
+    }
     _CUSTOM_TIERS = {
         "classifier_type": "llm",
         "classifier_llm_config": {"model": "gpt-4o-mini"},
@@ -5061,6 +5081,16 @@ class TestStrategyRouterWriteValidation:
     @pytest.mark.parametrize(
         "limit,effective_params,db_models,config_config,model_id,expected",
         [
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY}, ["auto_router/complexity_router"], None, None, "refused"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY}, [], _CAPABILITY, None, "refused"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY}, [], _FUSE, None, "reserved"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY}, [], None, "held-id", "reserved"),
+            (None, {"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY}, ["auto_router/complexity_router"], _CAPABILITY, None, "plain"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _FUSE}, ["auto_router/complexity_router"], None, None, "refused"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _FUSE}, [], _FUSE, None, "refused"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _FUSE}, [], _CAPABILITY, None, "reserved"),
+            (1, {"model": "auto_router/complexity_router", "complexity_router_config": _FUSE}, [], None, "held-id", "reserved"),
+            (None, {"model": "auto_router/complexity_router", "complexity_router_config": _FUSE}, ["auto_router/complexity_router"], _FUSE, None, "plain"),
             (1, {"model": "auto_router/complexity_router", "complexity_router_config": _V2}, ["auto_router/complexity_router"], None, None, "refused"),
             (1, {"model": "auto_router/complexity_router", "complexity_router_config": _V2}, [], _V2, None, "refused"),
             (1, {"model": "auto_router/complexity_router", "complexity_router_config": _V2}, [], None, None, "reserved"),
@@ -5350,7 +5380,8 @@ class TestStrategyRouterWriteValidation:
         assert events == ["slot-enter", "slot-exit", "team_model_add"]
 
     @pytest.mark.asyncio
-    async def test_add_new_model_refuses_a_second_heuristic_v2_router_before_the_db_write(self) -> None:
+    @pytest.mark.parametrize("config", [_V2, _CAPABILITY, _FUSE])
+    async def test_add_new_model_refuses_a_second_gated_classifier_router_before_the_db_write(self, config: Mapping[str, object]) -> None:
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             add_new_model,
@@ -5378,7 +5409,7 @@ class TestStrategyRouterWriteValidation:
                 await add_new_model(
                     model_params=Deployment(
                         model_name="second-v2",
-                        litellm_params=LiteLLM_Params(model="auto_router/complexity_router", complexity_router_config=self._V2),
+                        litellm_params=LiteLLM_Params(model="auto_router/complexity_router", complexity_router_config=config),
                     ),
                     user_api_key_dict=admin,
                 )
@@ -5475,7 +5506,8 @@ class TestStrategyRouterWriteValidation:
         assert fake.litellm_proxymodeltable.update.await_count == 0
 
     @pytest.mark.asyncio
-    async def test_patch_model_refuses_switching_another_router_to_heuristic_v2(self) -> None:
+    @pytest.mark.parametrize("config", [_V2, _CAPABILITY, _FUSE])
+    async def test_patch_model_refuses_switching_another_router_to_gated_classifier(self, config: Mapping[str, object]) -> None:
         """patch_model relays HTTPException as-is, so the license refusal reaches the client as a plain 403."""
         from fastapi import HTTPException
 
@@ -5510,7 +5542,7 @@ class TestStrategyRouterWriteValidation:
             with pytest.raises(HTTPException) as exc_info:
                 await patch_model(
                     model_id=model_id,
-                    patch_data=updateDeployment(litellm_params=updateLiteLLMParams(complexity_router_config=self._V2)),
+                    patch_data=updateDeployment(litellm_params=updateLiteLLMParams(complexity_router_config=config)),
                     user_api_key_dict=admin,
                 )
             assert exc_info.value.status_code == 403
@@ -5518,7 +5550,8 @@ class TestStrategyRouterWriteValidation:
             fake.litellm_proxymodeltable.update.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_update_model_refuses_switching_another_router_to_heuristic_v2(self) -> None:
+    @pytest.mark.parametrize("config", [_V2, _CAPABILITY, _FUSE])
+    async def test_update_model_refuses_switching_another_router_to_gated_classifier(self, config: Mapping[str, object]) -> None:
         from litellm.proxy._types import ProxyException
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             update_model,
@@ -5554,7 +5587,7 @@ class TestStrategyRouterWriteValidation:
             with pytest.raises(ProxyException) as exc_info:
                 await update_model(
                     model_params=updateDeployment(
-                        litellm_params=updateLiteLLMParams(complexity_router_config=self._V2),
+                        litellm_params=updateLiteLLMParams(complexity_router_config=config),
                         model_info=ModelInfo(id=model_id),
                     ),
                     user_api_key_dict=admin,

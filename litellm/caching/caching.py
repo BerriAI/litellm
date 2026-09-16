@@ -15,6 +15,7 @@ import time
 import traceback
 from collections.abc import Mapping
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Final
 
 from pydantic import BaseModel
@@ -366,7 +367,7 @@ class Cache:
                     param_value = kwargs[param]
                     cache_key += f"{param}: {param_value}"
 
-        nested_litellm_params: Final = kwargs.get("litellm_params") or {}
+        nested_litellm_params: Final = kwargs.get("litellm_params") or MappingProxyType({})
         forward_reasoning_content: Final = kwargs.get(
             "forward_reasoning_content", nested_litellm_params.get("forward_reasoning_content")
         )

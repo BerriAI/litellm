@@ -4,6 +4,7 @@ Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation
 
 
 import pytest
+from copy import deepcopy
 from typing import Final
 
 
@@ -1122,6 +1123,108 @@ class TestToolReferenceStripping:
         )
 
         assert request["messages"][2]["content"] == ""
+
+
+class TestSystemMessagesFirst:
+    """With litellm.openai_system_messages_first on, requests bound for OpenAI put system and
+    developer messages ahead of the conversation, keeping each group's order, so the instruction
+    prefix stays byte-stable for OpenAI's prefix-matched prompt cache."""
+
+    MESSAGES: Final = (
+        {"role": "user", "content": "first turn"},
+        {"role": "system", "content": "sys 1"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "developer", "content": "dev"},
+        {"role": "user", "content": "second turn"},
+        {"role": "system", "content": "sys 2"},
+    )
+    ORIGINAL_ORDER: Final = ("first turn", "sys 1", "reply", "dev", "second turn", "sys 2")
+    ORDERED: Final = ("sys 1", "dev", "sys 2", "first turn", "reply", "second turn")
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def _messages(self):
+        return [dict(m) for m in self.MESSAGES]
+
+    def _transform(self, provider):
+        return self.config.transform_request(
+            model="gpt-4.1",
+            messages=self._messages(),
+            optional_params={},
+            litellm_params={"custom_llm_provider": provider},
+            headers={},
+        )
+
+    def test_default_off_keeps_caller_order(self, monkeypatch):
+        monkeypatch.setattr(litellm, "openai_system_messages_first", False)
+        assert tuple(m["content"] for m in self._transform("openai")["messages"]) == self.ORIGINAL_ORDER
+
+    def test_moves_system_and_developer_messages_first_for_openai(self, monkeypatch):
+        monkeypatch.setattr(litellm, "openai_system_messages_first", True)
+        assert tuple(m["content"] for m in self._transform("openai")["messages"]) == self.ORDERED
+
+    def test_leaves_openai_compatible_providers_alone(self, monkeypatch):
+        monkeypatch.setattr(litellm, "openai_system_messages_first", True)
+        assert tuple(m["content"] for m in self._transform("deepseek")["messages"]) == self.ORIGINAL_ORDER
+
+    def test_does_not_mutate_caller_messages(self, monkeypatch):
+        monkeypatch.setattr(litellm, "openai_system_messages_first", True)
+        messages = self._messages()
+        self.config.transform_request(
+            model="gpt-4.1",
+            messages=messages,
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai"},
+            headers={},
+        )
+        assert tuple(m["content"] for m in messages) == self.ORIGINAL_ORDER
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("is_async", [False, True])
+    @pytest.mark.parametrize("enabled", [False, True])
+    async def test_reasoning_normalization_preserves_prompt_cache_ordering(
+        self, monkeypatch: pytest.MonkeyPatch, is_async: bool, enabled: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "openai_system_messages_first", enabled)
+        messages: Final = [
+            {**message, **({"reasoning_content": "thinking"} if message["role"] == "assistant" else {})}
+            for message in self.MESSAGES
+        ]
+        original: Final = deepcopy(messages)
+        kwargs: Final = {
+            "model": "reasoning-test",
+            "messages": messages,
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai", "reasoning_content_field": "reasoning"},
+            "headers": {},
+        }
+        request: Final = (
+            await self.config.async_transform_request(**kwargs) if is_async else self.config.transform_request(**kwargs)
+        )
+        assert tuple(m["content"] for m in request["messages"]) == (self.ORDERED if enabled else self.ORIGINAL_ORDER)
+        assert next(m for m in request["messages"] if m["role"] == "assistant") == {
+            "role": "assistant", "content": "reply", "reasoning": "thinking"
+        }
+        assert messages == original
+
+    @pytest.mark.asyncio
+    async def test_async_transform_request_moves_system_messages_first(self, monkeypatch):
+        class UninstantiatedOpenAIGPTConfig(OpenAIGPTConfig):
+            _is_base_class = True
+
+            def __init__(self) -> None:
+                pass
+
+        monkeypatch.setattr(litellm, "openai_system_messages_first", True)
+        request = await UninstantiatedOpenAIGPTConfig().async_transform_request(
+            model="gpt-4.1",
+            messages=self._messages(),
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai"},
+            headers={},
+        )
+        assert tuple(m["content"] for m in request["messages"]) == self.ORDERED
 
 
 class TestOpenAIPromptCacheBreakpointChatPath:

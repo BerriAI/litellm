@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import httpx
 
 import litellm
+from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _extract_reasoning_content,
@@ -24,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     flatten_combinators_and_drop_non_python_regex_patterns,
     get_tool_call_names,
     hoist_images_from_tool_messages,
+    system_messages_first,
     tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
@@ -467,6 +469,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         ]
         return MappingProxyType({"tools": sanitized})
 
+    def _prompt_cache_ordered_messages(
+        self, messages: list[AllMessageValues], litellm_params: Mapping[str, object]
+    ) -> list[AllMessageValues]:
+        if not litellm.openai_system_messages_first:
+            return messages
+        if litellm_params.get("custom_llm_provider") not in OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS:
+            return messages
+        return system_messages_first(messages)
+
     def transform_request(
         self,
         model: str,
@@ -489,7 +500,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             )
             else messages
         )
-        messages = self._transform_messages(messages=request_messages, model=model)
+        messages = self._transform_messages(
+            messages=self._prompt_cache_ordered_messages(request_messages, litellm_params), model=model
+        )
         if not self._should_preserve_cache_control_for_endpoint(
             litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
         ):
@@ -526,7 +539,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             )
             else messages
         )
-        transformed_messages = await self._transform_messages(messages=request_messages, model=model, is_async=True)
+        transformed_messages = await self._transform_messages(
+            messages=self._prompt_cache_ordered_messages(request_messages, litellm_params), model=model, is_async=True
+        )
         if not self._should_preserve_cache_control_for_endpoint(
             litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
         ):
