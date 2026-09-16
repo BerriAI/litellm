@@ -190,6 +190,7 @@ mod tests {
 
     #[test]
     fn required_shapes_preserve_nested_values_and_existing_errors() {
+        Python::initialize();
         let nested = json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}]);
         assert_eq!(
             Value::Array(required_array("messages", nested.clone()).unwrap()),
