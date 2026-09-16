@@ -34,6 +34,16 @@ else:
 MAX_MCP_TOOL_CALL_ROUNDS: Final = 5
 
 
+def _output_items(response: ResponsesAPIResponse) -> Sequence[object]:
+    """Read a response's output items as plain objects; the field is a wide union of item models."""
+    return tuple(cast("Sequence[object]", response.output))  # cast-ok: items are only carried, never inspected
+
+
+def _set_event_field(event: ResponsesAPIStreamingResponse, name: str, value: object) -> None:
+    """Events are pydantic models with extra fields allowed, so any event type can carry the field."""
+    setattr(event, name, value)
+
+
 async def create_mcp_list_tools_events(
     mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]],
     user_api_key_auth: "UserAPIKeyAuth | None",
@@ -170,6 +180,7 @@ def create_mcp_call_events(
     result: str | None = None,
     base_item_id: str | None = None,
     sequence_start: int = 1,
+    output_index: int = 0,
 ) -> list[ResponsesAPIStreamingResponse]:
     """Create MCP call events following OpenAI's specification"""
     events: Final[list[ResponsesAPIStreamingResponse]] = []
@@ -179,7 +190,7 @@ def create_mcp_call_events(
     in_progress_event: Final = MCPCallInProgressEvent(
         type=ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS,
         sequence_number=sequence_start,
-        output_index=0,
+        output_index=output_index,
         item_id=item_id,
     )
     events.append(in_progress_event)
@@ -187,7 +198,7 @@ def create_mcp_call_events(
     # MCP call arguments delta event (streaming the arguments)
     arguments_delta_event: Final = MCPCallArgumentsDeltaEvent(
         type=ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA,
-        output_index=0,
+        output_index=output_index,
         item_id=item_id,
         delta=arguments,  # JSON string with arguments
         sequence_number=sequence_start + 1,
@@ -197,7 +208,7 @@ def create_mcp_call_events(
     # MCP call arguments done event
     arguments_done_event: Final = MCPCallArgumentsDoneEvent(
         type=ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE,
-        output_index=0,
+        output_index=output_index,
         item_id=item_id,
         arguments=arguments,  # Complete JSON string with finalized arguments
         sequence_number=sequence_start + 2,
@@ -210,7 +221,7 @@ def create_mcp_call_events(
             type=ResponsesAPIStreamEvents.MCP_CALL_COMPLETED,
             sequence_number=sequence_start + 3,
             item_id=item_id,
-            output_index=0,
+            output_index=output_index,
         )
         events.append(completed_event)
 
@@ -219,7 +230,7 @@ def create_mcp_call_events(
 
         output_item_done_event: Final = OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-            output_index=0,
+            output_index=output_index,
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
                     "id": item_id,
@@ -239,7 +250,7 @@ def create_mcp_call_events(
             type=ResponsesAPIStreamEvents.MCP_CALL_FAILED,
             sequence_number=sequence_start + 3,
             item_id=item_id,
-            output_index=0,
+            output_index=output_index,
         )
         events.append(failed_event)
 
@@ -330,6 +341,17 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self._error_event_emitted = False
         self._last_sequence_number = 0
 
+        # Every auto-execute round is a distinct upstream response, but the
+        # client is reading one stream. Fold the rounds into one public
+        # lifecycle: one response.created, one response.completed whose
+        # output holds every round's items, and output indexes that are
+        # never reused for a different item.
+        self._round_index = 0
+        self._output_index_offset = 0
+        self._round_max_output_index = -1
+        self._composed_output: list[object] = []  # mutable-ok: grows as each round finishes
+        self._pending_mcp_call_items: list[dict[str, object]] = []  # mutable-ok: grows per executed tool
+
     def _extract_mcp_headers_from_params(self) -> None:
         """Extract MCP headers from original request params to pass to tool calls"""
 
@@ -415,8 +437,14 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
         chunk: Final = await self._anext_impl()
         sequence_number: Final = getattr(chunk, "sequence_number", None)
-        if isinstance(sequence_number, int) and sequence_number > self._last_sequence_number:
-            self._last_sequence_number = sequence_number
+        if isinstance(sequence_number, int):
+            # Follow-up rounds and gateway events restart their numbering.
+            # Keep the public stream strictly increasing.
+            if sequence_number <= self._last_sequence_number and self._last_sequence_number > 0:
+                self._last_sequence_number += 1
+                _set_event_field(chunk, "sequence_number", self._last_sequence_number)
+            else:
+                self._last_sequence_number = max(self._last_sequence_number, sequence_number)
         return chunk
 
     async def _anext_impl(self) -> ResponsesAPIStreamingResponse:
@@ -472,7 +500,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             await self._create_follow_up_iterator()
             if self.base_iterator is not None:
                 self.phase = "continue_initial_response"
-                return await self.__anext__()
+                return await self._anext_impl()
             self.phase = "finished"
             if self._stream_error is not None and not self._error_event_emitted:
                 self._error_event_emitted = True
@@ -530,17 +558,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         if chunk_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
                             self.initial_events_emitted = True
                             self.phase = "mcp_discovery"
-                            return chunk
+                            return await self._compose_round_chunk(chunk)
 
-                    # If auto-execution is enabled, check for completed responses
-                    if self.should_auto_execute and self._is_response_completed(chunk):
-                        response_obj = getattr(chunk, "response", None)
-                        if isinstance(response_obj, ResponsesAPIResponse):
-                            self.collected_response = response_obj
-                        self.phase = "tool_execution"
-                        await self._generate_tool_execution_events()
-
-                    return chunk
+                    # None means the chunk was folded into the single public
+                    # lifecycle; fall through so phase 4 runs the follow-up.
+                    return await self._compose_round_chunk(chunk)
                 except StopAsyncIteration:
                     if self.should_auto_execute and self.collected_response:
                         self.phase = "tool_execution"
@@ -565,6 +587,72 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         chunk_type: Final[object] = getattr(chunk, "type", None)
         return chunk_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+
+    def _follow_up_pending(self) -> bool:
+        """True when the current round's tool calls were executed and a follow-up round will run."""
+        return self.collected_response is not None and self.collected_response is self._tool_results_for_response
+
+    def _round_output_width(self, response: ResponsesAPIResponse) -> int:
+        """How many output indexes this round used, counting items it streamed but never listed."""
+        return max(len(_output_items(response)), self._round_max_output_index + 1)
+
+    def _absorb_round(self, response: ResponsesAPIResponse) -> None:
+        """Bank a finished round's items so the final response.completed can list them."""
+        width: Final = self._round_output_width(response)
+        self._composed_output.extend(_output_items(response))
+        self._composed_output.extend(self._pending_mcp_call_items)
+        self._output_index_offset += width + len(self._pending_mcp_call_items)
+        self._pending_mcp_call_items.clear()
+        self._round_max_output_index = -1
+
+    async def _compose_round_chunk(self, chunk: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse | None:
+        """
+        Fold one round's event into the single public lifecycle.
+
+        Returns None when the event must not reach the client: the lifecycle
+        openers of a follow-up round, and the response.completed of a round
+        whose tool calls the gateway executes itself. Shifts output_index on
+        follow-up rounds past the items already emitted, and lists every
+        round's items on the final response.completed.
+        """
+        chunk_type: Final[object] = getattr(chunk, "type", None)
+        if self._round_index > 0 and chunk_type in (
+            ResponsesAPIStreamEvents.RESPONSE_CREATED,
+            ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
+        ):
+            return None
+
+        output_index: Final[object] = getattr(chunk, "output_index", None)
+        if isinstance(output_index, int):
+            self._round_max_output_index = max(self._round_max_output_index, output_index)
+            if self._output_index_offset:
+                _set_event_field(chunk, "output_index", output_index + self._output_index_offset)
+
+        if not (self.should_auto_execute and self._is_response_completed(chunk)):
+            return chunk
+
+        response_obj: Final[object] = getattr(chunk, "response", None)
+        if isinstance(response_obj, ResponsesAPIResponse):
+            self.collected_response = response_obj
+        # Move to tool execution phase after this chunk
+        self.phase = "tool_execution"
+        await self._generate_tool_execution_events()
+
+        if not isinstance(response_obj, ResponsesAPIResponse):
+            return chunk
+        if self._follow_up_pending():
+            self._absorb_round(response_obj)
+            return None
+        if self._composed_output:
+            merged_output: Final[list[object]] = [  # mutable-ok: the response model declares output as a list
+                *self._composed_output,
+                *_output_items(response_obj),
+            ]
+            merged_response: Final = response_obj.model_copy(
+                update={"output": merged_output}  # mutable-ok: pydantic's update argument must be a dict
+            )
+            _set_event_field(chunk, "response", merged_response)
+        return chunk
 
     async def _process_base_iterator_chunk(self) -> ResponsesAPIStreamingResponse:
         """
@@ -593,17 +681,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     )
                     response_obj.id = self._cached_response_id
 
-        # If auto-execution is enabled, check for completed responses
-        if self.should_auto_execute and self._is_response_completed(chunk):
-            # Collect the response for tool execution
-            response_obj = getattr(chunk, "response", None)
-            if isinstance(response_obj, ResponsesAPIResponse):
-                self.collected_response = response_obj
-            # Move to tool execution phase after emitting this chunk
-            self.phase = "tool_execution"
-            await self._generate_tool_execution_events()
-
-        return chunk
+        composed: Final = await self._compose_round_chunk(chunk)
+        if composed is None:
+            # The chunk stays internal; hand the next public event back instead.
+            return await self._anext_impl()
+        return composed
 
     async def _create_initial_response_iterator(self) -> None:
         """Create the initial response iterator by making the first LLM call"""
@@ -667,6 +749,16 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 return
             self.tool_call_round += 1
 
+            # Each executed tool is one mcp_call output item of the single
+            # public response. Announce it at an output_index past the items
+            # this round already streamed, and keep that item id for the
+            # completion events below.
+            from litellm.types.llms.openai import OutputItemAddedEvent
+
+            next_output_index = self._output_index_offset + self._round_output_width(  # rebind-ok: advances per item
+                self.collected_response
+            )
+            call_items: Final[dict[str, tuple[str, int]]] = {}  # mutable-ok: filled per tool call as events queue
             for tool_call in tool_calls:
                 (
                     tool_name,
@@ -674,14 +766,36 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     tool_call_id,
                 ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
                 if tool_name and tool_call_id:
+                    item_id = f"mcp_{uuid.uuid4().hex[:8]}"
+                    output_index = next_output_index
+                    next_output_index += 1
+                    call_items[tool_call_id] = (item_id, output_index)
+                    self.tool_execution_events.append(
+                        OutputItemAddedEvent.model_validate(
+                            {  # mutable-ok: consumed once by model_validate
+                                "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                                "sequence_number": len(self.tool_execution_events) + 1,
+                                "output_index": output_index,
+                                "item": {  # mutable-ok: consumed once by model_validate
+                                    "id": item_id,
+                                    "type": "mcp_call",
+                                    "status": "in_progress",
+                                    "arguments": tool_arguments or "{}",
+                                    "name": tool_name,
+                                    "server_label": "litellm",
+                                },
+                            }
+                        )
+                    )
                     # Create MCP call events for this tool execution
                     call_events = create_mcp_call_events(
                         tool_name=tool_name,
                         tool_call_id=tool_call_id,
                         arguments=tool_arguments or "{}",  # JSON string with arguments
                         result=None,  # Will be set after execution
-                        base_item_id=f"mcp_{uuid.uuid4().hex[:8]}",
+                        base_item_id=item_id,
                         sequence_start=len(self.tool_execution_events) + 1,
+                        output_index=output_index,
                     )
                     # Add the in_progress and arguments events (not the completed event yet)
                     self.tool_execution_events.extend(call_events[:-1])
@@ -719,37 +833,45 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         tool_arguments = args or "{}"
                         break
 
-                item_id = f"mcp_{uuid.uuid4().hex[:8]}"
+                if tool_call_id in call_items:
+                    item_id, output_index = call_items[tool_call_id]
+                else:
+                    item_id = f"mcp_{uuid.uuid4().hex[:8]}"
+                    output_index = next_output_index
+                    next_output_index += 1
 
                 # Create the completion event
                 completed_event = MCPCallCompletedEvent(
                     type=ResponsesAPIStreamEvents.MCP_CALL_COMPLETED,
                     sequence_number=len(self.tool_execution_events) + 1,
                     item_id=item_id,
-                    output_index=0,
+                    output_index=output_index,
                 )
                 self.tool_execution_events.append(completed_event)
 
                 # Create output_item.done event with the tool call result
                 from litellm.types.llms.openai import OutputItemDoneEvent
 
+                mcp_call_item = BaseLiteLLMOpenAIResponseObject(
+                    **{  # mutable-ok: consumed once by the model constructor
+                        "id": item_id,
+                        "type": "mcp_call",
+                        "approval_request_id": f"mcpr_{uuid.uuid4().hex[:8]}",
+                        "arguments": tool_arguments,
+                        "error": None,
+                        "name": tool_name,
+                        "output": result_text,
+                        "server_label": "litellm",  # or extract from tool config
+                    }
+                )
                 output_item_done_event = OutputItemDoneEvent(
                     type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-                    output_index=0,
-                    item=BaseLiteLLMOpenAIResponseObject(
-                        **{
-                            "id": item_id,
-                            "type": "mcp_call",
-                            "approval_request_id": f"mcpr_{uuid.uuid4().hex[:8]}",
-                            "arguments": tool_arguments,
-                            "error": None,
-                            "name": tool_name,
-                            "output": result_text,
-                            "server_label": "litellm",  # or extract from tool config
-                        }
-                    ),
+                    output_index=output_index,
+                    item=mcp_call_item,
                 )
                 self.tool_execution_events.append(output_item_done_event)
+                # The response model accepts output items as dicts, not as the generic event object.
+                self._pending_mcp_call_items.append(mcp_call_item.model_dump())
 
             # Store tool results for follow-up call
             self.tool_results = tool_results
@@ -824,6 +946,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self.base_iterator = follow_up_response
                 self.collected_response = None
                 self._cached_response_id = None
+                self._round_index += 1
 
         except Exception as e:
             verbose_logger.error("Error creating follow-up iterator: %s", e)
