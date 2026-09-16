@@ -186,6 +186,25 @@ def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local
     assert info["key"] == "ft:gpt-4o-2024-08-06"
 
 
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_key"),
+    [
+        ("gpt-5.6-luna-2026-07-09", "openai", "gpt-5.6-luna"),
+        ("gpt-5.6-luna-2026-07-09", "azure", "azure/gpt-5.6-luna"),
+    ],
+)
+def test_get_model_info_falls_back_from_dated_snapshot_to_undated_entry(
+    local_model_cost_map, model, custom_llm_provider, expected_key
+):
+    info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    assert info["key"] == expected_key
+
+
+def test_get_model_info_prefers_exact_dated_key_over_stripped(local_model_cost_map):
+    info = litellm.get_model_info(model="gpt-4o-2024-08-06", custom_llm_provider="openai")
+    assert info["key"] == "gpt-4o-2024-08-06"
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.
