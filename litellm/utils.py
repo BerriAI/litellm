@@ -8254,8 +8254,8 @@ class ProviderConfigManager:
             LlmProviders.TRITON: (lambda: litellm.TritonConfig(), False),
             LlmProviders.PETALS: (lambda: litellm.PetalsConfig(), False),
             LlmProviders.SAP_GENERATIVE_AI_HUB: (
-                lambda: litellm.GenAIHubOrchestrationConfig(),
-                False,
+                lambda model: ProviderConfigManager._get_sap_chat_config(model),
+                True,
             ),
             LlmProviders.FEATHERLESS_AI: (lambda: litellm.FeatherlessAIConfig(), False),
             LlmProviders.NOVITA: (lambda: litellm.NovitaConfig(), False),
@@ -8375,6 +8375,24 @@ class ProviderConfigManager:
         from litellm.llms.langflow.chat.transformation import LangFlowConfig
 
         return LangFlowConfig()
+
+    @staticmethod
+    def _get_sap_chat_config(model: str) -> BaseConfig:
+        """Pick the SAP chat config by explicit backend form encoded in the model string.
+
+        ``sap/deployment/<model>`` connects straight to a foundation-model deployment, dispatched by
+        model-family configuration. Other forms fall back to standard orchestration.
+        """
+        from litellm.llms.sap.submode import SapBackendForm, split_sap_submode
+
+        form, bare_model = split_sap_submode(model)
+        if form is SapBackendForm.DEPLOYMENT:
+            from litellm.llms.sap.chat.deployment_dispatch import (
+                get_sap_deployment_chat_config,
+            )
+
+            return get_sap_deployment_chat_config(bare_model)
+        return litellm.GenAIHubOrchestrationConfig()
 
     @staticmethod
     def get_provider_chat_config(
@@ -8636,6 +8654,20 @@ class ProviderConfigManager:
                 )
 
                 return GithubCopilotAnthropicMessagesConfig()
+        elif litellm.LlmProviders.SAP_GENERATIVE_AI_HUB == provider:
+            from litellm.llms.sap.chat.deployment_dispatch import (
+                SapModelFamily,
+                detect_sap_model_family,
+            )
+            from litellm.llms.sap.submode import SapBackendForm, split_sap_submode
+
+            form, bare_model = split_sap_submode(model)
+            if form is SapBackendForm.DEPLOYMENT and detect_sap_model_family(bare_model) is SapModelFamily.ANTHROPIC:
+                from litellm.llms.sap.messages.transformation import (
+                    SapDeploymentAnthropicMessagesConfig,
+                )
+
+                return SapDeploymentAnthropicMessagesConfig()
 
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
@@ -8832,6 +8864,19 @@ class ProviderConfigManager:
             return litellm.HostedVLLMResponsesAPIConfig()
         elif litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIResponsesAPIConfig()
+        elif litellm.LlmProviders.SAP_GENERATIVE_AI_HUB == provider:
+            # GPT on SAP is served by an Azure OpenAI executable with a native Responses
+            # API surface; other deployment model families (Claude, Gemini) are not.
+            from litellm.llms.sap.chat.deployment_dispatch import SapModelFamily, detect_sap_model_family
+            from litellm.llms.sap.responses.transformation import SapDeploymentOpenAIResponsesConfig
+            from litellm.llms.sap.submode import split_sap_submode
+
+            if model is None:
+                return None
+            _, bare_model = split_sap_submode(model)
+            if detect_sap_model_family(bare_model) is not SapModelFamily.OPENAI:
+                return None
+            return SapDeploymentOpenAIResponsesConfig(model=bare_model)
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
             # Both decisions are data-driven from the model's price-map entry, with
             # no model-name logic. Capability (can it serve Responses?) comes from

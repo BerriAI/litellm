@@ -636,6 +636,7 @@ from litellm.proxy.middleware.security_headers_middleware import (
     SecurityHeadersMiddleware,
 )
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
+from litellm.proxy.sap_endpoints.endpoints import router as sap_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
@@ -18792,6 +18793,7 @@ app.include_router(public_endpoints_router)
 app.include_router(public_v1_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
+app.include_router(sap_router)
 app.include_router(rag_router)
 app.include_router(video_router)
 app.include_router(container_router)

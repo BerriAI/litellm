@@ -1901,6 +1901,12 @@ if TYPE_CHECKING:
     from .llms.sap.embed.transformation import (
         GenAIHubEmbeddingConfig as _GenAIHubEmbeddingConfig,
     )
+    from .llms.sap.messages.transformation import (
+        SapDeploymentAnthropicMessagesConfig as _SapDeploymentAnthropicMessagesConfig,
+    )
+    from .llms.sap.chat.direct_transformation import (
+        SapDeploymentAnthropicChatConfig as _SapDeploymentAnthropicChatConfig,
+    )
     from .llms.azure.chat.o_series_transformation import (
         AzureOpenAIO1Config as _AzureOpenAIO1Config,
     )
@@ -1940,6 +1946,8 @@ if TYPE_CHECKING:
     TencentChatConfig: Type[_TencentChatConfig]
     GenAIHubOrchestrationConfig: Type[_GenAIHubOrchestrationConfig]
     GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
+    SapDeploymentAnthropicMessagesConfig: Type[_SapDeploymentAnthropicMessagesConfig]
+    SapDeploymentAnthropicChatConfig: Type[_SapDeploymentAnthropicChatConfig]
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
     PerplexityChatConfig: Type[_PerplexityChatConfig]
     NscaleConfig: Type[_NscaleConfig]

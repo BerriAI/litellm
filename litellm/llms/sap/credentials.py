@@ -397,12 +397,12 @@ def _request_token(
 
 
 def get_token_creator(
-    service_key: str | dict | None = None,
+    service_key: str | dict[str, object] | None = None,
     profile: str | None = None,
     *,
     timeout: float = 30.0,
     expiry_buffer_minutes: int = 60,
-    **overrides,
+    **overrides: object,
 ) -> tuple[Callable[[], str], str, str]:
     """
     Creates a callable that fetches and caches an OAuth2 bearer token

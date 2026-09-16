@@ -109,6 +109,19 @@ vi.mock("../networking", async () => {
           },
         ],
       },
+      {
+        provider: "sap",
+        provider_display_name: Providers.SAP,
+        litellm_provider: "sap",
+        default_model_placeholder: "sap/anthropic--claude-4.8-opus",
+        credential_fields: [
+          {
+            key: "api_key",
+            label: "SAP AI Core Service Key",
+            field_type: "password",
+          },
+        ],
+      },
     ]),
   };
 });
@@ -288,6 +301,33 @@ describe("ProviderSpecificFields", () => {
 
     const baseModelInput = screen.getByPlaceholderText("azure/gpt-3.5-turbo");
     expect(baseModelInput).toBeInTheDocument();
+  });
+
+  it("shows the SAP deployment discovery button when the SAP provider slug is selected", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost>
+          <ProviderSpecificFields selectedProvider={"sap" as Providers} accessToken="admin-token" />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("button", { name: "Discover deployments" })).toBeInTheDocument();
+  });
+
+  it("does not show the SAP deployment discovery button for a non-SAP provider", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost>
+          <ProviderSpecificFields selectedProvider={Providers.OpenAI} />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByLabelText("OpenAI API Key");
+    expect(screen.queryByRole("button", { name: "Discover deployments" })).not.toBeInTheDocument();
   });
 
   it("sets Azure API version from the API base query parameter", async () => {

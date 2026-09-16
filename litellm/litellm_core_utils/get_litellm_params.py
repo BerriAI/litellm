@@ -26,7 +26,7 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
 # Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
 # which are otherwise invisible to it because that call site passes explicit
 # named arguments rather than `**kwargs`.
-FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS
+FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS | frozenset({"resource_group"})
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -53,6 +53,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "gigachat_scope",
             "gigachat_auth_url",
             "gigachat_access_token",
+            "resource_group",
             "tpm",
             "rpm",
             "itpm",

@@ -13290,6 +13290,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sap/deployments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** List Sap Deployments Endpoint */
+        post: operations["list_sap_deployments_endpoint_sap_deployments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/schedule/anthropic_beta_headers_reload": {
         parameters: {
             query?: never;
@@ -36738,6 +36755,34 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** SapDeploymentDiscoveryRequest */
+        SapDeploymentDiscoveryRequest: {
+            /** Resource Group */
+            resource_group?: string | null;
+            /** Service Key */
+            service_key: string;
+        };
+        /** SapDeploymentDiscoveryResponse */
+        SapDeploymentDiscoveryResponse: {
+            /** Deployments */
+            deployments: components["schemas"]["SapDeploymentInfo"][];
+        };
+        /** SapDeploymentInfo */
+        SapDeploymentInfo: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Deployment Url */
+            deployment_url: string;
+            /** Id */
+            id: string;
+            /** Model Name */
+            model_name: string;
+            /** Status */
+            status: string;
+        };
         /**
          * ScheduledJobStaggerSettings
          * @description Spreads the proxy's scheduled background jobs across a window instead of firing them
@@ -57697,6 +57742,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_sap_deployments_endpoint_sap_deployments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SapDeploymentDiscoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SapDeploymentDiscoveryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

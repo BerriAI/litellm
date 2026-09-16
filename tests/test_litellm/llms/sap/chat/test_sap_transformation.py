@@ -58,6 +58,20 @@ class TestSAPTransformationIntegration:
                 ), "SAP API requires parameters.type == 'object'"
                 assert "properties" in tool["function"]["parameters"]
 
+    def test_transform_request_drops_resource_group_from_model_params(self, mock_config):
+        """resource_group routes as the AI-Resource-Group header; leaking it into the model params makes SAP reject the completion with 400 'Unrecognized request argument supplied: resource_group'."""
+        result = mock_config.transform_request(
+            "gpt-4o",
+            [{"role": "user", "content": "Hello"}],
+            {"max_tokens": 16, "resource_group": "development-sandbox"},
+            {},
+            {},
+        )
+
+        model_params = result["config"]["modules"]["prompt_templating"]["model"]["params"]
+        assert "resource_group" not in model_params
+        assert model_params["max_tokens"] == 16
+
     def test_transform_request_parameter_handling_robustness(self, mock_config):
         """Test transform_request method handles various parameter combinations correctly."""
 
@@ -639,3 +653,43 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+    def test_deployment_url_raises_404_when_no_orchestration_deployment(self, mock_config):
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.handler import GenAIHubOrchestrationError
+
+        mock_client = MagicMock()
+        mock_client.get.return_value.json.return_value = {"resources": []}
+        mock_config._http_client = mock_client
+
+        with pytest.raises(GenAIHubOrchestrationError) as exc_info:
+            _ = mock_config.deployment_url
+
+        assert exc_info.value.status_code == 404
+        assert "test-group" in exc_info.value.message
+
+
+def test_validate_environment_threads_litellm_params_resource_group(monkeypatch):
+    from litellm.llms.sap.chat import transformation as sap_transformation
+
+    seen = {}
+
+    def fake_get_token_creator(service_key=None, resource_group=None):
+        seen["resource_group"] = resource_group
+        return (lambda: "Bearer test-token", "https://api.test-sap.com", resource_group or "default")
+
+    monkeypatch.setattr(sap_transformation, "get_token_creator", fake_get_token_creator)
+
+    config = sap_transformation.GenAIHubOrchestrationConfig()
+    headers = config.validate_environment(
+        headers={},
+        model="anthropic--claude-4.8-opus",
+        messages=[],
+        optional_params={},
+        litellm_params={"resource_group": "team-a"},
+        api_key="svc-key",
+    )
+
+    assert seen["resource_group"] == "team-a"
+    assert headers["AI-Resource-Group"] == "team-a"

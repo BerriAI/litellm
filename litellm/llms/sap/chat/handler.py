@@ -9,6 +9,7 @@ import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
+from litellm.types.utils import Usage
 
 from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
@@ -47,6 +48,18 @@ class _StreamParser:
     """Normalize orchestration streaming events into OpenAI-like chunks."""
 
     @staticmethod
+    def _validate_chunk(
+        payload: dict,  # mutable-ok: normalized in place (pops empty logprobs) before validation
+    ) -> OpenAIChatCompletionChunk:
+        for choice in payload.get("choices") or []:  # mutable-ok: only iterated, never mutated
+            if isinstance(choice, dict) and not choice.get("logprobs"):
+                choice.pop("logprobs", None)
+        chunk = OpenAIChatCompletionChunk.model_validate(payload)
+        if chunk.usage is not None:
+            chunk.usage = Usage(**chunk.usage.model_dump())
+        return chunk
+
+    @staticmethod
     def _from_orchestration_result(evt: dict) -> OpenAIChatCompletionChunk | None:
         """
         Accepts orchestration_result shape and maps it to an OpenAI-like *chunk*.
@@ -55,7 +68,7 @@ class _StreamParser:
         if not orc:
             return None
 
-        return OpenAIChatCompletionChunk.model_validate(
+        return _StreamParser._validate_chunk(
             {
                 "id": orc.get("id") or evt.get("request_id") or "stream-chunk",
                 "object": orc.get("object") or "chat.completion.chunk",
@@ -93,7 +106,7 @@ class _StreamParser:
             # ensure it looks like an OpenAI chunk
             if "object" not in fr:
                 fr["object"] = "chat.completion.chunk"
-            return OpenAIChatCompletionChunk.model_validate(fr)
+            return _StreamParser._validate_chunk(fr)
 
         # Orchestration incremental delta
         if "orchestration_result" in event_obj:
@@ -101,7 +114,7 @@ class _StreamParser:
 
         # Already an OpenAI-like chunk
         if "choices" in event_obj and "object" in event_obj:
-            return OpenAIChatCompletionChunk.model_validate(event_obj)
+            return _StreamParser._validate_chunk(event_obj)
 
         # Unknown / heartbeat / metrics
         return None
@@ -247,9 +260,18 @@ class AsyncSAPStreamIterator:
 # LLM handler
 # -------------------------------
 class GenAIHubOrchestration(BaseLLMHTTPHandler):
-    def _add_stream_param_to_request_body(self, data: dict, provider_config: BaseConfig, fake_stream: bool):
-        if data.get("config", {}).get("stream", None) is not None:
-            data["config"]["stream"]["enabled"] = True
-        else:
-            data["config"]["stream"] = {"enabled": True}
-        return data
+    def _add_stream_param_to_request_body(
+        self,
+        data: dict,  # mutable-ok: litellm base handler override signature
+        provider_config: BaseConfig,
+        fake_stream: bool,
+    ) -> dict:  # mutable-ok: litellm base handler override signature
+        # Only the orchestration body carries a top-level `config` envelope and enables streaming as
+        # `config.stream.enabled`. Direct-connect bodies (Bedrock invoke, Azure OpenAI chat, Gemini
+        # generateContent) follow the base contract, which honors supports_stream_param_in_request_body.
+        if "config" not in data:
+            return super()._add_stream_param_to_request_body(data, provider_config, fake_stream)
+        existing_stream: Final = data["config"].get("stream") or {}  # mutable-ok: orchestration config.stream default
+        stream_cfg: Final = {**existing_stream, "enabled": True}  # mutable-ok: orchestration config.stream body
+        config: Final = {**data["config"], "stream": stream_cfg}  # mutable-ok: orchestration config envelope
+        return {**data, "config": config}  # mutable-ok: orchestration request body

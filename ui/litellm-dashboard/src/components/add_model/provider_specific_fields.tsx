@@ -16,9 +16,11 @@ import {
 import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
+import SapDeploymentDiscovery from "./SapDeploymentDiscovery";
 
 interface ProviderSpecificFieldsProps {
-  selectedProvider: string | null;
+  selectedProvider: Providers;
+  accessToken?: string;
 }
 
 const readTextFile = (file: File, onLoaded: (contents: string) => void) => {
@@ -117,7 +119,7 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
   return credential;
 };
 
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider }) => {
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, accessToken }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = useFormContext<MountedFormValues>();
   const credentialsFileRef = React.useRef<HTMLInputElement>(null);
@@ -168,7 +170,6 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
   }, [cacheEntries]);
 
   const allFields = React.useMemo(() => {
-    if (selectedProvider === null) return [];
     // First try to resolve from the in-memory cache. We support both the
     // enum/display-name form and the raw provider slug (e.g. "petals").
     const cachedFields =
@@ -357,6 +358,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
           )}
         </React.Fragment>
       ))}
+      {(selectedProviderEnum === Providers.SAP || selectedProvider === provider_map.SAP) && (
+        <SapDeploymentDiscovery accessToken={accessToken ?? ""} />
+      )}
     </>
   );
 };
