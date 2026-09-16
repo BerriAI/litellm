@@ -52,6 +52,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     update_group,
     update_user,
 )
+from litellm.proxy.utils import _premium_user_check
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_USER_SCHEMA,
     SCIM_MANAGED_TEAM_METADATA_KEY,
@@ -607,6 +608,7 @@ def _scim_test_client(monkeypatch: pytest.MonkeyPatch, mock_prisma_client: Magic
     app: Final = FastAPI()
     app.include_router(scim_router)
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    app.dependency_overrides[_premium_user_check] = lambda: None
     return TestClient(app)
 
 
