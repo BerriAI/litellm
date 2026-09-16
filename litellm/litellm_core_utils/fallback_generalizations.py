@@ -34,6 +34,11 @@ rules never mix the two and never use ``extends``. A rule whose
 Rules are only consulted after exact and case-insensitive lookups miss, so an
 exact cost-map entry always takes precedence over any rule.
 
+Rules flagged with ``fill_missing_for_providers: [..]`` also fill only keys
+missing from an exact cost-map entry when the entry's ``litellm_provider`` is
+listed, while values already present on the entry win on conflict. Only flagged
+capability rules participate in this fill; routing rules never do.
+
 Patterns are matched case-insensitively with ``re.search`` and are not implicitly
 anchored: a rule must include ``^`` and ``$`` to bind to the whole model name,
 otherwise it matches as a substring. Keeping anchoring in the regex makes the rule
@@ -46,17 +51,19 @@ Rules are compiled and classified once, at install time. The match functions are
 O(number of rules); callers must only invoke them on a cache miss.
 """
 
+import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Final
 
-from litellm._logging import verbose_logger
-
-NAME_FIELD = "name"
-PATTERN_FIELD = "pattern"
-MODEL_INFO_FIELD = "model_info"
-PROVIDER_KEY = "litellm_provider"
-LEGACY_EXTENDS_FIELD = "extends"
+verbose_logger: Final = logging.getLogger("LiteLLM")
+NAME_FIELD: Final = "name"
+PATTERN_FIELD: Final = "pattern"
+MODEL_INFO_FIELD: Final = "model_info"
+PROVIDER_KEY: Final = "litellm_provider"
+LEGACY_EXTENDS_FIELD: Final = "extends"
+FILL_MISSING_FOR_PROVIDERS_FIELD: Final = "fill_missing_for_providers"
 
 
 def _resolve_legacy_extends(rules: list) -> list:
@@ -67,7 +74,7 @@ def _resolve_legacy_extends(rules: list) -> list:
     rules and dangling parents pass through unchanged; new-schema rules carry no
     ``extends`` and are untouched.
     """
-    base_by_name = {
+    base_by_name: Final = {
         rule[NAME_FIELD]: rule[MODEL_INFO_FIELD]
         for rule in rules
         if isinstance(rule, dict)
@@ -78,9 +85,9 @@ def _resolve_legacy_extends(rules: list) -> list:
     def resolved(rule: object) -> object:
         if not isinstance(rule, dict):
             return rule
-        parent_name = rule.get(LEGACY_EXTENDS_FIELD)
-        own_info = rule.get(MODEL_INFO_FIELD)
-        parent_info = base_by_name.get(parent_name) if isinstance(parent_name, str) else None
+        parent_name: Final = rule.get(LEGACY_EXTENDS_FIELD)
+        own_info: Final = rule.get(MODEL_INFO_FIELD)
+        parent_info: Final = base_by_name.get(parent_name) if isinstance(parent_name, str) else None
         if parent_info is None or not isinstance(own_info, dict):
             return rule
         return {**rule, MODEL_INFO_FIELD: {**parent_info, **own_info}}
@@ -98,16 +105,33 @@ class _RoutingRule:
 class _CapabilityRule:
     pattern: re.Pattern
     model_info: dict
+    fill_missing_for_providers: frozenset[str]
 
 
-_CompiledRule = Union[_RoutingRule, _CapabilityRule]
+_CompiledRule = _RoutingRule | _CapabilityRule
+
+
+def _parse_fill_missing_for_providers(rule: Mapping[str, object], pattern_label: object) -> frozenset[str] | None:
+    if FILL_MISSING_FOR_PROVIDERS_FIELD not in rule:
+        return frozenset()
+    raw_fill_missing_for_providers: Final = rule.get(FILL_MISSING_FOR_PROVIDERS_FIELD)
+    if not isinstance(raw_fill_missing_for_providers, (list, tuple)) or not all(
+        isinstance(provider, str) for provider in raw_fill_missing_for_providers
+    ):
+        verbose_logger.warning(
+            "LiteLLM: skipping malformed fallback generalization rule %s ('%s' must be a list of provider strings).",
+            rule.get(NAME_FIELD, pattern_label),
+            FILL_MISSING_FOR_PROVIDERS_FIELD,
+        )
+        return None
+    return frozenset(raw_fill_missing_for_providers)
 
 
 def _compile_rule(rule: object) -> tuple[_CompiledRule, ...]:
     if not isinstance(rule, dict):
         return ()
-    pattern = rule.get(PATTERN_FIELD)
-    model_info = rule.get(MODEL_INFO_FIELD)
+    pattern: Final = rule.get(PATTERN_FIELD)
+    model_info: Final = rule.get(MODEL_INFO_FIELD)
     if not isinstance(pattern, str) or not isinstance(model_info, dict):
         verbose_logger.warning(
             "LiteLLM: skipping malformed fallback generalization rule %s (needs string '%s' and dict '%s').",
@@ -117,7 +141,7 @@ def _compile_rule(rule: object) -> tuple[_CompiledRule, ...]:
         )
         return ()
     try:
-        compiled = re.compile(pattern, re.IGNORECASE)
+        compiled: Final = re.compile(pattern, re.IGNORECASE)
     except re.error as e:
         verbose_logger.warning(
             "LiteLLM: skipping fallback generalization rule with invalid regex %r: %s",
@@ -125,9 +149,18 @@ def _compile_rule(rule: object) -> tuple[_CompiledRule, ...]:
             e,
         )
         return ()
+    fill_missing_for_providers: Final = _parse_fill_missing_for_providers(rule, pattern)
+    if fill_missing_for_providers is None:
+        return ()
     if PROVIDER_KEY not in model_info:
-        return (_CapabilityRule(pattern=compiled, model_info=model_info),)
-    provider = model_info[PROVIDER_KEY]
+        return (
+            _CapabilityRule(
+                pattern=compiled,
+                model_info=model_info,
+                fill_missing_for_providers=fill_missing_for_providers,
+            ),
+        )
+    provider: Final = model_info[PROVIDER_KEY]
     if not isinstance(provider, str):
         verbose_logger.warning(
             "LiteLLM: skipping invalid fallback generalization rule %s: '%s' in '%s' must be a string.",
@@ -140,7 +173,11 @@ def _compile_rule(rule: object) -> tuple[_CompiledRule, ...]:
         return (_RoutingRule(pattern=compiled, provider=provider),)
     return (
         _RoutingRule(pattern=compiled, provider=provider),
-        _CapabilityRule(pattern=compiled, model_info=model_info),
+        _CapabilityRule(
+            pattern=compiled,
+            model_info=model_info,
+            fill_missing_for_providers=fill_missing_for_providers,
+        ),
     )
 
 
@@ -151,15 +188,17 @@ class _FallbackGeneralizations:
         self.rules: list = []
         self.routing_rules: tuple = ()
         self.capability_rules: tuple = ()
+        self.fill_missing_rules: tuple[_CapabilityRule, ...] = ()
 
-    def set_rules(self, rules: Optional[list]) -> None:
-        installed = rules if isinstance(rules, list) else []
-        compiled = tuple(kind for rule in _resolve_legacy_extends(installed) for kind in _compile_rule(rule))
+    def set_rules(self, rules: list | None) -> None:
+        installed: Final = rules if isinstance(rules, list) else []
+        compiled: Final = tuple(kind for rule in _resolve_legacy_extends(installed) for kind in _compile_rule(rule))
         self.rules = installed
         self.routing_rules = tuple(rule for rule in compiled if isinstance(rule, _RoutingRule))
         self.capability_rules = tuple(rule for rule in compiled if isinstance(rule, _CapabilityRule))
+        self.fill_missing_rules = tuple(rule for rule in self.capability_rules if rule.fill_missing_for_providers)
 
-    def match_routing(self, model: str) -> Optional[str]:
+    def match_routing(self, model: str) -> str | None:
         if not model:
             return None
         return next(
@@ -167,7 +206,7 @@ class _FallbackGeneralizations:
             None,
         )
 
-    def match_capabilities(self, model: str) -> Optional[dict]:
+    def match_capabilities(self, model: str) -> dict | None:
         if not model:
             return None
         matched = tuple(rule.model_info for rule in self.capability_rules if rule.pattern.search(model) is not None)
@@ -175,11 +214,26 @@ class _FallbackGeneralizations:
             return None
         return {key: value for model_info in matched for key, value in model_info.items()}
 
+    def match_fill_missing(self, model: str, provider: str) -> Mapping[str, object] | None:
+        if not model or not provider:
+            return None
+        matched = tuple(
+            rule.model_info
+            for rule in self.fill_missing_rules
+            if provider in rule.fill_missing_for_providers and rule.pattern.search(model) is not None
+        )
+        if not matched:
+            return None
+        fill_missing: Final[Mapping[str, object]] = {
+            key: value for model_info in matched for key, value in model_info.items() if key != PROVIDER_KEY
+        }
+        return fill_missing or None
 
-_registry = _FallbackGeneralizations()
+
+_registry: Final = _FallbackGeneralizations()
 
 
-def set_fallback_generalizations(rules: Optional[list]) -> None:
+def set_fallback_generalizations(rules: list | None) -> None:
     """Install the active rule list, compiling and classifying each rule.
 
     Legacy ``extends`` inheritance is resolved here, once, before classification;
@@ -195,7 +249,7 @@ def get_fallback_generalization_rules() -> list:
     return _registry.rules
 
 
-def match_routing_generalization(model: str) -> Optional[str]:
+def match_routing_generalization(model: str) -> str | None:
     """Return the provider of the first routing rule whose regex matches ``model``.
 
     O(number of rules). Only call this once exact lookups have missed.
@@ -203,10 +257,21 @@ def match_routing_generalization(model: str) -> Optional[str]:
     return _registry.match_routing(model)
 
 
-def match_capability_generalizations(model: str) -> Optional[dict]:
+def match_capability_generalizations(model: str) -> dict | None:
     """Return the union of the ``model_info`` of every capability rule matching ``model``.
 
     Later rules override earlier ones on key conflicts. Returns ``None`` when no
     capability rule matches. O(number of rules); only call once exact lookups have missed.
     """
     return _registry.match_capabilities(model)
+
+
+def match_fill_missing_generalizations(model: str, provider: str) -> Mapping[str, object] | None:
+    """Return flagged capability rules matching ``model`` for ``provider``.
+
+    Later rules override earlier ones on key conflicts. Only rules listing
+    ``provider`` in ``fill_missing_for_providers`` contribute. Returns ``None``
+    when no flagged rule matches. O(number of rules); only call once exact
+    lookups have matched.
+    """
+    return _registry.match_fill_missing(model, provider)

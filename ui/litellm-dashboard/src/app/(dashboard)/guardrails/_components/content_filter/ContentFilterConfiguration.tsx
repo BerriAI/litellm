@@ -1,8 +1,10 @@
-import React, { useState } from "react";
-import { Typography, Space, Upload, Card, Button } from "antd";
-import { PlusOutlined, UploadOutlined } from "@ant-design/icons";
+import React, { useRef, useState } from "react";
+import { Plus, Upload } from "lucide-react";
 import { validateBlockedWordsFile } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import PatternModal from "./PatternModal";
 import CustomPatternModal from "./CustomPatternModal";
 import KeywordModal from "./KeywordModal";
@@ -10,8 +12,6 @@ import PatternTable from "./PatternTable";
 import KeywordTable from "./KeywordTable";
 import ContentCategoryConfiguration from "./ContentCategoryConfiguration";
 import CompetitorIntentConfiguration, { CompetitorIntentConfig } from "./CompetitorIntentConfiguration";
-
-const { Title, Text } = Typography;
 
 interface PrebuiltPattern {
   name: string;
@@ -115,10 +115,11 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
   const [newKeywordAction, setNewKeywordAction] = useState<"BLOCK" | "MASK">("BLOCK");
   const [newKeywordDescription, setNewKeywordDescription] = useState<string>("");
   const [uploadValidating, setUploadValidating] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleAddPrebuiltPattern = () => {
     if (!selectedPatternName) {
-      NotificationsManager.error("Please select a pattern");
+      toast.error("Please select a pattern");
       return;
     }
 
@@ -139,7 +140,7 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
 
   const handleAddCustomPattern = () => {
     if (!customPatternName || !customPatternRegex) {
-      NotificationsManager.error("Please provide pattern name and regex");
+      toast.error("Please provide pattern name and regex");
       return;
     }
 
@@ -159,7 +160,7 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
 
   const handleAddKeyword = () => {
     if (!newKeyword) {
-      NotificationsManager.error("Please enter a keyword");
+      toast.error("Please enter a keyword");
       return;
     }
 
@@ -187,18 +188,26 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
           if (onFileUpload) {
             onFileUpload(content);
           }
-          NotificationsManager.success(result.message || "File uploaded successfully");
+          toast.success(result.message || "File uploaded successfully");
         } else {
           const errorMessage = result.error || (result.errors && result.errors.join(", ")) || "Invalid file";
-          NotificationsManager.error(`Validation failed: ${errorMessage}`);
+          toast.error(`Validation failed: ${errorMessage}`);
         }
       }
     } catch (error) {
-      NotificationsManager.error(`Failed to upload file: ${error}`);
+      toast.error(`Failed to upload file: ${error}`);
     } finally {
       setUploadValidating(false);
     }
     return false;
+  };
+
+  const handleFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (file) {
+      handleFileUpload(file);
+    }
   };
 
   const showPatterns = !showStep || showStep === "patterns";
@@ -210,68 +219,78 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
     <div className="space-y-6">
       {!showStep && (
         <div>
-          <Text type="secondary">
+          <p className="text-muted-foreground">
             Configure patterns, keywords, and content categories to detect and filter sensitive information in requests
             and responses.
-          </Text>
+          </p>
         </div>
       )}
 
       {showPatterns && (
-        <Card
-          title={
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <Title level={5} style={{ margin: 0 }}>
-                Pattern Detection
-              </Title>
-              <Text type="secondary" style={{ fontSize: 14, fontWeight: 400 }}>
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle>Pattern Detection</CardTitle>
+              <p className="text-sm font-normal text-muted-foreground">
                 Detect sensitive information using regex patterns (SSN, credit cards, API keys, etc.)
-              </Text>
+              </p>
             </div>
-          }
-          size="small"
-        >
-          <div style={{ marginBottom: 16 }}>
-            <Space>
-              <Button type="primary" onClick={() => setPatternModalVisible(true)} icon={<PlusOutlined />}>
+          </CardHeader>
+          <CardContent>
+            <div className="mb-4 flex flex-wrap gap-2">
+              <Button onClick={() => setPatternModalVisible(true)}>
+                <Plus />
                 Add prebuilt pattern
               </Button>
-              <Button onClick={() => setCustomPatternModalVisible(true)} icon={<PlusOutlined />}>
+              <Button variant="outline" onClick={() => setCustomPatternModalVisible(true)}>
+                <Plus />
                 Add custom regex
               </Button>
-            </Space>
-          </div>
-          <PatternTable patterns={selectedPatterns} onActionChange={onPatternActionChange} onRemove={onPatternRemove} />
+            </div>
+            <PatternTable
+              patterns={selectedPatterns}
+              onActionChange={onPatternActionChange}
+              onRemove={onPatternRemove}
+            />
+          </CardContent>
         </Card>
       )}
 
       {showKeywords && (
-        <Card
-          title={
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <Title level={5} style={{ margin: 0 }}>
-                Blocked Keywords
-              </Title>
-              <Text type="secondary" style={{ fontSize: 14, fontWeight: 400 }}>
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle>Blocked Keywords</CardTitle>
+              <p className="text-sm font-normal text-muted-foreground">
                 Block or mask specific sensitive terms and phrases
-              </Text>
+              </p>
             </div>
-          }
-          size="small"
-        >
-          <div style={{ marginBottom: 16 }}>
-            <Space>
-              <Button type="primary" onClick={() => setKeywordModalVisible(true)} icon={<PlusOutlined />}>
+          </CardHeader>
+          <CardContent>
+            <div className="mb-4 flex flex-wrap gap-2">
+              <Button onClick={() => setKeywordModalVisible(true)}>
+                <Plus />
                 Add keyword
               </Button>
-              <Upload beforeUpload={handleFileUpload} accept=".yaml,.yml" showUploadList={false}>
-                <Button icon={<UploadOutlined />} loading={uploadValidating}>
-                  Upload YAML file
-                </Button>
-              </Upload>
-            </Space>
-          </div>
-          <KeywordTable keywords={blockedWords} onActionChange={onBlockedWordUpdate} onRemove={onBlockedWordRemove} />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".yaml,.yml"
+                className="hidden"
+                onChange={handleFileInputChange}
+              />
+              <Button
+                variant="outline"
+                disabled={uploadValidating}
+                aria-busy={uploadValidating}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {uploadValidating ? <UiLoadingSpinner className="size-4" /> : <Upload />}
+                Upload YAML file
+              </Button>
+            </div>
+            <KeywordTable keywords={blockedWords} onActionChange={onBlockedWordUpdate} onRemove={onBlockedWordRemove} />
+          </CardContent>
         </Card>
       )}
 

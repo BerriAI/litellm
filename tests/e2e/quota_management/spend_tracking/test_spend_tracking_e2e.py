@@ -17,13 +17,13 @@ fails the test; a pricing or token-count drift does not.
 
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from math import isclose
+from typing import Final
 
 import pytest
-
-from e2e_http import Result, Success
+from e2e_http import Success
 from lifecycle import ResourceManager
-from models import ChatResponse, SpendLogs, SpendLogsParams
+from models import LiteLLMParamsBody, SpendLogs, SpendLogsParams
 from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
 
 pytestmark = pytest.mark.e2e
@@ -194,6 +194,7 @@ def test_streaming_messages_via_responses_bridge_tracks_spend(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.embeddings.logs_cost")
+@pytest.mark.covers("llm.embeddings.openai.basic.nonstream.cost_logged")
 def test_embedding_writes_nonzero_spend_row(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -225,20 +226,20 @@ def test_cache_hit_is_zero_cost_and_suffixed(
     # populated. The marker keeps each run isolated - a fixed prompt would persist
     # in the shared response cache across runs and make both calls hit (flaky).
     prompt = f"What is the capital of France? Answer in one word. {unique_marker()}"
-    _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16))
-    _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16))
+    _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16, cache=None))
+    _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16, cache=None))
 
     rows = client.poll_logs_for_key(
-        scoped_key, predicate=lambda rs: any(r.cache_hit == "True" for r in rs)
+        scoped_key,
+        predicate=lambda rs: any(r.cache_hit == "True" for r in rs)
+        and any(r.cache_hit != "True" for r in rs),
     )
-    cache_rows = [r for r in rows if r.cache_hit == "True"]
-    if not cache_rows:
-        pytest.skip(
-            "no cache-hit row observed; caching may be disabled on this proxy. "
-            f"rows seen: {_summarize(rows)}"
-        )
-
-    cache_row = cache_rows[0]
+    cache_row = _require_row(
+        rows,
+        lambda r: r.cache_hit == "True",
+        "with cache_hit=True (caching is enabled on the e2e proxy, so an identical "
+        "repeat call must hit the cache)",
+    )
     assert (
         cache_row.spend or 0
     ) == 0.0, f"cache hit was charged (double-charge regression): {_summarize(rows)}"
@@ -279,51 +280,22 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
     ), f"key aggregate {key_spend} != sum of logs {logs_total}; rows: {_summarize(rows)}"
 
 
+@pytest.mark.replayable
 @pytest.mark.covers("quota_management.spend_tracking.concurrent_burst.loses_no_spend")
 def test_burst_of_concurrent_calls_loses_no_spend(
-    client: SpendClient, scoped_key: str
+    client: SpendClient, resources: ResourceManager
 ) -> None:
-    """Six concurrent calls on one key: every call lands its own spend row under a
-    distinct request_id and the key aggregate equals the sum of the rows.
-    Sequential accuracy is covered by test_key_spend_equals_sum_of_logs; this pins
-    the concurrent increment path (parallel writers racing on one key's counter),
-    where a lost update can never be reproduced by sequential calls."""
-    burst = 6
+    from spend_reconciliation import TeamTraffic, assert_logs_match, create_traffic
 
-    def call(idx: int) -> Result[ChatResponse]:
-        return client.chat(
-            scoped_key,
-            "gemini-2.5-flash",
-            f"burst call {idx} {unique_marker()}",
-            max_tokens=16,
-        )
+    traffic: Final = create_traffic(client, resources)
 
-    with ThreadPoolExecutor(max_workers=burst) as pool:
-        results = tuple(pool.map(call, range(burst)))
-    failed = [r for r in results if not is_ok(r)]
-    assert not failed, f"{len(failed)}/{burst} burst calls failed; first: {failed[0]}"
+    def assert_team(team: TeamTraffic) -> None:
+        assert_logs_match(client, team)
+        key_spend: Final = client.poll_key_spend(team.key, minimum=team.spend * 0.999999)
+        assert isclose(key_spend, team.spend, rel_tol=1e-6, abs_tol=1e-9)
 
-    rows = client.poll_logs_for_key(
-        scoped_key,
-        min_rows=burst,
-        predicate=lambda rs: len([r for r in rs if (r.spend or 0) > 0]) >= burst,
-    )
-    costed = [r for r in rows if (r.spend or 0) > 0]
-    assert len(costed) >= burst, (
-        f"only {len(costed)}/{burst} burst calls produced a costed row - "
-        f"rows lost under concurrency: {_summarize(rows)}"
-    )
-    request_ids = [r.request_id for r in costed]
-    assert len(set(request_ids)) == len(request_ids), (
-        f"concurrent rows collapsed onto shared request_ids: {_summarize(rows)}"
-    )
-
-    logs_total = sum((r.spend or 0) for r in rows)
-    key_spend = client.poll_key_spend(scoped_key, minimum=logs_total * 0.999)
-    assert _approx_equal(key_spend, logs_total), (
-        f"key aggregate {key_spend} != sum of {len(rows)} rows {logs_total} - "
-        f"spend increments lost under concurrency: {_summarize(rows)}"
-    )
+    for team in traffic:
+        assert_team(team)
 
 
 @pytest.mark.covers("quota_management.spend_tracking.pagination.keeps_total")
@@ -503,22 +475,27 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
 
 @pytest.mark.covers("quota_management.spend_tracking.failure.writes_failure_row")
 def test_failure_call_writes_failure_status_row(
-    client: SpendClient, scoped_key: str
+    client: SpendClient, resources: ResourceManager, scoped_key: str
 ) -> None:
-    result = client.chat(scoped_key, "gemini-2.5-flash", "", max_tokens=1)
-    if is_ok(result):
-        pytest.skip("call unexpectedly succeeded; could not induce a failure row")
+    model = f"e2e-spend-failure-{unique_marker()}"
+    model_id = client.proxy.create_model(
+        model,
+        LiteLLMParamsBody(model="openai/gpt-5.5", api_key="sk-invalid-e2e-failure-row"),
+    )
+    resources.defer(lambda: client.proxy.delete_model(model_id))
+
+    result = client.chat(scoped_key, model, f"trigger failure {unique_marker()}", max_tokens=1)
+    assert not is_ok(result), (
+        f"a call to a deployment with an invalid upstream key must fail, not succeed: {result}"
+    )
 
     rows = client.poll_logs_for_key(
         scoped_key, predicate=lambda rs: any(r.status == "failure" for r in rs)
     )
-    failure_rows = [r for r in rows if r.status == "failure"]
-    if not failure_rows:
-        pytest.skip(
-            "no failure-status row was logged for the rejected call; "
-            "failure logging is environment-specific"
-        )
-    assert (failure_rows[0].spend or 0) == 0.0, "failed call must not be charged"
+    failure_row = _require_row(
+        rows, lambda r: r.status == "failure", "with status=failure for the rejected call"
+    )
+    assert (failure_row.spend or 0) == 0.0, "failed call must not be charged"
 
 
 @pytest.mark.covers("quota_management.spend_tracking.spend_calculate.returns_cost")

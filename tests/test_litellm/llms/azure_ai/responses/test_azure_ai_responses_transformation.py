@@ -1,36 +1,44 @@
-"""
-Regression tests for native Azure AI Foundry Responses API routing (LIT-4427).
-
-Before the fix, `azure_ai` had no native Responses config, so `litellm.responses()`
-fell back to the chat-completions bridge and sent `reasoning_effort` + function tools
-to `/chat/completions`, which Azure rejects for GPT-5 models. These tests assert the
-request now goes to the native `/openai/v1/responses` endpoint in Responses shape.
-"""
-
 import json
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
+from litellm.responses.main import _will_bridge_to_chat_completions
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager
 
+FOUNDRY_PROJECT_BASE = "https://res.services.ai.azure.com/api/projects/proj"
+FOUNDRY_RESPONSES_URL = f"{FOUNDRY_PROJECT_BASE}/openai/v1/responses"
+SERVERLESS_BASE = "https://endpoint.eastus.models.ai.azure.com"
+WEATHER_TOOL = {
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get weather",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
 
-class MockResponse:
-    def __init__(self, json_data, status_code=200):
-        self._json_data = json_data
-        self.status_code = status_code
-        self.text = json.dumps(json_data)
-        self.headers = httpx.Headers({})
 
-    def json(self):
-        return self._json_data
+@pytest.fixture(autouse=True)
+def clear_azure_ai_env(monkeypatch):
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    for env_var in (
+        "AZURE_AI_API_BASE",
+        "AZURE_AI_API_KEY",
+        "AZURE_AD_TOKEN",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
 
 
-def _minimal_responses_payload(model: str) -> dict:
+def _responses_payload(model: str) -> dict:
     return {
         "id": "resp_123",
         "object": "response",
@@ -56,161 +64,184 @@ def _minimal_responses_payload(model: str) -> dict:
     }
 
 
+def _chat_completion_payload(model: str) -> dict:
+    return {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "created": 1741369938,
+        "model": model,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6-luna-20260710154139", "gpt-5.5-20260504143601", "DeepSeek-R1-0528", None])
 @pytest.mark.parametrize(
-    "model",
-    ["gpt-5.6-luna-20260710154139", "gpt-5.5-20260504143601", "DeepSeek-R1-0528"],
+    "api_base", [FOUNDRY_PROJECT_BASE, "https://res.services.ai.azure.com", "https://res.openai.azure.com"]
 )
-def test_azure_ai_resolves_native_responses_config(model):
-    config = ProviderConfigManager.get_provider_responses_api_config(provider="azure_ai", model=model)
+def test_azure_openai_v1_hosts_resolve_native_config(model, api_base):
+    config = ProviderConfigManager.get_provider_responses_api_config(provider="azure_ai", model=model, api_base=api_base)
     assert isinstance(config, AzureAIResponsesAPIConfig)
 
 
-def test_azure_ai_resolves_native_config_for_management_ops():
-    """Management ops (delete/get/cancel/list) call the lookup with model=None; it must
-    still return the native config so those operations can build the right URL after a
-    native create succeeds."""
-    config = ProviderConfigManager.get_provider_responses_api_config(provider="azure_ai", model=None)
+def test_api_base_from_env_resolves_native_config(monkeypatch):
+    monkeypatch.setenv("AZURE_AI_API_BASE", FOUNDRY_PROJECT_BASE)
+    config = ProviderConfigManager.get_provider_responses_api_config(provider="azure_ai", model="gpt-5.6-luna", api_base=None)
     assert isinstance(config, AzureAIResponsesAPIConfig)
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6-luna", None])
+@pytest.mark.parametrize(
+    "api_base",
+    [SERVERLESS_BASE, "https://endpoint.eastus.inference.ml.azure.com/score", "https://res.cognitiveservices.azure.com"],
+)
+def test_other_hosts_keep_chat_bridge(model, api_base):
+    config = ProviderConfigManager.get_provider_responses_api_config(provider="azure_ai", model=model, api_base=api_base)
+    assert config is None
 
 
 @pytest.mark.parametrize("model", ["claude-3-5-sonnet", "model_router/gpt-5", "agents/my-agent"])
-def test_azure_ai_non_responses_models_keep_bridge(model):
-    """Claude / model-router / agents routes have their own surfaces, so they must
-    keep returning None (chat-completions bridge)."""
-    config = ProviderConfigManager.get_provider_responses_api_config(provider="azure_ai", model=model)
+def test_non_openai_surfaces_keep_chat_bridge(model):
+    config = ProviderConfigManager.get_provider_responses_api_config(
+        provider="azure_ai", model=model, api_base=FOUNDRY_PROJECT_BASE
+    )
     assert config is None
+
+
+@pytest.mark.parametrize("api_base,bridged", [(FOUNDRY_PROJECT_BASE, False), (SERVERLESS_BASE, True)])
+def test_will_bridge_to_chat_completions_follows_host(api_base, bridged):
+    assert _will_bridge_to_chat_completions("gpt-5.6-luna", "azure_ai", False, None, api_base) is bridged
 
 
 @pytest.mark.parametrize(
     "api_base,expected",
     [
+        (FOUNDRY_PROJECT_BASE, FOUNDRY_RESPONSES_URL),
+        (f"{FOUNDRY_PROJECT_BASE}/", FOUNDRY_RESPONSES_URL),
+        (f"{FOUNDRY_PROJECT_BASE}/openai/v1", FOUNDRY_RESPONSES_URL),
+        (FOUNDRY_RESPONSES_URL, FOUNDRY_RESPONSES_URL),
+        ("https://res.services.ai.azure.com", "https://res.services.ai.azure.com/openai/v1/responses"),
+        ("https://res.services.ai.azure.com/models", "https://res.services.ai.azure.com/openai/v1/responses"),
         (
-            "https://res.services.ai.azure.com/api/projects/proj",
-            "https://res.services.ai.azure.com/api/projects/proj/openai/v1/responses",
-        ),
-        (
-            "https://res.services.ai.azure.com/api/projects/proj/",
-            "https://res.services.ai.azure.com/api/projects/proj/openai/v1/responses",
-        ),
-        (
-            "https://res.services.ai.azure.com",
+            "https://res.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview",
             "https://res.services.ai.azure.com/openai/v1/responses",
         ),
+        ("https://res.openai.azure.com", "https://res.openai.azure.com/openai/v1/responses"),
         (
-            "https://res.openai.azure.com",
+            "https://res.openai.azure.com/openai/deployments/gpt-5?api-version=2025-04-01-preview",
             "https://res.openai.azure.com/openai/v1/responses",
-        ),
-        (
-            "https://res.services.ai.azure.com/api/projects/proj/openai/v1/responses",
-            "https://res.services.ai.azure.com/api/projects/proj/openai/v1/responses",
         ),
     ],
 )
 def test_get_complete_url(api_base, expected):
-    config = AzureAIResponsesAPIConfig()
-    assert config.get_complete_url(api_base=api_base, litellm_params={}) == expected
+    assert AzureAIResponsesAPIConfig().get_complete_url(api_base=api_base, litellm_params={}) == expected
 
 
-def test_get_complete_url_adds_api_version_from_params():
-    config = AzureAIResponsesAPIConfig()
-    url = config.get_complete_url(
-        api_base="https://res.services.ai.azure.com/api/projects/proj",
-        litellm_params={"api_version": "2025-04-01-preview"},
+def test_get_complete_url_ignores_api_version():
+    url = AzureAIResponsesAPIConfig().get_complete_url(
+        api_base=FOUNDRY_PROJECT_BASE, litellm_params={"api_version": "2025-04-01-preview"}
     )
-    assert url == (
-        "https://res.services.ai.azure.com/api/projects/proj/openai/v1/responses?api-version=2025-04-01-preview"
+    assert url == FOUNDRY_RESPONSES_URL
+
+
+def test_get_complete_url_uses_env_api_base(monkeypatch):
+    monkeypatch.setenv("AZURE_AI_API_BASE", FOUNDRY_PROJECT_BASE)
+    assert AzureAIResponsesAPIConfig().get_complete_url(api_base=None, litellm_params={}) == FOUNDRY_RESPONSES_URL
+
+
+def test_get_complete_url_raises_without_api_base():
+    with pytest.raises(ValueError, match="AZURE_AI_API_BASE"):
+        AzureAIResponsesAPIConfig().get_complete_url(api_base=None, litellm_params={})
+
+
+def test_native_websocket_stays_off():
+    assert AzureAIResponsesAPIConfig().supports_native_websocket() is False
+
+
+def test_validate_environment_sends_api_key_header():
+    headers = AzureAIResponsesAPIConfig().validate_environment(
+        headers={"x-custom": "1"},
+        model="gpt-5.6-luna",
+        litellm_params=GenericLiteLLMParams(api_key="secret", api_base=FOUNDRY_PROJECT_BASE),
     )
+    assert headers == {"x-custom": "1", "api-key": "secret", "Content-Type": "application/json"}
 
 
-def test_get_complete_url_raises_without_api_base(monkeypatch):
-    monkeypatch.setattr(litellm, "api_base", None)
-    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
-    config = AzureAIResponsesAPIConfig()
-    with pytest.raises(ValueError):
-        config.get_complete_url(api_base=None, litellm_params={})
+def test_validate_environment_reads_api_key_from_env(monkeypatch):
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-secret")
+    headers = AzureAIResponsesAPIConfig().validate_environment(
+        headers={}, model="gpt-5.6-luna", litellm_params=GenericLiteLLMParams(api_base=FOUNDRY_PROJECT_BASE)
+    )
+    assert headers["api-key"] == "env-secret"
 
 
-def test_validate_environment_api_key_header_for_foundry_host():
-    config = AzureAIResponsesAPIConfig()
-    headers = config.validate_environment(
+def test_validate_environment_uses_entra_token_without_api_key():
+    headers = AzureAIResponsesAPIConfig().validate_environment(
         headers={},
         model="gpt-5.6-luna",
-        litellm_params=GenericLiteLLMParams(
-            api_key="secret", api_base="https://res.services.ai.azure.com/api/projects/proj"
-        ),
+        litellm_params=GenericLiteLLMParams(azure_ad_token="entra-token", api_base=FOUNDRY_PROJECT_BASE),
     )
-    assert headers["api-key"] == "secret"
-    assert "Authorization" not in headers
-
-
-def test_validate_environment_bearer_for_serverless_host():
-    config = AzureAIResponsesAPIConfig()
-    headers = config.validate_environment(
-        headers={},
-        model="gpt-5.6-luna",
-        litellm_params=GenericLiteLLMParams(
-            api_key="secret", api_base="https://endpoint.eastus.models.ai.azure.com"
-        ),
-    )
-    assert headers["Authorization"] == "Bearer secret"
+    assert headers["Authorization"] == "Bearer entra-token"
     assert "api-key" not in headers
 
 
-def test_validate_environment_falls_back_to_base_azure_env_without_key(monkeypatch):
-    monkeypatch.setattr(litellm, "api_key", None)
-    monkeypatch.setattr(litellm, "openai_key", None)
-    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
-    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("AZURE_API_KEY", raising=False)
-    config = AzureAIResponsesAPIConfig()
-    headers = config.validate_environment(
-        headers={},
-        model="gpt-5.6-luna",
-        litellm_params=GenericLiteLLMParams(api_base="https://res.services.ai.azure.com/api/projects/proj"),
-    )
-    assert headers["Content-Type"] == "application/json"
-    assert "api-key" not in headers
+def test_validate_environment_raises_without_credentials():
+    with pytest.raises(ValueError, match="AZURE_AI_API_KEY"):
+        AzureAIResponsesAPIConfig().validate_environment(
+            headers={}, model="gpt-5.6-luna", litellm_params=GenericLiteLLMParams(api_base=FOUNDRY_PROJECT_BASE)
+        )
 
 
 @pytest.mark.asyncio
-async def test_aresponses_routes_to_native_endpoint_with_reasoning_and_tools():
-    """Core LIT-4427 regression: reasoning_effort + function tools must be sent to the
-    native /openai/v1/responses endpoint in Responses shape, not bridged to /chat/completions."""
-    tools = [
-        {
-            "type": "function",
-            "name": "get_weather",
-            "description": "Get weather",
-            "parameters": {
-                "type": "object",
-                "properties": {"city": {"type": "string"}},
-                "required": ["city"],
-            },
-        }
-    ]
+@respx.mock
+@pytest.mark.parametrize(
+    "model,api_base,expected_url",
+    [
+        ("azure_ai/gpt-5.6-luna-20260710154139", FOUNDRY_PROJECT_BASE, FOUNDRY_RESPONSES_URL),
+        (
+            "azure_ai/gpt-5.6-luna",
+            "https://res.services.ai.azure.com/models",
+            "https://res.services.ai.azure.com/openai/v1/responses",
+        ),
+    ],
+)
+async def test_aresponses_sends_reasoning_and_tools_to_native_endpoint(model, api_base, expected_url):
+    route = respx.post(expected_url).mock(return_value=httpx.Response(200, json=_responses_payload("gpt-5.6-luna")))
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post:
-        mock_post.return_value = MockResponse(_minimal_responses_payload("gpt-5.6-luna"), 200)
+    await litellm.aresponses(
+        model=model,
+        input="What is the weather in SF?",
+        reasoning_effort="high",
+        tools=[WEATHER_TOOL],
+        api_base=api_base,
+        api_key="fake-key",
+    )
 
-        await litellm.aresponses(
-            model="azure_ai/gpt-5.6-luna-20260710154139",
-            input="What is the weather in SF?",
-            reasoning_effort="high",
-            tools=tools,
-            api_base="https://res.services.ai.azure.com/api/projects/proj",
-            api_key="fake-key",
-        )
-
-    mock_post.assert_called_once()
-    url = str(mock_post.call_args.kwargs["url"])
-    body = mock_post.call_args.kwargs["json"]
-
-    assert url == "https://res.services.ai.azure.com/api/projects/proj/openai/v1/responses"
-    assert "/chat/completions" not in url
-    assert "input" in body
+    request = route.calls.last.request
+    body = json.loads(request.content)
+    assert request.headers["api-key"] == "fake-key"
+    assert body["input"] == "What is the weather in SF?"
     assert "messages" not in body
     assert body["reasoning"] == {"effort": "high"}
-    assert body["tools"] == tools
+    assert body["tools"] == [WEATHER_TOOL]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_aresponses_serverless_host_stays_on_chat_bridge():
+    chat_route = respx.post(url__regex=r".*/chat/completions$").mock(
+        return_value=httpx.Response(200, json=_chat_completion_payload("gpt-5.6-luna"))
+    )
+    responses_route = respx.post(url__regex=r".*/responses$")
+
+    await litellm.aresponses(
+        model="azure_ai/gpt-5.6-luna-20260710154139",
+        input="What is the weather in SF?",
+        tools=[WEATHER_TOOL],
+        api_base=SERVERLESS_BASE,
+        api_key="fake-key",
+    )
+
+    assert chat_route.called
+    assert not responses_route.called
+    assert chat_route.calls.last.request.headers["Authorization"] == "Bearer fake-key"

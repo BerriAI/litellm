@@ -8,11 +8,13 @@ Coverage:
   E1-E4  file_search guard in responses/main.py
   F1-F6  ManagedFiles hook access control
   G1-G3  get_vector_store_ids_from_file_search_tools()
-  H1-H14 emulated_handler unit tests
+  H1-H17 emulated_handler unit tests
 """
 
 import base64
+import logging
 from typing import Any, Dict, List, Optional
+from importlib import import_module
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -223,28 +225,28 @@ class TestFileSearchGuardInResponsesMain:
         expected = {"ok": True}
 
         with (
-            patch(
-                "litellm.responses.main.litellm.get_llm_provider",
+            patch.object(
+                import_module("litellm.responses.main").litellm, "get_llm_provider",
                 return_value=("claude-sonnet-4-5", "anthropic", None, None),
             ),
-            patch(
-                "litellm.responses.main.update_responses_input_with_model_file_ids",
+            patch.object(
+                import_module("litellm.responses.main"), "update_responses_input_with_model_file_ids",
                 return_value="hello",
             ),
-            patch(
-                "litellm.responses.main.update_responses_tools_with_model_file_ids",
+            patch.object(
+                import_module("litellm.responses.main"), "update_responses_tools_with_model_file_ids",
                 return_value=tools,
             ),
-            patch(
-                "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+            patch.object(
+                import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
                 return_value=None,
             ),
-            patch(
-                "litellm.responses.main.ResponsesAPIRequestUtils.get_requested_response_api_optional_param",
+            patch.object(
+                import_module("litellm.responses.main").ResponsesAPIRequestUtils, "get_requested_response_api_optional_param",
                 return_value={},
             ),
-            patch(
-                "litellm.responses.main.run_async_function", return_value=expected
+            patch.object(
+                import_module("litellm.responses.main"), "run_async_function", return_value=expected
             ) as run_async_mock,
         ):
             result = responses(
@@ -274,28 +276,28 @@ class TestFileSearchGuardInResponsesMain:
         mock_config.supports_native_file_search.return_value = False
 
         with (
-            patch(
-                "litellm.responses.main.litellm.get_llm_provider",
+            patch.object(
+                import_module("litellm.responses.main").litellm, "get_llm_provider",
                 return_value=("claude-sonnet-4-5", "anthropic", None, None),
             ),
-            patch(
-                "litellm.responses.main.update_responses_input_with_model_file_ids",
+            patch.object(
+                import_module("litellm.responses.main"), "update_responses_input_with_model_file_ids",
                 return_value="hello",
             ),
-            patch(
-                "litellm.responses.main.update_responses_tools_with_model_file_ids",
+            patch.object(
+                import_module("litellm.responses.main"), "update_responses_tools_with_model_file_ids",
                 return_value=tools,
             ),
-            patch(
-                "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+            patch.object(
+                import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
                 return_value=mock_config,
             ),
-            patch(
-                "litellm.responses.main.ResponsesAPIRequestUtils.get_requested_response_api_optional_param",
+            patch.object(
+                import_module("litellm.responses.main").ResponsesAPIRequestUtils, "get_requested_response_api_optional_param",
                 return_value={},
             ),
-            patch(
-                "litellm.responses.main.run_async_function", return_value=expected
+            patch.object(
+                import_module("litellm.responses.main"), "run_async_function", return_value=expected
             ) as run_async_mock,
         ):
             result = responses(
@@ -758,8 +760,8 @@ class TestEmulatedFileSearchHandler:
         mock_search_response.data = [search_result]
 
         with (
-            patch(
-                "litellm.responses.file_search.emulated_handler._call_aresponses",
+            patch.object(
+                import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses",
                 new=AsyncMock(side_effect=[first_resp, final_resp]),
             ),
             patch(
@@ -821,8 +823,8 @@ class TestEmulatedFileSearchHandler:
         mock_search_response.data = [search_result]
 
         with (
-            patch(
-                "litellm.responses.file_search.emulated_handler._call_aresponses",
+            patch.object(
+                import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses",
                 new=AsyncMock(side_effect=[first_resp_plural, final_resp]),
             ),
             patch(
@@ -855,8 +857,8 @@ class TestEmulatedFileSearchHandler:
             text="I already know the answer."
         )
 
-        with patch(
-            "litellm.responses.file_search.emulated_handler._call_aresponses",
+        with patch.object(
+            import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses",
             new=AsyncMock(return_value=direct_resp),
         ):
             result = await aresponses_with_emulated_file_search(
@@ -905,8 +907,8 @@ class TestEmulatedFileSearchHandler:
         mock_search_response.data = [search_result]
 
         with (
-            patch(
-                "litellm.responses.file_search.emulated_handler._call_aresponses",
+            patch.object(
+                import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses",
                 new=AsyncMock(side_effect=[first_resp, final_resp]),
             ) as mock_call,
             patch(
@@ -935,3 +937,112 @@ class TestEmulatedFileSearchHandler:
                 f"Sub-call {i} must run with is_internal_call=True to suppress "
                 "billing callbacks in wrapper_async"
             )
+
+    @pytest.mark.asyncio
+    async def test_H16_model_chosen_id_outside_request_is_not_searched(self, caplog):
+        """A vector_store_id the model returns that the request did not list is never
+        searched; the request's own stores are searched instead, with a warning."""
+        from litellm.responses.file_search.emulated_handler import (
+            aresponses_with_emulated_file_search,
+        )
+
+        first_resp = MagicMock()
+        first_resp.output = [
+            {
+                "type": "function_call",
+                "name": "litellm_file_search",
+                "call_id": "call_unlisted",
+                "arguments": '{"queries": ["launch codeword"], "vector_store_id": "vs_unlisted"}',
+            }
+        ]
+        first_resp.id = "resp_unlisted"
+        first_resp.created_at = 1700000000
+        first_resp.model = "claude-3-5-sonnet"
+        first_resp.usage = None
+
+        final_resp = self._make_mock_responses_api_response(text="done")
+
+        search_result = MagicMock()
+        search_result.file_id = "file-allowed"
+        search_result.filename = "allowed.txt"
+        search_result.score = 0.9
+        search_result.content = [{"type": "text", "text": "allowed context"}]
+        mock_search_response = MagicMock()
+        mock_search_response.data = [search_result]
+
+        mock_asearch = AsyncMock(return_value=mock_search_response)
+        with (
+            patch.object(
+                import_module("litellm.responses.file_search.emulated_handler"),
+                "_call_aresponses",
+                new=AsyncMock(side_effect=[first_resp, final_resp]),
+            ),
+            patch("litellm.vector_stores.main.asearch", new=mock_asearch),  # test-quality-ok: asserts store searched
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await aresponses_with_emulated_file_search(
+                input="What is the launch codeword?",
+                model="anthropic/claude-3-5-sonnet",
+                tools=[{"type": "file_search", "vector_store_ids": ["vs_allowed"]}],
+            )
+
+        searched_ids = [c.kwargs["vector_store_id"] for c in mock_asearch.call_args_list]
+        assert searched_ids, "Expected the vector store to be searched at least once"
+        assert "vs_unlisted" not in searched_ids, "Handler searched a store the request did not list"
+        assert set(searched_ids) == {"vs_allowed"}
+        dropped_id_warnings = [r for r in caplog.records if "vs_unlisted" in r.getMessage()]
+        assert len(dropped_id_warnings) == 1, "Expected one warning naming the dropped model-picked id"
+        assert dropped_id_warnings[0].levelno == logging.WARNING
+        assert "vs_allowed" in dropped_id_warnings[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_H17_model_chosen_id_within_request_narrows_search(self):
+        """A vector_store_id the model returns that IS one of the request's stores is honored:
+        only that store is searched, not every store in the request."""
+        from litellm.responses.file_search.emulated_handler import (
+            aresponses_with_emulated_file_search,
+        )
+
+        first_resp = MagicMock()
+        first_resp.output = [
+            {
+                "type": "function_call",
+                "name": "litellm_file_search",
+                "call_id": "call_narrow",
+                "arguments": '{"queries": ["q"], "vector_store_id": "vs_two"}',
+            }
+        ]
+        first_resp.id = "resp_narrow"
+        first_resp.created_at = 1700000000
+        first_resp.model = "claude-3-5-sonnet"
+        first_resp.usage = None
+
+        final_resp = self._make_mock_responses_api_response(text="done")
+
+        search_result = MagicMock()
+        search_result.file_id = "file-two"
+        search_result.filename = "two.txt"
+        search_result.score = 0.9
+        search_result.content = [{"type": "text", "text": "context"}]
+        mock_search_response = MagicMock()
+        mock_search_response.data = [search_result]
+
+        mock_asearch = AsyncMock(return_value=mock_search_response)
+        with (
+            patch.object(
+                import_module("litellm.responses.file_search.emulated_handler"),
+                "_call_aresponses",
+                new=AsyncMock(side_effect=[first_resp, final_resp]),
+            ),
+            patch("litellm.vector_stores.main.asearch", new=mock_asearch),  # test-quality-ok: asserts store searched
+        ):
+            await aresponses_with_emulated_file_search(
+                input="q",
+                model="anthropic/claude-3-5-sonnet",
+                tools=[{"type": "file_search", "vector_store_ids": ["vs_one", "vs_two"]}],
+            )
+
+        searched_ids = [c.kwargs["vector_store_id"] for c in mock_asearch.call_args_list]
+        assert set(searched_ids) == {"vs_two"}, (
+            "A request-listed id the model picks should narrow the search to that store only"
+        )

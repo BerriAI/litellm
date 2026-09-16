@@ -78,8 +78,11 @@ async def test_should_resolve_raw_input_file_id_to_unified_id():
         f"got raw: '{response.input_file_id}'"
     )
 
-    prisma.db.litellm_managedfiletable.find_first.assert_called_once_with(
+    prisma.db.litellm_managedfiletable.find_first.assert_any_call(
         where={"flat_model_file_ids": {"has": raw_input_file_id}}
+    )
+    prisma.db.litellm_managedfiletable.find_first.assert_any_call(
+        where={"flat_model_file_ids": {"has": "file-output-raw"}}
     )
 
 

@@ -1,13 +1,9 @@
 # Create server parameters for stdio connection
 import os
-import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from contextlib import asynccontextmanager
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
@@ -2010,6 +2006,9 @@ async def test_get_tools_for_single_server_applies_disallowed_tools_without_allo
     mock_server.mcp_info = {"server_name": "zapier"}
     mock_server.name = "zapier"
     mock_server.server_id = "zapier"
+    mock_server.server_name = "zapier"
+    mock_server.alias = None
+    mock_server.short_prefix = None
     mock_server.allowed_tools = None
     mock_server.disallowed_tools = ["send_email"]
 
@@ -2034,6 +2033,65 @@ async def test_get_tools_for_single_server_applies_disallowed_tools_without_allo
         result = await _get_tools_for_single_server(mock_server, "Bearer test_token")
 
     assert [tool.name for tool in result] == ["read_email"]
+
+
+@pytest.mark.asyncio
+async def test_rest_listing_hides_key_grants_dispatch_would_refuse():
+    """REST listing must answer for exactly the key/team grants dispatch honors.
+
+    ``mcp_tool_permissions`` and toolset rows name a tool on one server, so both
+    the MCP list path and ``tools/call`` compare them bare. A wire-form entry
+    therefore grants nothing, and REST listing that matched the prefixed
+    spelling would advertise a tool the very next call refuses.
+    """
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+        _get_tools_for_single_server,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from mcp.types import Tool as MCPTool
+
+    server_id = "3c6f6617-d23c-4f48-bfb0-f205e3b27bab"
+    mock_server = MagicMock()
+    mock_server.mcp_info = {"server_name": server_id}
+    mock_server.name = server_id
+    mock_server.server_id = server_id
+    mock_server.server_name = None
+    mock_server.alias = None
+    mock_server.short_prefix = None
+    mock_server.allowed_tools = None
+    mock_server.disallowed_tools = None
+    mock_server.tool_name_to_display_name = None
+
+    mock_tools = [
+        MCPTool(
+            name="read_wiki_contents",
+            description="Read a wiki",
+            inputSchema={"type": "object"},
+        ),
+    ]
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+    ) as mock_manager, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+    ) as mock_server_manager, patch.object(
+        MCPRequestHandler,
+        "get_allowed_tools_for_server",
+        AsyncMock(return_value=[f"{server_id}-read_wiki_contents"]),
+    ):
+        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+        mock_server_manager.get_mcp_server_by_id.return_value = mock_server
+
+        result = await _get_tools_for_single_server(
+            mock_server,
+            "Bearer test_token",
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert result == []
 
 
 @pytest.mark.asyncio
@@ -2757,6 +2815,7 @@ async def test_mcp_server_manager_with_access_groups_integration():
     """Integration test for MCPServerManager with access group filtering"""
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
+        MCPServerAccess,
     )
     from litellm.proxy._types import UserAPIKeyAuth
 
@@ -2790,11 +2849,11 @@ async def test_mcp_server_manager_with_access_groups_integration():
     )
 
     # Mock the permission lookup to return staff access group
-    with patch.object(MCPRequestHandler, "get_allowed_mcp_servers") as mock_get_allowed:
-        mock_get_allowed.return_value = [
-            "staff-server-id",
-            "ops-server-id",
-        ]  # User has access to staff and ops
+    with patch.object(MCPRequestHandler, "get_mcp_server_access") as mock_get_allowed:  # test-quality-ok: manager resolver seam
+        mock_get_allowed.return_value = MCPServerAccess(
+            server_ids=("staff-server-id", "ops-server-id"),
+            scope="scoped",
+        )
 
         allowed_servers = await test_manager.get_allowed_mcp_servers(user_auth)
 
@@ -2843,6 +2902,7 @@ async def test_get_allowed_mcp_servers_returns_empty_for_non_admin_without_permi
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
+        MCPServerAccess,
     )
 
     test_manager = MCPServerManager()
@@ -2865,9 +2925,9 @@ async def test_get_allowed_mcp_servers_returns_empty_for_non_admin_without_permi
     )
 
     with patch.object(
-        MCPRequestHandler, "get_allowed_mcp_servers", new_callable=AsyncMock
+        MCPRequestHandler, "get_mcp_server_access", new_callable=AsyncMock
     ) as mock_permission_lookup:
-        mock_permission_lookup.return_value = []
+        mock_permission_lookup.return_value = MCPServerAccess(server_ids=())
         allowed_servers = await test_manager.get_allowed_mcp_servers(user_auth)
 
     assert allowed_servers == []

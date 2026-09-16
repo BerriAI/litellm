@@ -1,5 +1,10 @@
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import {
+  buildPlaygroundHeaders,
+  type CustomHeaders,
+  withRequiredHeaders,
+} from "@/components/llm_calls/request_headers";
 
 export async function makeOpenAIEmbeddingsRequest(
   input: string,
@@ -8,6 +13,7 @@ export async function makeOpenAIEmbeddingsRequest(
   accessToken: string,
   tags?: string[],
   customBaseUrl?: string,
+  customHeaders?: CustomHeaders,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -20,11 +26,10 @@ export async function makeOpenAIEmbeddingsRequest(
   }
 
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
-  // Prepare headers with tags and trace ID
-  const headers: Record<string, string> = {};
-  if (tags && tags.length > 0) {
-    headers["x-litellm-tags"] = tags.join(",");
-  }
+  const headers = withRequiredHeaders(buildPlaygroundHeaders(tags, customHeaders), {
+    "Content-Type": "application/json",
+    [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
+  });
 
   try {
     const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
@@ -32,11 +37,7 @@ export async function makeOpenAIEmbeddingsRequest(
 
     const response = await fetch(requestUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
-        ...headers,
-      },
+      headers,
       body: JSON.stringify({
         model: selectedModel,
         input,
@@ -57,9 +58,7 @@ export async function makeOpenAIEmbeddingsRequest(
 
     updateEmbeddingsUI(JSON.stringify(embedding), responseData?.model ?? selectedModel);
   } catch (error: unknown) {
-    NotificationManager.fromBackend(
-      `Error occurred while making embeddings request. Please try again. Error: ${error}`,
-    );
+    toast.fromError(`Error occurred while making embeddings request. Please try again. Error: ${error}`);
 
     throw error; // Re-throw to allow the caller to handle the error
   }

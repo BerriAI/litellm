@@ -158,7 +158,7 @@ async def test_lakera_v2_inspects_responses_api_input(user_api_key, monkeypatch)
             call_type="responses",
         )
 
-    assert seen_messages == [[{"role": "user", "content": "responses-api content"}]]
+    assert seen_messages == [({"role": "user", "content": "responses-api content"},)]
 
 
 @pytest.mark.asyncio
@@ -320,7 +320,7 @@ async def test_lakera_v2_inspects_multimodal_list_content(user_api_key, monkeypa
             call_type="acompletion",
         )
 
-    assert seen_messages == [[{"role": "user", "content": "AKIAEXAMPLE"}]]
+    assert seen_messages == [({"role": "user", "content": "AKIAEXAMPLE"},)]
 
 
 # ── Lasso ─────────────────────────────────────────────────────────────────────

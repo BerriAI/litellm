@@ -1,6 +1,8 @@
 """Golden tests for the OTel v2 engine: span shape, kinds, semconv attributes,
 legacy dual-emit, hierarchy, error status, and idempotency. Needs the OTel SDK."""
 
+import json
+
 import pytest
 
 pytest.importorskip("opentelemetry")
@@ -17,6 +19,10 @@ from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.emitter import SpanEmitter  # noqa: E402
 from litellm.integrations.otel.emitter import stamp_error  # noqa: E402
+from litellm.integrations.otel.mappers.utils import (  # noqa: E402
+    MAX_MESSAGE_ATTRS_PER_SPAN,
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
+)
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
     GuardrailSpanData,
     LLMCallSpanData,
@@ -305,3 +311,293 @@ def test_guardrail_success_span_is_unset():
     )
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.UNSET
+
+
+def _tools_payload(count):
+    """A request declaring ``count`` tools, in the chat-completion shape."""
+    return _payload(
+        model_parameters={
+            "temperature": 0.7,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": f"tool_{i}",
+                        "description": f"description for tool {i}",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+                for i in range(count)
+            ],
+        }
+    )
+
+
+def test_many_tools_do_not_evict_core_attributes():
+    """Tool definitions must never crowd core telemetry off the span.
+
+    An agentic client declares hundreds of tools. Spelling each one out as
+    per-index attributes overruns the OTel SDK's 128-attribute span limit,
+    which evicts oldest-first and so destroys the ``gen_ai.*`` attributes
+    written before it. Capping the tool family keeps the core intact.
+    """
+    engine, exporter = _engine()
+    data = LLMCallSpanData.from_standard_logging_payload(_tools_payload(127))
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+    a = span.attributes
+
+    assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert a[GenAI.PROVIDER_NAME] == "openai"
+    assert a[GenAI.USAGE_INPUT_TOKENS] == 10
+    assert a[GenAI.USAGE_OUTPUT_TOKENS] == 5
+    assert a[GenAI.RESPONSE_FINISH_REASONS] == ("stop",)
+    assert a[f"{LiteLLM.COST_PREFIX}total"] == 0.002
+    assert a["gen_ai.usage.prompt_tokens"] == 10
+
+    assert span.dropped_attributes == 0
+    assert a[LiteLLM.TOOLS_DECLARED] == 127
+    assert a["gen_ai.tool.0.name"] == "tool_0"
+    assert "gen_ai.tool.126.name" not in a
+    assert "llm.request.functions.126.name" not in a
+
+
+def test_tool_definitions_kept_in_full_below_the_cap():
+    """A handful of tools keeps full per-index detail in both vocabularies."""
+    engine, exporter = _engine()
+    data = LLMCallSpanData.from_standard_logging_payload(_tools_payload(3))
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+    a = span.attributes
+
+    assert a[LiteLLM.TOOLS_DECLARED] == 3
+    for idx in range(3):
+        assert a[f"gen_ai.tool.{idx}.name"] == f"tool_{idx}"
+        assert a[f"gen_ai.tool.{idx}.description"] == f"description for tool {idx}"
+        assert a[f"gen_ai.tool.{idx}.parameters"]
+        assert a[f"llm.request.functions.{idx}.name"] == f"tool_{idx}"
+
+
+def _tool_span(mapper_names, tool_count):
+    """The exported LLM-call span for ``mapper_names`` and ``tool_count`` tools."""
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=True,
+        mapper_names=list(mapper_names),
+    )
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    engine.emit(
+        SpanRole.LLM_CALL,
+        LLMCallSpanData.from_standard_logging_payload(_tools_payload(tool_count)),
+    )
+    (span,) = exporter.get_finished_spans()
+    return span
+
+
+def _tool_definition_keys(attributes):
+    return [
+        key
+        for key in attributes
+        if key.startswith(("gen_ai.tool.", "llm.request.functions.", "llm.tools."))
+    ]
+
+
+@pytest.mark.parametrize(
+    "mapper_names",
+    [
+        ["genai"],
+        ["genai", "openinference"],
+        ["genai", "openinference", "langfuse", "weave", "langtrace"],
+    ],
+)
+def test_tool_definitions_stay_within_one_span_wide_budget(mapper_names):
+    """Every supported composition has to leave core telemetry on the span.
+
+    Each vocabulary spells the same tools out under its own keys, so an
+    allowance handed to each mapper separately multiplies by the number of
+    configured vocabularies and reaches the attribute limit again. Arize and
+    Phoenix already layer OpenInference on top of the default two, and every
+    vendor vocabulary can be listed at once. One budget shared across them all
+    is what keeps the total bounded.
+    """
+    span = _tool_span(mapper_names, 127)
+    a = span.attributes
+
+    assert span.dropped_attributes == 0
+    assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert a[GenAI.PROVIDER_NAME] == "openai"
+    assert a[GenAI.USAGE_INPUT_TOKENS] == 10
+    assert a[GenAI.USAGE_OUTPUT_TOKENS] == 5
+    assert a[f"{LiteLLM.COST_PREFIX}total"] == 0.002
+    assert a[LiteLLM.TOOLS_DECLARED] == 127
+
+    emitted = _tool_definition_keys(a)
+    assert emitted, "some tool detail should survive in every composition"
+    assert len(emitted) <= MAX_TOOL_DEFINITION_ATTRS_PER_SPAN
+
+
+def test_vendor_tool_definitions_are_truncated_not_dropped():
+    """The OpenInference vocabulary keeps its leading tools and loses the tail."""
+    a = _tool_span(["genai", "openinference"], 127).attributes
+    assert a["llm.tools.0.tool.name"] == "tool_0"
+    assert a["llm.tools.0.tool.json_schema"]
+    assert "llm.tools.126.tool.name" not in a
+
+
+def _conversation_payload(turns, choices=1, **overrides):
+    """A ``turns``-message chat with ``choices`` response choices, content-bearing."""
+    return _payload(
+        messages=[{"role": ("user", "assistant")[i % 2], "content": f"turn {i}"} for i in range(turns)],
+        response={
+            "id": "resp_1",
+            "model": "gpt-4o-2024",
+            "choices": [
+                {"finish_reason": "stop", "message": {"role": "assistant", "content": f"reply {i}"}}
+                for i in range(choices)
+            ],
+        },
+        **overrides,
+    )
+
+
+def _conversation_span(mapper_names, payload, legacy_compat=False):
+    """The exported LLM-call span for ``payload`` with content capture on."""
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=legacy_compat,
+        mapper_names=list(mapper_names),
+        capture_message_content="span_only",
+    )
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    engine.emit(
+        SpanRole.LLM_CALL,
+        LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True),
+    )
+    (span,) = exporter.get_finished_spans()
+    return span
+
+
+def _indexed_message_count(attributes, prefix):
+    return len({key.split(".")[2] for key in attributes if key.startswith(f"{prefix}.")})
+
+
+@pytest.mark.parametrize("turns", [60, 200])
+def test_long_conversation_does_not_evict_core_attributes(turns):
+    """Per-message OpenInference attributes must never crowd core telemetry off the span."""
+    span = _conversation_span(["genai", "openinference"], _conversation_payload(turns))
+    a = span.attributes
+
+    assert span.dropped_attributes == 0
+    assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert a[GenAI.PROVIDER_NAME] == "openai"
+    assert a[GenAI.USAGE_INPUT_TOKENS] == 10
+    assert a[GenAI.USAGE_OUTPUT_TOKENS] == 5
+    assert a[GenAI.RESPONSE_FINISH_REASONS] == ("stop",)
+    assert a[f"{LiteLLM.COST_PREFIX}total"] == 0.002
+
+    assert a["llm.input_messages.0.message.content"] == "turn 0"
+    assert a["llm.output_messages.0.message.content"] == "reply 0"
+    assert a[f"llm.input_messages.{turns - 1}.message.content"] == f"turn {turns - 1}"
+    assert f"llm.input_messages.{turns // 2}.message.role" not in a
+    assert len(json.loads(a["input.value"])) == turns
+    assert len(json.loads(a["output.value"])) == 1
+    assert len(json.loads(a[GenAI.INPUT_MESSAGES])) == turns
+
+
+def test_short_conversation_keeps_every_message_indexed():
+    """Below the cap nothing is truncated in either direction."""
+    a = _conversation_span(["genai", "openinference"], _conversation_payload(4, choices=2)).attributes
+    for idx in range(4):
+        assert a[f"llm.input_messages.{idx}.message.content"] == f"turn {idx}"
+    for idx in range(2):
+        assert a[f"llm.output_messages.{idx}.message.content"] == f"reply {idx}"
+
+
+def test_indexed_prompt_keeps_opener_and_latest_turns_under_a_value_length_limit(monkeypatch):
+    """The system prompt and the live turn keep their own keys once the SDK clips ``input.value``."""
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "256")
+    chat = _conversation_payload(60)
+    payload = {
+        **chat,
+        "messages": [
+            {"role": "system", "content": "be terse"},
+            *chat["messages"][1:-1],
+            {"role": "user", "content": "LATEST-TURN"},
+        ],
+    }
+    a = _conversation_span(["genai", "openinference"], payload).attributes
+
+    assert len(a["input.value"]) == 256
+    assert a["llm.input_messages.0.message.role"] == "system"
+    assert a["llm.input_messages.0.message.content"] == "be terse"
+    assert a["llm.input_messages.59.message.role"] == "user"
+    assert a["llm.input_messages.59.message.content"] == "LATEST-TURN"
+    assert a["llm.output_messages.0.message.content"] == "reply 0"
+    assert [int(key.split(".")[2]) for key in a if key.endswith("message.content") and key.startswith("llm.input_")] == [
+        0,
+        *range(54, 60),
+    ]
+
+
+def test_message_cap_is_shared_across_input_and_output():
+    """One span-wide allowance covers both directions, and the response always keeps a share."""
+    long_prompt = _conversation_span(["genai", "openinference"], _conversation_payload(60, choices=1)).attributes
+    many_choices = _conversation_span(["genai", "openinference"], _conversation_payload(60, choices=20)).attributes
+
+    single_reply_indexed = _indexed_message_count(long_prompt, "llm.output_messages")
+    assert single_reply_indexed == 1
+    assert _indexed_message_count(long_prompt, "llm.input_messages") + single_reply_indexed == (
+        MAX_MESSAGE_ATTRS_PER_SPAN // 2
+    )
+
+    assert _indexed_message_count(many_choices, "llm.input_messages") > 0
+    assert _indexed_message_count(many_choices, "llm.output_messages") > single_reply_indexed
+    assert _indexed_message_count(many_choices, "llm.input_messages") + _indexed_message_count(
+        many_choices, "llm.output_messages"
+    ) == (MAX_MESSAGE_ATTRS_PER_SPAN // 2)
+
+
+def test_fully_populated_span_with_every_vocabulary_stays_within_the_attribute_limit():
+    """Every capped family maxed at once still leaves the whole core intact."""
+    payload = _conversation_payload(
+        200,
+        choices=20,
+        stream=True,
+        model_parameters={
+            **_tools_payload(127)["model_parameters"],
+            "top_p": 0.9,
+            "frequency_penalty": 0.1,
+            "presence_penalty": 0.1,
+            "seed": 7,
+            "stop": ["\n"],
+        },
+        cost_breakdown={
+            key: 0.001
+            for key in (
+                "input_cost",
+                "output_cost",
+                "cache_read_cost",
+                "cache_creation_cost",
+                "tool_usage_cost",
+                "original_cost",
+                "discount_amount",
+                "discount_percent",
+                "margin_fixed_amount",
+                "margin_percent",
+                "margin_total_amount",
+                "total_cost",
+            )
+        },
+    )
+    span = _conversation_span(["genai", "openinference", "langfuse", "weave", "langtrace"], payload, legacy_compat=True)
+    a = span.attributes
+
+    assert span.dropped_attributes == 0
+    assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert a[f"{LiteLLM.COST_PREFIX}total"] == 0.002
+    assert a[LiteLLM.TOOLS_DECLARED] == 127
+    assert a["llm.input_messages.0.message.content"] == "turn 0"
+    assert a["llm.input_messages.199.message.content"] == "turn 199"
+    assert a["llm.output_messages.0.message.content"] == "reply 0"
