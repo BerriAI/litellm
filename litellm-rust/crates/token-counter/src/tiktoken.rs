@@ -195,14 +195,21 @@ mod tests {
     }
 
     #[test]
-    fn long_repeated_runs_stay_cheap() {
+    fn long_repeated_runs_cost_close_to_linear() {
         let ranks = ranks();
         let mut scratch = MergeScratch::default();
-        let piece = vec![b' '; 1 << 20];
-        let started = std::time::Instant::now();
-        let count = ranks.count_piece(&piece, &mut scratch);
-        assert!(count > 0);
-        assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+        let mut time = |len: usize| {
+            let piece = vec![b' '; len];
+            let started = std::time::Instant::now();
+            assert!(ranks.count_piece(&piece, &mut scratch) > 0);
+            started.elapsed()
+        };
+        let small = (0..3).map(|_| time(1 << 14)).min().unwrap();
+        let large = time(1 << 18);
+        assert!(
+            large < small * 64,
+            "{small:?} for 2^14 bytes, {large:?} for 2^18"
+        );
     }
 
     #[test]

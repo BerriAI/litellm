@@ -752,6 +752,49 @@ def test_completed_event_restores_usage_hidden_by_stream_options_none():
     assert completed.response.usage.output_tokens == 5
 
 
+def _empty_choices_chunk(usage: Usage | None = None) -> ModelResponseStream:
+    return ModelResponseStream(id=CHAT_COMPLETION_ID, model="claude-haiku-4-5", choices=[], usage=usage)
+
+
+@pytest.mark.asyncio
+async def test_leading_empty_choices_chunk_does_not_kill_the_stream():
+    """
+    Azure leads some streams with a `prompt_filter_results` chunk whose `choices` is empty.
+    The bridge used to index `choices[0]` on it and die before the first token.
+    """
+    iterator = _build_iterator([_empty_choices_chunk(), _chunk("Hello"), _chunk("!", finish_reason="stop")])
+
+    events = [event async for event in iterator]
+
+    event_types = [getattr(event, "type", None) for event in events]
+    assert event_types.count(ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED) == 1
+    assert "".join(event.delta for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Hello!"
+    assert event_types[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_trailing_empty_choices_usage_chunk_reaches_response_completed():
+    """
+    With `stream_options.include_usage` (which the bridge always sets) the last upstream chunk
+    carries only usage and an empty `choices`. It must not crash the stream, and its usage must
+    still land on `response.completed`.
+    """
+    usage: Final = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    iterator = _build_iterator([_chunk("Hello"), _chunk("", finish_reason="stop"), _empty_choices_chunk(usage)])
+
+    events = [event async for event in iterator]
+
+    completed = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert completed.response.usage.input_tokens == 10
+    assert completed.response.usage.output_tokens == 5
+
+
+def test_is_reasoning_end_ignores_empty_choices_chunk():
+    assert _build_iterator([])._is_reasoning_end(_empty_choices_chunk()) is False
+
+
 def test_object_tool_call_arguments_stream_as_valid_json():
     """A provider that sends decoded object arguments must still stream valid JSON.
 
