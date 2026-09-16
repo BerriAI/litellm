@@ -30,7 +30,7 @@ export function DataTableViewOptions<TData>({ table, label = "View", className }
         }
       />
       <Menu.Portal>
-        <Menu.Positioner side="bottom" align="end" sideOffset={4} className="isolate z-50">
+        <Menu.Positioner side="bottom" align="end" sideOffset={4} className="isolate z-popup">
           <Menu.Popup className="min-w-[12rem] rounded-md bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden">
             {hideableColumns.map((column) => (
               <Menu.CheckboxItem

@@ -76,6 +76,44 @@ def test_convert_mcp_to_llm_format_defaults_model(proxy_logging, make_mcp_reques
     }
 
 
+def test_convert_mcp_to_llm_format_exposes_headers_on_metadata(proxy_logging, make_mcp_request_obj):
+    """Guardrails read the caller's HTTP headers off ``metadata.headers`` on the chat
+    completions path, so the MCP bridge has to put them in the same place."""
+    req = make_mcp_request_obj()
+    out = proxy_logging._convert_mcp_to_llm_format(
+        request_obj=req,
+        kwargs={"headers": {"x-nuid": "nuid-1"}},
+    )
+    assert out["metadata"]["headers"] == {"x-nuid": "nuid-1"}
+
+
+def test_convert_mcp_to_llm_format_exposes_caller_identity_on_metadata(proxy_logging, make_mcp_request_obj):
+    """Custom code guardrails resolve user_id/team_id/end_user_id from the proxy-owned metadata
+    bucket on every route, so the MCP bridge has to write the authenticated ids there too."""
+    req = make_mcp_request_obj()
+    out = proxy_logging._convert_mcp_to_llm_format(
+        request_obj=req,
+        kwargs={
+            "user_api_key_user_id": "u-1",
+            "user_api_key_team_id": "t-1",
+            "user_api_key_end_user_id": "eu-1",
+            "headers": {"x-nuid": "nuid-1"},
+        },
+    )
+    assert out["metadata"] == {
+        "headers": {"x-nuid": "nuid-1"},
+        "user_api_key_user_id": "u-1",
+        "user_api_key_team_id": "t-1",
+        "user_api_key_end_user_id": "eu-1",
+    }
+
+
+def test_convert_mcp_to_llm_format_defaults_headers_to_empty(proxy_logging, make_mcp_request_obj):
+    req = make_mcp_request_obj()
+    out = proxy_logging._convert_mcp_to_llm_format(request_obj=req, kwargs={})
+    assert out["metadata"]["headers"] == {}
+
+
 def test_convert_mcp_to_llm_format_missing_request_obj_raises(proxy_logging):
     with pytest.raises(AttributeError):
         proxy_logging._convert_mcp_to_llm_format(request_obj=None, kwargs={})

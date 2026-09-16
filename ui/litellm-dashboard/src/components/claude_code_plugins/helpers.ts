@@ -23,6 +23,12 @@ const GITHUB_HOST = "github.com";
 
 const SKILL_FILE_EXTENSION_REGEX = /\.(md|markdown|txt|json|ya?ml|toml)$/i;
 
+const ZIP_ARCHIVE_REGEX = /\.zip$/i;
+
+export const SHA256_REGEX = /^[0-9a-fA-F]{64}$/;
+
+export const isValidSha256 = (digest: string): boolean => digest.trim() === "" || SHA256_REGEX.test(digest.trim());
+
 // WHATWG normalizes obfuscated IPv4 (e.g. 2130706433, 0x7f.0.0.1) to dotted-decimal, so this
 // catches every IPv4 form; bracketed IPv6 is rejected separately.
 const IPV4_HOST_REGEX = /^\d{1,3}(\.\d{1,3}){3}$/;
@@ -33,6 +39,7 @@ const GITHUB_REPO_REGEX = /^[A-Za-z0-9._-]+$/;
 const SSH_SCP_REGEX = /^([a-z0-9._-]+)@([a-z0-9.-]+\.[a-z]{2,}):([a-z0-9._-]+(?:\/[a-z0-9._-]+)+?)(?:\.git)?\/?$/i;
 const SSH_URL_REGEX =
   /^ssh:\/\/([a-z0-9._-]+)@([a-z0-9.-]+\.[a-z]{2,})(:\d+)?\/([a-z0-9._-]+(?:\/[a-z0-9._-]+)+?)(?:\.git)?\/?$/i;
+const DOTS_ONLY_SEGMENT_REGEX = /^\.+$/;
 
 const buildRepoUrl = (url: URL): string => `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
 
@@ -138,13 +145,12 @@ const parseGitHubSource = (url: URL, subPath?: string): SkillSourcePreview | nul
   return repoPreview;
 };
 
-const parseRawGitSource = (url: URL, subPath?: string): SkillSourcePreview | null => {
-  if (pathSegments(url).length < 2) {
-    return null;
-  }
-
-  const repoUrl = buildRepoUrl(url);
-
+const buildGitSourcePreview = (
+  kind: "Git" | "SSH",
+  repoUrl: string,
+  repoName: string,
+  subPath?: string,
+): SkillSourcePreview | null => {
   const normalized = normalizeSubPath(subPath ?? "");
   if (normalized !== "") {
     if (!SUBDIR_PATH_REGEX.test(normalized)) {
@@ -152,69 +158,83 @@ const parseRawGitSource = (url: URL, subPath?: string): SkillSourcePreview | nul
     }
     return {
       parsed: { source: "git-subdir", url: repoUrl, path: normalized },
-      label: `Git subdir — ${repoUrl} @ ${normalized}`,
+      label: `${kind} subdir — ${repoUrl} @ ${normalized}`,
       suggestedName: toKebabCase(lastSegment(normalized)),
     };
   }
 
   return {
     parsed: { source: "url", url: repoUrl },
-    label: `Git repo — ${repoUrl}`,
-    suggestedName: toKebabCase(lastSegment(url.pathname).replace(/\.git$/, "")),
-  };
-};
-
-const withGitSuffix = (path: string): string => `${path.replace(/\.git$/i, "")}.git`;
-
-const parseSshRepoUrl = (raw: string): string | null => {
-  const trimmed = raw.trim();
-  const sshUrl = SSH_URL_REGEX.exec(trimmed);
-  if (sshUrl) {
-    const [, user, host, port, path] = sshUrl;
-    return `ssh://${user}@${host}${port ?? ""}/${withGitSuffix(path)}`;
-  }
-  const scp = SSH_SCP_REGEX.exec(trimmed);
-  if (scp) {
-    const [, user, host, path] = scp;
-    return `${user}@${host}:${withGitSuffix(path)}`;
-  }
-  return null;
-};
-
-const parseSshSource = (cloneUrl: string, subPath?: string): SkillSourcePreview | null => {
-  const repoName = lastSegment(cloneUrl.replace(/\.git$/, "").replace(/^[^:]*:/, ""));
-  const normalized = normalizeSubPath(subPath ?? "");
-  if (normalized !== "") {
-    if (!SUBDIR_PATH_REGEX.test(normalized)) {
-      return null;
-    }
-    return {
-      parsed: { source: "git-subdir", url: cloneUrl, path: normalized },
-      label: `SSH subdir — ${cloneUrl} @ ${normalized}`,
-      suggestedName: toKebabCase(lastSegment(normalized)),
-    };
-  }
-  return {
-    parsed: { source: "url", url: cloneUrl },
-    label: `SSH repo — ${cloneUrl}`,
+    label: `${kind} repo — ${repoUrl}`,
     suggestedName: toKebabCase(repoName),
   };
 };
 
+const parseRawGitSource = (url: URL, subPath?: string): SkillSourcePreview | null => {
+  if (pathSegments(url).length < 2) {
+    return null;
+  }
+  const repoName = lastSegment(url.pathname).replace(/\.git$/, "");
+  return buildGitSourcePreview("Git", buildRepoUrl(url), repoName, subPath);
+};
+
+interface SshRemote {
+  cloneUrl: string;
+  repoPath: string;
+}
+
+const withGitSuffix = (path: string): string => `${path.replace(/\.git$/i, "")}.git`;
+
+const buildSshRemote = (rawPath: string, toCloneUrl: (repoPath: string) => string): SshRemote | null => {
+  if (rawPath.split("/").some((segment) => DOTS_ONLY_SEGMENT_REGEX.test(segment))) {
+    return null;
+  }
+  const repoPath = withGitSuffix(rawPath);
+  return { cloneUrl: toCloneUrl(repoPath), repoPath };
+};
+
+const parseSshRemote = (raw: string): SshRemote | null => {
+  const trimmed = raw.trim();
+  const sshUrl = SSH_URL_REGEX.exec(trimmed);
+  if (sshUrl) {
+    const [, user, host, port, path] = sshUrl;
+    return buildSshRemote(path, (repoPath) => `ssh://${user}@${host}${port ?? ""}/${repoPath}`);
+  }
+  const scp = SSH_SCP_REGEX.exec(trimmed);
+  if (scp) {
+    const [, user, host, path] = scp;
+    return buildSshRemote(path, (repoPath) => `${user}@${host}:${repoPath}`);
+  }
+  return null;
+};
+
+const parseSshSource = (remote: SshRemote, subPath?: string): SkillSourcePreview | null =>
+  buildGitSourcePreview("SSH", remote.cloneUrl, lastSegment(remote.repoPath).replace(/\.git$/, ""), subPath);
+
+const parseArchiveSource = (url: URL): SkillSourcePreview => ({
+  parsed: { source: "archive", url: url.href },
+  label: `Zip archive — ${url.host}${url.pathname}`,
+  suggestedName: toKebabCase(lastSegment(url.pathname).replace(ZIP_ARCHIVE_REGEX, "")),
+});
+
 /**
- * Parse any git-accessible repository URL into a registerable skill source.
- * GitHub https URLs keep their `github`/`git-subdir` shorthand; ssh clone URLs stay ssh so a
- * private host authenticates with the user's own key; every other host is treated as a raw repo
- * URL, with an optional subfolder turning it into git-subdir.
+ * Parse any git-accessible repository URL or https zip archive URL into a registerable skill
+ * source. A `.zip` path is an `archive` source (S3, Artifactory, any static host). GitHub URLs
+ * keep their `github`/`git-subdir` shorthand; ssh clone URLs stay ssh so a private host
+ * authenticates with the user's own key; every other host is treated as a raw repo URL,
+ * with an optional subfolder turning it into git-subdir.
  */
 export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourcePreview | null => {
-  const sshCloneUrl = parseSshRepoUrl(rawUrl);
-  if (sshCloneUrl) {
-    return parseSshSource(sshCloneUrl, subPath);
+  const sshRemote = parseSshRemote(rawUrl);
+  if (sshRemote) {
+    return parseSshSource(sshRemote, subPath);
   }
   const url = parseRepoUrl(rawUrl);
   if (!url) {
     return null;
+  }
+  if (ZIP_ARCHIVE_REGEX.test(url.pathname)) {
+    return parseArchiveSource(url);
   }
   if (url.hostname.replace(/^www\./, "") === GITHUB_HOST) {
     return parseGitHubSource(url, subPath);
@@ -225,13 +245,14 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
 /**
  * Build the `~/.claude/settings.json` snippet that registers the proxy as a marketplace.
  * Claude Code expects `extraKnownMarketplaces.<name>.source` to be a source object, not a
- * bare `"url"` string, so the url/source pair is nested one level deeper.
+ * bare `"url"` string, so the url/source pair is nested one level deeper. The key must be
+ * "litellm" to match the name the proxy returns in marketplace.json.
  */
 export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
   JSON.stringify(
     {
       extraKnownMarketplaces: {
-        "my-org": {
+        litellm: {
           source: {
             source: "url",
             url: `${proxyOrigin}/claude-code/marketplace.json`,
@@ -244,20 +265,10 @@ export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
   );
 
 /**
- * Generate install command for Claude Code CLI
- * Format: /plugin marketplace add org/repo OR /plugin marketplace add url
+ * Generate install command for Claude Code CLI.
+ * Installs the named plugin from the "litellm" marketplace registered in settings.json.
  */
-export const formatInstallCommand = (plugin: { name: string; source: PluginSource }): string => {
-  const { source } = plugin;
-  if (source.source === "github" && source.repo) {
-    return `/plugin marketplace add ${source.repo}`;
-  }
-  if ((source.source === "url" || source.source === "git-subdir") && source.url) {
-    return `/plugin marketplace add ${source.url}`;
-  }
-  // Fallback to plugin name
-  return `/plugin marketplace add ${plugin.name}`;
-};
+export const formatInstallCommand = (plugin: { name: string }): string => `/plugin install ${plugin.name}@litellm`;
 
 /**
  * Extract unique categories from plugins list
@@ -300,23 +311,21 @@ export const getSourceDisplayText = (source: PluginSource): string => {
   if (source.source === "git-subdir" && source.url && source.path) {
     return `${source.url} @ ${source.path}`;
   }
-  if (source.source === "url" && source.url) {
+  if ((source.source === "url" || source.source === "archive") && source.url) {
     return source.url;
   }
   return "Unknown source";
 };
 
 /**
- * Get clickable link for plugin source
+ * Get clickable link for plugin source. Ssh clone urls are not browsable, so they yield null.
  */
 export const getSourceLink = (source: PluginSource): string | null => {
   if (source.source === "github" && source.repo) {
     return `https://github.com/${source.repo}`;
   }
-  if ((source.source === "url" || source.source === "git-subdir") && source.url) {
-    return source.url.startsWith("https://") ? source.url : null;
-  }
-  return null;
+  const linksToUrl = source.source === "url" || source.source === "git-subdir" || source.source === "archive";
+  return linksToUrl && source.url?.startsWith("https://") ? source.url : null;
 };
 
 /**

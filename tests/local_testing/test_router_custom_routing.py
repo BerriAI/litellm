@@ -1,15 +1,10 @@
 import asyncio
-import os
-import sys
 import time
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from typing import Dict, List, Optional, Union
 
 import pytest
