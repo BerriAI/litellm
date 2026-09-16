@@ -507,16 +507,32 @@ def test_inject_trace_context_uses_ambient_span_without_request_root():
     assert propagated.get_span_context().span_id == ambient.get_span_context().span_id
 
 
-def test_inject_trace_context_forwards_valid_inbound_context_without_span():
-    inbound = {"traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"}
-
+def test_inject_trace_context_prefers_explicit_parent_span_over_root_and_ambient():
     def run():
-        result = ctx_mod.inject_trace_context({}, inbound_headers=inbound)
-        return get_current_span(TraceContextTextMapPropagator().extract(result))
+        tracer = _test_tracer()
+        parent = tracer.start_span("litellm_request")
+        with tracer.start_as_current_span("ambient") as ambient:
+            ctx_mod.set_request_root_span(ambient)
+            result = ctx_mod.inject_trace_context({}, parent_span=parent)
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return parent, ambient, propagated
 
-    propagated = ContextVarContext().run(run)
-    assert propagated.get_span_context().trace_id == int("0af7651916cd43dd8448eb211c80319c", 16)
-    assert propagated.get_span_context().span_id == int("b7ad6b7169203331", 16)
+    parent, ambient, propagated = ContextVarContext().run(run)
+    assert propagated.get_span_context().trace_id == parent.get_span_context().trace_id
+    assert propagated.get_span_context().span_id == parent.get_span_context().span_id
+    assert propagated.get_span_context().span_id != ambient.get_span_context().span_id
+
+
+def test_inject_trace_context_skips_unusable_parent_span():
+    def run():
+        tracer = _test_tracer()
+        with tracer.start_as_current_span("ambient") as ambient:
+            result = ctx_mod.inject_trace_context({}, parent_span=object())
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return ambient, propagated
+
+    ambient, propagated = ContextVarContext().run(run)
+    assert propagated.get_span_context().span_id == ambient.get_span_context().span_id
 
 
 def test_inject_trace_context_returns_headers_unchanged_without_context():

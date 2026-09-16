@@ -985,7 +985,7 @@ async def pass_through_request(
             headers=headers,
             forward_headers=forward_headers,
         )
-        headers = _with_trace_context(headers, inbound_headers=_safe_get_request_headers(request))
+        headers = _with_trace_context(headers, parent_span=user_api_key_dict.parent_otel_span)
 
         requested_query_params: dict | None = query_params or dict(request.query_params)
 
@@ -2161,12 +2161,12 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
 _WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("authorization", "x-api-key", "x-goog-user-project"))
 
 
-def _with_trace_context(headers: Mapping[str, str], inbound_headers: Mapping[str, str]) -> dict[str, str]:
+def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict[str, str]:
     try:
         from litellm.integrations.otel.plumbing.context import inject_trace_context
     except ImportError:
         return dict(headers)  # mutable-ok: matches inject_trace_context's carrier return type
-    return inject_trace_context(headers, inbound_headers=inbound_headers)
+    return inject_trace_context(headers, parent_span=parent_span)
 
 
 async def websocket_passthrough_request(
@@ -2211,16 +2211,15 @@ async def websocket_passthrough_request(
         await websocket.accept()
         verbose_proxy_logger.debug("WebSocket passthrough (%s): WebSocket connection accepted", endpoint)
 
-    incoming_headers: Final = dict(websocket.headers)  # mutable-ok: propagator carrier
-    forwarded_headers: Final = {  # mutable-ok: propagator carrier
+    forwarded_headers: Final = {  # mutable-ok: one-shot upstream header dict, read as a Mapping
         **custom_headers,
         **{
             header_name: header_value
-            for header_name, header_value in incoming_headers.items()
+            for header_name, header_value in websocket.headers.items()
             if forward_headers and header_name.lower() in _WEBSOCKET_FORWARDED_HEADERS
         },
     }
-    upstream_headers: Final = _with_trace_context(forwarded_headers, inbound_headers=incoming_headers)
+    upstream_headers: Final = _with_trace_context(forwarded_headers, parent_span=user_api_key_dict.parent_otel_span)
 
     # Initialize logging object similar to HTTP passthrough
     team_callbacks: Final = _resolve_team_callback_wiring(

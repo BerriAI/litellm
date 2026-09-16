@@ -51,7 +51,7 @@ MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"
 def test_with_trace_context_without_opentelemetry(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "litellm.integrations.otel.plumbing.context", None)
 
-    headers = _with_trace_context({"authorization": "x"}, {})
+    headers = _with_trace_context({"authorization": "x"}, parent_span=None)
 
     assert headers == {"authorization": "x"}
     assert "traceparent" not in headers
@@ -4282,11 +4282,11 @@ def _relay_client_request(method="GET"):
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_propagates_active_trace_context():
+@pytest.mark.parametrize("span_source", ["auth_parent_span", "ambient_span"])
+async def test_pass_through_request_propagates_active_trace_context(span_source: str):
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.trace import get_current_span
     from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-    from litellm.proxy._types import UserAPIKeyAuth
 
     captured: dict[str, httpx.Headers] = {}
 
@@ -4295,17 +4295,23 @@ async def test_pass_through_request_propagates_active_trace_context():
         return httpx.Response(200, json={"ok": True}, request=upstream_request)
 
     fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    tracer = TracerProvider().get_tracer("test")
     try:
         with ExitStack() as stack:
             _enter_relay_logging_mocks(stack, {})
-            tracer = TracerProvider().get_tracer("test")
-            with tracer.start_as_current_span("passthrough") as span:
-                response = await pass_through_request(
-                    request=_relay_client_request(method="POST"),
-                    target="http://internal-api.test/v1/generate",
-                    custom_headers={},
-                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
-                )
+            if span_source == "auth_parent_span":
+                span = tracer.start_span("litellm_request")
+                stack.callback(span.end)
+                user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", parent_otel_span=span)
+            else:
+                span = stack.enter_context(tracer.start_as_current_span("passthrough"))
+                user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+            response = await pass_through_request(
+                request=_relay_client_request(method="POST"),
+                target="http://internal-api.test/v1/generate",
+                custom_headers={},
+                user_api_key_dict=user_api_key_dict,
+            )
     finally:
         cleanup()
         await fake_client.aclose()
@@ -4313,6 +4319,7 @@ async def test_pass_through_request_propagates_active_trace_context():
     assert response.status_code == 200
     propagated = get_current_span(TraceContextTextMapPropagator().extract(captured["headers"]))
     assert propagated.get_span_context().trace_id == span.get_span_context().trace_id
+    assert propagated.get_span_context().span_id == span.get_span_context().span_id
 
 
 @pytest.mark.asyncio
@@ -4913,7 +4920,10 @@ async def test_websocket_passthrough_forwards_non_ascii_first_frame():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("forward_headers", [True, False])
-async def test_websocket_passthrough_propagates_active_trace_context(monkeypatch, forward_headers: bool):
+@pytest.mark.parametrize("span_source", ["auth_parent_span", "ambient_span"])
+async def test_websocket_passthrough_propagates_active_trace_context(
+    monkeypatch, forward_headers: bool, span_source: str
+):
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.trace import get_current_span
     from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
@@ -4954,12 +4964,19 @@ async def test_websocket_passthrough_propagates_active_trace_context(monkeypatch
         "litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER",
         mock_worker,
     )
-    with tracer.start_as_current_span("websocket_passthrough") as span:
+    with ExitStack() as stack:
+        if span_source == "auth_parent_span":
+            span = tracer.start_span("litellm_request")
+            stack.callback(span.end)
+            user_api_key_dict = UserAPIKeyAuth(parent_otel_span=span)
+        else:
+            span = stack.enter_context(tracer.start_as_current_span("websocket_passthrough"))
+            user_api_key_dict = UserAPIKeyAuth()
         await websocket_passthrough_request(
             websocket=websocket,
             target="wss://upstream.example.test/v1/realtime",
             custom_headers={},
-            user_api_key_dict=UserAPIKeyAuth(),
+            user_api_key_dict=user_api_key_dict,
             forward_headers=forward_headers,
             endpoint="/realtime",
             accept_websocket=True,
@@ -4967,6 +4984,7 @@ async def test_websocket_passthrough_propagates_active_trace_context(monkeypatch
 
     propagated = get_current_span(TraceContextTextMapPropagator().extract(captured["headers"]))
     assert propagated.get_span_context().trace_id == span.get_span_context().trace_id
+    assert propagated.get_span_context().span_id == span.get_span_context().span_id
     assert captured["headers"].get("authorization") == ("Bearer client" if forward_headers else None)
 
 
