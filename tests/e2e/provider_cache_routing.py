@@ -19,6 +19,7 @@ BEDROCK_EDGE_MODELS: Final = frozenset(
     }
 )
 ENV_REFERENCE_PREFIX: Final = "os.environ/"
+EDGE_PROVIDERS: Final = frozenset({"openai", "anthropic", "gemini"})
 
 
 def bedrock_region(declared: str | None) -> str:
@@ -81,7 +82,7 @@ def route_cache_model(
         return route_bedrock(params, base_for, mode)
     if mode == "realtime" or params.api_base is not None:
         return params
-    if provider not in {"openai", "anthropic"}:
+    if provider not in EDGE_PROVIDERS:
         return params
     base: Final = base_for(provider)
     if base is None:

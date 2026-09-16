@@ -1,12 +1,22 @@
 # Shared provider-response cache
 
-`E2E_PROVIDER_CACHE=1` enables automatic response reuse in the live E2E mode. Standard OpenAI and Anthropic model registrations use the provider edge, as do Anthropic-on-Bedrock registrations that carry no AWS identity of their own. Existing custom API bases, named credentials, mocked models and realtime WebSocket deployments keep their existing routing. Other provider protocols remain live
+`E2E_PROVIDER_CACHE=1` enables automatic response reuse in the live E2E mode. Standard OpenAI, Anthropic and Gemini model registrations use the provider edge, as do Anthropic-on-Bedrock registrations that carry no AWS identity of their own. Existing custom API bases, named credentials, mocked models and realtime WebSocket deployments keep their existing routing. Other provider protocols remain live
 
-The edge caches complete successful POST responses for `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings` and `/v1/responses` on the OpenAI and Anthropic mounts, SSE streams included, and for `/model/{id}/converse` and `/model/{id}/invoke` on a Bedrock mount. Unsupported endpoints pass through. Each endpoint family has its own completeness rule, so a truncated embedding or a Responses run that never reached `response.completed` is not stored
+The edge caches complete successful POST responses for `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings` and `/v1/responses` on the OpenAI and Anthropic mounts, SSE streams included, for `/model/{id}/converse` and `/model/{id}/invoke` on a Bedrock mount, and for `models/{model}:generateContent` and `:streamGenerateContent` on the Gemini mount. Unsupported endpoints pass through. Each endpoint family has its own completeness rule, so a truncated embedding or a Responses run that never reached `response.completed` is not stored
 
 Bedrock's streaming endpoints, `converse-stream` and `invoke-with-response-stream`, cache too. AWS frames those as binary `vnd.amazon.eventstream` rather than SSE, so botocore's own parser reads the frames and validates both CRCs, and each endpoint is then held to its terminal grammar. That matters more than the endpoint count suggests: the Claude Code compat cells drive the real CLI, which always streams, so streaming is most of the suite's Bedrock traffic
 
 Two details of that rule are worth knowing before changing it. A ConverseStream ends with `metadata`, not with `messageStop`, and the `metadata` frame is what carries the token usage litellm prices the call from, so the rule requires it: a stream cut between the two still names a stop reason but would replay as a free call. And a dropped connection is invisible to the parser, which yields the frames it did receive and silently discards a trailing partial one, so the body is also checked against the frame lengths it declares. A stream cut one byte short parses clean and has to be caught that way
+
+## Gemini
+
+Gemini needs nothing that Bedrock needed. litellm composes `{api_base}/models/{model}:{endpoint}` from a custom api_base, so a path-prefixed mount reaches it, and the credential travels as a static `x-goog-api-key` header that no host rewrite invalidates. Nothing is re-signed and nothing is excluded from the key, so a recording still cannot cross credentials
+
+The mount's upstream base carries the API version, which is the one detail worth remembering: the path the cache rules see is the upstream one, `/v1beta/models/...`, not the one the proxy sent. A rule anchored at the start of that path would look right against a local stub and then cache nothing at all in a real run
+
+A finished turn names a `finishReason` on every candidate and reports `usageMetadata`. The reason is read as a string rather than compared to `STOP`, because `MAX_TOKENS` and the safety reasons end a turn just as finally and rejecting them would send every one of them upstream forever. Streaming is the more interesting half: Gemini repeats `usageMetadata` on every chunk and names a `finishReason` only on the last one, so the terminator is the final event rather than any event, and a stream the connection cut short ends on a chunk with usage and no reason
+
+Vertex is not mounted. litellm grafts the default Vertex path onto an api_base only when that api_base has no path of its own, so a Vertex mount needs a root-mounted edge on its own port rather than a path prefix. Gemini and Vertex are separate providers in litellm and the Gemini mount does not cover Vertex deployments
 
 ## Request identity
 
@@ -30,7 +40,7 @@ Only deployments that carry no AWS identity of their own route to the edge. A de
 
 Which models route is an explicit allowlist in `provider_cache_routing.py`, mirroring the runner role's IAM policy, which names its models one by one. That coupling is deliberate: the edge re-signs with the run pod's identity, so a model the role cannot invoke comes back 403 from Bedrock rather than falling back. An unlisted model keeps its direct path and loses only caching, so adding a Bedrock model to the suite can never turn it red. Adding one to the edge is a policy edit in litellm-ops plus a line here
 
-Vertex and Gemini are not mounted. litellm's `_check_custom_proxy` rewrites a path-prefixed Vertex `api_base` into `{api_base}:{endpoint}`, dropping project, location and model, so a mount under a path prefix cannot work without either a root-mounted edge on its own port or a change in litellm
+Vertex is not mounted. litellm's `_check_custom_proxy` rewrites a path-prefixed Vertex `api_base` into `{api_base}:{endpoint}`, dropping project, location and model, so a mount under a path prefix cannot work without either a root-mounted edge on its own port or a change in litellm. Gemini is a separate provider there and does have a working path-prefixed form, so it is mounted; see the Gemini section
 
 Recordings are shared across workers and builds through dedicated Redis, separate from the candidate's own cache. They expire 86,400 seconds after capture starts, based on Redis time. Reads never extend expiry. There is no scheduled recapture: the next miss calls the provider again. Bounded coordination reduces duplicate concurrent calls, but slow or failed captures may lead to extra live calls after the wait expires
 
