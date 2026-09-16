@@ -41,6 +41,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_request_body_for_spend_logs_payload,
     get_logging_payload,
     get_spend_logs_id,
+    resolve_authoritative_response_cost,
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import hash_token
@@ -4128,6 +4129,102 @@ def test_autorouter_savings_flow_from_logging_payload_into_spend_log_metadata():
     )
     metadata = json.loads(payload["metadata"])
     assert metadata["autorouter_savings"] == 0.42
+
+
+@pytest.mark.parametrize("response_cost", [None, 0.0])
+def test_spend_reads_cost_breakdown_when_response_cost_is_missing_or_zero(response_cost):
+    kwargs: Final = {
+        "model": "azure_ai/gpt-5.5",
+        "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        "standard_logging_object": {
+            "cost_breakdown": {"total_cost": 0.42},
+            "metadata": {},
+            "model_map_information": None,
+        },
+        **({"response_cost": response_cost} if response_cost is not None else {}),
+    }
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(
+            id="chatcmpl-azure-40100",
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100),
+        ),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["spend"] == pytest.approx(0.42)
+
+
+def test_spend_stays_zero_on_a_cache_hit_with_a_cost_breakdown():
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "azure_ai/gpt-5.5",
+            "response_cost": 0.0,
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": {
+                "cache_hit": True,
+                "cost_breakdown": {"total_cost": 0.42},
+                "metadata": {},
+                "model_map_information": None,
+            },
+        },
+        response_obj=litellm.ModelResponse(
+            id="chatcmpl-azure-cache-hit",
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100),
+        ),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["spend"] == 0.0
+
+
+def test_spend_sums_input_and_output_cost_when_total_cost_is_missing():
+    kwargs: Final = {
+        "model": "azure_ai/gpt-5.5",
+        "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        "standard_logging_object": {
+            "cost_breakdown": {"input_cost": 0.25, "output_cost": 0.17},
+            "metadata": {},
+            "model_map_information": None,
+        },
+    }
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(
+            id="chatcmpl-azure-summed",
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100),
+        ),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["spend"] == pytest.approx(0.42)
+
+
+def test_spend_stays_zero_on_kwargs_cache_hit():
+    kwargs: Final = {
+        "model": "azure_ai/gpt-5.5",
+        "cache_hit": True,
+        "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+    }
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(
+            id="chatcmpl-azure-cache-hit-kwargs",
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100),
+        ),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["spend"] == 0.0
+
+
+def test_resolve_authoritative_response_cost_returns_none_when_unresolvable():
+    resolved: Final = resolve_authoritative_response_cost(kwargs={})
+    assert resolved is None
 
 
 @pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])

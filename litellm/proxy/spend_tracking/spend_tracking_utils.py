@@ -127,6 +127,73 @@ def _get_router_metadata_for_spend_log(
     )
 
 
+def resolve_authoritative_response_cost(
+    kwargs: Mapping[str, object] | None,
+    standard_logging_payload: StandardLoggingPayload | None = None,
+    response_cost: float | None = None,
+) -> float | None:
+    sl_payload: Final[StandardLoggingPayload | None] = (
+        standard_logging_payload
+        if standard_logging_payload is not None
+        else (
+            cast(StandardLoggingPayload, kwargs.get("standard_logging_object"))
+            if kwargs is not None and isinstance(kwargs.get("standard_logging_object"), dict)
+            else None
+        )
+    )
+    raw_cost: Final[object] = (
+        response_cost
+        if response_cost is not None
+        else (
+            sl_payload.get("response_cost")
+            if sl_payload is not None
+            else (kwargs.get("response_cost") if kwargs is not None else None)
+        )
+    )
+    if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool) and raw_cost > 0.0:
+        return float(raw_cost)
+    is_cache_hit: Final = (bool(sl_payload.get("cache_hit")) if sl_payload is not None else False) or (
+        bool(kwargs.get("cache_hit")) if kwargs is not None else False
+    )
+    if is_cache_hit:
+        return 0.0
+    if sl_payload is not None:
+        cost_breakdown: Final = sl_payload.get("cost_breakdown")
+        if cost_breakdown is not None:
+            total_cost: Final[object] = cost_breakdown.get("total_cost")
+            if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool) and total_cost > 0.0:
+                return float(total_cost)
+            input_cost: Final[object] = cost_breakdown.get("input_cost")
+            output_cost: Final[object] = cost_breakdown.get("output_cost")
+            input_val: Final = (
+                float(input_cost) if isinstance(input_cost, (int, float)) and not isinstance(input_cost, bool) else 0.0
+            )
+            output_val: Final = (
+                float(output_cost)
+                if isinstance(output_cost, (int, float)) and not isinstance(output_cost, bool)
+                else 0.0
+            )
+            summed_cost: Final = input_val + output_val
+            if summed_cost > 0.0:
+                return summed_cost
+    if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool):
+        return float(raw_cost)
+    return None
+
+
+def _resolve_spend_for_spend_log(
+    kwargs: Mapping[str, object],
+    standard_logging_payload: StandardLoggingPayload | None,
+    response_cost: float | None = None,
+) -> float:
+    resolved: Final = resolve_authoritative_response_cost(
+        kwargs=kwargs,
+        standard_logging_payload=standard_logging_payload,
+        response_cost=response_cost,
+    )
+    return resolved if resolved is not None else 0.0
+
+
 def _get_spend_logs_metadata(
     metadata: dict | None,
     applied_guardrails: list[str] | None = None,
@@ -344,7 +411,13 @@ def _looks_like_model_name(model: str) -> bool:
     return len(candidate) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in candidate)
 
 
-def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
+def get_logging_payload(
+    kwargs,
+    response_obj,
+    start_time,
+    end_time,
+    response_cost: float | None = None,
+) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
 
@@ -591,7 +664,11 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             organization_id=metadata.get("user_api_key_org_id") or "",
             metadata=safe_dumps(clean_metadata),
             cache_key=cache_key,
-            spend=kwargs.get("response_cost", 0),
+            spend=_resolve_spend_for_spend_log(
+                kwargs=cast(Mapping[str, object], kwargs),
+                standard_logging_payload=standard_logging_payload,
+                response_cost=response_cost,
+            ),
             total_tokens=usage.get("total_tokens", standard_logging_total_tokens),
             prompt_tokens=usage.get("prompt_tokens", standard_logging_prompt_tokens),
             completion_tokens=usage.get("completion_tokens", standard_logging_completion_tokens),

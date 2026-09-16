@@ -1748,10 +1748,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if isinstance(result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(result, "_hidden_params"):
             hidden_params: Final = getattr(result, "_hidden_params", {})
-            if (
-                "response_cost" in hidden_params and hidden_params["response_cost"] is not None
-            ):  # use cost if already calculated
-                return hidden_params["response_cost"]
+            hidden_response_cost: Final = hidden_params.get("response_cost")
+            if hidden_response_cost:
+                return hidden_response_cost
             elif router_model_id is None and "model_id" in hidden_params:  # use model_id if not already set
                 router_model_id = hidden_params["model_id"]
 
