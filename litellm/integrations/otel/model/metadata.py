@@ -49,7 +49,8 @@ if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
 
 LANGFUSE_TRACE_NAME_HEADER: Final = "langfuse_trace_name"
-REQUESTER_METADATA_PATH: Final = "requester_metadata."
+REQUESTER_METADATA_KEY: Final = "requester_metadata"
+REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
 
 
 @dataclass(frozen=True)
@@ -106,8 +107,9 @@ class RequestIdentity:
         guardrail, or service span is created — so the whole request's spans
         inherit identity, not just the LLM-call span. Metadata sub-keys use the
         ``user_api_key_*`` names that ``baggage.DEFAULT_BAGGAGE_METADATA_KEYS``
-        promotes; ``request_metadata`` (the proxy's per-request metadata dict) is
-        flattened to dotted keys so ``requester_metadata.<key>`` resolves too.
+        promotes; ``request_metadata`` (the caller's ``requester_metadata``
+        snapshot) is flattened to dotted keys so ``requester_metadata.<key>``
+        resolves too.
         """
         get: Final = lambda name: getattr(auth, name, None)  # noqa: E731
         auth_meta: Final = tuple(
@@ -358,21 +360,21 @@ def model_from_request_data(data: object) -> str | None:
 
 
 def metadata_from_request_data(data: object) -> Mapping[str, object] | None:
-    """The proxy's per-request metadata dict from a pre-call ``data`` dict.
+    """The caller's ``requester_metadata`` snapshot from a pre-call ``data`` dict, keyed under its wrapper.
 
-    The proxy writes it under ``metadata`` or ``litellm_metadata`` depending on
-    the route; the one carrying the ``requester_metadata`` snapshot wins.
+    The proxy stores it under ``metadata`` or ``litellm_metadata`` depending on the route;
+    the proxy-owned siblings (``user_api_key_*``, ``requester_ip_address``) are not read.
     """
     top: Final = _as_str_mapping(data)
     if top is None:
         return None
-    candidates: Final = tuple(
-        nested for name in ("metadata", "litellm_metadata") if (nested := _as_str_mapping(top.get(name))) is not None
+    snapshots: Final = tuple(
+        snapshot
+        for name in ("metadata", "litellm_metadata")
+        if (nested := _as_str_mapping(top.get(name))) is not None
+        and (snapshot := _as_str_mapping(nested.get(REQUESTER_METADATA_KEY))) is not None
     )
-    return next(
-        (c for c in candidates if isinstance(c.get("requester_metadata"), Mapping)),
-        candidates[0] if candidates else None,
-    )
+    return MappingProxyType({REQUESTER_METADATA_KEY: snapshots[0]}) if snapshots else None
 
 
 def flatten_metadata(raw: Mapping[str, object]) -> Iterator[tuple[str, str]]:
