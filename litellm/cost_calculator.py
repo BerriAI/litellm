@@ -1466,12 +1466,15 @@ def completion_cost(
                             duration_seconds = usage_obj.get("duration_seconds", None)
                             _vr = usage_obj.get("video_resolution", None)
                             provider_reported_cost = usage_obj.get("provider_reported_cost_usd", None)
+                            _vc = usage_obj.get("video_count", None)
                         else:
                             duration_seconds = getattr(usage_obj, "duration_seconds", None)
                             _vr = getattr(usage_obj, "video_resolution", None)
                             provider_reported_cost = getattr(usage_obj, "provider_reported_cost_usd", None)
+                            _vc = getattr(usage_obj, "video_count", None)
                         if _vr is not None:
                             video_resolution = str(_vr).strip().lower()
+                        video_count = _vc if isinstance(_vc, int) and not isinstance(_vc, bool) and _vc > 1 else 1
 
                         if _video_model_info is None and provider_reported_cost is not None:
                             return float(provider_reported_cost)
@@ -1482,12 +1485,15 @@ def completion_cost(
                                 video_generation_cost,
                             )
 
-                            return video_generation_cost(
-                                model=model,
-                                duration_seconds=duration_seconds,
-                                custom_llm_provider=custom_llm_provider,
-                                model_info=_video_model_info,
-                                video_resolution=video_resolution,
+                            return (
+                                video_generation_cost(
+                                    model=model,
+                                    duration_seconds=duration_seconds,
+                                    custom_llm_provider=custom_llm_provider,
+                                    model_info=_video_model_info,
+                                    video_resolution=video_resolution,
+                                )
+                                * video_count
                             )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
