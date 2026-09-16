@@ -1667,6 +1667,70 @@ def test_enduser_invalidation_is_paged_and_batched(reset_budget_job, mock_prisma
 
 
 
+def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_finish(
+    mock_prisma_client, monkeypatch
+):
+    """A page that fails to read is not the end of the customer list.
+
+    The tier's window is already advanced by the time this walk runs, so no later
+    tick comes back for the customers past the page that failed: their cached
+    spend goes on rejecting requests until it expires. Returning the same empty
+    page normal end-of-data returns hid that behind a report of a clean pass.
+    """
+    _make_counter_invalidation_job(monkeypatch)
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="budget-1")]
+    endusers: Final = mock_prisma_client.db.litellm_endusertable
+    endusers.set_find_many_results(
+        [
+            type("EndUser", (), {"user_id": f"cust-{i:06d}", "spend": 5.0, "budget_id": "budget-1"})
+            for i in range(RESET_BUDGET_JOB_BATCH_SIZE + 3)
+        ]
+    )
+    read_page: Final = endusers.find_many
+
+    async def fail_after_the_first_page(**kwargs):
+        if endusers.find_many_calls:
+            raise RuntimeError("connection reset while paging customers")
+        return await read_page(**kwargs)
+
+    endusers.find_many = fail_after_the_first_page
+    logging_obj: Final = RecordingProxyLogging()
+    job: Final = ResetBudgetJob(proxy_logging_obj=logging_obj, prisma_client=mock_prisma_client)
+
+    _run_and_drain_hooks(job.reset_budget_for_litellm_budget_table)
+
+    metadata: Final = logging_obj.service_logging_obj.success_calls[0]["event_metadata"]
+    assert metadata["enduser_invalidation_truncated"] is True
+    assert metadata["num_endusers_updated"] == RESET_BUDGET_JOB_BATCH_SIZE
+
+
+def test_a_failed_counter_batch_still_evicts_the_management_cache(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """The spend counters and the management cache are invalidated independently.
+
+    Sharing one handler meant a Redis failure on the counters returned before the
+    management cache was touched at all. The commit has already zeroed those rows
+    by then, so the cached objects keep authorizing against their pre-reset spend
+    until they expire.
+    """
+    counter_cache: Final = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.async_delete_cache_keys = AsyncMock(side_effect=RuntimeError("redis unavailable"))
+    mock_prisma_client.data["budget"] = [_budget_row(budget_id="budget-1")]
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results(
+        [type("EndUser", (), {"user_id": "customer-42", "spend": 5.0, "budget_id": "budget-1"})]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    evicted: Final = {
+        key
+        for call in counter_cache.user_api_key_cache.async_delete_cache_keys.await_args_list
+        for key in call.args[0]
+    }
+    assert "end_user_id:customer-42" in evicted
+
+
 def test_budget_table_reset_commits_even_when_cache_eviction_fails(reset_budget_job, mock_prisma_client, monkeypatch):
     """Eviction runs after the commit, so a broken cache cannot undo the write."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
