@@ -12,10 +12,22 @@ import { useMemo, useState } from "react";
 import type { ModelViewType } from "../components/ModelViewToggle";
 import { USAGE_OPTIONS, type UsageOption } from "../components/UsageViewSelect/UsageViewSelect";
 
-export const USAGE_TABS = ["cost", "models", "agents", "keys", "mcp", "endpoints"] as const;
+const USAGE_TABS = ["cost", "models", "agents", "keys", "mcp", "endpoints"] as const;
 export type UsageTab = (typeof USAGE_TABS)[number];
 export type EntityUsageTab = Exclude<UsageTab, "mcp">;
-export const GLOBAL_USAGE_TABS: readonly Exclude<UsageTab, "agents">[] = ["cost", "models", "keys", "mcp", "endpoints"];
+const GLOBAL_USAGE_TABS: readonly Exclude<UsageTab, "agents">[] = ["cost", "models", "keys", "mcp", "endpoints"];
+
+export const usageTabsForView = (view: UsageOption): readonly UsageTab[] => {
+  switch (view) {
+    case "global":
+    case "my-usage":
+      return GLOBAL_USAGE_TABS;
+    case "user-agent-activity":
+      return [];
+    default:
+      return USAGE_TABS;
+  }
+};
 
 export const USAGE_TOP_LIMITS = [5, 10, 25, 50] as const;
 export type UsageTopLimit = (typeof USAGE_TOP_LIMITS)[number];
@@ -75,13 +87,11 @@ export function useUsageUrlState(): UsageUrlState {
   const [state, setState] = useQueryStates(USAGE_URL_PARSERS);
   const [fallbackRange] = useState(defaultUsageRange);
 
-  const dateValue = useMemo<DateRangePickerValue>(
-    () => ({
-      from: state.from ? moment(state.from).startOf("day").toDate() : fallbackRange.from,
-      to: state.to ? moment(state.to).endOf("day").toDate() : fallbackRange.to,
-    }),
-    [state.from, state.to, fallbackRange],
-  );
+  const { from: urlFrom, to: urlTo } = state;
+  const dateValue = useMemo<DateRangePickerValue>(() => {
+    if (!urlFrom || !urlTo || urlFrom > urlTo) return fallbackRange;
+    return { from: moment(urlFrom).startOf("day").toDate(), to: moment(urlTo).endOf("day").toDate() };
+  }, [urlFrom, urlTo, fallbackRange]);
 
   const actions = useMemo(
     () => ({

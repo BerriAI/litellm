@@ -45,6 +45,24 @@ describe("useUsageUrlState", () => {
     expect(result.current.dateValue.to).toEqual(new Date(2025, 2, 5, 23, 59, 59, 999));
   });
 
+  it("reads a one-day ?from=&to= range as that whole day", () => {
+    const { result } = renderUsageUrlState("?from=2025-03-01&to=2025-03-01");
+
+    expect(result.current.dateValue.from).toEqual(new Date(2025, 2, 1));
+    expect(result.current.dateValue.to).toEqual(new Date(2025, 2, 1, 23, 59, 59, 999));
+  });
+
+  it.each(["?to=2025-01-01", "?from=2025-01-01", "?from=2025-03-05&to=2025-03-01"])(
+    "falls back to the default range for both ends when %s is not a complete forward range",
+    (searchParams) => {
+      const { result } = renderUsageUrlState(searchParams);
+      const { from, to } = result.current.dateValue;
+
+      expect(moment(to).diff(from, "days")).toBe(7);
+      expect(Date.now() - to!.getTime()).toBeLessThan(60_000);
+    },
+  );
+
   it("reads every other key from the URL", () => {
     const { result } = renderUsageUrlState(
       "?view=team&user=user-9&model_view=individual&top_keys=10&top_models=25&top_agents=50&filter=team-1,team-2",

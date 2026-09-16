@@ -1,9 +1,10 @@
-import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import { renderWithProviders } from "@/../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import * as networking from "@/components/networking";
@@ -119,7 +120,12 @@ vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
 }));
 
 vi.mock("@/components/common_components/team_multi_select", () => ({
-  default: () => <div>Team Multi Select</div>,
+  default: ({ value, onChange }: { value: string[]; onChange: (value: string[]) => void }) => (
+    <div>
+      <span>{`team-select:${value.join("|")}`}</span>
+      <button onClick={() => onChange(["team-9"])}>pick-team-9</button>
+    </div>
+  ),
 }));
 
 // Mock useTeams hook
@@ -1219,6 +1225,8 @@ describe("EntityUsage", () => {
     const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
       new URLSearchParams(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams);
     const tab = (name: string): HTMLElement => screen.getByRole("tab", { name });
+    const topModelCardLimits = (): (string | null)[] =>
+      screen.getAllByText(/^top-models-limit:/).map((element) => element.textContent);
 
     it("filters the request by the entities named in ?filter=", async () => {
       renderWithProviders(<EntityUsage {...defaultProps} />, { searchParams: "?filter=tag-2" });
@@ -1254,6 +1262,49 @@ describe("EntityUsage", () => {
         expect(mockTagDailyActivityCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 1, [
           "tag-2",
         ]);
+      });
+    });
+
+    it("hands the team picker the teams named in ?filter= and requests only those", async () => {
+      renderWithProviders(<EntityUsage {...defaultProps} entityType="team" />, { searchParams: "?filter=team-1" });
+
+      expect(await screen.findByText("team-select:team-1")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          ["team-1"],
+        );
+      });
+      expect(mockTeamDailyActivityAggregatedCall).not.toHaveBeenCalledWith(
+        "test-token",
+        expect.any(Date),
+        expect.any(Date),
+        null,
+      );
+    });
+
+    it("writes the teams picked in the team picker to ?filter=", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<EntityUsage {...defaultProps} entityType="team" />, { onUrlUpdate });
+      expect(await screen.findByText("team-select:")).toBeInTheDocument();
+
+      act(() => {
+        fireEvent.click(screen.getByText("pick-team-9"));
+      });
+
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate).get("filter")).toBe("team-9");
+      });
+      expect(screen.getByText("team-select:team-9")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          ["team-9"],
+        );
       });
     });
 
@@ -1339,6 +1390,32 @@ describe("EntityUsage", () => {
       expect(tab("Cost")).toHaveAttribute("aria-selected", "true");
     });
 
+    it("lands an internal user on the cost tab and clears ?tab=agents, since only agent viewers get that tab", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      render(<EntityUsage {...defaultProps} entityType="team" userRole="Internal User" />, {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <NuqsTestingAdapter
+            searchParams="?tab=agents"
+            onUrlUpdate={onUrlUpdate}
+            hasMemory
+            resetUrlUpdateQueueOnMount={false}
+          >
+            <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+          </NuqsTestingAdapter>
+        ),
+      });
+      await waitFor(() => {
+        expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      expect(screen.queryByRole("tab", { name: "Agent Activity" })).not.toBeInTheDocument();
+      expect(tab("Cost")).toHaveAttribute("aria-selected", "true");
+      await waitFor(() => {
+        expect(onUrlUpdate).toHaveBeenCalled();
+      });
+      expect(lastUrl(onUrlUpdate).has("tab")).toBe(false);
+    });
+
     it("keeps ?tab=agents for a team, which renders the Agent Activity tab", async () => {
       renderWithProviders(<EntityUsage {...defaultProps} entityType="team" />, { searchParams: "?tab=agents" });
       await waitFor(() => {
@@ -1383,8 +1460,7 @@ describe("EntityUsage", () => {
       });
 
       expect(await screen.findByText("top-keys-limit:10")).toBeInTheDocument();
-      expect(screen.getByText("top-models-limit:25")).toBeInTheDocument();
-      expect(screen.getByText("top-models-limit:50")).toBeInTheDocument();
+      expect(topModelCardLimits()).toEqual(["top-models-limit:25", "top-models-limit:50"]);
     });
 
     it("writes each top table limit under its own key", async () => {
@@ -1409,6 +1485,7 @@ describe("EntityUsage", () => {
         expect(lastUrl(onUrlUpdate).get("top_models")).toBe("50");
       });
       expect(lastUrl(onUrlUpdate).has("top_agents")).toBe(false);
+      expect(topModelCardLimits()).toEqual(["top-models-limit:50", "top-models-limit:5"]);
 
       act(() => {
         fireEvent.click(screen.getAllByText("set-top-models-limit")[1]);
@@ -1416,7 +1493,7 @@ describe("EntityUsage", () => {
       await waitFor(() => {
         expect(lastUrl(onUrlUpdate).get("top_agents")).toBe("50");
       });
-      expect(screen.getAllByText("top-models-limit:50")).toHaveLength(2);
+      expect(topModelCardLimits()).toEqual(["top-models-limit:50", "top-models-limit:50"]);
     });
   });
 });

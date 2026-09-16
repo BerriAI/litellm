@@ -47,7 +47,7 @@ import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
-import { GLOBAL_USAGE_TABS, USAGE_TABS, USAGE_TOP_LIMITS, useUsageUrlState } from "../hooks/useUsageUrlState";
+import { USAGE_TOP_LIMITS, usageTabsForView, useUsageUrlState } from "../hooks/useUsageUrlState";
 import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
@@ -125,7 +125,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const visibleViews = visibleUsageOptions(userRole, canViewTagUsage, isOrgAdmin);
   const usageView: UsageOption = visibleViews.includes(selectedUsageView) ? selectedUsageView : "global";
   const showsGlobalPanel = usageView === "global" || usageView === "my-usage";
-  const [activeTab, setActiveTab] = useUrlTab(showsGlobalPanel ? GLOBAL_USAGE_TABS : USAGE_TABS, "cost");
+  const [activeTab, setActiveTab] = useUrlTab(usageTabsForView(usageView), "cost");
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);

@@ -1039,6 +1039,31 @@ describe("UsagePage", () => {
         );
       });
     });
+
+    it.each([
+      ["a non-admin on the global view", nonAdminSession, "?user=user-002"],
+      ["an admin on their own usage view", adminSession, "?view=my-usage&user=user-002"],
+    ])("should ignore another user's id in ?user= for %s", async (_label, session, searchParams) => {
+      mockUseAuthorized.mockReturnValue(session);
+
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams });
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          "user-123",
+        );
+      });
+      expect(mockUserDailyActivityAggregatedCall).not.toHaveBeenCalledWith(
+        "test-token",
+        expect.any(Date),
+        expect.any(Date),
+        "user-002",
+      );
+      expect(screen.queryByText("Filter by user")).not.toBeInTheDocument();
+    });
   });
 
   describe("aggregated endpoint fallback", () => {
@@ -1569,6 +1594,18 @@ describe("UsagePage", () => {
       expect(lastUrl(onUrlUpdate).has("view")).toBe(false);
       expect(lastUrl(onUrlUpdate).has("tab")).toBe(false);
       expect(tab("Cost")).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("clears ?tab= on the user agent activity view, which renders no tab strip", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderKeepingMountWrites(<UsagePage {...defaultProps} />, "?view=user-agent-activity&tab=keys", onUrlUpdate);
+
+      expect(await screen.findByText("User Agent Activity", { selector: "div" })).toBeInTheDocument();
+      await waitFor(() => {
+        expect(onUrlUpdate).toHaveBeenCalled();
+      });
+      expect(lastUrl(onUrlUpdate).has("tab")).toBe(false);
+      expect(lastUrl(onUrlUpdate).get("view")).toBe("user-agent-activity");
     });
 
     it("leaves ?tab=agents alone for an entity view, whose panel does render that tab", async () => {
