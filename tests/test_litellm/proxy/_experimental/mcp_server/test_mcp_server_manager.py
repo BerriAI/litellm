@@ -13591,6 +13591,7 @@ class TestProtectedCredentialPreparation:
         ({"X-API-Key": "static"}, {"x-api-key": "forwarded"}, None),
         ({}, {"X-API-Key": "forwarded"}, None),
         ({}, None, "ApiKey caller"),
+        ({"X-API-Key": "static"}, {"Authorization": ""}, None),
     ])
     async def test_openapi_static_credentials_remain_supported(
         self, static: dict[str, str], forwarded: dict[str, str] | None, caller: str | None
@@ -13655,4 +13656,40 @@ class TestProtectedCredentialPreparation:
                            authentication_token=value if source == "configured" else None)
         with pytest.raises(HTTPException) as exc:
             await MCPServerManager()._create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
+        assert exc.value.status_code == 500
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type,value,default_slot", [
+        (MCPAuth.api_key, "fixture-key", "X-API-Key"),
+        (MCPAuth.bearer_token, "fixture-key", "Authorization"),
+        (MCPAuth.basic, "user:pass", "Authorization"),
+        (MCPAuth.token, "fixture-key", "Authorization"),
+        (MCPAuth.authorization, "fixture-key", "Authorization"),
+    ])
+    @pytest.mark.parametrize("source", ["configured", "caller"])
+    async def test_usable_credential_survives_an_empty_alternate_header(
+        self, auth_type: MCPAuthType, value: str, default_slot: str, source: str
+    ) -> None:
+        server: Final = MCPServer(
+            server_id="alternate", name="alternate", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=auth_type, upstream_token_header="X-Custom",
+            authentication_token=value if source == "configured" else None,
+        )
+        empty_slot: Final = default_slot if source == "configured" else "X-Custom"
+        selected_slot: Final = "X-Custom" if source == "configured" else default_slot
+        client: Final = await MCPServerManager()._create_mcp_client(
+            server, mcp_auth_header=value if source == "caller" else None, extra_headers={empty_slot: ""},
+        )
+        request: Final = await client.prepare_request_auth()
+        assert request.headers[selected_slot]
+        assert request.headers[empty_slot] == ""
+
+    @pytest.mark.asyncio
+    async def test_empty_custom_and_default_headers_do_not_satisfy_auth(self) -> None:
+        server: Final = MCPServer(
+            server_id="both-empty", name="both-empty", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.api_key, upstream_token_header="X-Custom",
+        )
+        with pytest.raises(HTTPException) as exc:
+            await MCPServerManager()._create_mcp_client(server, extra_headers={"X-Custom": "", "X-API-Key": ""})
         assert exc.value.status_code == 500
