@@ -79,6 +79,7 @@ const mockKey: KeyResponse = {
   key_name: "test-key",
   key_alias: "Test Key Alias",
   spend: 5.5,
+  total_spend: 42.25,
   max_budget: 100,
   expires: "2999-12-31T23:59:59Z",
   models: ["gpt-3.5-turbo", "gpt-4"],
@@ -234,6 +235,14 @@ it("should display key information correctly", async () => {
     expect(screen.getByText("$5.5000")).toBeInTheDocument();
     expect(screen.getByText("of $100")).toBeInTheDocument();
   });
+});
+
+it("shows lifetime spend in its own column next to the period spend meter", async () => {
+  renderWithProviders(<VirtualKeysTable />);
+
+  expect(await screen.findByText("Lifetime Spend")).toBeInTheDocument();
+  expect(screen.getByText("$42.2500")).toBeInTheDocument();
+  expect(screen.getByText("$5.5000")).toBeInTheDocument();
 });
 
 it("should display user email correctly", async () => {
@@ -638,6 +647,23 @@ describe("server-side filtering – the LIT-4080 regression guard", () => {
     });
   });
 
+  it("threads the Status drawer filter into the useKeys query and the URL", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
+
+    openFilters();
+    const user = userEvent.setup();
+    await chooseSelectOption(user, await screen.findByRole("combobox", { name: "Status" }), "Revoked (blocked)");
+    fireEvent.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ status: "revoked" }));
+    });
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "filter_status")).toBe("revoked");
+    });
+  });
+
   it("sends the search box as the combined alias-or-ID search rather than the key-alias filter", async () => {
     renderWithProviders(<VirtualKeysTable />);
 
@@ -745,6 +771,25 @@ describe("Status column reflects blocked / expiry / scim metadata", () => {
     expect(screen.queryByText(/Blocked by SCIM/i)).not.toBeInTheDocument();
   });
 
+  it("renders Deleted for an archived key, even when the archived row was also blocked", async () => {
+    mockUseKeys.mockReturnValue(
+      keysResult([
+        { ...mockKey, blocked: true, metadata: {}, deleted_at: "2024-11-15T10:00:00Z", deleted_by: "admin-1" },
+      ]),
+    );
+
+    renderWithProviders(<VirtualKeysTable />);
+
+    const tag = await screen.findByTestId(`key-status-${mockKey.token_id}`);
+    expect(tag).toHaveTextContent("Deleted");
+
+    const user = userEvent.setup();
+    await user.hover(tag);
+    await waitFor(() => {
+      expect(screen.getByText(/by admin-1/)).toBeInTheDocument();
+    });
+  });
+
   it("marks a SCIM-blocked key with the SCIM tooltip reason", async () => {
     mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, blocked: true, metadata: { scim_blocked: true } }]));
 
@@ -788,6 +833,24 @@ describe("table state lives in the URL so it survives leaving and returning to t
       );
     });
     expect(screen.getByTestId("filter-chip-team_id")).toHaveTextContent("Test Team");
+  });
+
+  it("restores the status filter from the URL and sends it to /key/list", async () => {
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { filter_status: "deleted" } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ status: "deleted" }));
+    });
+    expect(screen.getByTestId("filter-chip-status")).toHaveTextContent("Deleted");
+  });
+
+  it("ignores a hand-edited status the backend would reject instead of 400ing the page", async () => {
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { filter_status: "bogus" } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ status: undefined }));
+    });
+    expect(screen.queryByTestId("filter-chip-status")).not.toBeInTheDocument();
   });
 
   it("writes the search term to the URL", async () => {

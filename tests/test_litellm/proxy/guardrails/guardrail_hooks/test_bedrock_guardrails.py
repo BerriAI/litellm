@@ -5603,6 +5603,7 @@ def test_initialize_bedrock_wires_streaming_flags():
             streaming_buffer_until_moderated=False,
             streaming_sampling_rate=3,
             streaming_end_of_stream_only=True,
+            streaming_buffer_release_on_scan=True,
         ),
         {"guardrail_name": "bedrock-streaming"},
     )
@@ -5616,9 +5617,11 @@ def test_initialize_bedrock_wires_streaming_flags():
     assert configured.streaming_buffer_until_moderated is False
     assert configured.streaming_sampling_rate == 3
     assert configured.streaming_end_of_stream_only is True
+    assert configured.streaming_buffer_release_on_scan is True
     assert defaulted.streaming_buffer_until_moderated is True
     assert defaulted.streaming_sampling_rate == 5
     assert defaulted.streaming_end_of_stream_only is False
+    assert defaulted.streaming_buffer_release_on_scan is False
 
 
 def test_initialize_bedrock_rejects_non_positive_sampling_rate():
@@ -5719,6 +5722,44 @@ async def test_buffered_default_hook_scans_before_any_chunk():
     assert events[0] == "scan"
     assert all(e == "scan" or e[0] == "chunk" for e in events)
     assert len([e for e in events if e != "scan"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_buffered_release_on_scan_hook_releases_each_window_after_its_scan():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-release-on-scan",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        streaming_buffer_release_on_scan=True,
+        streaming_sampling_rate=1,
+    )
+
+    assert guardrail._streams_incrementally() is True
+    events = await _run_streaming_hook_recording_order(guardrail)
+
+    assert events == ["scan", ("chunk", "Hello"), "scan", ("chunk", " world"), ("chunk", "")]
+
+
+@pytest.mark.asyncio
+async def test_buffered_release_on_scan_defers_to_end_of_stream_only():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-release-on-scan-end-only",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        streaming_buffer_release_on_scan=True,
+        streaming_end_of_stream_only=True,
+        streaming_sampling_rate=1,
+    )
+
+    assert guardrail._streams_incrementally() is False
+    events = await _run_streaming_hook_recording_order(guardrail)
+
+    assert events.count("scan") == 1
+    assert events[0] == "scan"
 
 
 @pytest.mark.asyncio
