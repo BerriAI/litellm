@@ -87,17 +87,22 @@ def _flatten_messages_for_compression(messages: list[dict[str, object]]) -> list
     at its part), so merging text across a non-text part would move a later
     breakpoint to the other side of it. Rows with non-text parts are sent
     unchanged and pass through the service untouched.
+
+    An explicit ``"tool_calls": null`` (what OpenAI SDK message objects
+    serialize to) is dropped: the service iterates the field and older
+    releases fail on ``None``.
     """
-    flattened: Final[list[dict[str, object]]] = []
-    for msg in messages:
-        content = msg.get("content")
-        if is_all_text_parts(content):
-            text = content_to_text(content)
-            if text:
-                flattened.append({**msg, "content": text})
-                continue
-        flattened.append(msg)
-    return flattened
+    return [_compression_row(msg) for msg in messages]
+
+
+def _compression_row(message: Mapping[str, object]) -> dict[str, object]:
+    content: Final = message.get("content")
+    text: Final = content_to_text(content) if is_all_text_parts(content) else ""
+    return {
+        key: text if key == "content" and text else value
+        for key, value in message.items()
+        if key != "tool_calls" or value is not None
+    }
 
 
 def _restore_content_shapes(
