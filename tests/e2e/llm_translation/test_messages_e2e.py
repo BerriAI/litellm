@@ -24,10 +24,10 @@ from models import (
     AnthropicAssistantTurn,
     AnthropicContentBlock,
     AnthropicCustomTool,
+    AnthropicMessagesBody,
     AnthropicToolChoice,
     AnthropicToolResultBlock,
     AnthropicToolResultTurn,
-    AnthropicMessagesBody,
     ChatMessage,
     JsonSchemaProperty,
     LiteLLMParamsBody,
@@ -165,6 +165,7 @@ class TestAnthropicMessages:
         )
 
     @pytest.mark.covers("llm.messages.anthropic.basic.stream.works")
+    @pytest.mark.provider_live
     def test_messages_streams_completion(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
