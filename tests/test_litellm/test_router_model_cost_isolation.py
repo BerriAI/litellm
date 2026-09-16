@@ -7,6 +7,7 @@ and one has explicit zero-cost pricing in model_info, the other deployment
 should still use the built-in pricing.
 """
 
+import asyncio
 import copy
 import logging
 import os
@@ -19,8 +20,10 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
@@ -97,6 +100,130 @@ async def test_discovery_discards_metadata_for_a_replaced_deployment(monkeypatch
         assert router.get_configured_token_limits("local") == (None, None)
         await router.arefresh_model_info(client=handler)
         assert router.get_configured_token_limits("local") == (2048, 2048)
+    _invalidate_model_cost_lowercase_map()
+
+
+async def test_discovery_is_isolated_across_routers_and_reused_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    first, second = tuple(
+        Router(model_list=[{
+            "model_name": "local",
+            "litellm_params": {
+                "model": "hosted_vllm/local-model",
+                "api_base": f"https://{host}.test/v1",
+                "api_key": "local-key",
+            },
+            "model_info": {"id": "shared-discovery-id"},
+        }])
+        for host in ("first", "second")
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "unavailable.test":
+            return httpx.Response(503)
+        limit: Final = 8192 if request.url.host == "first.test" else 2048
+        return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": limit}]})
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        await first.arefresh_model_info(client=handler)
+        assert second.get_configured_token_limits("local") == (None, None)
+        await second.arefresh_model_info(client=handler)
+        assert first._get_discovered_model_info("shared-discovery-id")["max_input_tokens"] == 8192
+        assert first.get_configured_token_limits("local") == (8192, 8192)
+        assert second.get_configured_token_limits("local") == (2048, 2048)
+        assert litellm.model_cost["shared-discovery-id"].get("max_input_tokens") is None
+        first.upsert_deployment(Deployment(
+            model_name="local",
+            litellm_params=LiteLLM_Params(
+                model="hosted_vllm/local-model",
+                api_base="https://unavailable.test/v1",
+                api_key="local-key",
+            ),
+            model_info=ModelInfo(id="shared-discovery-id"),
+        ))
+        assert first.get_configured_token_limits("local") == (None, None)
+        await first.arefresh_model_info(client=handler)
+        assert first.get_configured_token_limits("local") == (None, None)
+        assert second.get_configured_token_limits("local") == (2048, 2048)
+    _invalidate_model_cost_lowercase_map()
+
+
+async def test_discovery_refreshes_other_endpoints_while_one_is_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    second_started: Final = asyncio.Event()
+    router: Final = Router(model_list=[
+        {
+            "model_name": host,
+            "litellm_params": {
+                "model": "hosted_vllm/local-model",
+                "api_base": f"https://{host}.test/v1",
+                "api_key": "local-key",
+            },
+        }
+        for host in ("first", "second", "third")
+    ])
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "first.test":
+            await second_started.wait()
+        if request.url.host == "second.test":
+            second_started.set()
+            return httpx.Response(503)
+        return httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 2048}]})
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        await asyncio.wait_for(router.arefresh_model_info(client=handler), timeout=2)
+        assert router.get_configured_token_limits("first") == (2048, 2048)
+        assert router.get_configured_token_limits("second") == (None, None)
+        assert router.get_configured_token_limits("third") == (2048, 2048)
+    _invalidate_model_cost_lowercase_map()
+
+
+async def test_discovered_limits_expire_after_the_last_successful_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    clock: Final = Mock(return_value=0.0)
+    router: Final = Router(model_list=[{
+        "model_name": "local",
+        "litellm_params": {
+            "model": "hosted_vllm/local-model",
+            "api_base": "https://expiry.test/v1",
+            "api_key": "local-key",
+        },
+        "model_info": {"id": "expiring-discovery"},
+    }])
+    router._discovered_model_info_cache = InMemoryCache(clock=clock, default_ttl=2 * MODEL_INFO_REFRESH_SECONDS)
+    responses: Final = iter((
+        httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]}),
+        httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 8192}]}),
+        httpx.Response(503),
+    ))
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: next(responses))) as client:
+        handler.client = client
+        await router.arefresh_model_info(client=handler)
+        clock.return_value = MODEL_INFO_REFRESH_SECONDS
+        router.cache.in_memory_cache.flush_cache()
+        await router.arefresh_model_info(client=handler)
+        clock.return_value = 2 * MODEL_INFO_REFRESH_SECONDS + 1
+        router.cache.in_memory_cache.flush_cache()
+        await router.arefresh_model_info(client=handler)
+        assert router.get_configured_token_limits("local") == (8192, 8192)
+        group: Final = router.get_model_group_info("local")
+        assert group is not None
+        assert group.max_input_tokens == 8192
+        clock.return_value = 3 * MODEL_INFO_REFRESH_SECONDS + 1
+        await router.arefresh_model_info(client=handler)
+        assert router.get_configured_token_limits("local") == (None, None)
+        expired_group: Final = router.get_model_group_info("local")
+        assert expired_group is not None
+        assert expired_group.max_input_tokens is None
     _invalidate_model_cost_lowercase_map()
 
 

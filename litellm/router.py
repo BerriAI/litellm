@@ -111,7 +111,11 @@ from litellm.llms.base_llm.vector_store.transformation import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-from litellm.llms.openai_like.model_info import get_openai_compatible_model_info
+from litellm.llms.openai_like.model_info import (
+    MODEL_INFO_REFRESH_CONCURRENCY,
+    MODEL_INFO_REFRESH_SECONDS,
+    get_openai_compatible_model_info,
+)
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -244,6 +248,7 @@ from litellm.types.router import (
     Deployment,
     DeploymentModelListingInfo,
     DeploymentTypedDict,
+    DiscoveredDeploymentModelInfo,
     FallbackAccessCheck,
     FallbackBudgetCheck,
     GuardrailTypedDict,
@@ -974,6 +979,10 @@ class Router:
         self._zero_cost_cache: dict[str, bool] = {}
         self.cached_deployment_model_info = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
             self.get_deployment_model_info
+        )
+        self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
+            max_size_in_memory=DEFAULT_MAX_LRU_CACHE_SIZE,
+            default_ttl=2 * MODEL_INFO_REFRESH_SECONDS,
         )
         self._routing_group_rows: tuple[DeploymentTypedDict, ...] | None = None
         self._init_routing_groups(None)
@@ -10320,11 +10329,17 @@ class Router:
 
     async def arefresh_model_info(self, *, client: AsyncHTTPHandler | None = None) -> None:
         """Refresh token limits advertised by configured OpenAI-compatible deployments."""
-        for raw_deployment in tuple(self.model_list):
-            try:
-                await self._arefresh_deployment_model_info(raw_deployment, client=client)
-            except Exception:  # noqa: BLE001  # one invalid deployment must not prevent refreshing the others
-                verbose_router_logger.debug("Could not refresh deployment model info")
+        deployments: Final = iter(tuple(self.model_list))
+
+        async def refresh_worker() -> None:
+            for raw_deployment in deployments:
+                try:
+                    await self._arefresh_deployment_model_info(raw_deployment, client=client)
+                except Exception:  # noqa: BLE001  # one invalid deployment must not prevent refreshing the others
+                    verbose_router_logger.debug("Could not refresh deployment model info")
+
+        await asyncio.gather(*(refresh_worker() for _ in range(MODEL_INFO_REFRESH_CONCURRENCY)))
+        self._invalidate_model_group_info_cache()
 
     async def _arefresh_deployment_model_info(
         self, raw_deployment: Mapping[str, object], *, client: AsyncHTTPHandler | None
@@ -10368,14 +10383,22 @@ class Router:
         model_id: Final = deployment.model_info.id
         if not limits or model_id is None or self.get_model_info(model_id) is not raw_deployment:
             return
-        litellm.register_model(
-            model_cost={  # mutable-ok: register_model requires a concrete dict at its public boundary
-                model_id: MappingProxyType({**limits, **self._deployment_model_cost_payload(deployment)}),
-            },
-            persist_across_reloads=False,
-            warning_display_name=params.model,
+        self._discovered_model_info_cache.delete_cache(model_id)
+        self._discovered_model_info_cache.set_cache(
+            model_id, DiscoveredDeploymentModelInfo(deployment=raw_deployment, limits=limits)
         )
         self._invalidate_model_group_info_cache()
+
+    def _get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
+        cached: Final[object] = self._discovered_model_info_cache.get_cache(model_id)
+        if (
+            model_id is not None
+            and isinstance(cached, DiscoveredDeploymentModelInfo)
+            and cached.deployment is self.get_model_info(model_id)
+        ):
+            configured: Final = TypeAdapter(Mapping[str, object]).validate_python(cached.deployment["model_info"])
+            return MappingProxyType({key: value for key, value in cached.limits.items() if configured.get(key) is None})
+        return MappingProxyType({})
 
     def get_model_listing_info(self, model_name: str) -> DeploymentModelListingInfo | None:
         """
@@ -10404,10 +10427,7 @@ class Router:
         model_infos: Final = tuple(
             MappingProxyType(
                 {
-                    **(
-                        litellm.model_cost.get((deployment.get("model_info") or MappingProxyType({})).get("id"))
-                        or MappingProxyType({})
-                    ),
+                    **self._get_discovered_model_info((deployment.get("model_info") or MappingProxyType({})).get("id")),
                     **MappingProxyType(
                         {
                             k: v
@@ -10466,7 +10486,7 @@ class Router:
 
         model_info: Final = MappingProxyType(
             {
-                **(litellm.model_cost.get(deployment.model_info.id) or MappingProxyType({})),
+                **self._get_discovered_model_info(deployment.model_info.id),
                 **deployment.model_info.model_dump(exclude_none=True),
             }
         )
@@ -10736,7 +10756,7 @@ class Router:
         # values are skipped or Deployment's None pricing defaults would erase the map's
         merged_model_info: Final[ModelMapInfo] = {
             **copy.deepcopy(model_info),
-            **copy.deepcopy(litellm.model_cost.get((deployment.get("model_info") or {}).get("id")) or {}),
+            **self._get_discovered_model_info((deployment.get("model_info") or {}).get("id")),
             **MappingProxyType(
                 {key: value for key, value in (user_model_info or MappingProxyType({})).items() if value is not None}
             ),
@@ -10787,7 +10807,14 @@ class Router:
         litellm_model_name_model_info: ModelInfo | None = None
 
         try:
-            custom_model_info = copy.deepcopy(litellm.model_cost.get(model_id))
+            custom_model_info = (
+                {  # mutable-ok: the legacy model-info merge updates this private copy
+                    **copy.deepcopy(litellm.model_cost.get(model_id) or MappingProxyType({})),
+                    **self._get_discovered_model_info(model_id),
+                }
+                if model_id in litellm.model_cost
+                else None
+            )
         except Exception:
             pass
 

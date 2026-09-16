@@ -13,6 +13,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.utils import _add_path_to_api_base  # pyright: ignore[reportPrivateUsage]  # shared provider URL helper
 
 MODEL_INFO_REFRESH_SECONDS: Final = 300
+MODEL_INFO_REFRESH_CONCURRENCY: Final = 8
 _EMPTY_LIMITS: Final[Mapping[str, int]] = MappingProxyType({})
 
 
