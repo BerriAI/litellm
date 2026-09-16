@@ -36,17 +36,16 @@ def _usable_credential_value(auth_type: MCPAuthType, name: str, value: str) -> b
     return True
 
 
-def validate_static_credential(
-    server: MCPServer, headers: Mapping[str, str], *, header_slot: str | None = None, openapi: bool = False
-) -> Result[None, CredError]:
+def validate_static_credential(server: MCPServer, headers: Mapping[str, str]) -> Result[None, CredError]:
     if server.auth_type not in _STATIC_MODES or server.transport == MCPTransport.stdio:
         return Ok(None)
     default_slot: Final = "X-API-Key" if server.auth_type == MCPAuth.api_key else "Authorization"
     slots: Final = frozenset(
         name.lower()
         for name in (
-            header_slot or server.upstream_token_header or default_slot,
-            "Authorization" if openapi else default_slot,
+            server.upstream_token_header or default_slot,
+            default_slot,
+            "Authorization",
         )
     )
     values: Final = tuple((name.lower(), value.strip()) for name, value in headers.items() if name.lower() in slots)
@@ -75,7 +74,7 @@ def validate_openapi_credentials(
     headers: Final = merge_openapi_headers(
         server.static_headers or {}, forwarded_headers, caller_authorization, resolved_headers
     )
-    match validate_static_credential(server, headers, openapi=True):
+    match validate_static_credential(server, headers):
         case Error(error):
             raise_public(error)
         case Ok():
