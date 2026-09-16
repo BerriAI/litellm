@@ -1669,13 +1669,11 @@ async def _user_api_key_auth_builder(
 
                     is_proxy_admin: Final = result["is_proxy_admin"]
                     team_id: Final = result["team_id"]
-                    team_object: Final = result["team_object"]
                     user_id: Final = result["user_id"]
                     user_email: Final = result["user_email"]
                     user_object: Final = result["user_object"]
                     end_user_id = result["end_user_id"]
                     org_id: Final = result["org_id"]
-                    team_membership: Final[LiteLLM_TeamMembership | None] = result.get("team_membership", None)
                     jwt_claims = result.get("jwt_claims", None)
                     agent_id: Final[str | None] = result.get("agent_id")
 
@@ -1693,40 +1691,9 @@ async def _user_api_key_auth_builder(
                                 value=_JWT_PROXY_ADMIN_SENTINEL,
                                 ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
                             )
-                        return UserAPIKeyAuth(
-                            api_key=None,
-                            user_role=LitellmUserRoles.PROXY_ADMIN,
-                            user_id=user_id,
-                            user_email=user_email,
-                            team_id=team_id,
-                            org_id=org_id,
-                            end_user_id=end_user_id,
-                            parent_otel_span=parent_otel_span,
-                            jwt_claims=jwt_claims,
-                            agent_id=agent_id,
-                            **team_grants(team_object=team_object, team_membership=team_membership, user_id=user_id),
-                        )
+                        return JWTAuthManager.user_api_key_auth_from_result(result, parent_otel_span)
 
-                    valid_token = UserAPIKeyAuth(
-                        api_key=None,
-                        team_id=team_id,
-                        user_role=(
-                            LitellmUserRoles(user_object.user_role)
-                            if user_object is not None and user_object.user_role is not None
-                            else LitellmUserRoles.INTERNAL_USER
-                        ),
-                        user_id=user_id,
-                        user_email=user_email,
-                        org_id=org_id,
-                        parent_otel_span=parent_otel_span,
-                        end_user_id=end_user_id,
-                        user_tpm_limit=(user_object.tpm_limit if user_object is not None else None),
-                        user_rpm_limit=(user_object.rpm_limit if user_object is not None else None),
-                        user_model_max_budget=(user_object.model_max_budget if user_object is not None else None),
-                        jwt_claims=jwt_claims,
-                        agent_id=agent_id,
-                        **team_grants(team_object=team_object, team_membership=team_membership, user_id=user_id),
-                    )
+                    valid_token = JWTAuthManager.user_api_key_auth_from_result(result, parent_otel_span)
 
                     # AUTO_REGISTER deferred from _resolve_jwt_to_virtual_key.
                     # JWT policy (RBAC, scope, custom_validate, email-domain)
