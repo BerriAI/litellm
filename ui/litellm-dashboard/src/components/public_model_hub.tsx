@@ -1,6 +1,5 @@
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
-import { SortingState } from "@tanstack/react-table";
 import { Copy, Inbox, Info } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +23,8 @@ import { MultiSelect } from "./shared/MultiSelect";
 import { featureLabel } from "./publicModelHub/publicModelHubFilters";
 import { usePublicModelHubFacets } from "./publicModelHub/usePublicModelHubFacets";
 import { usePublicModelHubList } from "./publicModelHub/usePublicModelHubList";
+import { type PublicHubAvailability, usePublicHubUrlState } from "./publicModelHub/usePublicHubUrlState";
+import { useSelectedPublicModel } from "./publicModelHub/useSelectedPublicModel";
 import { DataTable } from "./shared/DataTable";
 import { toast } from "@/lib/toast";
 import Navbar from "./navbar";
@@ -79,17 +80,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [usefulLinks, setUsefulLinks] = useState<Record<string, string | { url: string; index: number }>>({});
   const [agentLoading, setAgentLoading] = useState<boolean>(true);
   const [mcpLoading, setMcpLoading] = useState<boolean>(true);
-  const [agentSearchTerm, setAgentSearchTerm] = useState<string>("");
-  const [mcpSearchTerm, setMcpSearchTerm] = useState<string>("");
-  const [selectedAgentSkills, setSelectedAgentSkills] = useState<string[]>([]);
-  const [selectedMcpTransports, setSelectedMcpTransports] = useState<string[]>([]);
-  const [isModalVisible, setIsModalVisible] = useState(false);
-  const [isAgentModalVisible, setIsAgentModalVisible] = useState(false);
-  const [isMcpModalVisible, setIsMcpModalVisible] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<null | ModelGroupInfo>(null);
-  const [selectedAgent, setSelectedAgent] = useState<null | AgentCard>(null);
-  const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
-  const [activeTab, setActiveTab] = useState<string>("models");
   const [skillHubData, setSkillHubData] = useState<Plugin[]>([]);
   const [skillLoading, setSkillLoading] = useState<boolean>(false);
 
@@ -176,6 +166,15 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     return Array.from(transports).sort();
   };
 
+  const hasAgents = Array.isArray(agentHubData) && agentHubData.length > 0;
+  const hasMcpServers = Array.isArray(mcpHubData) && mcpHubData.length > 0;
+  const hubAvailability: PublicHubAvailability = { agentsLoading: agentLoading, hasAgents, mcpLoading, hasMcpServers };
+  const hub = usePublicHubUrlState(hubAvailability);
+  const agentSearchTerm = hub.agentTable.search;
+  const mcpSearchTerm = hub.mcpTable.search;
+  const selectedAgentSkills = hub.agentSkills;
+  const selectedMcpTransports = hub.mcpTransports;
+
   const filteredAgentData = useMemo(() => {
     if (!agentHubData || !Array.isArray(agentHubData)) return [];
 
@@ -212,35 +211,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     });
   }, [mcpHubData, mcpSearchTerm, selectedMcpTransports]);
 
-  const showModal = useCallback((model: ModelGroupInfo) => {
-    setSelectedModel(model);
-    setIsModalVisible(true);
-  }, []);
-
-  const handleModalCancel = () => {
-    setIsModalVisible(false);
-    setSelectedModel(null);
-  };
-
-  const showAgentModal = useCallback((agent: AgentCard) => {
-    setSelectedAgent(agent);
-    setIsAgentModalVisible(true);
-  }, []);
-
-  const handleAgentModalCancel = () => {
-    setIsAgentModalVisible(false);
-    setSelectedAgent(null);
-  };
-
-  const showMcpModal = useCallback((server: MCPServerData) => {
-    setSelectedMcpServer(server);
-    setIsMcpModalVisible(true);
-  }, []);
-
-  const handleMcpModalCancel = () => {
-    setIsMcpModalVisible(false);
-    setSelectedMcpServer(null);
-  };
+  const { openModel, openAgent, openMcp, closeDetail } = hub;
+  const showModal = useCallback((model: ModelGroupInfo) => openModel(model.model_group), [openModel]);
+  const showAgentModal = useCallback((agent: AgentCard) => openAgent(agent.name), [openAgent]);
+  const showMcpModal = useCallback((server: MCPServerData) => openMcp(server.server_id), [openMcp]);
+  const selectedAgent = agentHubData?.find((agent) => agent.name === hub.agentId) ?? null;
+  const selectedMcpServer = mcpHubData?.find((server) => server.server_id === hub.mcpId) ?? null;
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -273,15 +249,15 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     [modelFacets],
   );
   const serviceStatus = models.error ? "Service unavailable" : "I'm alive! ✓";
-  const [agentSorting, setAgentSorting] = useState<SortingState>([{ id: "name", desc: false }]);
-  const [mcpSorting, setMcpSorting] = useState<SortingState>([{ id: "server_name", desc: false }]);
+  const selectedModel = useSelectedPublicModel({
+    modelGroup: hub.modelId,
+    pageRows: models.rows,
+    pageSettled: proxyConfigured && !models.isLoading,
+  });
 
   const modelColumns = useMemo(() => getPublicModelHubColumns({ onModelClick: showModal }), [showModal]);
   const agentColumns = useMemo(() => getPublicAgentHubColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
   const mcpColumns = useMemo(() => getPublicMCPHubColumns({ onServerClick: showMcpModal }), [showMcpModal]);
-
-  const hasAgents = Array.isArray(agentHubData) && agentHubData.length > 0;
-  const hasMcpServers = Array.isArray(mcpHubData) && mcpHubData.length > 0;
 
   const agentSkillOptions = useMemo(
     () =>
@@ -373,7 +349,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
             {/* Tabs for Models and Agents */}
             <Card className="p-8 bg-card border border-border rounded-lg shadow-xs">
-              <Tabs value={activeTab} onValueChange={setActiveTab} className="public-hub-tabs">
+              <Tabs value={hub.tab} onValueChange={hub.setTab} className="public-hub-tabs">
                 <TabsList>
                   <TabsTrigger value="models">Model Hub</TabsTrigger>
                   {hasAgents && <TabsTrigger value="agents">Agent Hub</TabsTrigger>}
@@ -535,7 +511,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                             type="text"
                             placeholder="Search agent names or descriptions..."
                             value={agentSearchTerm}
-                            onChange={(e) => setAgentSearchTerm(e.target.value)}
+                            onChange={(e) => hub.agentTable.setSearch(e.target.value)}
                             className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
                           />
                         </div>
@@ -545,7 +521,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         <MultiSelect
                           options={agentSkillOptions}
                           value={selectedAgentSkills}
-                          onValueChange={setSelectedAgentSkills}
+                          onValueChange={hub.setAgentSkills}
                           placeholder="Select skills"
                           className="w-full"
                         />
@@ -555,11 +531,13 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     <DataTable
                       data={filteredAgentData}
                       paginationMode="client"
+                      pagination={hub.agentTable.pagination}
+                      onPaginationChange={hub.agentTable.onPaginationChange}
                       columns={agentColumns}
                       getRowId={(agent, index) => agent.name || String(index)}
                       sortingMode="client"
-                      sorting={agentSorting}
-                      onSortingChange={setAgentSorting}
+                      sorting={hub.agentTable.sorting}
+                      onSortingChange={hub.agentTable.onSortingChange}
                       isLoading={agentLoading}
                       loadingMessage="Loading agents…"
                       noDataMessage={
@@ -602,7 +580,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                             type="text"
                             placeholder="Search MCP server names or descriptions..."
                             value={mcpSearchTerm}
-                            onChange={(e) => setMcpSearchTerm(e.target.value)}
+                            onChange={(e) => hub.mcpTable.setSearch(e.target.value)}
                             className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
                           />
                         </div>
@@ -612,7 +590,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         <MultiSelect
                           options={mcpTransportOptions}
                           value={selectedMcpTransports}
-                          onValueChange={setSelectedMcpTransports}
+                          onValueChange={hub.setMcpTransports}
                           placeholder="Select transport types"
                           className="w-full"
                         />
@@ -622,11 +600,13 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     <DataTable
                       data={filteredMcpData}
                       paginationMode="client"
+                      pagination={hub.mcpTable.pagination}
+                      onPaginationChange={hub.mcpTable.onPaginationChange}
                       columns={mcpColumns}
                       getRowId={(server, index) => server.server_id || String(index)}
                       sortingMode="client"
-                      sorting={mcpSorting}
-                      onSortingChange={setMcpSorting}
+                      sorting={hub.mcpTable.sorting}
+                      onSortingChange={hub.mcpTable.onSortingChange}
                       isLoading={mcpLoading}
                       loadingMessage="Loading MCP servers…"
                       noDataMessage={
@@ -655,7 +635,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
           </div>
 
           {/* Model Details Modal */}
-          <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleModalCancel()}>
+          <Dialog open={selectedModel !== null} onOpenChange={(open) => !open && closeDetail()}>
             <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
               <DialogHeader>
                 <DialogTitle className="flex min-w-0 items-center space-x-2">
@@ -891,7 +871,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
           </Dialog>
 
           {/* Agent Details Modal */}
-          <Dialog open={isAgentModalVisible} onOpenChange={(open) => !open && handleAgentModalCancel()}>
+          <Dialog open={selectedAgent !== null} onOpenChange={(open) => !open && closeDetail()}>
             <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
               <DialogHeader>
                 <DialogTitle className="flex min-w-0 items-center space-x-2">
@@ -1194,7 +1174,7 @@ print(response.model_dump(mode='json', exclude_none=True))`;
           </Dialog>
 
           {/* MCP Server Details Modal */}
-          <Dialog open={isMcpModalVisible} onOpenChange={(open) => !open && handleMcpModalCancel()}>
+          <Dialog open={selectedMcpServer !== null} onOpenChange={(open) => !open && closeDetail()}>
             <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
               <DialogHeader>
                 <DialogTitle className="flex min-w-0 items-center space-x-2">

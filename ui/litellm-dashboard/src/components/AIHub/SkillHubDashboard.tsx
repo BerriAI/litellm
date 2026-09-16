@@ -1,14 +1,33 @@
-import React, { useMemo, useState } from "react";
-import { SortingState } from "@tanstack/react-table";
+import React, { useCallback, useMemo } from "react";
+import { ColumnFiltersState } from "@tanstack/react-table";
 import { Inbox, Search, X } from "lucide-react";
+import { parseAsString, useQueryState } from "nuqs";
 import { Plugin } from "@/components/claude_code_plugins/types";
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { getSkillHubTableColumns } from "@/components/AIHub/SkillHubTableColumns";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const ALL_DOMAINS = "__all_domains__";
+const DOMAIN_FILTER = "domain";
+const SKILL_FILTER_COLUMNS = [DOMAIN_FILTER] as const;
+
+const SKILL_TABLE_STATE: UrlTableStateOptions<typeof DOMAIN_FILTER> = {
+  sortFields: ["name", "category", "domain", "enabled"],
+  defaultSort: { id: "name", desc: false },
+  defaultPageSize: 25,
+  filterColumns: SKILL_FILTER_COLUMNS,
+  keyPrefix: "skill_",
+  urlKeys: { search: "q", filter_domain: "domain" },
+};
+
+const selectedSkillParser = parseAsString.withOptions({ history: "push" });
+
+const readDomainFilter = (filters: ColumnFiltersState): string | undefined => {
+  const value = filters.find((filter) => filter.id === DOMAIN_FILTER)?.value;
+  return typeof value === "string" ? value : undefined;
+};
 
 interface SkillHubDashboardProps {
   skills: Plugin[];
@@ -43,10 +62,14 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
   publicPage = false,
   onPublishSuccess,
 }) => {
-  const [search, setSearch] = useState("");
-  const [domainFilter, setDomainFilter] = useState<string | undefined>(undefined);
-  const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
-  const [sorting, setSorting] = useState<SortingState>([{ id: "name", desc: false }]);
+  const table = useUrlTableState(SKILL_TABLE_STATE);
+  const { search, setSearch, onColumnFiltersChange } = table;
+  const domainFilter = readDomainFilter(table.columnFilters);
+  const setDomainFilter = (domain: string | undefined) =>
+    onColumnFiltersChange(domain ? [{ id: DOMAIN_FILTER, value: domain }] : []);
+  const [selectedSkillId, setSelectedSkillId] = useQueryState("skill", selectedSkillParser);
+  const selectedSkill = selectedSkillId ? skills.find((skill) => skill.id === selectedSkillId) : undefined;
+  const openSkill = useCallback((skill: Plugin) => void setSelectedSkillId(skill.id), [setSelectedSkillId]);
 
   // Derived stats
   const totalSkills = skills.length;
@@ -76,7 +99,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
     return result;
   }, [skills, search, domainFilter]);
 
-  const columns = useMemo(() => getSkillHubTableColumns({ onSkillClick: setSelectedSkill }), []);
+  const columns = useMemo(() => getSkillHubTableColumns({ onSkillClick: openSkill }), [openSkill]);
 
   const domainItems = useMemo(
     () => [{ value: ALL_DOMAINS, label: "All Domains" }, ...domains.map((d) => ({ value: d, label: d }))],
@@ -89,7 +112,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
     return (
       <SkillDetail
         skill={selectedSkill}
-        onBack={() => setSelectedSkill(null)}
+        onBack={() => void setSelectedSkillId(null)}
         isAdmin={isAdmin}
         accessToken={accessToken}
         onPublishClick={onPublishSuccess}
@@ -163,11 +186,13 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
         <DataTable
           data={filteredSkills}
           paginationMode="client"
+          pagination={table.pagination}
+          onPaginationChange={table.onPaginationChange}
           columns={columns}
           getRowId={(skill, index) => skill.id || String(index)}
           sortingMode="client"
-          sorting={sorting}
-          onSortingChange={setSorting}
+          sorting={table.sorting}
+          onSortingChange={table.onSortingChange}
           isLoading={isLoading}
           loadingMessage="Loading skills…"
           noDataMessage={<SkillsEmptyState filtered={hasActiveFilter} />}

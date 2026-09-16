@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, type Mock } from "vitest";
 import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { renderWithProviders } from "@/../tests/test-utils";
 import PublicModelHub from "./public_model_hub";
-import { getPublicMCPHubColumns, MCPServerData, ModelGroupInfo } from "./PublicModelHubTableColumns";
+import { AgentCard, getPublicMCPHubColumns, MCPServerData, ModelGroupInfo } from "./PublicModelHubTableColumns";
 
 const { apiGetMock } = vi.hoisted(() => ({ apiGetMock: vi.fn() }));
 
@@ -93,12 +94,18 @@ const facetPaths = (): string[] =>
 const modelQueries = (): QueryRecord[] => modelCalls().map((call) => (call[1] as { query: QueryRecord }).query);
 const lastModelQuery = (): QueryRecord => modelQueries()[modelQueries().length - 1];
 
-const renderHub = () => {
+interface HubUrlOptions {
+  searchParams?: string;
+  onUrlUpdate?: OnUrlUpdateFunction;
+}
+
+const renderHub = (urlOptions: HubUrlOptions = {}) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return renderWithProviders(
     <QueryClientProvider client={client}>
       <PublicModelHub />
     </QueryClientProvider>,
+    urlOptions,
   );
 };
 
@@ -395,6 +402,284 @@ describe("PublicModelHub", () => {
       expect(screen.getByText("Model Hub")).toBeInTheDocument();
       expect(screen.getByText("No models available")).toBeInTheDocument();
     });
+  });
+});
+
+describe("PublicModelHub URL state", () => {
+  const agentCard = (name: string, description: string, version: string, tag: string): AgentCard => ({
+    protocolVersion: "0.3.0",
+    name,
+    description,
+    url: `https://agents.example/${tag}`,
+    version,
+    defaultInputModes: ["text"],
+    defaultOutputModes: ["text"],
+    skills: [{ id: `${tag}-skill`, name: `${tag} skill`, description: "", tags: [tag] }],
+  });
+  const AGENTS = [
+    agentCard("Billing Router", "routes billing questions", "1.0.0", "billing"),
+    agentCard("Support Bot", "handles support tickets", "2.0.0", "support"),
+  ];
+  const mcpServer = (server_id: string, server_name: string, transport: string): MCPServerData => ({
+    server_id,
+    name: server_name,
+    server_name,
+    transport,
+    auth_type: "none",
+    mcp_info: { server_name, description: `${server_name} tools` },
+  });
+  const MCP_SERVERS = [mcpServer("server-1", "exa_test", "http"), mcpServer("server-2", "zeta-files", "sse")];
+
+  const AGENT_ROWS = /^(Billing Router|Support Bot|agent-\d+)$/;
+  const MCP_ROWS = /^(exa_test|zeta-files)$/;
+  const MODEL_ROWS = /^(gpt-4|claude-3)$/;
+
+  const hubMocks = async () => {
+    const networkingModule = await import("./networking");
+    return {
+      agents: vi.mocked(networkingModule.agentHubPublicModelsCall),
+      mcp: vi.mocked(networkingModule.mcpHubPublicServersCall),
+    };
+  };
+
+  afterEach(async () => {
+    const mocks = await hubMocks();
+    mocks.agents.mockResolvedValue([]);
+    mocks.mcp.mockResolvedValue([]);
+  });
+
+  const renderUrlHub = async (searchParams = "", agents: AgentCard[] = AGENTS) => {
+    const mocks = await hubMocks();
+    mocks.agents.mockResolvedValue(agents);
+    mocks.mcp.mockResolvedValue(MCP_SERVERS);
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderHub({ searchParams, onUrlUpdate });
+    await screen.findByRole("tab", { name: "MCP Hub", hidden: true });
+    return { user: userEvent.setup(), onUrlUpdate };
+  };
+
+  const lastUrl = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => {
+    const update = onUrlUpdate.mock.calls.at(-1)?.[0];
+    if (!update) throw new Error("no URL update was emitted");
+    return update;
+  };
+
+  const activePanel = () => screen.getByRole("tabpanel", { hidden: true });
+  const rowNames = (names: RegExp) =>
+    within(activePanel())
+      .queryAllByRole("button", { name: names, hidden: true })
+      .map((button) => button.textContent);
+  const selectedTab = () => screen.getByRole("tab", { selected: true });
+
+  it("opens the hub tab named by ?tab=", async () => {
+    await renderUrlHub("?tab=mcp");
+
+    expect(selectedTab()).toHaveTextContent("MCP Hub");
+    expect(rowNames(MCP_ROWS)).toEqual(["exa_test", "zeta-files"]);
+  });
+
+  it("writes the chosen hub tab to ?tab= and drops it for the Model Hub", async () => {
+    const { user, onUrlUpdate } = await renderUrlHub();
+
+    await user.click(screen.getByRole("tab", { name: "Agent Hub" }));
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("tab")).toBe("agents"));
+    expect(rowNames(AGENT_ROWS)).toEqual(["Billing Router", "Support Bot"]);
+
+    await user.click(screen.getByRole("tab", { name: "Model Hub" }));
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.has("tab")).toBe(false));
+  });
+
+  it("keeps ?tab=agents while the public agents are still loading", async () => {
+    const mocks = await hubMocks();
+    mocks.mcp.mockResolvedValue([]);
+    let publishAgents: (agents: AgentCard[]) => void = () => {};
+    mocks.agents.mockReturnValue(new Promise((resolve) => (publishAgents = resolve)));
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderHub({ searchParams: "?tab=agents", onUrlUpdate });
+    await waitFor(() => expect(mocks.agents).toHaveBeenCalled());
+    await waitFor(() => expect(modelCalls().length).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole("tab", { name: "Agent Hub" })).not.toBeInTheDocument();
+
+    publishAgents(AGENTS);
+
+    expect(await screen.findByRole("tab", { name: "Agent Hub", selected: true })).toBeInTheDocument();
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the Model Hub and drops ?tab=agents when there are no public agents", async () => {
+    const { onUrlUpdate } = await renderUrlHub("?tab=agents", []);
+
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(lastUrl(onUrlUpdate).searchParams.has("tab")).toBe(false);
+    expect(selectedTab()).toHaveTextContent("Model Hub");
+    expect(screen.queryByRole("tab", { name: "Agent Hub" })).not.toBeInTheDocument();
+  });
+
+  it("opens the model named by ?model=", async () => {
+    await renderUrlHub("?model=claude-3");
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "claude-3" })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Model Overview");
+  });
+
+  it("looks up a deep-linked model that is not on the current page", async () => {
+    const deepLinked = model({ model_group: "o1-preview", providers: ["openai"] });
+    respondWith(DEFAULT_MODELS);
+    const listPage = apiGetMock.getMockImplementation();
+    apiGetMock.mockImplementation((path: string, options?: { query?: QueryRecord }) =>
+      options?.query?.q === "o1-preview"
+        ? Promise.resolve({ data: [model({ model_group: "o1-preview-mini" }), deepLinked] })
+        : listPage?.(path, options),
+    );
+
+    await renderUrlHub("?model=o1-preview");
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "o1-preview" })).toBeInTheDocument();
+    expect(apiGetMock).toHaveBeenCalledWith(
+      MODEL_HUB_PATH,
+      expect.objectContaining({ query: { q: "o1-preview", page_size: 100 } }),
+    );
+    expect(rowNames(MODEL_ROWS)).toEqual(["gpt-4", "claude-3"]);
+  });
+
+  it("does not look up a deep-linked model that is already on the page", async () => {
+    await renderUrlHub("?model=gpt-4");
+
+    await screen.findByRole("dialog");
+    expect(modelQueries().every((query) => query.q === undefined)).toBe(true);
+  });
+
+  it("pushes the clicked model into ?model= and clears it when the dialog closes", async () => {
+    const { user, onUrlUpdate } = await renderUrlHub();
+    await screen.findByText("gpt-4");
+
+    await user.click(within(activePanel()).getByRole("button", { name: "gpt-4" }));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("model")).toBe("gpt-4"));
+    expect(lastUrl(onUrlUpdate).options.history).toBe("push");
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "gpt-4" })).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: /close/i }));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.has("model")).toBe(false));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("opens the agent named by ?agent=", async () => {
+    await renderUrlHub("?tab=agents&agent=Support%20Bot");
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "Support Bot" })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Agent Overview");
+  });
+
+  it("pushes the clicked agent name into ?agent=", async () => {
+    const { user, onUrlUpdate } = await renderUrlHub("?tab=agents");
+
+    await user.click(within(activePanel()).getByRole("button", { name: "Billing Router" }));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("agent")).toBe("Billing Router"));
+    expect(lastUrl(onUrlUpdate).options.history).toBe("push");
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "Billing Router" })).toBeInTheDocument();
+  });
+
+  it("filters agents by agent_q and writes the search back", async () => {
+    const { onUrlUpdate } = await renderUrlHub("?tab=agents&agent_q=support");
+    const search = screen.getByPlaceholderText("Search agent names or descriptions...");
+    expect(search).toHaveValue("support");
+    expect(rowNames(AGENT_ROWS)).toEqual(["Support Bot"]);
+
+    fireEvent.change(search, { target: { value: "billing" } });
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("agent_q")).toBe("billing"));
+    expect(rowNames(AGENT_ROWS)).toEqual(["Billing Router"]);
+  });
+
+  it("filters agents by the skills in agent_skills", async () => {
+    await renderUrlHub("?tab=agents&agent_skills=support");
+
+    expect(rowNames(AGENT_ROWS)).toEqual(["Support Bot"]);
+    expect(within(activePanel()).getByLabelText("support")).toBeInTheDocument();
+  });
+
+  it("writes picked skills to agent_skills and returns the agent table to its first page", async () => {
+    const manyAgents = Array.from({ length: 30 }, (_, index) =>
+      agentCard(`agent-${String(index).padStart(2, "0")}`, "generated", "1.0.0", index < 5 ? "billing" : "support"),
+    );
+    const { user, onUrlUpdate } = await renderUrlHub("?tab=agents&agent_page=2", manyAgents);
+    expect(within(activePanel()).getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+
+    await user.click(screen.getByPlaceholderText("Select skills"));
+    await user.click(await screen.findByRole("option", { name: "billing" }));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.getAll("agent_skills")).toEqual(["billing"]));
+    expect(lastUrl(onUrlUpdate).searchParams.has("agent_page")).toBe(false);
+    expect(rowNames(AGENT_ROWS)).toEqual(["agent-00", "agent-01", "agent-02", "agent-03", "agent-04"]);
+  });
+
+  it("sorts agents from agent_ keys and writes header clicks back", async () => {
+    const { user, onUrlUpdate } = await renderUrlHub("?tab=agents&agent_sort_order=desc");
+    expect(rowNames(AGENT_ROWS)).toEqual(["Support Bot", "Billing Router"]);
+
+    await user.click(within(activePanel()).getByTestId("sort-header-version"));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("agent_sort_by")).toBe("version"));
+    expect(rowNames(AGENT_ROWS)).toEqual(["Billing Router", "Support Bot"]);
+  });
+
+  it("opens the MCP server whose id is in ?mcp=", async () => {
+    await renderUrlHub("?tab=mcp&mcp=server-2");
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "zeta-files" })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Server Overview");
+  });
+
+  it("pushes the clicked MCP server id into ?mcp=", async () => {
+    const { user, onUrlUpdate } = await renderUrlHub("?tab=mcp");
+
+    await user.click(within(activePanel()).getByRole("button", { name: "exa_test" }));
+
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("mcp")).toBe("server-1"));
+    expect(lastUrl(onUrlUpdate).options.history).toBe("push");
+    expect(await screen.findByText("Server Overview")).toBeInTheDocument();
+  });
+
+  it("filters MCP servers by mcp_q and mcp_transport from the URL", async () => {
+    await renderUrlHub("?tab=mcp&mcp_q=zeta");
+    expect(screen.getByPlaceholderText("Search MCP server names or descriptions...")).toHaveValue("zeta");
+    expect(rowNames(MCP_ROWS)).toEqual(["zeta-files"]);
+  });
+
+  it("filters MCP servers by the transports in mcp_transport", async () => {
+    await renderUrlHub("?tab=mcp&mcp_transport=http");
+
+    expect(rowNames(MCP_ROWS)).toEqual(["exa_test"]);
+  });
+
+  it("writes the MCP search, transport and sort to mcp_ keys", async () => {
+    const { user, onUrlUpdate } = await renderUrlHub("?tab=mcp&mcp_sort_order=desc");
+    expect(rowNames(MCP_ROWS)).toEqual(["zeta-files", "exa_test"]);
+
+    fireEvent.change(screen.getByPlaceholderText("Search MCP server names or descriptions..."), {
+      target: { value: "e" },
+    });
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("mcp_q")).toBe("e"));
+
+    await user.click(screen.getByPlaceholderText("Select transport types"));
+    await user.click(await screen.findByRole("option", { name: "sse" }));
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.getAll("mcp_transport")).toEqual(["sse"]));
+    expect(rowNames(MCP_ROWS)).toEqual(["zeta-files"]);
+
+    await user.keyboard("{Escape}");
+    await user.click(within(activePanel()).getByTestId("sort-header-transport"));
+    await waitFor(() => expect(lastUrl(onUrlUpdate).searchParams.get("mcp_sort_by")).toBe("transport"));
+    expect(lastUrl(onUrlUpdate).searchParams.get("mcp_q")).toBe("e");
   });
 });
 

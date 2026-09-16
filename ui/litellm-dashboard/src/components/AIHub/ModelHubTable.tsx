@@ -11,6 +11,8 @@ import SkillHubDashboard from "@/components/AIHub/SkillHubDashboard";
 import MakeSkillPublicForm from "@/components/claude_code_plugins/MakeSkillPublicForm";
 import { DataTable } from "@/components/shared/DataTable";
 import ModelFilters from "@/components/model_filters";
+import { filterModelHubData } from "@/components/useModelFiltersState";
+import { useModelHubTableUrlState } from "@/components/AIHub/useModelHubTableUrlState";
 import {
   fetchMCPServers,
   getAgentsList,
@@ -24,7 +26,6 @@ import PublicModelHub from "@/components/public_model_hub";
 import { copyToClipboard } from "@/utils/dataUtils";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { filterBySearchTerm } from "@/utils/searchUtils";
-import { SortingState } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -49,6 +50,19 @@ interface ModelHubTableProps {
   userRole: string | null;
 }
 
+interface AgentListEntry {
+  agent_id: string;
+  agent_card_params: AgentHubData;
+  litellm_params?: { is_public?: boolean } | null;
+}
+
+const toAgentHubRows = (agents: AgentListEntry[]): AgentHubData[] =>
+  agents.map((agent) => ({
+    agent_id: agent.agent_id,
+    ...agent.agent_card_params,
+    is_public: agent.litellm_params?.is_public,
+  }));
+
 function HubEmptyState({ title, body }: { title: string; body: string }) {
   return (
     <div className="flex flex-col items-center gap-1 py-6">
@@ -70,28 +84,22 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
   const [modelHubData, setModelHubData] = useState<ModelHubData[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [isModalVisible, setIsModalVisible] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<null | ModelHubData>(null);
-  const [filteredData, setFilteredData] = useState<ModelHubData[]>([]);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
   // Agent Hub state
   const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
   const [isMakeAgentPublicModalVisible, setIsMakeAgentPublicModalVisible] = useState(false);
   const [agentLoading, setAgentLoading] = useState<boolean>(true);
-  const [selectedAgent, setSelectedAgent] = useState<null | AgentHubData>(null);
-  const [isAgentModalVisible, setIsAgentModalVisible] = useState(false);
-  const [agentSearchTerm, setAgentSearchTerm] = useState("");
   // MCP Hub state
   const [mcpHubData, setMcpHubData] = useState<MCPServerData[] | null>(null);
   const [mcpLoading, setMcpLoading] = useState<boolean>(true);
-  const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
-  const [isMcpModalVisible, setIsMcpModalVisible] = useState(false);
   const [isMakeMcpPublicModalVisible, setIsMakeMcpPublicModalVisible] = useState(false);
   // Skill Hub state
   const [skillHubData, setSkillHubData] = useState<Plugin[]>([]);
   const [skillLoading, setSkillLoading] = useState<boolean>(false);
   const [isMakeSkillPublicModalVisible, setIsMakeSkillPublicModalVisible] = useState(false);
   const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
+  const hub = useModelHubTableUrlState();
+  const { openModel, openAgent, openMcp, closeDetail } = hub;
 
   // Check authentication requirement for public AI Hub
   useEffect(() => {
@@ -176,13 +184,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       try {
         setAgentLoading(true);
         const response = await getAgentsList(accessToken);
-        let agents = response.agents;
-        let agent_card_list = agents.map((agent: any) => ({
-          agent_id: agent.agent_id,
-          ...agent.agent_card_params,
-          is_public: agent.litellm_params.is_public,
-        }));
-        setAgentHubData(agent_card_list);
+        setAgentHubData(toAgentHubRows(response.agents));
       } catch (error) {
         console.error("There was an error fetching the agent data", error);
       } finally {
@@ -238,20 +240,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     fetchSkillData();
   }, [accessToken, publicPage]);
 
-  const showModal = useCallback((model: ModelHubData) => {
-    setSelectedModel(model);
-    setIsModalVisible(true);
-  }, []);
-
-  const showAgentModal = useCallback((agent: AgentHubData) => {
-    setSelectedAgent(agent);
-    setIsAgentModalVisible(true);
-  }, []);
-
-  const showMcpModal = useCallback((server: MCPServerData) => {
-    setSelectedMcpServer(server);
-    setIsMcpModalVisible(true);
-  }, []);
+  const showModal = useCallback((model: ModelHubData) => openModel(model.model_group), [openModel]);
+  const showAgentModal = useCallback((agent: AgentHubData) => openAgent(agent.agent_id ?? agent.name), [openAgent]);
+  const showMcpModal = useCallback((server: MCPServerData) => openMcp(server.server_id), [openMcp]);
+  const selectedModel = publicPage ? null : modelHubData?.find((model) => model.model_group === hub.modelId) ?? null;
+  const selectedAgent = agentHubData?.find((agent) => (agent.agent_id ?? agent.name) === hub.agentId) ?? null;
+  const selectedMcpServer = mcpHubData?.find((server) => server.server_id === hub.mcpId) ?? null;
 
   const handleMakePublicPage = () => {
     if (!accessToken) {
@@ -278,24 +272,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
     // Show the modal for selecting MCP servers to make public
     setIsMakeMcpPublicModalVisible(true);
-  };
-
-  const handleOk = () => {
-    setIsModalVisible(false);
-    setSelectedModel(null);
-    setIsAgentModalVisible(false);
-    setSelectedAgent(null);
-    setIsMcpModalVisible(false);
-    setSelectedMcpServer(null);
-  };
-
-  const handleCancel = () => {
-    setIsModalVisible(false);
-    setSelectedModel(null);
-    setIsAgentModalVisible(false);
-    setSelectedAgent(null);
-    setIsMcpModalVisible(false);
-    setSelectedMcpServer(null);
   };
 
   const formatCapabilityName = (key: string) => {
@@ -339,13 +315,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       const fetchAgentData = async () => {
         try {
           const response = await getAgentsList(accessToken);
-          let agents = response.agents;
-          let agent_card_list = agents.map((agent: any) => ({
-            agent_id: agent.agent_id,
-            ...agent.agent_card_params,
-            is_public: agent.is_public,
-          }));
-          setAgentHubData(agent_card_list);
+          setAgentHubData(toAgentHubRows(response.agents));
         } catch (error) {
           console.error("Error refreshing agent data:", error);
         }
@@ -369,13 +339,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     }
   };
 
-  const handleFilteredDataChange = useCallback((newFilteredData: ModelHubData[]) => {
-    setFilteredData(newFilteredData);
-  }, []);
-
-  const [modelSorting, setModelSorting] = useState<SortingState>([{ id: "model_group", desc: false }]);
-  const [agentSorting, setAgentSorting] = useState<SortingState>([{ id: "name", desc: false }]);
-  const [mcpSorting, setMcpSorting] = useState<SortingState>([{ id: "server_name", desc: false }]);
+  const modelFilterValues = hub.modelFilters.values;
+  const filteredData = useMemo(
+    () => filterModelHubData(modelHubData ?? [], modelFilterValues),
+    [modelHubData, modelFilterValues],
+  );
+  const agentSearchTerm = hub.agentsTable.search;
 
   const modelColumns = useMemo(() => getModelHubTableColumns({ onModelClick: showModal }), [showModal]);
   const agentColumns = useMemo(() => getAgentHubTableColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
@@ -431,7 +400,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
           )}
 
           {/* Tab System for Model Hub, Agent Hub, MCP Hub, and Plugin Marketplace */}
-          <Tabs defaultValue="models">
+          <Tabs value={hub.tab} onValueChange={hub.setTab}>
             <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
               <TabsTrigger value="models" className="flex-none rounded-none px-4 py-2">
                 Model Hub
@@ -460,17 +429,19 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   )}
 
                   {/* Filters */}
-                  <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
+                  <ModelFilters modelHubData={modelHubData || []} filtersState={hub.modelFilters} />
 
                   {/* Model Table */}
                   <DataTable
                     data={filteredData}
                     paginationMode="client"
+                    pagination={hub.modelsTable.pagination}
+                    onPaginationChange={hub.modelsTable.onPaginationChange}
                     columns={modelColumns}
                     getRowId={(model, index) => model.model_group || String(index)}
                     sortingMode="client"
-                    sorting={modelSorting}
-                    onSortingChange={setModelSorting}
+                    sorting={hub.modelsTable.sorting}
+                    onSortingChange={hub.modelsTable.onSortingChange}
                     isLoading={loading}
                     loadingMessage="Loading models…"
                     noDataMessage={
@@ -513,14 +484,14 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                       <InputGroupInput
                         placeholder="Search agent names or descriptions..."
                         value={agentSearchTerm}
-                        onChange={(e) => setAgentSearchTerm(e.target.value)}
+                        onChange={(e) => hub.agentsTable.setSearch(e.target.value)}
                       />
                       {agentSearchTerm && (
                         <InputGroupAddon align="inline-end">
                           <InputGroupButton
                             size="icon-xs"
                             aria-label="Clear search"
-                            onClick={() => setAgentSearchTerm("")}
+                            onClick={() => hub.agentsTable.setSearch("")}
                           >
                             <X />
                           </InputGroupButton>
@@ -533,11 +504,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   <DataTable
                     data={filteredAgentData}
                     paginationMode="client"
+                    pagination={hub.agentsTable.pagination}
+                    onPaginationChange={hub.agentsTable.onPaginationChange}
                     columns={agentColumns}
                     getRowId={(agent, index) => agent.agent_id || agent.name || String(index)}
                     sortingMode="client"
-                    sorting={agentSorting}
-                    onSortingChange={setAgentSorting}
+                    sorting={hub.agentsTable.sorting}
+                    onSortingChange={hub.agentsTable.onSortingChange}
                     isLoading={agentLoading}
                     loadingMessage="Loading agents…"
                     noDataMessage={
@@ -575,11 +548,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   <DataTable
                     data={mcpHubData || []}
                     paginationMode="client"
+                    pagination={hub.mcpTable.pagination}
+                    onPaginationChange={hub.mcpTable.onPaginationChange}
                     columns={mcpColumns}
                     getRowId={(server, index) => server.server_id || String(index)}
                     sortingMode="client"
-                    sorting={mcpSorting}
-                    onSortingChange={setMcpSorting}
+                    sorting={hub.mcpTable.sorting}
+                    onSortingChange={hub.mcpTable.onSortingChange}
                     isLoading={mcpLoading}
                     loadingMessage="Loading MCP servers…"
                     noDataMessage={
@@ -631,7 +606,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       )}
 
       {/* Model Details Modal */}
-      <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleCancel()}>
+      <Dialog open={selectedModel !== null} onOpenChange={(open) => !open && closeDetail()}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
           <DialogHeader>
             <DialogTitle>{selectedModel?.model_group || "Model Details"}</DialogTitle>
@@ -780,7 +755,7 @@ print(response.choices[0].message.content)`}
       </Dialog>
 
       {/* Agent Details Modal */}
-      <Dialog open={isAgentModalVisible} onOpenChange={(open) => !open && handleCancel()}>
+      <Dialog open={selectedAgent !== null} onOpenChange={(open) => !open && closeDetail()}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
           <DialogHeader>
             <DialogTitle>{selectedAgent?.name || "Agent Details"}</DialogTitle>
@@ -917,7 +892,7 @@ print(response.choices[0].message.content)`}
       </Dialog>
 
       {/* MCP Server Details Modal */}
-      <Dialog open={isMcpModalVisible} onOpenChange={(open) => !open && handleCancel()}>
+      <Dialog open={selectedMcpServer !== null} onOpenChange={(open) => !open && closeDetail()}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
           <DialogHeader>
             <DialogTitle>{selectedMcpServer?.server_name || "MCP Server Details"}</DialogTitle>
