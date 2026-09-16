@@ -303,7 +303,14 @@ class TestProcessEmbedContentResponseUsage:
     """Gemini Embedding 2 embedContent usageMetadata must drive spend.
 
     Regression for multimodal calls recording prompt_tokens=0 / spend=$0.
+
+    Uses ``local_model_cost_map`` so cost assertions bill against this branch's
+    ``model_prices_and_context_window.json`` instead of the remote copy on
+    ``main``, which lags behind branch-local pricing changes (Gemini Embedding 2
+    moved from per-token to per-image / per-second billing here first).
     """
+
+    pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 
     MODEL = "gemini-embedding-2"
 
