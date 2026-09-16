@@ -327,12 +327,13 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             elif param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param == "reasoning_effort":
-                if value is True:
+                effort: Final = value.get("effort") if isinstance(value, dict) else value
+                if effort is True:
                     optional_params["reasoning_effort"] = "medium"
-                elif value is False:
+                elif effort is False:
                     optional_params["reasoning_effort"] = "none"
-                elif value != "auto":
-                    optional_params["reasoning_effort"] = value
+                elif effort is not None and effort != "auto":
+                    optional_params["reasoning_effort"] = effort
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
