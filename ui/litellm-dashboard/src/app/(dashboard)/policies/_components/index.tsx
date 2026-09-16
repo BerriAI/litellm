@@ -172,12 +172,20 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
   const {
     selectedPolicyId,
     selectPolicy,
+    editPolicyId,
     editingPolicy,
     isEditingPolicyPending,
     openPolicyEditor,
     showPolicyVersion,
     closePolicyEditor,
   } = usePolicyUrlState({ policies: policiesList, hasFetched: hasFetchedPolicies, isLoading });
+
+  const [deepLinkNeedsPoliciesTab] = useState(
+    () => activeTab === "templates" && (selectedPolicyId !== null || editPolicyId !== null),
+  );
+  useEffect(() => {
+    if (deepLinkNeedsPoliciesTab) setActiveTab("policies");
+  }, [deepLinkNeedsPoliciesTab, setActiveTab]);
 
   const editPolicy = (policy: Policy) => {
     setIsNewPolicyFlowOpen(false);

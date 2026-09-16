@@ -167,6 +167,51 @@ describe("TagInfoView save payload", () => {
   });
 });
 
+describe("TagInfoView unknown ?tag=", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTagUpdateCall.mockResolvedValue(undefined);
+  });
+
+  it("shows a not-found message with a working Back button when the tag does not exist", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    mockTagInfoCall.mockResolvedValue({});
+    renderWithProviders(<TagInfoView tagId="deleted-tag" onClose={onClose} accessToken="sk-test" is_admin />, {
+      searchParams: "?tag=deleted-tag",
+    });
+
+    expect(await screen.findByText("Tag not found")).toBeInTheDocument();
+    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Back to Tags/ }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the not-found message when the first lookup fails", async () => {
+    mockTagInfoCall.mockRejectedValue(new Error("network down"));
+    renderTagInfo("?tag=prod-tag");
+
+    expect(await screen.findByText("Tag not found")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Back to Tags/ })).toBeInTheDocument();
+  });
+
+  it("keeps showing the loaded tag when a refresh after saving fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const refreshError = new Error("network down");
+    mockTagInfoCall.mockResolvedValueOnce({ "prod-tag": tag }).mockRejectedValueOnce(refreshError);
+    const { user } = await renderEditor();
+
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(consoleError).toHaveBeenCalledWith("Error fetching tag details:", refreshError));
+    expect(await screen.findByText("Tag Details")).toBeInTheDocument();
+    expect(screen.queryByText("Tag not found")).not.toBeInTheDocument();
+    consoleError.mockRestore();
+  });
+});
+
 describe("TagInfoView ?edit= mode", () => {
   beforeEach(() => {
     vi.clearAllMocks();

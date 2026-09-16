@@ -65,12 +65,14 @@ vi.mock("./policy_templates", () => ({
 vi.mock("./pipeline_flow_builder", () => ({
   FlowBuilderPage: ({
     onBack,
+    onSuccess,
     editingPolicy,
     onVersionCreated,
     onSelectVersion,
     onVersionStatusUpdated,
   }: {
     onBack: () => void;
+    onSuccess: () => void;
     editingPolicy?: Policy | null;
     onVersionCreated?: (policy: Policy) => void;
     onSelectVersion?: (policy: Policy) => void;
@@ -94,6 +96,9 @@ vi.mock("./pipeline_flow_builder", () => ({
         </div>
         <button type="button" onClick={onBack}>
           Back to policies
+        </button>
+        <button type="button" onClick={onSuccess}>
+          Save policy
         </button>
         <button type="button" onClick={() => onVersionCreated?.(draftVersion)}>
           Create draft version
@@ -364,13 +369,46 @@ describe("PoliciesPanel ?policy= detail", () => {
     networkingMocks.getPoliciesList.mockResolvedValue({ policies: [] });
   });
 
-  it("opens the policy named in ?policy= instead of the table", () => {
+  it("opens the policy named in ?policy= instead of the table", async () => {
     renderWithProviders(<PoliciesPanel accessToken="test-token" userRole="Admin" />, {
       searchParams: `?tab=policies&policy=${POLICY_ID}`,
     });
 
     expect(screen.getByTestId("policy-info")).toHaveTextContent(POLICY_ID);
+    expect(screen.queryByRole("columnheader", { name: /^Name/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(networkingMocks.getPoliciesList).toHaveBeenCalled());
     expect(screen.queryByRole("button", { name: "pii-policy" })).not.toBeInTheDocument();
+  });
+
+  it("selects the Policies tab for a ?policy= link that has no ?tab=, and still lets the user leave it", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderPanelKeepingMountUpdates(`?policy=${POLICY_ID}`, onUrlUpdate);
+
+    expect(screen.getByTestId("policy-info")).toHaveTextContent(POLICY_ID);
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tab")).toBe("policies"));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("policy")).toBe(POLICY_ID);
+    expect(screen.getByRole("tab", { name: "Policies" })).toHaveAttribute("aria-selected", "true");
+
+    await user.click(screen.getByRole("tab", { name: "Templates" }));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("tab")).toBe(false));
+    expect(screen.getByRole("tab", { name: "Templates" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("closes the open policy and removes ?policy= when Add New Policy is clicked", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<PoliciesPanel accessToken="test-token" userRole="Admin" />, {
+      searchParams: `?tab=policies&policy=${POLICY_ID}`,
+      onUrlUpdate,
+    });
+
+    await user.click(screen.getByRole("button", { name: "+ Add New Policy" }));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("policy")).toBe(false));
+    expect(screen.queryByTestId("policy-info")).not.toBeInTheDocument();
+    expect(screen.getByTestId("add-policy-prefill")).toHaveTextContent("empty");
   });
 
   it("pushes ?policy= when a policy name is clicked", async () => {
@@ -487,6 +525,49 @@ describe("PoliciesPanel flow builder", () => {
     await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("edit_policy")).toBe(false));
     expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tab")).toBe("policies");
     expect(lastUrlUpdate(onUrlUpdate)?.options.history).toBe("replace");
+  });
+
+  it("does not open a config-defined policy named in ?edit_policy=", async () => {
+    const configPolicy: Policy = { ...PII_POLICY, policy_id: "config-pii", definition_location: "config" };
+    networkingMocks.getPoliciesList.mockResolvedValue({ policies: [configPolicy] });
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderPanelKeepingMountUpdates("?tab=policies&edit_policy=config-pii", onUrlUpdate);
+
+    expect(await screen.findByRole("tab", { name: "Policies" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByTestId("flow-builder-target")).not.toBeInTheDocument();
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("edit_policy")).toBe(false));
+    expect(lastUrlUpdate(onUrlUpdate)?.options.history).toBe("replace");
+  });
+
+  it("returns to the Policies tab after closing a builder opened from an ?edit_policy= link with no ?tab=", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderPanelKeepingMountUpdates(`?edit_policy=${POLICY_ID}`, onUrlUpdate);
+
+    expect(await screen.findByTestId("flow-builder-target")).toHaveTextContent(POLICY_ID);
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tab")).toBe("policies"));
+
+    await user.click(screen.getByRole("button", { name: "Back to policies" }));
+
+    expect(await screen.findByRole("tab", { name: "Policies" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("edit_policy")).toBe(false));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tab")).toBe("policies");
+  });
+
+  it("stays on the saved policy after an update instead of turning into a create form", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<PoliciesPanel accessToken="test-token" userRole="Admin" />, {
+      searchParams: `?tab=policies&edit_policy=${POLICY_ID}`,
+      onUrlUpdate,
+    });
+    await screen.findByTestId("flow-builder-target");
+
+    await user.click(screen.getByRole("button", { name: "Save policy" }));
+
+    await waitFor(() => expect(networkingMocks.getPoliciesList).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId("flow-builder-target")).toHaveTextContent(`${POLICY_ID} production`);
+    expect(onUrlUpdate).not.toHaveBeenCalled();
   });
 
   it("keeps a freshly created version open before the refreshed list includes it", async () => {

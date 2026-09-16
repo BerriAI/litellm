@@ -19,7 +19,7 @@ function resolveEditingPolicy(
   policies: readonly Policy[],
 ): Policy | null {
   if (policyId === null) return null;
-  const listed = policies.find((policy) => policy.policy_id === policyId);
+  const listed = policies.find((policy) => policy.policy_id === policyId && policy.definition_location !== "config");
   if (handedBack?.policy.policy_id !== policyId) return listed ?? null;
   const listCaughtUp = listed !== undefined && handedBack.listWhenHandedBack !== policies;
   return listCaughtUp ? listed : handedBack.policy;
@@ -62,6 +62,7 @@ export function usePolicyUrlState({ policies, hasFetched, isLoading }: PolicyLis
   return {
     selectedPolicyId,
     selectPolicy,
+    editPolicyId,
     editingPolicy,
     isEditingPolicyPending,
     openPolicyEditor,
