@@ -440,7 +440,7 @@ class BaseResponsesAPIStreamingIterator:
                         and _response_obj is not None
                         and _response_obj.usage is None
                     ):
-                        _response_obj.usage = _estimate_usage_from_text(
+                        _response_obj.usage = _estimate_usage_safely(
                             self.model or "",
                             self.request_data.get("input"),
                             self.request_data,
@@ -1379,6 +1379,24 @@ def _estimate_usage_from_text(
         output_tokens=output_tokens,
         total_tokens=input_tokens + output_tokens,
     )
+
+
+def _estimate_usage_safely(
+    model: str,
+    request_input: object,
+    responses_api_request: Mapping[str, object],
+    generated_text: str,
+) -> ResponseAPIUsage | None:
+    try:
+        return _estimate_usage_from_text(
+            model=model,
+            request_input=request_input,
+            responses_api_request=responses_api_request,
+            generated_text=generated_text,
+        )
+    except Exception as e:
+        verbose_logger.debug("Could not estimate usage from stream text, billing $0: %s", e)
+        return None
 
 
 def _stamp_responses_usage_cost(
