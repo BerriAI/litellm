@@ -290,10 +290,10 @@ class LoginThrottle:
         shared: Final = await self._shared_block_ttls(keys)
         user_ttl: Final = max(local[0], shared[0])
         source_ttl: Final = max(local[1], shared[1])
-        if user_ttl > 0:
-            return Block(scope="user", retry_after=user_ttl)
         if self.source_limit is not None and source_ttl > 0:
             return Block(scope="source", retry_after=source_ttl)
+        if user_ttl > 0:
+            return Block(scope="user", retry_after=user_ttl)
         return None
 
     async def _shared_block_ttls(self, keys: _Keys) -> _BlockTtls:
