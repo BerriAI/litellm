@@ -809,6 +809,8 @@ def test_registration_preserves_unsupported_or_explicit_routes(params: LiteLLMPa
     ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "us-east-1"),
     ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "os.environ/AWS_REGION"),
     ("bedrock/invoke/us.anthropic.claude-sonnet-5", "os.environ/AWS_REGION"),
+    ("bedrock/us.anthropic.claude-opus-4-7", "us-east-1"),
+    ("bedrock/converse/us.anthropic.claude-opus-4-7", "us-east-1"),
 ])
 def test_anthropic_on_bedrock_registers_the_edge_as_its_runtime_endpoint(model: str, region: str | None) -> None:
     """Almost every Bedrock deployment in the suite declares its region as
@@ -839,6 +841,8 @@ def test_anthropic_on_bedrock_registers_the_edge_as_its_runtime_endpoint(model: 
     LiteLLMParamsBody(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", aws_region_name="eu-west-1"),
     LiteLLMParamsBody(model="bedrock/anthropic.claude-sonnet-5", aws_region_name="os.environ/AWS_REGION"),
     LiteLLMParamsBody(model="bedrock/invoke/eu.anthropic.claude-sonnet-5", aws_region_name="os.environ/AWS_REGION"),
+    LiteLLMParamsBody(model="bedrock/us.anthropic.claude-opus-4-5", aws_region_name="us-east-1"),
+    LiteLLMParamsBody(model="bedrock/converse/us.anthropic.claude-haiku-9-9", aws_region_name="us-east-1"),
 ])
 def test_bedrock_deployments_the_edge_must_not_touch_keep_their_direct_route(params: LiteLLMParamsBody) -> None:
     """Non-Anthropic models the runner role cannot invoke, deployments carrying

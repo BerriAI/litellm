@@ -9,8 +9,15 @@ from models import LiteLLMParamsBody, ModelMode
 LIVE_PROVIDER_REQUIRED: Final[ContextVar[bool]] = ContextVar("live_provider_required", default=False)
 
 DEFAULT_BEDROCK_REGION: Final = "us-east-1"
-BEDROCK_ANTHROPIC_INFIX: Final = "anthropic."
 BEDROCK_CROSS_REGION_PREFIX: Final = "us."
+BEDROCK_EDGE_MODELS: Final = frozenset(
+    {
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "us.anthropic.claude-sonnet-5",
+        "us.anthropic.claude-opus-4-7",
+    }
+)
 ENV_REFERENCE_PREFIX: Final = "os.environ/"
 
 
@@ -33,16 +40,16 @@ def bedrock_region(declared: str | None, model: str) -> str | None:
 
 
 def bedrock_mount(params: LiteLLMParamsBody) -> str | None:
-    """The edge mount an Anthropic-on-Bedrock deployment belongs to, or None.
+    """The edge mount a Bedrock deployment belongs to, or None.
 
-    Only the Anthropic models route. The edge validates converse and invoke
-    bodies by their Anthropic and Converse terminator fields, and the runner role
-    is allowed to invoke exactly those models, so Bedrock embeddings, image
-    generation, rerank and realtime keep their existing direct path rather than
-    reaching an edge that could neither sign nor validate for them."""
+    The allowlist mirrors the runner role's IAM policy, which names its models
+    one by one. A model outside it would be re-signed with an identity that
+    cannot invoke it and come back 403 from Bedrock, so an unlisted model keeps
+    its direct path and loses only caching. Adding a model is a policy edit in
+    litellm-ops and a line here."""
     route: Final = params.model.partition("/")[2]
     model: Final = route.partition("/")[2] or route
-    if BEDROCK_ANTHROPIC_INFIX not in model:
+    if model not in BEDROCK_EDGE_MODELS:
         return None
     region: Final = bedrock_region(params.aws_region_name, model)
     return None if region is None else f"bedrock/{region}"
