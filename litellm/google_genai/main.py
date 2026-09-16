@@ -203,7 +203,9 @@ class GenerateContentHelper:
             MappingProxyType(litellm_params.model_dump(exclude_none=True))
         )
         vertex_location_params: Final = (
-            {"vertex_location": explicit_vertex_location} if explicit_vertex_location else {}
+            MappingProxyType({"vertex_location": explicit_vertex_location})
+            if explicit_vertex_location
+            else MappingProxyType({})
         )
 
         litellm_logging_obj.update_from_kwargs(
