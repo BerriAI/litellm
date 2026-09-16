@@ -2,10 +2,27 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::mime::Mime;
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError};
 use reqwest::Url;
+use std::io::Read;
+use std::path::Path;
 
 use super::types::{OcrConnection, OcrDocument};
 use crate::constants::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS};
 use crate::media::{DownloadPolicy, MediaFetcher};
+
+pub(crate) fn read_path_document(
+    path: &Path,
+    mime_type: Option<&str>,
+) -> Result<OcrDocument, super::Error> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(OCR_INLINE_MAX_BYTES as u64 + 1).read_to_end(&mut bytes))
+        .map_err(|source| super::Error::FileRead {
+            path: path.to_owned(),
+            source: std::sync::Arc::new(source),
+        })?;
+    let name = path.file_name().map(|name| name.to_string_lossy());
+    encode_file_document(&bytes, name.as_deref(), mime_type)
+}
 
 pub fn encode_file_document(
     bytes: &[u8],
@@ -182,6 +199,27 @@ fn map_media_error(error: crate::media::Error) -> crate::ocr::Error {
 mod tests {
     use super::*;
 
+    #[test]
+    fn path_preparation_preserves_io_causes_and_enforces_the_inline_limit() {
+        let path = std::env::temp_dir().join(format!("ocr-document-{:032x}.png", rand::random::<u128>()));
+        let error = read_path_document(&path, None).unwrap_err();
+        let super::super::Error::FileRead { path: failed_path, source } = error else {
+            panic!("missing path must produce a typed file error");
+        };
+        assert_eq!(failed_path, path);
+        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(OCR_INLINE_MAX_BYTES as u64 + 1).unwrap();
+        let oversized = read_path_document(&path, None);
+        std::fs::write(&path, b"image bytes").unwrap();
+        let image = read_path_document(&path, None).unwrap();
+        let overridden = read_path_document(&path, Some("application/pdf")).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(oversized, Err(super::super::Error::InlineDocumentTooLarge)));
+        assert!(matches!(image, OcrDocument::ImageUrl { image_url, .. } if image_url == "data:image/png;base64,aW1hZ2UgYnl0ZXM="));
+        assert!(matches!(overridden, OcrDocument::DocumentUrl { document_url, .. } if document_url == "data:application/pdf;base64,aW1hZ2UgYnl0ZXM="));
+    }
+
     fn document(source: &str) -> OcrDocument {
         OcrDocument::DocumentUrl {
             document_url: source.into(),
@@ -248,10 +286,10 @@ mod tests {
     #[test]
     fn file_encoding_enforces_decoded_size_limit() {
         let bytes = vec![b'a'; OCR_INLINE_MAX_BYTES + 1];
-        assert_eq!(
+        assert!(matches!(
             encode_file_document(&bytes, None, None),
             Err(crate::ocr::Error::InlineDocumentTooLarge)
-        );
+        ));
         let document = encode_file_document(&bytes[..OCR_INLINE_MAX_BYTES], None, None).unwrap();
         let inline = InlineDocument::parse(document.source()).unwrap().unwrap();
         assert_eq!(
@@ -282,10 +320,10 @@ mod tests {
         ] {
             let inline = InlineDocument::parse(source).unwrap().unwrap();
             assert_eq!(inline.decode(expected.len()).unwrap(), expected);
-            assert_eq!(
+            assert!(matches!(
                 inline.decode(expected.len() - 1),
                 Err(crate::ocr::Error::InlineDocumentTooLarge)
-            );
+            ));
         }
     }
 

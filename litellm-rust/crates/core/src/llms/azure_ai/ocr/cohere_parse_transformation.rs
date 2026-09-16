@@ -99,7 +99,6 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         CohereParseConfig.transform_ocr_response(model, raw_response, request_format)
     }
 
-
     fn validate_request_body(&self, body: &Value) -> Result<(), crate::ocr::Error> {
         let document = crate::ocr::prepare::body_document(body)?;
         validate_document(&document)?;

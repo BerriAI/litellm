@@ -205,10 +205,10 @@ mod tests {
     #[case("Mistral")]
     #[case("unknown")]
     fn invalid_provider_names_are_rejected(#[case] provider: &str) {
-        assert_eq!(
+        assert!(matches!(
             resolve_provider_config("model", Some(provider)),
-            Err(crate::ocr::Error::InvalidProvider(provider.into()))
-        );
+            Err(crate::ocr::Error::InvalidProvider(value)) if value == provider
+        ));
     }
 
     #[rstest]

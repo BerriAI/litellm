@@ -192,7 +192,6 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
                 .collect(),
         })
     }
-
 }
 
 pub(crate) fn normalize_response(
@@ -612,7 +611,7 @@ mod tests {
             "usage":{"prompt_tokens":1}
         }))])
         .await;
-        let mut request = wire_request(
+        let request = wire_request(
             "vertex_ai/deepseek-ocr-maas",
             &base,
             json!({
@@ -623,9 +622,7 @@ mod tests {
                 "extra_body":{"provider_option":"value"}
             }),
         );
-        request.document = request
-            .document
-            .with_source("gs://bucket/document.pdf".into());
+        let request = crate::ocr::test_support::with_source(request, "gs://bucket/document.pdf");
 
         let response = perform_ocr(request).await.unwrap();
         server.await.unwrap();

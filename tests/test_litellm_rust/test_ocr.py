@@ -1,5 +1,10 @@
 import json
+import asyncio
+import base64
 import threading
+import weakref
+import gc
+from pathlib import Path
 from collections.abc import Generator
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -330,6 +335,126 @@ def test_native_lifecycle_core_encodes_python_file_input(
         expected_field: expected_uri,
     }
     assert requests[0]["body"]["opaque_extension"] == {"nested": [None, False, 0]}
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("source", ["path", "pathlike", "reader", "text", "bytes"])
+@pytest.mark.asyncio
+async def test_native_file_sources_preserve_sdk_behavior(ocr_server, tmp_path, asynchronous, source):
+    server, requests = ocr_server
+    path: Final = tmp_path / "scan.png"
+    content: Final = b"document bytes"
+    path.write_bytes(content)
+
+    class CustomPath:
+        def __fspath__(self) -> str:
+            return str(path)
+
+        def __str__(self) -> str:
+            return "/not/the/document.pdf"
+
+    class Reader:
+        name = "scan.png"
+
+        def __init__(self) -> None:
+            self.stream = BytesIO(b"prefix" + content)
+            self.stream.seek(6)
+            self.calls = 0
+
+        def read(self) -> bytes | str:
+            assert threading.get_ident() == caller_thread
+            if asynchronous:
+                assert asyncio.current_task() is caller_task
+            self.calls += 1
+            value: Final = self.stream.read()
+            return value.decode() if source == "text" else value
+
+    caller_thread: Final = threading.get_ident()
+    caller_task: Final = asyncio.current_task()
+    reader: Final = Reader()
+    file_input: Final = {
+        "path": path,
+        "pathlike": CustomPath(),
+        "reader": reader,
+        "text": reader,
+        "bytes": content,
+    }[source]
+    document: Final = {"type": "file", "file": file_input, **({"mime_type": "image/png"} if source == "bytes" else {})}
+    litellm.rust(True)
+    kwargs: Final = {
+        "model": "mistral/mistral-ocr-latest",
+        "document": document,
+        "api_key": "test-key",
+        "api_base": f"http://127.0.0.1:{server.server_port}",
+    }
+    response: Final = await litellm.aocr(**kwargs) if asynchronous else litellm.ocr(**kwargs)
+    assert response.pages[0].markdown == "native OCR response"
+    assert len(requests) == 1
+    assert requests[0]["body"]["document"] == {
+        "type": "image_url",
+        "image_url": "data:image/png;base64," + base64.b64encode(content).decode(),
+    }
+    assert reader.calls == (1 if source in {"reader", "text"} else 0)
+    assert not reader.stream.closed
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_native_file_failures_preserve_identity_and_do_not_send(ocr_server, tmp_path, asynchronous):
+    from litellm.rust_bridge import _native
+
+    server, requests = ocr_server
+    failure: Final = KeyError("reader failed")
+
+    class Reader:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def read(self) -> bytes:
+            self.calls += 1
+            raise failure
+
+    reader: Final = Reader()
+    path: Final = tmp_path / "missing.pdf"
+    kwargs: Final = {
+        "model": "mistral/mistral-ocr-latest",
+        "api_key": "test-key",
+        "api_base": f"http://127.0.0.1:{server.server_port}",
+    }
+    for source, error in ((reader, KeyError), (path, FileNotFoundError)):
+        with pytest.raises(error) as caught:
+            if asynchronous:
+                await _native.aocr(document={"type": "file", "file": source}, **kwargs)
+            else:
+                _native.ocr(document={"type": "file", "file": source}, **kwargs)
+        if source is reader:
+            assert caught.value is failure
+        else:
+            assert caught.value.filename == str(path)
+    assert reader.calls == 1
+    assert requests == []
+
+
+def test_unstarted_native_file_call_does_not_read_and_releases_reader():
+    from litellm.rust_bridge import _native
+
+    class Reader:
+        def read(self) -> bytes:
+            raise AssertionError("unstarted call consumed its document")
+
+    def create_call():
+        reader: Final = Reader()
+        pending: Final = _native.aocr(
+            model="mistral/mistral-ocr-latest", document={"type": "file", "file": reader}
+        )
+        reader.pending = pending
+        return pending, weakref.ref(reader)
+
+    pending, reference = create_call()
+    pending.close()
+    del pending
+    gc.collect()
+    assert reference() is None
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

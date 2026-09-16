@@ -109,7 +109,6 @@ impl BaseOcrConfig for VertexAIOCRConfig {
         MistralOCRConfig.transform_ocr_response(model, raw_response, request_format)
     }
 
-
     fn validate_request_body(&self, body: &Value) -> Result<(), crate::ocr::Error> {
         validate_inline_document(&crate::ocr::prepare::body_document(body)?)
     }
@@ -339,8 +338,8 @@ mod tests {
             options.clone(),
         );
         let vertex = wire_request("vertex_ai/mistral-ocr-maas", "https://vertex.test", options);
-        let direct = crate::ocr::prepare::prepare_request(direct);
-        let vertex = crate::ocr::prepare::prepare_request(vertex);
+        let direct = crate::ocr::prepare::prepare_request(crate::ocr::test_support::resolved_request(direct));
+        let vertex = crate::ocr::prepare::prepare_request(crate::ocr::test_support::resolved_request(vertex));
         let direct_http = MistralOCRConfig
             .prepare_request(&direct, &client)
             .await

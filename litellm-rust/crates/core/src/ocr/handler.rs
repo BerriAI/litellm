@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use super::OcrClient;
 use super::hooks::{OcrHooks, OcrLifecycleHooks, OcrPostCallRequest};
-use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, PreparedOcrRequest};
+use super::types::{ResolvedOcrRequest, LiteLLMOcrResponse, PreparedOcrRequest};
 use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
 use crate::llms::base_llm::ocr::transformation::OcrResponseContext;
 
 pub(crate) async fn perform_ocr_request(
     client: &OcrClient,
-    request: LiteLLMOcrRequest,
+    request: ResolvedOcrRequest,
 ) -> Result<LiteLLMOcrResponse, super::Error> {
     request.response_format()?;
     let context = CallLifecycleContext::new(
@@ -43,7 +43,7 @@ pub(crate) struct PreparedOcrCall {
 impl PreparedOcrCall {
     pub(crate) async fn prepare(
         client: OcrClient,
-        request: LiteLLMOcrRequest,
+        request: ResolvedOcrRequest,
     ) -> Result<Self, super::Error> {
         let request = super::prepare::prepare_request(request);
         let http = request.config.prepare_request(&request, &client).await?;

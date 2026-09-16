@@ -211,10 +211,10 @@ mod tests {
             lifecycle.accept::<crate::ocr::Error>(Ok(()));
         }
         let selected = crate::ocr::Error::InvalidRequest("provider".into());
-        assert_eq!(
+        assert!(matches!(
             lifecycle.accept(Err(HostFailure::Error(selected.clone()))),
-            Some(selected)
-        );
+            Some(crate::ocr::Error::InvalidRequest(message)) if message == "provider"
+        ));
         lifecycle.accept::<crate::ocr::Error>(Ok(()));
         for phase in [
             HostPhase::DeploymentFailure,
@@ -222,11 +222,10 @@ mod tests {
             HostPhase::AsyncFailure,
         ] {
             assert_eq!(lifecycle.phase(), phase);
-            assert_eq!(
+            assert!(
                 lifecycle.accept(Err(HostFailure::Error(crate::ocr::Error::InvalidRequest(
                     "callback".into()
-                )))),
-                None
+                )))).is_none()
             );
         }
         assert_eq!(lifecycle.phase(), HostPhase::Complete);
@@ -236,10 +235,10 @@ mod tests {
     fn cancellation_skips_terminal_dispatch() {
         let mut lifecycle = HostLifecycle::new(true);
         let error = crate::ocr::Error::InvalidRequest("cancelled".into());
-        assert_eq!(
+        assert!(matches!(
             lifecycle.accept(Err(HostFailure::Cancelled(error.clone()))),
-            Some(error)
-        );
+            Some(crate::ocr::Error::InvalidRequest(message)) if message == "cancelled"
+        ));
         assert_eq!(lifecycle.phase(), HostPhase::Complete);
     }
 }

@@ -1,42 +1,24 @@
+use std::sync::Arc;
+
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::PyDict;
 
 use litellm_auth::ResolvedCredential;
 use litellm_core::ocr::hooks::{OcrDuringCallRequest, OcrPostCallRequest};
-use litellm_core::ocr::{OcrAdmission, OcrCall, OcrClient, OcrHostOperation, OcrHostResult};
+use litellm_core::ocr::{OcrCall, OcrHostOperation, OcrHostResult};
 use litellm_python_interop::{
     from_py_preserving_errors as from_py, to_py_preserving_errors as to_py,
 };
 
-use super::callbacks;
+use super::document::PythonFileReader;
 use super::errors::to_pyerr as ocr_error_to_pyerr;
-use super::project::{admitted_call, project};
+use super::project::project;
+use super::{ASYNC_SIGNATURE, SIGNATURE, callbacks, errors};
 use crate::auth::PythonTokenProvider;
-use crate::lifecycle::{
-    OperationClass, PythonCallState, PythonRoute, Signature, missing_state, now, run_call,
-};
+use crate::lifecycle::{OperationClass, PythonCallState, PythonRoute, missing_state, now};
 
-const SIGNATURE: Signature = Signature {
-    name: "ocr",
-    parameters: &[
-        "model",
-        "document",
-        "api_key",
-        "api_base",
-        "timeout",
-        "custom_llm_provider",
-        "extra_headers",
-    ],
-    required: 2,
-};
-
-const ASYNC_SIGNATURE: Signature = Signature {
-    name: "aocr",
-    ..SIGNATURE
-};
-
-struct PythonOcrHost {
+pub(super) struct PythonOcrHost {
     state: PythonCallState,
     projected: Option<ProjectedOcrHost>,
 }
@@ -48,6 +30,8 @@ struct ProjectedOcrHost {
     azure_ad_token_provider: Option<PythonTokenProvider>,
     pre_call: Option<callbacks::OcrLoggingFields>,
     payload: Option<CapturedOcrPayload>,
+    reader: Option<PythonFileReader>,
+    reader_failed: bool,
 }
 
 struct CapturedOcrPayload {
@@ -63,6 +47,13 @@ impl CapturedOcrPayload {
 }
 
 impl PythonOcrHost {
+    pub(super) fn new(state: PythonCallState) -> Self {
+        Self {
+            state,
+            projected: None,
+        }
+    }
+
     fn projected(&self) -> PyResult<&ProjectedOcrHost> {
         self.projected.as_ref().ok_or_else(missing_state)
     }
@@ -87,9 +78,15 @@ impl PythonOcrHost {
             azure_ad_token_provider: projected.azure_ad_token_provider,
             pre_call: None,
             payload: None,
+            reader: projected.reader,
+            reader_failed: false,
         });
         Ok(OcrHostResult::Request(Ok((
-            Box::new(projected.request),
+            Box::new(
+                projected
+                    .request
+                    .with_host_hooks(Arc::new(BridgeOcrHooks), None),
+            ),
             has_token_provider,
         ))))
     }
@@ -161,20 +158,21 @@ impl PythonOcrHost {
     }
 
     fn map_failure(&mut self, py: Python<'_>, error: litellm_core::ocr::Error) -> PyResult<()> {
-        if self.state.error.is_none() {
-            self.state.retain_error(py, ocr_error_to_pyerr(error));
-        }
         if self.state.end.is_none() {
             self.state.end = Some(now(py)?);
         }
-        let error = self.state.error.as_ref().ok_or_else(missing_state)?;
         let (model, provider) = match &self.projected {
             Some(projected) => (projected.model.as_str(), projected.provider),
             None => ("", ""),
         };
-        let mapped = callbacks::map_failure(py, error, model, provider, &self.state.kwargs)?;
-        self.state
-            .retain_error(py, PyErr::from_value(mapped.into_bound(py).into_any()));
+        let mapped = match self.state.error.take() {
+            Some(host_error) if self.projected.as_ref().is_some_and(|host| host.reader_failed) => {
+                PyErr::from_value(host_error.into_bound(py).into_any())
+            }
+            Some(host_error) => errors::public_host_exception(py, &host_error, model, provider)?,
+            None => errors::public_exception(py, error, model, provider)?,
+        };
+        self.state.retain_error(py, mapped);
         Ok(())
     }
 }
@@ -211,6 +209,12 @@ impl PythonRoute for PythonOcrHost {
     fn invoke(&mut self, py: Python<'_>, operation: OcrHostOperation) -> PyResult<OcrHostResult> {
         Ok(match operation {
             OcrHostOperation::ProjectRequest => self.project(py)?,
+            OcrHostOperation::ReadDocument => {
+                let reader = self.projected_mut()?.reader.take().ok_or_else(missing_state)?;
+                let result = reader.read(py);
+                self.projected_mut()?.reader_failed = result.is_err();
+                OcrHostResult::Document(Ok(result?))
+            }
             OcrHostOperation::AcquireAzureAdToken => {
                 OcrHostResult::AzureAdToken(Ok(self.acquire_azure_ad_token(py)?))
             }
@@ -250,6 +254,9 @@ impl PythonRoute for PythonOcrHost {
         if let Some(provider) = &projected.azure_ad_token_provider {
             provider.traverse(visit)?;
         }
+        if let Some(reader) = &projected.reader {
+            reader.traverse(visit)?;
+        }
         if let Some(payload) = &projected.payload {
             payload.traverse(visit)?;
         }
@@ -257,69 +264,10 @@ impl PythonRoute for PythonOcrHost {
     }
 }
 
-pub(super) struct BridgeOcrHooks;
+struct BridgeOcrHooks;
 
 impl litellm_core::ocr::hooks::OcrHooks for BridgeOcrHooks {
     fn intercepts_requests(&self) -> bool {
         true
     }
-}
-
-fn call(
-    py: Python<'_>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Option<Bound<'_, PyDict>>,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>> {
-    let kwargs = kwargs.unwrap_or_else(|| PyDict::new(py));
-    let signature = if asynchronous {
-        &ASYNC_SIGNATURE
-    } else {
-        &SIGNATURE
-    };
-    signature.bind(&args, &kwargs)?;
-    let client = OcrClient::shared().map_err(ocr_error_to_pyerr)?;
-    let call = admitted_call(OcrCall::admit(
-        client,
-        OcrAdmission {
-            asynchronous,
-            ..OcrAdmission::all()
-        },
-    ))?;
-    let host = PythonOcrHost {
-        state: PythonCallState::new(
-            py,
-            args.unbind(),
-            kwargs.copy()?.unbind(),
-            asynchronous,
-            signature.name,
-        )?,
-        projected: None,
-    };
-    run_call(py, call, host)
-}
-
-#[pyfunction]
-#[pyo3(signature = (*args, **kwargs))]
-fn ocr(
-    py: Python<'_>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Option<Bound<'_, PyDict>>,
-) -> PyResult<Py<PyAny>> {
-    call(py, args, kwargs, false)
-}
-
-#[pyfunction]
-#[pyo3(signature = (*args, **kwargs))]
-fn aocr(
-    py: Python<'_>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Option<Bound<'_, PyDict>>,
-) -> PyResult<Py<PyAny>> {
-    call(py, args, kwargs, true)
-}
-
-pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    super::super::add_function(module, wrap_pyfunction!(ocr, module)?)?;
-    super::super::add_function(module, wrap_pyfunction!(aocr, module)?)
 }

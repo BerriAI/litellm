@@ -1,153 +1,113 @@
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::time::Duration;
+//! `ProjectRequest` host step: read the bound `ocr()` arguments and hand core a
+//! typed [`LiteLLMOcrRequest`]. Generic argument handling lives in
+//! [`crate::marshal::BoundRouteInputs`]; this module only owns what is specific
+//! to OCR: the `document` argument and the core constructor call.
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use serde_json::{Map, Value};
 
-use litellm_auth::InputSource;
 use litellm_core::ocr::{
-    LiteLLMOcrRequest, NativeOutcome, OcrCall, OcrCredentialInputs, OcrDocument,
-    consumed_optional_params,
+    LiteLLMOcrRequest, OcrConnectionInputs, OcrDocument, consumed_optional_params,
 };
 use litellm_python_interop::from_py_preserving_errors as from_py;
 
 use super::errors::to_pyerr as ocr_error_to_pyerr;
-use super::lifecycle::BridgeOcrHooks;
-use crate::auth::{AZURE_AD_TOKEN_PROVIDER, PythonTokenProvider};
-use crate::errors::RustBridgeDeclined;
+use super::document::{FileDocumentInput, PythonFileReader};
+use crate::auth::PythonTokenProvider;
 use crate::lifecycle::BoundArguments;
-use crate::marshal::{project_optional_fields, python_timeout_seconds, request_input_sources};
+use crate::marshal::BoundRouteInputs;
 
+/// Positional parameters of `ocr()` that are never projected into
+/// `optional_params`.
 const BOUND_FIELDS: &[&str] = &["model", "document", "timeout", "input_sources"];
 
 pub(super) struct ProjectedOcrCall {
     pub request: LiteLLMOcrRequest,
     pub azure_ad_token_provider: Option<PythonTokenProvider>,
     pub secret_fields: Vec<&'static str>,
+    pub reader: Option<PythonFileReader>,
 }
 
-fn project_document(py: Python<'_>, document: &Bound<'_, PyAny>) -> PyResult<Value> {
+enum ProjectedDocument {
+    File(FileDocumentInput),
+    Url(serde_json::Value),
+}
+
+impl ProjectedDocument {
+    fn into_native(self) -> Result<FileDocumentInput, litellm_core::ocr::Error> {
+        match self {
+            Self::File(file) => Ok(file),
+            Self::Url(value) => Ok(FileDocumentInput {
+                input: OcrDocument::try_from(value)?.into(),
+                reader: None,
+            }),
+        }
+    }
+}
+
+fn project_document(document: &Bound<'_, PyAny>) -> PyResult<ProjectedDocument> {
     let kind: String = document.get_item("type")?.extract()?;
     if kind != "file" {
-        return from_py(document);
+        return Ok(ProjectedDocument::Url(from_py(document)?));
     }
-    let encoded = super::document::file_document(py, document.extract()?)?;
-    serde_json::to_value(encoded)
-        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+    document.extract().map(ProjectedDocument::File)
 }
 
-fn header_pairs(headers: Option<Map<String, Value>>) -> Result<Vec<(String, String)>, litellm_core::ocr::Error> {
-    headers
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(name, value)| {
-            value
-                .as_str()
-                .map(|value| (name.clone(), value.to_string()))
-                .ok_or_else(|| litellm_core::ocr::Error::RequestField {
-                    path: format!("extra_headers.{name}"),
-                })
-        })
-        .collect()
-}
-
-fn source_for(sources: &BTreeMap<String, InputSource>, name: &str) -> InputSource {
-    sources.get(name).copied().unwrap_or_default()
-}
-
-pub(super) fn project(py: Python<'_>, arguments: &BoundArguments<'_>) -> PyResult<ProjectedOcrCall> {
-    let kwargs: &Bound<'_, PyDict> = arguments.kwargs();
-    let model: String = arguments.extract("model")?;
-    let custom_llm_provider: Option<String> = arguments.optional("custom_llm_provider")?;
-    let document = project_document(py, &arguments.required("document")?)?;
-    let api_key: Option<String> = arguments.optional("api_key")?;
-    let specs = consumed_optional_params(&model, custom_llm_provider.as_deref())
-        .map_err(ocr_error_to_pyerr)?;
-    let optional_params = project_optional_fields(kwargs, &specs, BOUND_FIELDS)?;
-    let input_sources = request_input_sources(
-        kwargs,
-        optional_params
-            .keys()
-            .map(String::as_str)
-            .chain(["api_key", "api_base", "extra_headers"]),
-    )?;
-    let azure_ad_token_provider = kwargs
-        .get_item("azure_ad_token_provider")?
-        .and_then(|provider| PythonTokenProvider::select(provider, AZURE_AD_TOKEN_PROVIDER));
-    let api_base: Option<String> = arguments.optional("api_base")?;
-    let extra_headers: Option<Map<String, Value>> = arguments
-        .get("extra_headers")?
-        .filter(|value| !value.is_none())
-        .map(|value| from_py(&value))
-        .transpose()?;
-    let timeout = arguments
-        .get("timeout")?
-        .filter(|value| !value.is_none())
-        .map(|value| python_timeout_seconds(py, value.unbind()))
-        .transpose()?
-        .flatten()
-        .map(|seconds| {
-            Duration::try_from_secs_f64(seconds).map_err(|_| {
-                litellm_core::ocr::Error::RequestField {
-                    path: "timeout_seconds".into(),
-                }
-            })
-        })
-        .transpose()
-        .map_err(ocr_error_to_pyerr)?;
-
-    let request = (|| {
-        let core = LiteLLMOcrRequest::new(
-            model,
-            OcrDocument::try_from(document)?,
-            custom_llm_provider.as_deref(),
-            optional_params.into(),
-        )?;
-        let transport = core.transport.clone().with_overrides(
-            header_pairs(extra_headers)?,
-            source_for(&input_sources, "extra_headers"),
-            timeout,
-        );
-        let credentials = OcrCredentialInputs::new(
+/// Pure core assembly; every failure here is a typed `ocr::Error`.
+fn build_request(
+    inputs: BoundRouteInputs,
+    document: ProjectedDocument,
+) -> Result<ProjectedOcrCall, litellm_core::ocr::Error> {
+    let document = document.into_native()?;
+    let BoundRouteInputs {
+        model,
+        custom_llm_provider,
+        api_key,
+        api_base,
+        extra_headers,
+        timeout,
+        optional_params,
+        input_sources,
+        azure_ad_token_provider,
+        secret_fields,
+    } = inputs;
+    let request = LiteLLMOcrRequest::from_inputs(
+        model,
+        document.input,
+        custom_llm_provider.as_deref(),
+        optional_params.into(),
+        OcrConnectionInputs {
             api_key,
-            source_for(&input_sources, "api_key"),
             api_base,
-            source_for(&input_sources, "api_base"),
-        );
-        Ok::<_, litellm_core::ocr::Error>(
-            core.with_connection_inputs(credentials, transport, input_sources)
-                .with_host_hooks(Arc::new(BridgeOcrHooks), None),
-        )
-    })()
-    .map_err(ocr_error_to_pyerr)?;
-
+            extra_headers,
+            timeout,
+            input_sources,
+        },
+    )?;
     Ok(ProjectedOcrCall {
         request,
         azure_ad_token_provider,
-        secret_fields: specs
-            .into_iter()
-            .filter(|spec| spec.secret)
-            .map(|spec| spec.name)
-            .collect(),
+        secret_fields,
+        reader: document.reader,
     })
 }
 
-pub(super) fn admitted_call(outcome: NativeOutcome<OcrCall>) -> PyResult<OcrCall> {
-    match outcome {
-        NativeOutcome::Completed(call) => Ok(call),
-        NativeOutcome::Declined(reason) => Err(RustBridgeDeclined::new_err(format!(
-            "native OCR admission declined: {reason:?}"
-        ))),
-    }
+pub(super) fn project(
+    py: Python<'_>,
+    arguments: &BoundArguments<'_>,
+) -> PyResult<ProjectedOcrCall> {
+    let model: String = arguments.extract("model")?;
+    let custom_llm_provider: Option<String> = arguments.optional("custom_llm_provider")?;
+    let document = project_document(&arguments.required("document")?)?;
+    let consumed = consumed_optional_params(&model, custom_llm_provider.as_deref())
+        .map_err(ocr_error_to_pyerr)?;
+    let inputs = BoundRouteInputs::extract(py, arguments, consumed, BOUND_FIELDS)?;
+    build_request(inputs, document).map_err(ocr_error_to_pyerr)
 }
 
 #[cfg(test)]
 mod tests {
-    use litellm_core::ocr::Error;
-    use litellm_core::ocr::OcrDecline;
-    use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
+    use pyo3::exceptions::{PyKeyError, PyTypeError};
+    use pyo3::types::PyDict;
 
     use super::*;
 
@@ -171,29 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_initial_decline_uses_bridge_decline_contract() {
-        Python::initialize();
-        Python::attach(|py| {
-            let Err(error) = admitted_call(NativeOutcome::Declined(OcrDecline::HostOperations))
-            else {
-                panic!("unsupported host operations should decline admission");
-            };
-            assert!(error.is_instance_of::<RustBridgeDeclined>(py));
-        });
-    }
-
-    #[test]
-    fn post_admission_error_does_not_use_bridge_decline_contract() {
-        Python::initialize();
-        Python::attach(|py| {
-            let error = ocr_error_to_pyerr(Error::InvalidRequest("callback result".into()));
-            assert!(error.is_instance_of::<PyValueError>(py));
-            assert!(!error.is_instance_of::<RustBridgeDeclined>(py));
-        });
-    }
-
-    #[test]
-    fn file_documents_are_encoded_and_other_documents_pass_through() {
+    fn file_documents_remain_raw_and_other_documents_pass_through() {
         Python::initialize();
         Python::attach(|py| {
             let file = py
@@ -203,13 +141,11 @@ mod tests {
                     None,
                 )
                 .unwrap();
-            assert_eq!(
-                project_document(py, &file).unwrap(),
-                serde_json::json!({
-                    "type": "document_url",
-                    "document_url": "data:application/pdf;base64,JVBERi0xLjQ=",
-                })
-            );
+            assert!(matches!(
+                project_document(&file).unwrap().into_native().unwrap().input,
+                litellm_core::ocr::OcrDocumentInput::Bytes { bytes, mime_type, .. }
+                    if bytes == b"%PDF-1.4"[..] && mime_type.as_deref() == Some("application/pdf")
+            ));
 
             let original = py
                 .eval(
@@ -218,13 +154,11 @@ mod tests {
                     None,
                 )
                 .unwrap();
-            assert_eq!(
-                project_document(py, &original).unwrap(),
-                serde_json::json!({
-                    "type": "document_url",
-                    "document_url": "https://example.com/a.pdf",
-                })
-            );
+            assert!(matches!(
+                project_document(&original).unwrap().into_native().unwrap().input,
+                litellm_core::ocr::OcrDocumentInput::Document(OcrDocument::DocumentUrl { document_url, .. })
+                    if document_url == "https://example.com/a.pdf"
+            ));
         });
     }
 
@@ -235,12 +169,7 @@ mod tests {
             let document = py
                 .eval(c"{'type': 'mystery', 'mystery': 'x'}", None, None)
                 .unwrap();
-            let wire_document = project_document(py, &document).unwrap();
-            assert_eq!(
-                wire_document,
-                serde_json::json!({"type": "mystery", "mystery": "x"})
-            );
-            let error = OcrDocument::try_from(wire_document).unwrap_err();
+            let error = project_document(&document).unwrap().into_native().err().unwrap();
             assert!(error.to_string().contains("document"));
         });
     }
@@ -251,15 +180,15 @@ mod tests {
         Python::attach(|py| {
             let missing = py.eval(c"{}", None, None).unwrap();
             assert!(
-                project_document(py, &missing)
-                    .unwrap_err()
+                project_document(&missing)
+                    .err().unwrap()
                     .is_instance_of::<PyKeyError>(py)
             );
 
             let non_string = py.eval(c"{'type': 1}", None, None).unwrap();
             assert!(
-                project_document(py, &non_string)
-                    .unwrap_err()
+                project_document(&non_string)
+                    .err().unwrap()
                     .is_instance_of::<PyTypeError>(py)
             );
 
@@ -274,7 +203,7 @@ document = Document()
 ",
             );
             let error =
-                project_document(py, &locals.get_item("document").unwrap().unwrap()).unwrap_err();
+                project_document(&locals.get_item("document").unwrap().unwrap()).err().unwrap();
             assert!(
                 error
                     .value(py)
@@ -303,8 +232,8 @@ document = Document()
 ",
             );
             let document = locals.get_item("document").unwrap().unwrap();
-            let wire = project_document(py, &document).unwrap();
-            assert_eq!(wire["type"], "document_url");
+            let projected = project_document(&document).unwrap().into_native().unwrap();
+            assert!(matches!(projected.input, litellm_core::ocr::OcrDocumentInput::Bytes { .. }));
             let reads: Vec<String> = document.getattr("reads").unwrap().extract().unwrap();
             assert_eq!(reads, ["type", "mime_type", "file"]);
         });

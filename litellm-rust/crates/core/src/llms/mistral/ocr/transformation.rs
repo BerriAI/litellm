@@ -206,12 +206,10 @@ mod tests {
     #[test]
     fn explicit_null_model_does_not_use_the_missing_model_default() {
         let response = serde_json::from_value(json!({"model":null})).unwrap();
-        assert_eq!(
+        assert!(matches!(
             normalize_response("fallback", response).unwrap_err(),
-            crate::ocr::Error::ResponseField {
-                path: "model".into()
-            }
-        );
+            crate::ocr::Error::ResponseField { path } if path == "model"
+        ));
     }
 
     #[test]
@@ -241,10 +239,10 @@ mod tests {
                 false,
             )
             .unwrap_err();
-            assert_eq!(
+            assert!(matches!(
                 error,
-                crate::ocr::Error::ResponseField { path: path.into() }
-            );
+                crate::ocr::Error::ResponseField { path: actual } if actual == path
+            ));
         }
     }
 

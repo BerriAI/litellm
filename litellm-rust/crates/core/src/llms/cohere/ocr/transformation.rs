@@ -349,7 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn composed_body_preserves_native_document_fields_and_untyped_overrides() {
-        let mut request = crate::ocr::test_support::wire_request(
+        let request = crate::ocr::test_support::wire_request(
             "cohere/parse",
             "https://example.com",
             json!({
@@ -361,10 +361,10 @@ mod tests {
                 }
             }),
         );
-        request.document = serde_json::from_value(json!({
+        let request = request.with_document(serde_json::from_value(json!({
             "type":"image_url","image_url":"https://example.com/original.png"
         }))
-        .unwrap();
+        .unwrap());
         let request = crate::ocr::prepare::prepare_request(request);
         let http = CohereParseConfig
             .prepare_request(&request, &crate::ocr::test_support::ocr_client())
@@ -461,12 +461,11 @@ mod tests {
             "pages":[{"markdown":{"images":[{"image_base64":42}]}}]
         }))
         .unwrap();
-        assert_eq!(
+        assert!(matches!(
             normalize_response("parse", response).unwrap_err(),
-            crate::ocr::Error::ResponseField {
-                path: "pages[0].markdown.images[0].image_base64".into()
-            }
-        );
+            crate::ocr::Error::ResponseField { path }
+                if path == "pages[0].markdown.images[0].image_base64"
+        ));
     }
 
     #[test]
@@ -504,13 +503,10 @@ mod tests {
             "https://example.com",
             json!({"output_format":null,"req_format":null}),
         );
-        let request = crate::ocr::types::LiteLLMOcrRequest {
-            document: serde_json::from_value(
+        let request = request.with_document(serde_json::from_value(
                 json!({"type":"image_url","image_url":"https://example.com/a.png"}),
             )
-            .unwrap(),
-            ..request
-        };
+            .unwrap());
         assert_eq!(
             request.response_format().unwrap(),
             crate::ocr::types::OcrResponseFormat::Litellm
@@ -677,10 +673,10 @@ mod tests {
             json!({"type":"image_url","image_url":""}),
             json!({"type":"image_url","image_url":"data:application/pdf;base64,YQ=="}),
         ] {
-            assert_eq!(
+            assert!(matches!(
                 validate_document(&serde_json::from_value(value).unwrap()),
                 Err(crate::ocr::Error::CohereImageOnly)
-            );
+            ));
         }
         assert!(serde_json::from_value::<CohereOptions>(json!({"output_format":"html"})).is_err());
         for format in ["markdown", "blocks"] {

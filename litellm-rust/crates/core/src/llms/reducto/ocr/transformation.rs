@@ -738,8 +738,7 @@ mod tests {
             "result":{"chunks":[]}
         }))])
         .await;
-        let mut request = wire_request(model, &base, options);
-        request.document = request.document.with_source(source.into());
+        let request = crate::ocr::test_support::with_source(wire_request(model, &base, options), source);
 
         perform_ocr(request).await.unwrap();
         server.await.unwrap();
@@ -857,8 +856,8 @@ mod tests {
     #[case("data:application/pdf;base64,INVALID!")]
     #[tokio::test]
     async fn rejects_invalid_document_sources_before_network(#[case] source: &str) {
-        let mut request = wire_request("reducto/parse-v3", "http://127.0.0.1:1", json!({}));
-        request.document = request.document.with_source(source.into());
+        let request = crate::ocr::test_support::with_source(
+            wire_request("reducto/parse-v3", "http://127.0.0.1:1", json!({})), source);
         assert!(perform_ocr(request).await.is_err());
     }
 
@@ -913,8 +912,8 @@ mod tests {
     async fn facade_omits_native_response_by_default_and_preserves_auth_priority() {
         let raw = json!({"job_id":"job-1","result":{"chunks":[]}});
         let (base, seen, server) = mock_server(vec![MockResponse::json(raw)]).await;
-        let mut request = wire_request("reducto/parse-v3", &base, json!({}));
-        request.document = request.document.with_source("reducto://ready.pdf".into());
+        let mut request = crate::ocr::test_support::with_source(
+            wire_request("reducto/parse-v3", &base, json!({})), "reducto://ready.pdf");
         request.transport.extra_headers = vec![("authorization".into(), "Bearer existing".into())];
 
         let response = perform_ocr(request).await.unwrap();

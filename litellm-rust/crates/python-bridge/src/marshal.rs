@@ -7,7 +7,96 @@ use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
 use litellm_auth::InputSource;
+use litellm_core::call_arguments::ArgumentSpec;
 use litellm_python_interop::from_py_preserving_errors as from_py;
+
+use crate::auth::{AZURE_AD_TOKEN_PROVIDER, PythonTokenProvider};
+use crate::lifecycle::BoundArguments;
+
+/// Fields every lifecycle route reads from its bound `*args, **kwargs` before
+/// asking core to build the typed request. Route-specific inputs (for example
+/// the OCR `document`) are read separately by the route.
+pub(crate) struct BoundRouteInputs {
+    pub(crate) model: String,
+    pub(crate) custom_llm_provider: Option<String>,
+    pub(crate) api_key: Option<String>,
+    pub(crate) api_base: Option<String>,
+    pub(crate) extra_headers: Map<String, Value>,
+    pub(crate) timeout: Option<Duration>,
+    /// Only the optional params core reports as consumed plus opaque unknown
+    /// values; bound/control fields are never serialized.
+    pub(crate) optional_params: Map<String, Value>,
+    /// Which projected fields were supplied via the proxy request body.
+    pub(crate) input_sources: BTreeMap<String, InputSource>,
+    pub(crate) azure_ad_token_provider: Option<PythonTokenProvider>,
+    /// Consumed params whose values must be redacted from logging.
+    pub(crate) secret_fields: Vec<&'static str>,
+}
+
+const CONNECTION_FIELDS: [&str; 3] = ["api_key", "api_base", "extra_headers"];
+
+impl BoundRouteInputs {
+    /// `consumed` is the route's provider-selected optional param list for the
+    /// already-extracted `model`/`custom_llm_provider`; `bound_fields` are the
+    /// route's positional parameter names that must not be projected.
+    pub(crate) fn extract(
+        py: Python<'_>,
+        arguments: &BoundArguments<'_>,
+        consumed: Vec<ArgumentSpec>,
+        bound_fields: &[&str],
+    ) -> PyResult<Self> {
+        let kwargs = arguments.kwargs();
+        let optional_params = project_optional_fields(kwargs, &consumed, bound_fields)?;
+        let input_sources = request_input_sources(
+            kwargs,
+            optional_params
+                .keys()
+                .map(String::as_str)
+                .chain(CONNECTION_FIELDS),
+        )?;
+        Ok(Self {
+            model: arguments.extract("model")?,
+            custom_llm_provider: arguments.optional("custom_llm_provider")?,
+            api_key: arguments.optional("api_key")?,
+            api_base: arguments.optional("api_base")?,
+            extra_headers: arguments
+                .optional::<Bound<'_, PyAny>>("extra_headers")?
+                .map(|value| {
+                    from_py(&value).and_then(|value| required_object("extra_headers", value))
+                })
+                .transpose()?
+                .unwrap_or_default(),
+            timeout: bound_timeout(py, arguments)?,
+            optional_params,
+            input_sources,
+            azure_ad_token_provider: kwargs.get_item("azure_ad_token_provider")?.and_then(
+                |provider| PythonTokenProvider::select(provider, AZURE_AD_TOKEN_PROVIDER),
+            ),
+            secret_fields: consumed
+                .into_iter()
+                .filter(|spec| spec.secret)
+                .map(|spec| spec.name)
+                .collect(),
+        })
+    }
+}
+
+/// Reads `timeout` through `litellm.rust_bridge.timeouts.timeout_to_seconds`
+/// so Python `httpx.Timeout` objects keep their existing semantics. Unlike the
+/// value-route [`optional_timeout`], non-finite or negative values are
+/// rejected rather than silently dropped.
+fn bound_timeout(py: Python<'_>, arguments: &BoundArguments<'_>) -> PyResult<Option<Duration>> {
+    arguments
+        .optional::<Bound<'_, PyAny>>("timeout")?
+        .map(|value| python_timeout_seconds(py, value.unbind()))
+        .transpose()?
+        .flatten()
+        .map(|seconds| {
+            Duration::try_from_secs_f64(seconds)
+                .map_err(|_| PyValueError::new_err("timeout must be a non-negative finite number"))
+        })
+        .transpose()
+}
 
 pub(crate) struct RouteOptions {
     pub(crate) model: String,

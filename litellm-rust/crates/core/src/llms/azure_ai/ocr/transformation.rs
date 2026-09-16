@@ -100,7 +100,6 @@ impl BaseOcrConfig for AzureAIOCRConfig {
         MistralOCRConfig.transform_ocr_response(model, raw_response, request_format)
     }
 
-
     fn validate_request_body(&self, body: &Value) -> Result<(), crate::ocr::Error> {
         validate_inline_document(&crate::ocr::prepare::body_document(body)?)
     }

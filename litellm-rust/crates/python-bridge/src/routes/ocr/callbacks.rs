@@ -1,4 +1,3 @@
-use pyo3::exceptions::PyBaseException;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::Value;
@@ -147,18 +146,4 @@ pub(super) fn response(py: Python<'_>, response: &LiteLLMOcrResponse) -> PyResul
         .getattr("build_response")?
         .call1((to_py(py, response)?,))
         .map(Bound::unbind)
-}
-
-pub(super) fn map_failure(
-    py: Python<'_>,
-    error: &Py<PyBaseException>,
-    model: &str,
-    provider: &str,
-    kwargs: &Py<PyDict>,
-) -> PyResult<Py<PyBaseException>> {
-    Ok(py
-        .import("litellm.rust_bridge.ocr")?
-        .getattr("map_failure")?
-        .call1((error, model, provider, kwargs))?
-        .extract()?)
 }

@@ -2006,6 +2006,7 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "criterion",
  "futures-util",
  "litellm-auth",

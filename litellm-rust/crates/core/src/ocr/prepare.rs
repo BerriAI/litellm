@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use super::OcrClient;
 use super::hooks::OcrDuringCallRequest;
-use super::types::{LiteLLMOcrRequest, OcrConnection, OcrDocument, PreparedOcrRequest};
+use super::types::{ResolvedOcrRequest, OcrConnection, OcrDocument, PreparedOcrRequest};
 
 pub(crate) async fn transform_request_body<B>(
     client: &OcrClient,
@@ -111,7 +111,7 @@ pub(crate) fn credential_env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-pub(crate) fn prepare_request(request: LiteLLMOcrRequest) -> PreparedOcrRequest {
+pub(crate) fn prepare_request(request: ResolvedOcrRequest) -> PreparedOcrRequest {
     use litellm_auth::{InputSource, Sourced};
 
     let credentials = request.credentials.clone();

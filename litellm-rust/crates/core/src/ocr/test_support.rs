@@ -5,7 +5,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use crate::ocr::{
-    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient, OcrCredentialInputs, OcrDocument,
+    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient, OcrConnectionInputs, OcrDocument,
 };
 
 pub(crate) fn ocr_client() -> OcrClient {
@@ -23,7 +23,7 @@ pub(crate) async fn perform_ocr(
 }
 
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOcrRequest {
-    let request = LiteLLMOcrRequest::new(
+    LiteLLMOcrRequest::from_inputs(
         model.into(),
         OcrDocument::try_from(
             json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
@@ -31,23 +31,28 @@ pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOc
         .unwrap(),
         None,
         options.as_object().unwrap().clone().into(),
+        OcrConnectionInputs {
+            api_key: Some("test-key".into()),
+            api_base: Some(base.into()),
+            timeout: Some(std::time::Duration::from_secs(2)),
+            ..Default::default()
+        },
     )
-    .unwrap();
-    let transport = request.transport.clone().with_overrides(
-        Vec::new(),
-        Default::default(),
-        Some(std::time::Duration::from_secs(2)),
-    );
-    request.with_connection_inputs(
-        OcrCredentialInputs::new(
-            Some("test-key".into()),
-            Default::default(),
-            Some(base.into()),
-            Default::default(),
-        ),
-        transport,
-        Default::default(),
-    )
+    .unwrap()
+}
+
+pub(crate) fn resolved_request(request: LiteLLMOcrRequest) -> super::types::ResolvedOcrRequest {
+    let super::OcrDocumentInput::Document(document) = &request.document else {
+        panic!("wire fixture must contain a URL document");
+    };
+    let document = document.clone();
+    request.with_document(document)
+}
+
+pub(crate) fn with_source(request: LiteLLMOcrRequest, source: &str) -> LiteLLMOcrRequest {
+    let request = resolved_request(request);
+    let document = request.document.clone().with_source(source.into());
+    request.with_document(document.into())
 }
 
 pub(crate) struct MockResponse {

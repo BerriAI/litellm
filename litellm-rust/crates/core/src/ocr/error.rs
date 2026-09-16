@@ -1,4 +1,4 @@
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     #[error("upstream OCR error ({status}): {body}")]
     Provider {
@@ -8,6 +8,14 @@ pub enum Error {
     },
     #[error("File is empty or could not be read")]
     EmptyFile,
+    #[error("Failed to read OCR file {}: {source}", path.display())]
+    FileRead {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::sync::Arc<std::io::Error>,
+    },
+    #[error("OCR document preparation task failed: {0}")]
+    DocumentTask(#[source] std::sync::Arc<tokio::task::JoinError>),
     #[error("Invalid MIME type: {0}")]
     InvalidMimeType(String),
     #[error(

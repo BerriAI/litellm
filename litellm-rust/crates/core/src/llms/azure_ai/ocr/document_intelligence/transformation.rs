@@ -541,7 +541,6 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
     ) -> Result<DocumentIntelligenceRequest, crate::ocr::Error> {
         build_request(document)
     }
-
 }
 
 impl AzureDocumentIntelligenceOCRConfig {
@@ -813,11 +812,11 @@ mod tests {
             &base,
             json!({"pages":[2,0,0,1],"features":["keyValuePairs","languages"], "future_option": {"nested":null}, "extra_body":{"provider_option":false}}),
         );
-        request.document = serde_json::from_value(json!({
+        request.document = serde_json::from_value::<OcrDocument>(json!({
             "type":"document_url",
             "document_url":"https://example.com/document.pdf"
         }))
-        .unwrap();
+        .unwrap().into();
 
         perform_ocr(request).await.unwrap();
         server.await.unwrap();
