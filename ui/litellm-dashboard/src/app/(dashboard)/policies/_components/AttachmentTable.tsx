@@ -1,10 +1,9 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { PolicyAttachment } from "@/components/policies/types";
 
 import { getAttachmentTableColumns } from "./AttachmentTableColumns";
@@ -17,7 +16,13 @@ interface AttachmentTableProps {
   accessToken: string | null;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["policy_name", "created_at"],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 25,
+  filterColumns: [],
+  keyPrefix: "att_",
+};
 
 function EmptyState() {
   return (
@@ -40,7 +45,7 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
   isAdmin,
   accessToken,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
 
   const columns = useMemo(() => {
     const deps = { isAdmin, accessToken, onDeleteClick };
@@ -51,11 +56,13 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
     <DataTable
       data={attachments}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(row) => row.attachment_id}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       isLoading={isLoading}
       loadingMessage="Loading attachments…"
       noDataMessage={<EmptyState />}
