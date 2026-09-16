@@ -12,7 +12,7 @@ a large deployment the first backfill is minutes of work.
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -73,7 +73,7 @@ def _reconcile_day_sql() -> str:
 
 
 RECONCILE_DAY_SQL: Final = _reconcile_day_sql()
-_DB_NOW_SQL: Final = "SELECT (NOW() AT TIME ZONE 'UTC')::text AS now"
+_DB_NOW_SQL: Final = "SELECT (NOW() AT TIME ZONE 'UTC')::text AS now, (NOW() AT TIME ZONE 'UTC')::date::text AS today"
 _ALL_CLOSED_DAYS_SQL: Final = 'SELECT DISTINCT "date" FROM "LiteLLM_DailyUserSpend" WHERE "date" <= $1 ORDER BY "date"'
 # Pod clocks drift from the database clock and from each other, so rows are picked up from a
 # little before the previous scan; rewriting a day twice is idempotent.
@@ -111,6 +111,7 @@ class _NowRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     now: str
+    today: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,18 +161,18 @@ async def _record_marker(prisma_client: "PrismaClient", marker: ReconciledThroug
     await invalidate_config_param(DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM)
 
 
-async def _db_now(prisma_client: "PrismaClient") -> str:
+async def _db_now(prisma_client: "PrismaClient") -> _NowRow:
     rows: Final = await prisma_client.db.query_raw(_DB_NOW_SQL)
-    return _NowRow.model_validate(rows[0]).now
+    return _NowRow.model_validate(rows[0])
 
 
-async def _scan_pending(prisma_client: "PrismaClient", today: date) -> _PendingScan:
-    """Every closed UTC day (strictly before today) still to roll up, oldest first: days past the
-    marker, plus any day with per-key rows written since the scan behind the marker. Before a
-    run has fully succeeded there is no such scan, so every closed day is rolled up."""
+async def _scan_pending(prisma_client: "PrismaClient") -> _PendingScan:
+    """Every closed UTC day (strictly before the database's today) still to roll up, oldest first:
+    days past the marker, plus any day with per-key rows written since the scan behind the marker.
+    Before a run has fully succeeded there is no such scan, so every closed day is rolled up."""
     marker: Final = await read_marker(prisma_client)
-    scanned_at: Final = await _db_now(prisma_client)
-    last_closed_day: Final = (today - timedelta(days=1)).isoformat()
+    db_now: Final = await _db_now(prisma_client)
+    last_closed_day: Final = (date.fromisoformat(db_now.today) - timedelta(days=1)).isoformat()
     rows: Final = (
         await prisma_client.db.query_raw(_ALL_CLOSED_DAYS_SQL, last_closed_day)
         if marker is None or marker.scanned_at is None
@@ -179,11 +180,11 @@ async def _scan_pending(prisma_client: "PrismaClient", today: date) -> _PendingS
             _PENDING_DAYS_SQL, last_closed_day, marker.reconciled_through, marker.scanned_at
         )
     )
-    return _PendingScan(marker, scanned_at, tuple(_DateRow.model_validate(row).date for row in rows))
+    return _PendingScan(marker, db_now.now, tuple(_DateRow.model_validate(row).date for row in rows))
 
 
-async def pending_days(prisma_client: "PrismaClient", today: date) -> tuple[str, ...]:
-    return (await _scan_pending(prisma_client, today)).days
+async def pending_days(prisma_client: "PrismaClient") -> tuple[str, ...]:
+    return (await _scan_pending(prisma_client)).days
 
 
 async def reconcile_day(prisma_client: "PrismaClient", day: str) -> None:
@@ -192,15 +193,11 @@ async def reconcile_day(prisma_client: "PrismaClient", day: str) -> None:
     await prisma_client.db.execute_raw(RECONCILE_DAY_SQL, day)
 
 
-async def run_daily_global_spend_reconcile(
-    prisma_client: "PrismaClient",
-    today: date | None = None,
-) -> ReconcileResult:
+async def run_daily_global_spend_reconcile(prisma_client: "PrismaClient") -> ReconcileResult:
     """Roll up every pending day, advancing the marker after each; a failing day stops the run
     with the marker on the last good day so the next run resumes there. The scan time is only
     recorded once every pending day is done, so late rows a failed run saw are found again."""
-    effective_today: Final = today or datetime.now(timezone.utc).date()
-    scan: Final = await _scan_pending(prisma_client, effective_today)
+    scan: Final = await _scan_pending(prisma_client)
     done: Final = await _reconcile_until_failure(prisma_client, scan)
     if len(done) < len(scan.days):
         marker: Final = await reconciled_through(prisma_client)
@@ -243,13 +240,12 @@ async def run_scheduled_daily_global_spend_reconcile(
     prisma_client: "PrismaClient",
     pod_lock_manager: "PodLockManager | None" = None,
     alert: Callable[[str], Awaitable[None]] | None = None,
-    today: date | None = None,
 ) -> ReconcileResult | None:
     """Run the reconcile under a cross-pod lock so one proxy does the work; the lock only saves
     effort (each day is an idempotent rewrite), so an unreachable Redis runs unguarded rather than skipping."""
     redis_cache: Final = None if pod_lock_manager is None else pod_lock_manager.redis_cache
     if pod_lock_manager is None or redis_cache is None:
-        return await _run_and_alert(prisma_client, alert=alert, today=today)
+        return await _run_and_alert(prisma_client, alert=alert)
 
     acquired: Final = await pod_lock_manager.acquire_lock(
         cronjob_id=DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID, ttl=DAILY_GLOBAL_SPEND_RECONCILE_LOCK_TTL_SECONDS
@@ -258,7 +254,7 @@ async def run_scheduled_daily_global_spend_reconcile(
         verbose_proxy_logger.info("Daily global spend reconcile: another pod holds the lock, skipping this run")
         return None
     try:
-        return await _run_and_alert(prisma_client, alert=alert, today=today)
+        return await _run_and_alert(prisma_client, alert=alert)
     finally:
         if acquired:
             await pod_lock_manager.release_lock(cronjob_id=DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID)
@@ -277,9 +273,8 @@ async def _run_and_alert(
     prisma_client: "PrismaClient",
     *,
     alert: Callable[[str], Awaitable[None]] | None,
-    today: date | None,
 ) -> ReconcileResult:
-    result: Final = await run_daily_global_spend_reconcile(prisma_client, today=today)
+    result: Final = await run_daily_global_spend_reconcile(prisma_client)
     if result.days_reconciled:
         verbose_proxy_logger.info(
             "Daily global spend reconcile: rolled up %d day(s), reconciled through %s",
