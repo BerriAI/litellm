@@ -41,17 +41,23 @@ GET_ASYNC_CLIENT_TARGET = "litellm.proxy._experimental.mcp_server.openapi_to_mcp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("value,accepted", [
-    ("Bearer Bearer", False), ("ApiKey ApiKey", False), ("token token", False),
-    ("bEaReR   BEARER", False), ("aPiKeY\tAPIKEY", False),
-    ("Bearer fixture-key", True), ("ApiKey fixture-key", True), ("token fixture-key", True),
+@pytest.mark.parametrize("auth_type,value,accepted", [
+    (MCPAuth.api_key, "Bearer Bearer", False), (MCPAuth.api_key, "ApiKey ApiKey", False),
+    (MCPAuth.api_key, "token token", False), (MCPAuth.api_key, "bEaReR   BEARER", False),
+    (MCPAuth.api_key, "aPiKeY\tAPIKEY", False), (MCPAuth.api_key, "Bearer fixture-key", True),
+    (MCPAuth.api_key, "ApiKey fixture-key", True), (MCPAuth.api_key, "token fixture-key", True),
+    (MCPAuth.authorization, "Bearer", False), (MCPAuth.authorization, "basic", False),
+    (MCPAuth.authorization, "token", False), (MCPAuth.authorization, "ApiKey", False),
+    (MCPAuth.authorization, " bEaReR ", False), (MCPAuth.authorization, "\tTOKEN\t", False),
+    (MCPAuth.authorization, "opaque-secret-value", True), (MCPAuth.authorization, "Bearer abc", True),
+    (MCPAuth.authorization, "Custom abc", True),
 ])
-async def test_api_key_authorization_validates_payload_before_http(
-    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, value: str, accepted: bool,
+async def test_authorization_validates_credentials_before_http(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, auth_type: MCPAuthType, value: str, accepted: bool,
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     tool: Final = create_tool_function(
-        "/echo", "get", {}, "https://upstream.example", auth_type=MCPAuth.api_key,
+        "/echo", "get", {}, "https://upstream.example", auth_type=auth_type,
     )
     destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
     caller_token: Final = _request_auth_header.set(value)
