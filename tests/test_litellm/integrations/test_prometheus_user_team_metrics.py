@@ -1015,7 +1015,7 @@ def test_set_customer_budget_metrics_without_budget_only_emits_remaining(prometh
 
 
 @pytest.mark.asyncio
-async def test_increment_remaining_budget_metrics_emits_customer_gauges_from_end_user_object(
+async def test_increment_remaining_budget_metrics_emits_customer_gauges_from_cached_end_user(
     prometheus_logger, customer_metrics_enabled
 ):
     import sys
@@ -1030,14 +1030,14 @@ async def test_increment_remaining_budget_metrics_emits_customer_gauges_from_end
         budget_id="budget-1",
         litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-1", max_budget=1000.0),
     )
-    get_end_user_object = AsyncMock(return_value=end_user)
+    get_end_user_object = AsyncMock()
     mock_proxy_server = MagicMock()
-    mock_proxy_server.prisma_client = MagicMock()
-    mock_proxy_server.user_api_key_cache = MagicMock()
+    mock_proxy_server.prisma_client = None
+    mock_proxy_server.user_api_key_cache.async_get_cache = AsyncMock(return_value=end_user)
 
     with (
         patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}),
-        patch("litellm.proxy.auth.auth_checks.get_end_user_object", get_end_user_object),  # test-quality-ok: [TQ008] logger resolves customers through the proxy auth lookup, no injection seam
+        patch("litellm.proxy.auth.auth_checks.get_end_user_object", get_end_user_object),  # test-quality-ok: [TQ008] assert the request path never reaches the DB-backed auth lookup
     ):
         await prometheus_logger._increment_remaining_budget_metrics(
             user_api_team=None,
@@ -1049,30 +1049,104 @@ async def test_increment_remaining_budget_metrics_emits_customer_gauges_from_end
             end_user_id="cust-req",
         )
 
-    get_end_user_object.assert_awaited_once()
-    assert get_end_user_object.await_args.kwargs["end_user_id"] == "cust-req"
+    get_end_user_object.assert_not_awaited()
+    cache_read = mock_proxy_server.user_api_key_cache.async_get_cache
+    cache_read.assert_awaited_once()
+    assert cache_read.await_args.kwargs["key"] == "end_user_id:cust-req"
     assert _customer_sample("litellm_remaining_customer_budget_metric", "cust-req") == pytest.approx(650.0)
     assert _customer_sample("litellm_customer_max_budget_metric", "cust-req") == pytest.approx(1000.0)
+
+
+@pytest.mark.asyncio
+async def test_set_customer_budget_metrics_after_api_request_uses_cached_default_budget(
+    prometheus_logger, customer_metrics_enabled
+):
+    import sys
+
+    from litellm.models.budget import LiteLLM_BudgetTable
+    from litellm.models.end_user import LiteLLM_EndUserTable
+
+    end_user = LiteLLM_EndUserTable(
+        user_id="cust-default",
+        blocked=False,
+        spend=0.5,
+        budget_id=None,
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="default-budget", max_budget=3.0),
+    )
+    mock_proxy_server = MagicMock()
+    mock_proxy_server.user_api_key_cache.async_get_cache = AsyncMock(return_value=end_user)
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+        await prometheus_logger._set_customer_budget_metrics_after_api_request(
+            end_user_id="cust-default",
+            response_cost=0.5,
+        )
+
+    assert _customer_sample("litellm_remaining_customer_budget_metric", "cust-default") == pytest.approx(2.0)
+    assert _customer_sample("litellm_customer_max_budget_metric", "cust-default") == pytest.approx(3.0)
+
+
+@pytest.mark.asyncio
+async def test_set_customer_budget_metrics_after_api_request_without_budget_only_emits_remaining(
+    prometheus_logger, customer_metrics_enabled
+):
+    import sys
+
+    from litellm.models.end_user import LiteLLM_EndUserTable
+
+    end_user = LiteLLM_EndUserTable(user_id="cust-no-budget", blocked=False, spend=2.0, budget_id=None)
+    mock_proxy_server = MagicMock()
+    mock_proxy_server.user_api_key_cache.async_get_cache = AsyncMock(return_value=end_user)
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+        await prometheus_logger._set_customer_budget_metrics_after_api_request(
+            end_user_id="cust-no-budget",
+            response_cost=1.0,
+        )
+
+    assert _customer_sample("litellm_remaining_customer_budget_metric", "cust-no-budget") == float("inf")
+    assert _customer_sample("litellm_customer_max_budget_metric", "cust-no-budget") is None
+
+
+@pytest.mark.asyncio
+async def test_set_customer_budget_metrics_after_api_request_skips_uncached_customer(
+    prometheus_logger, customer_metrics_enabled
+):
+    import sys
+
+    get_end_user_object = AsyncMock()
+    mock_proxy_server = MagicMock()
+    mock_proxy_server.prisma_client = MagicMock()
+    mock_proxy_server.user_api_key_cache.async_get_cache = AsyncMock(return_value=None)
+
+    with (
+        patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}),
+        patch("litellm.proxy.auth.auth_checks.get_end_user_object", get_end_user_object),  # test-quality-ok: [TQ008] assert a cache miss does not fall back to the DB-backed auth lookup
+    ):
+        await prometheus_logger._set_customer_budget_metrics_after_api_request(
+            end_user_id="cust-uncached",
+            response_cost=1.0,
+        )
+
+    get_end_user_object.assert_not_awaited()
+    mock_proxy_server.prisma_client.assert_not_called()
+    assert prometheus_logger.litellm_remaining_customer_budget_metric._metrics == {}
 
 
 @pytest.mark.asyncio
 async def test_set_customer_budget_metrics_after_api_request_without_end_user_is_noop(prometheus_logger):
     import sys
 
-    get_end_user_object = AsyncMock()
     mock_proxy_server = MagicMock()
-    mock_proxy_server.prisma_client = MagicMock()
+    mock_proxy_server.user_api_key_cache.async_get_cache = AsyncMock()
 
-    with (
-        patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}),
-        patch("litellm.proxy.auth.auth_checks.get_end_user_object", get_end_user_object),  # test-quality-ok: [TQ008] assert the proxy auth lookup is never reached without an end user
-    ):
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
         await prometheus_logger._set_customer_budget_metrics_after_api_request(
             end_user_id=None,
             response_cost=1.0,
         )
 
-    get_end_user_object.assert_not_awaited()
+    mock_proxy_server.user_api_key_cache.async_get_cache.assert_not_awaited()
     assert prometheus_logger.litellm_remaining_customer_budget_metric._metrics == {}
 
 
@@ -1241,13 +1315,10 @@ async def test_customer_max_budget_gauge_emitted_when_only_it_is_configured(cust
         litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-1", max_budget=40.0),
     )
     mock_proxy_server = MagicMock()
-    mock_proxy_server.prisma_client = MagicMock()
-    mock_proxy_server.user_api_key_cache = MagicMock()
+    mock_proxy_server.prisma_client = None
+    mock_proxy_server.user_api_key_cache.async_get_cache = AsyncMock(return_value=end_user)
 
-    with (
-        patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}),
-        patch("litellm.proxy.auth.auth_checks.get_end_user_object", AsyncMock(return_value=end_user)),  # test-quality-ok: [TQ008] logger resolves customers through the proxy auth lookup, no injection seam
-    ):
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
         await logger._increment_remaining_budget_metrics(
             user_api_team=None,
             user_api_team_alias=None,
