@@ -1043,9 +1043,6 @@
     },
     "no-nested-ternary": {
       "count": 3
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/prompts/_components/prompt_utils.tsx": {
@@ -1072,14 +1069,6 @@
     },
     "prefer-const": {
       "count": 2
-    }
-  },
-  "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 2
-    },
-    "react-hooks/static-components": {
-      "count": 1
     }
   },
   "src/app/(dashboard)/search-tools/_components/index.tsx": {
