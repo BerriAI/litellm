@@ -6902,12 +6902,6 @@ class ProxyConfig:
 
     @staticmethod
     def _apply_router_settings(llm_router: Router, router_settings: Mapping[str, object]) -> None:
-        """
-        `routing_groups` is applied on its own so a value persisted before
-        save-time validation existed cannot abort the reconcile that also loads
-        SSO, guardrails and the other DB-backed settings. The router keeps the
-        groups it already holds when the new value is rejected.
-        """
         llm_router.update_settings(**{k: v for k, v in router_settings.items() if k != "routing_groups"})
         if "routing_groups" not in router_settings:
             return
