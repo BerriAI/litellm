@@ -187,7 +187,7 @@ def _error_message(exc: BaseException) -> str:
     if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
         return str(exc.detail.get("error", exc.detail))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # HTTPException.detail is untyped
     if isinstance(exc, HTTPException):
-        return str(exc.detail)  # pyright: ignore[reportUnknownArgumentType]  # HTTPException.detail is untyped
+        return str(exc.detail)
     return str(exc) or type(exc).__name__
 
 

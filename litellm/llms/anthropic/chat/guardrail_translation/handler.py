@@ -199,9 +199,7 @@ def _write_back_system_block(system: object, block_idx: int, response: str) -> N
         return
     text_blocks: Final = tuple(block for block in system if isinstance(block, dict) and block.get("type") == "text")
     if block_idx < len(text_blocks):
-        text_blocks[block_idx]["text"] = (
-            response  # mutable-ok: guardrails rewrite the caller's request payload in place
-        )
+        text_blocks[block_idx]["text"] = response
 
 
 def _write_back_message_text(message: _WritableMessage, target: MessageTextTarget, response: str) -> None:
@@ -211,22 +209,16 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
     match target:
         case MessageContentTarget():
             if isinstance(content, str):
-                message["content"] = response  # mutable-ok: guardrails rewrite the caller's request payload in place
+                message["content"] = response
         case ContentBlockTextTarget(content_idx=content_idx):
             if isinstance(content, list):
-                content[content_idx]["text"] = (
-                    response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                )
+                content[content_idx]["text"] = response
         case ToolResultStringTarget(content_idx=content_idx):
             if isinstance(content, list):
-                content[content_idx]["content"] = (
-                    response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                )
+                content[content_idx]["content"] = response
         case ToolResultBlockTextTarget(content_idx=content_idx, block_idx=block_idx):
             if isinstance(content, list):
-                content[content_idx]["content"][block_idx]["text"] = (
-                    response  # mutable-ok: guardrails rewrite the caller's request payload in place
-                )
+                content[content_idx]["content"][block_idx]["text"] = response
         case _:
             assert_never(target)
 
@@ -248,9 +240,9 @@ def _write_back_tool_use(
     block: Final = content[target.content_idx] if isinstance(content, list) else None
     if not isinstance(block, dict):
         return
-    block["input"] = rewritten_input  # mutable-ok: guardrails rewrite the caller's request payload in place
+    block["input"] = rewritten_input
     if shape.name is not None and shape.name != block.get("name"):
-        block["name"] = shape.name  # mutable-ok: guardrails rewrite the caller's request payload in place
+        block["name"] = shape.name
 
 
 @dataclass(frozen=True, slots=True)
@@ -606,9 +598,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             image for one_message in extracted for image in one_message.images
         ]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
         scanned_tool_calls: Final = tuple(item for one_message in extracted for item in one_message.tool_calls)
-        tool_calls_to_check: Final = [
-            item.tool_call for item in scanned_tool_calls
-        ]  # mutable-ok: GenericGuardrailAPIInputs takes list[ChatCompletionToolCallChunk]
+        tool_calls_to_check: Final = [item.tool_call for item in scanned_tool_calls]
         pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
         # Step 2: Apply guardrail to all texts and tool calls in batch

@@ -1351,7 +1351,7 @@ def _billed_terminal_response(
         return None
     usage: Final[object] = response_obj.get("usage")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a model_constructed terminal event leaves response as an untyped dict
     return ResponsesAPIResponse.model_construct(
-        **{**response_obj, "usage": usage if usage is not None or estimate is None else estimate()}  # pyright: ignore[reportUnknownArgumentType, reportArgumentType]  # same untyped dict spread
+        **{**response_obj, "usage": usage if usage is not None or estimate is None else estimate()}  # pyright: ignore[reportArgumentType]  # same untyped dict spread
     )
 
 

@@ -1057,7 +1057,7 @@ def _with_classifier_forecast(
     if forecast is None:
         return decision
     verdict: Final = forecast.verdict
-    enriched: Final[StandardLoggingRoutingDecision] = {  # mutable-ok: routing decisions are JSON TypedDict records
+    enriched: Final[StandardLoggingRoutingDecision] = {
         **decision,
         "classifier_crux": verdict.crux,
         "classifier_primary_rule": verdict.primary_rule,
@@ -2292,7 +2292,7 @@ class ComplexityRouter(CustomLogger):
             {"role": "user", "content": opening_task},  # mutable-ok: SDK messages are dict-shaped
         ]
         if latest_follow_up is not None:
-            task_messages.append(  # mutable-ok: the provider SDK requires a concrete message list
+            task_messages.append(
                 {"role": "user", "content": latest_follow_up}  # mutable-ok: SDK messages are dict-shaped
             )
 
