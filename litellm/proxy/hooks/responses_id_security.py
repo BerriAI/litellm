@@ -13,6 +13,9 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.base_llm.base_model_iterator import (
+    convert_model_response_to_streaming,
+)
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -22,7 +25,7 @@ from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import CallTypesLiteral, LLMResponseTypes, SpecialEnums
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes, ModelResponse, SpecialEnums
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -328,11 +331,15 @@ class ResponsesIDSecurity(CustomLogger):
 
     async def async_post_call_streaming_iterator_hook(
         self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict
-    ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject, None]:
+    ) -> AsyncGenerator[Any, None]:
         general_settings: Final = self._general_settings_reader()
 
         # Create a request-scoped cache for consistent encryption across streaming chunks.
         request_encryption_cache: Final[dict[str, str]] = {}
+
+        if isinstance(response, ModelResponse):
+            yield convert_model_response_to_streaming(response)
+            return
 
         async for chunk in response:
             if (
