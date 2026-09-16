@@ -1379,8 +1379,10 @@ def test_gpt_5_4_responses_bridge_preserves_reasoning_summary_dict(
 
 
 @pytest.mark.parametrize("reasoning_effort", ["high", {"effort": "high"}])
+@pytest.mark.parametrize("verbosity", ["low"])
 def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
     reasoning_effort,
+    verbosity,
     restore_model_registry,
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
@@ -1441,6 +1443,7 @@ def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
         model=model,
         messages=[{"role": "user", "content": "hello"}],
         reasoning_effort=reasoning_effort,
+        verbosity=verbosity,
         drop_params=True,
         api_key="fake-key",
         api_base="https://api.perplexity.ai",
@@ -1448,6 +1451,7 @@ def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
 
     request_body: Final = json.loads(response_route.calls[0].request.content)
     assert request_body["reasoning"] == {"effort": "high"}
+    assert request_body["text"] == {"verbosity": verbosity}
 
 
 @pytest.mark.parametrize(

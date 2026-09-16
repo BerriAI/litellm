@@ -2457,6 +2457,44 @@ def test_map_optional_params_preserves_reasoning_summary():
     assert responses_api_request["reasoning"]["summary"] == "detailed"
 
 
+def test_map_optional_params_preserves_verbosity_with_response_format():
+    handler = LiteLLMResponsesTransformationHandler()
+    optional_params = {
+        "verbosity": "low",
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "person_schema",
+                "schema": {"type": "object"},
+                "strict": True,
+            },
+        },
+    }
+    responses_api_request = {}
+
+    handler._map_optional_params_to_responses_api_request(optional_params, responses_api_request)
+
+    assert responses_api_request["text"] == {
+        "format": {
+            "type": "json_schema",
+            "name": "person_schema",
+            "schema": {"type": "object"},
+            "strict": True,
+        },
+        "verbosity": "low",
+    }
+
+
+def test_map_optional_params_preserves_verbosity_without_response_format():
+    handler = LiteLLMResponsesTransformationHandler()
+    optional_params = {"verbosity": "low"}
+    responses_api_request = {}
+
+    handler._map_optional_params_to_responses_api_request(optional_params, responses_api_request)
+
+    assert responses_api_request["text"] == {"verbosity": "low"}
+
+
 @pytest.mark.parametrize("reasoning_effort", ["max", "high"])
 def test_transform_request_bedrock_mantle_tools_keeps_reasoning_effort(monkeypatch, reasoning_effort):
     """Regression for reasoning_effort=max being dropped on the chat -> Responses bridge (issue #38084)."""

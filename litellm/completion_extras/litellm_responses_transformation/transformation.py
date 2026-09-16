@@ -502,13 +502,21 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
                 if text_format:
-                    responses_api_request["text"] = text_format
+                    responses_api_request["text"] = {  # mutable-ok: API request payload
+                        **(responses_api_request.get("text") or {}),  # mutable-ok: API request payload
+                        **text_format,
+                    }
             elif key == "tool_choice":
                 responses_api_request["tool_choice"] = self._normalize_tool_choice_for_responses_api(value)
             elif key == "stream_options":
                 stream_options = normalize_responses_api_stream_options(value)
                 if stream_options is not None:
                     responses_api_request["stream_options"] = stream_options
+            elif key == "verbosity":
+                responses_api_request["text"] = {  # mutable-ok: API request payload
+                    **(responses_api_request.get("text") or {}),  # mutable-ok: API request payload
+                    "verbosity": value,
+                }
             elif key in ResponsesAPIOptionalRequestParams.__annotations__:
                 responses_api_request[key] = value
             elif key == "previous_response_id":
@@ -1142,6 +1150,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             {
                 "previous_response_id",
                 "reasoning_effort",  # We map this to "reasoning"
+                "verbosity",
             }
         )
 
