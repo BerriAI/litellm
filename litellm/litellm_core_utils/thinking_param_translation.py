@@ -7,6 +7,9 @@ from typing import Final
 
 _SEND_VIA_EXTRA_BODY: Final = "extra_body"
 _SEND_VIA_PROVIDER_MAPPED: Final = "provider_mapped"
+_SEND_VIA_VALUES: Final = frozenset((_SEND_VIA_EXTRA_BODY, _SEND_VIA_PROVIDER_MAPPED))
+_THINKING_ENABLED_STRINGS: Final = frozenset(("enabled", "true", "1", "auto"))
+_THINKING_TYPE_ENABLED: Final = frozenset(("enabled", "auto", "true"))
 
 _EFFORT_FALLBACKS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
@@ -36,11 +39,11 @@ def _thinking_enabled(thinking: object) -> bool:
     if isinstance(thinking, bool):
         return thinking
     if isinstance(thinking, str):
-        return thinking.lower() in {"enabled", "true", "1", "auto"}
+        return thinking.lower() in _THINKING_ENABLED_STRINGS
     if isinstance(thinking, Mapping):
         typ: Final = thinking.get("type")
         if isinstance(typ, str):
-            return typ.lower() in {"enabled", "auto", "true"}
+            return typ.lower() in _THINKING_TYPE_ENABLED
         enabled: Final = thinking.get("enabled")
         if isinstance(enabled, bool):
             return enabled
@@ -122,18 +125,20 @@ def _map_thinking_to_extra_body(
             typ: Final = _thinking_type_value(thinking, thinking_values)
             if typ is None:
                 return MappingProxyType({})
-            return MappingProxyType({"thinking": dict(_thinking_payload(thinking, typ))})
+            return MappingProxyType({"thinking": _thinking_payload(thinking, typ)})
         case "thinking":
             if isinstance(thinking, Mapping):
-                return MappingProxyType({"thinking": dict(thinking)})
+                return MappingProxyType({"thinking": MappingProxyType({k: thinking[k] for k in thinking})})
             typ_only: Final = _thinking_type_value(thinking, thinking_values or ("enabled", "disabled"))
             if typ_only is None:
                 return MappingProxyType({})
-            return MappingProxyType({"thinking": {"type": typ_only}})
+            return MappingProxyType({"thinking": MappingProxyType({"type": typ_only})})
         case "enable_thinking":
             return MappingProxyType({"enable_thinking": _thinking_enabled(thinking)})
         case "chat_template_kwargs":
-            return MappingProxyType({"chat_template_kwargs": {"enable_thinking": _thinking_enabled(thinking)}})
+            return MappingProxyType(
+                {"chat_template_kwargs": MappingProxyType({"enable_thinking": _thinking_enabled(thinking)})}
+            )
         case None:
             return MappingProxyType({})
         case _:
@@ -163,7 +168,7 @@ def translate_thinking_params(
         return state
 
     send_via: Final = model_info.get("thinking_send_via")
-    if send_via not in {_SEND_VIA_EXTRA_BODY, _SEND_VIA_PROVIDER_MAPPED}:
+    if send_via not in _SEND_VIA_VALUES:
         return state
 
     supports_reasoning: Final = model_info.get("supports_reasoning") is True
@@ -222,7 +227,7 @@ def apply_thinking_param_translation(
     existing_extra_body: Mapping[str, object] | None,
 ) -> ThinkingParamsState:
     base_extra: Final = (
-        MappingProxyType(dict(existing_extra_body))
+        MappingProxyType({k: existing_extra_body[k] for k in existing_extra_body})
         if isinstance(existing_extra_body, Mapping)
         else MappingProxyType({})
     )

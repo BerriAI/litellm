@@ -4153,11 +4153,11 @@ def _apply_model_info_thinking_translation(
         reasoning_effort=prior_effort,
         existing_extra_body=existing_extra,
     )
-    prior_extra: Final = dict(existing_extra) if existing_extra is not None else {}
+    prior_extra: Final = dict(existing_extra) if existing_extra is not None else {}  # mutable-ok: equality snapshot
     if (
         translated.thinking is prior_thinking
         and translated.reasoning_effort is prior_effort
-        and dict(translated.extra_body) == prior_extra
+        and dict(translated.extra_body) == prior_extra  # mutable-ok: MappingProxyType equality snapshot
     ):
         return
 
@@ -4177,7 +4177,7 @@ def _apply_model_info_thinking_translation(
         passed_params["reasoning_effort"] = translated.reasoning_effort
 
     if translated.extra_body:
-        passed_params["extra_body"] = dict(translated.extra_body)
+        passed_params["extra_body"] = dict(translated.extra_body)  # mutable-ok: openai extra_body is a dict
 
 
 def pre_process_optional_params(passed_params: dict, non_default_params: dict, custom_llm_provider: str) -> dict:
