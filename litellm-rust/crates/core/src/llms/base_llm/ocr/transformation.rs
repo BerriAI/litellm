@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use litellm_auth::Sourced;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -9,7 +8,8 @@ use crate::call_arguments::{CallArguments, parse_options};
 use crate::ocr::OcrClient;
 use crate::ocr::hooks::OcrHooks;
 use crate::ocr::types::{
-    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrResponseFormat,
+    LiteLLMOcrResponse, OcrConnection, OcrCredentialInputs, OcrDocument, OcrResponseFormat,
+    PreparedOcrRequest, ResolvedOcrCredentials,
 };
 
 const HEALTH_CHECK_PDF_DATA_URI: &str = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9UeXBlIC9QYWdlCi9QYXJlbnQgMSAwIFIKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KL0NvbnRlbnRzIDQgMCBSCi9SZXNvdXJjZXMgPDwvRm9udCA8PC9GMSAyIDAgUj4+Pj4+PgplbmRvYmoKNCAwIG9iago8PC9MZW5ndGggNDQ+PgpzdHJlYW0KQlQKL0YxIDI0IFRmCjEwMCA3MDAgVGQKKHRlc3QpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKMiAwIG9iago8PC9UeXBlIC9Gb250Ci9TdWJ0eXBlIC9UeXBlMQovQmFzZUZvbnQgL0hlbHZldGljYT4+CmVuZG9iagoxIDAgb2JqCjw8L1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDE+PgplbmRvYmoKNSAwIG9iago8PC9UeXBlIC9DYXRhbG9nCi9QYWdlcyAxIDAgUj4+CmVuZG9iagp0cmFpbGVyCjw8L1NpemUgNgovUm9vdCA1IDAgUj4+CnN0YXJ0eHJlZgozMjQKJSVFT0Y=";
@@ -23,21 +23,17 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
         None
     }
 
-    fn resolve_connection_params(
-        &self,
-        api_key: Option<Sourced<String>>,
-        api_base: Option<Sourced<String>>,
-        dynamic_api_key: Option<Sourced<String>>,
-        dynamic_api_base: Option<Sourced<String>>,
-    ) -> (Option<Sourced<String>>, Option<Sourced<String>>) {
-        (
-            dynamic_api_key
+    fn resolve_connection_params(&self, inputs: OcrCredentialInputs) -> ResolvedOcrCredentials {
+        ResolvedOcrCredentials {
+            api_key: inputs
+                .dynamic_api_key
                 .filter(|value| !value.value().is_empty())
-                .or(api_key),
-            dynamic_api_base
+                .or(inputs.api_key),
+            api_base: inputs
+                .dynamic_api_base
                 .filter(|value| !value.value().is_empty())
-                .or(api_base),
-        )
+                .or(inputs.api_base),
+        }
     }
 
     fn get_health_check_document(&self) -> OcrDocument {
@@ -49,13 +45,13 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
 
     fn validate_environment(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> impl Future<Output = Result<Self::Environment, crate::ocr::Error>> + Send;
 
     fn get_complete_url(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         optional_params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error>;

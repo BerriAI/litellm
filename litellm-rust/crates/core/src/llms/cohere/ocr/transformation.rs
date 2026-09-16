@@ -2,16 +2,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
-use crate::serde_compat::LaxI64;
 use crate::constants::{COHERE_API_KEY_ENV, COHERE_PARSE_API_BASE};
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::ocr::OcrClient;
 use crate::ocr::document::InlineDocument;
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{
-    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrPageImage,
-    OcrUsageInfo,
+    LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrPageImage, OcrUsageInfo,
+    PreparedOcrRequest,
 };
+use crate::serde_compat::LaxI64;
 use crate::url_utils::ApiUrl;
 
 const COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
@@ -100,7 +100,7 @@ impl BaseOcrConfig for CohereParseConfig {
 
     async fn validate_environment(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, crate::ocr::Error> {
         self.validate_environment(&request.connection, &credential_env)
@@ -108,7 +108,7 @@ impl BaseOcrConfig for CohereParseConfig {
 
     fn get_complete_url(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         _params: &Self::OcrParams,
         _environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
@@ -165,7 +165,7 @@ impl BaseOcrConfig for CohereParseConfig {
 impl CohereParseConfig {
     pub(crate) async fn prepare_request(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
@@ -380,6 +380,7 @@ mod tests {
             "type":"image_url","image_url":"https://example.com/original.png"
         }))
         .unwrap();
+        let request = crate::ocr::prepare::prepare_request(request);
         let http = CohereParseConfig
             .prepare_request(&request, &crate::ocr::test_support::ocr_client())
             .await
@@ -525,6 +526,7 @@ mod tests {
             request.response_format().unwrap(),
             crate::ocr::types::OcrResponseFormat::Litellm
         );
+        let request = crate::ocr::prepare::prepare_request(request);
         let http = CohereParseConfig
             .prepare_request(&request, &crate::ocr::test_support::ocr_client())
             .await

@@ -3,11 +3,11 @@ use serde_json::Value;
 
 use super::OcrClient;
 use super::hooks::OcrDuringCallRequest;
-use super::types::{LiteLLMOcrRequest, OcrDocument};
+use super::types::{LiteLLMOcrRequest, OcrConnection, OcrDocument, PreparedOcrRequest};
 
 pub(crate) async fn transform_request_body<B>(
     client: &OcrClient,
-    request: &LiteLLMOcrRequest,
+    request: &PreparedOcrRequest,
     url: &str,
     headers: &[(String, String)],
     retains_document: bool,
@@ -65,7 +65,7 @@ where
 
 pub(crate) fn build_http_request<B: Serialize>(
     client: &OcrClient,
-    request: &LiteLLMOcrRequest,
+    request: &PreparedOcrRequest,
     url: &str,
     headers: &[(String, String)],
     body: &B,
@@ -82,7 +82,7 @@ pub(crate) fn build_http_request<B: Serialize>(
 }
 
 pub(crate) async fn guardrail_document(
-    request: &LiteLLMOcrRequest,
+    request: &PreparedOcrRequest,
     url: &str,
     headers: &[(String, String)],
 ) -> Result<(OcrDocument, Vec<(String, String)>), super::Error> {
@@ -127,10 +127,10 @@ pub(crate) fn credential_env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-pub(crate) fn resolve_connection_params(request: LiteLLMOcrRequest) -> LiteLLMOcrRequest {
+pub(crate) fn prepare_request(request: LiteLLMOcrRequest) -> PreparedOcrRequest {
     use litellm_auth::{InputSource, Sourced};
 
-    let connection = request.connection;
+    let credentials = request.credentials.clone();
     let api_base_env = match request.config.provider() {
         super::provider_config::OcrProvider::Mistral => Some("MISTRAL_API_BASE"),
         super::provider_config::OcrProvider::AzureAi => Some("AZURE_AI_API_BASE"),
@@ -138,38 +138,29 @@ pub(crate) fn resolve_connection_params(request: LiteLLMOcrRequest) -> LiteLLMOc
         | super::provider_config::OcrProvider::Reducto
         | super::provider_config::OcrProvider::VertexAi => None,
     };
-    let dynamic_api_key = connection.dynamic_api_key.or_else(|| {
-        connection
-            .api_key
-            .clone()
-            .map(|value| Sourced::new(value, connection.api_key_source))
-            .or_else(|| {
-                request
-                    .config
-                    .get_api_key_env_var()
-                    .and_then(credential_env)
-                    .map(|value| Sourced::new(value, InputSource::Environment))
-            })
+    let dynamic_api_key = credentials.dynamic_api_key.or_else(|| {
+        credentials.api_key.clone().or_else(|| {
+            request
+                .config
+                .get_api_key_env_var()
+                .and_then(credential_env)
+                .map(|value| Sourced::new(value, InputSource::Environment))
+        })
     });
-    let dynamic_api_base = connection.dynamic_api_base.or_else(|| {
-        connection
-            .api_base
-            .clone()
-            .map(|value| Sourced::new(value, connection.api_base_source))
-            .or_else(|| {
-                api_base_env
-                    .and_then(credential_env)
-                    .map(|value| Sourced::new(value, InputSource::Environment))
-            })
+    let dynamic_api_base = credentials.dynamic_api_base.or_else(|| {
+        credentials.api_base.clone().or_else(|| {
+            api_base_env
+                .and_then(credential_env)
+                .map(|value| Sourced::new(value, InputSource::Environment))
+        })
     });
-    LiteLLMOcrRequest {
-        connection: request
-            .config
-            .resolve_connection_params(super::OcrConnection {
-                dynamic_api_key,
-                dynamic_api_base,
-                ..connection
-            }),
-        ..request
-    }
+    let resolved = request
+        .config
+        .resolve_connection_params(super::types::OcrCredentialInputs {
+            dynamic_api_key,
+            dynamic_api_base,
+            ..credentials
+        });
+    let transport = request.transport.clone();
+    PreparedOcrRequest::new(request, OcrConnection::new(resolved, transport))
 }

@@ -1,4 +1,4 @@
-use super::types::{OcrConnection, OcrDocument};
+use super::types::{OcrCredentialInputs, OcrDocument, ResolvedOcrCredentials};
 use crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig;
 use crate::llms::azure_ai::ocr::document_intelligence::transformation::AzureDocumentIntelligenceOCRConfig;
 use crate::llms::azure_ai::ocr::transformation::AzureAIOCRConfig;
@@ -9,7 +9,6 @@ use crate::llms::reducto::ocr::transformation::{ReductoParseLegacyConfig, Reduct
 use crate::llms::vertex_ai::ocr::deepseek_transformation::VertexAIDeepSeekOCRConfig;
 use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
-use litellm_auth::Sourced;
 use strum::{EnumString, IntoStaticStr};
 
 macro_rules! dispatch_config {
@@ -66,37 +65,11 @@ impl OcrConfigKind {
         dispatch_config!(self, get_health_check_document())
     }
 
-    pub(crate) fn resolve_connection_params(self, connection: OcrConnection) -> OcrConnection {
-        let api_key = connection
-            .api_key
-            .map(|value| Sourced::new(value, connection.api_key_source));
-        let api_base = connection
-            .api_base
-            .map(|value| Sourced::new(value, connection.api_base_source));
-        let (api_key, api_base) = dispatch_config!(
-            self,
-            resolve_connection_params(
-                api_key,
-                api_base,
-                connection.dynamic_api_key,
-                connection.dynamic_api_base,
-            )
-        );
-        OcrConnection {
-            api_key_source: api_key
-                .as_ref()
-                .map(Sourced::source)
-                .unwrap_or(connection.api_key_source),
-            api_base_source: api_base
-                .as_ref()
-                .map(Sourced::source)
-                .unwrap_or(connection.api_base_source),
-            api_key: api_key.map(Sourced::into_value),
-            api_base: api_base.map(Sourced::into_value),
-            dynamic_api_key: None,
-            dynamic_api_base: None,
-            ..connection
-        }
+    pub(crate) fn resolve_connection_params(
+        self,
+        inputs: OcrCredentialInputs,
+    ) -> ResolvedOcrCredentials {
+        dispatch_config!(self, resolve_connection_params(inputs))
     }
 
     pub(crate) fn get_error_class(
@@ -183,7 +156,7 @@ fn is_document_intelligence_model(model: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use litellm_auth::InputSource;
+    use litellm_auth::{InputSource, Sourced};
 
     #[test]
     fn provider_names_round_trip_exactly() {
@@ -261,34 +234,66 @@ mod tests {
 
     #[test]
     fn connection_resolution_preserves_dynamic_precedence_and_input_sources() {
-        let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrConnection {
-            api_key: Some("explicit-key".into()),
-            api_base: Some("https://explicit.test".into()),
+        let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrCredentialInputs {
+            api_key: Some(Sourced::new("explicit-key".into(), InputSource::Deployment)),
+            api_base: Some(Sourced::new(
+                "https://explicit.test".into(),
+                InputSource::Deployment,
+            )),
             dynamic_api_key: Some(Sourced::new("dynamic-key".into(), InputSource::Environment)),
             dynamic_api_base: Some(Sourced::new(
                 "https://dynamic.test".into(),
                 InputSource::Request,
             )),
-            ..Default::default()
         });
-        assert_eq!(connection.api_key.as_deref(), Some("dynamic-key"));
-        assert_eq!(connection.api_base.as_deref(), Some("https://dynamic.test"));
-        assert_eq!(connection.api_key_source, InputSource::Environment);
-        assert_eq!(connection.api_base_source, InputSource::Request);
+        assert_eq!(
+            connection
+                .api_key
+                .as_ref()
+                .map(|value| value.value().as_str()),
+            Some("dynamic-key")
+        );
+        assert_eq!(
+            connection
+                .api_base
+                .as_ref()
+                .map(|value| value.value().as_str()),
+            Some("https://dynamic.test")
+        );
+        assert_eq!(
+            connection.api_key.as_ref().map(Sourced::source),
+            Some(InputSource::Environment)
+        );
+        assert_eq!(
+            connection.api_base.as_ref().map(Sourced::source),
+            Some(InputSource::Request)
+        );
         for dynamic in [
             None,
             Some(Sourced::new(String::new(), InputSource::Environment)),
         ] {
-            let connection = OcrConfigKind::Mistral.resolve_connection_params(OcrConnection {
-                api_key: Some("explicit-key".into()),
-                api_base: Some("https://explicit.test".into()),
-                dynamic_api_key: dynamic.clone(),
-                dynamic_api_base: dynamic,
-                ..Default::default()
-            });
-            assert_eq!(connection.api_key.as_deref(), Some("explicit-key"));
+            let connection =
+                OcrConfigKind::Mistral.resolve_connection_params(OcrCredentialInputs {
+                    api_key: Some(Sourced::new("explicit-key".into(), InputSource::Deployment)),
+                    api_base: Some(Sourced::new(
+                        "https://explicit.test".into(),
+                        InputSource::Deployment,
+                    )),
+                    dynamic_api_key: dynamic.clone(),
+                    dynamic_api_base: dynamic,
+                });
             assert_eq!(
-                connection.api_base.as_deref(),
+                connection
+                    .api_key
+                    .as_ref()
+                    .map(|value| value.value().as_str()),
+                Some("explicit-key")
+            );
+            assert_eq!(
+                connection
+                    .api_base
+                    .as_ref()
+                    .map(|value| value.value().as_str()),
                 Some("https://explicit.test")
             );
         }
@@ -302,10 +307,12 @@ mod tests {
             (None, Some("base")),
             (Some("key"), Some("base")),
         ] {
-            let connection =
-                OcrConfigKind::AzureDocumentIntelligence.resolve_connection_params(OcrConnection {
-                    api_key: explicit_key.map(str::to_string),
-                    api_base: explicit_base.map(str::to_string),
+            let connection = OcrConfigKind::AzureDocumentIntelligence.resolve_connection_params(
+                OcrCredentialInputs {
+                    api_key: explicit_key
+                        .map(|value| Sourced::new(value.to_string(), InputSource::Deployment)),
+                    api_base: explicit_base
+                        .map(|value| Sourced::new(value.to_string(), InputSource::Deployment)),
                     dynamic_api_key: Some(Sourced::new(
                         "dynamic-key".into(),
                         InputSource::Environment,
@@ -314,14 +321,20 @@ mod tests {
                         "https://dynamic.test".into(),
                         InputSource::Deployment,
                     )),
-                    ..Default::default()
-                });
+                },
+            );
             assert_eq!(
-                connection.api_key.as_deref(),
+                connection
+                    .api_key
+                    .as_ref()
+                    .map(|value| value.value().as_str()),
                 explicit_key.map(|_| "dynamic-key")
             );
             assert_eq!(
-                connection.api_base.as_deref(),
+                connection
+                    .api_base
+                    .as_ref()
+                    .map(|value| value.value().as_str()),
                 explicit_base.map(|_| "https://dynamic.test")
             );
         }

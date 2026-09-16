@@ -26,8 +26,8 @@ use crate::ocr::document::InlineDocument;
 use crate::ocr::hooks::OcrHooks;
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{
-    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrPageDimensions,
-    OcrResponseFormat, OcrUsageInfo,
+    LiteLLMOcrResponse, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
+    OcrPageDimensions, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest, ResolvedOcrCredentials,
 };
 use crate::ocr::wire::DecodedOcrResponse;
 use crate::serde_compat::{FiniteF64, LaxI64};
@@ -476,33 +476,26 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
         Some(AZURE_DI_API_KEY_ENV)
     }
 
-    fn resolve_connection_params(
-        &self,
-        api_key: Option<litellm_auth::Sourced<String>>,
-        api_base: Option<litellm_auth::Sourced<String>>,
-        dynamic_api_key: Option<litellm_auth::Sourced<String>>,
-        dynamic_api_base: Option<litellm_auth::Sourced<String>>,
-    ) -> (
-        Option<litellm_auth::Sourced<String>>,
-        Option<litellm_auth::Sourced<String>>,
-    ) {
-        (
-            api_key.and_then(|key| {
-                dynamic_api_key
+    fn resolve_connection_params(&self, inputs: OcrCredentialInputs) -> ResolvedOcrCredentials {
+        ResolvedOcrCredentials {
+            api_key: inputs.api_key.and_then(|key| {
+                inputs
+                    .dynamic_api_key
                     .filter(|value| !value.value().is_empty())
                     .or(Some(key))
             }),
-            api_base.and_then(|base| {
-                dynamic_api_base
+            api_base: inputs.api_base.and_then(|base| {
+                inputs
+                    .dynamic_api_base
                     .filter(|value| !value.value().is_empty())
                     .or(Some(base))
             }),
-        )
+        }
     }
 
     async fn validate_environment(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, crate::ocr::Error> {
         let config = AzureAuthInputs {
@@ -518,7 +511,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
 
     fn get_complete_url(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         params: &Self::OcrParams,
         _environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
@@ -603,7 +596,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
 impl AzureDocumentIntelligenceOCRConfig {
     pub(crate) async fn prepare_request(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
@@ -1026,7 +1019,7 @@ mod tests {
             json!({"req_format":"native"}),
         );
         request
-            .connection
+            .transport
             .extra_headers
             .push(("X-Trace".into(), "initial-only".into()));
 
@@ -1110,8 +1103,8 @@ mod tests {
         ])
         .await;
         let mut request = wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({}));
-        request.connection.api_key = None;
-        request.connection.extra_headers = vec![("Authorization".into(), "Bearer token".into())];
+        request.credentials.api_key = None;
+        request.transport.extra_headers = vec![("Authorization".into(), "Bearer token".into())];
 
         perform_ocr(request).await.unwrap();
         server.await.unwrap();
@@ -1246,7 +1239,7 @@ mod tests {
         ])
         .await;
         let mut request = wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({}));
-        request.connection.poll_timeout = std::time::Duration::from_millis(100);
+        request.transport.poll_timeout = std::time::Duration::from_millis(100);
 
         let error = tokio::time::timeout(std::time::Duration::from_secs(1), perform_ocr(request))
             .await

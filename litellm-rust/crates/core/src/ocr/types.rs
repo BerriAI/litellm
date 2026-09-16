@@ -61,14 +61,16 @@ pub enum OcrResponseFormat {
     Native,
 }
 
-#[derive(Clone)]
-pub struct OcrConnection {
-    pub api_key: Option<String>,
+#[derive(Clone, Default)]
+pub struct OcrCredentialInputs {
+    pub api_key: Option<Sourced<String>>,
     pub dynamic_api_key: Option<Sourced<String>>,
-    pub api_key_source: InputSource,
-    pub api_base: Option<String>,
+    pub api_base: Option<Sourced<String>>,
     pub dynamic_api_base: Option<Sourced<String>>,
-    pub api_base_source: InputSource,
+}
+
+#[derive(Clone)]
+pub struct OcrTransportConfig {
     pub extra_headers: Vec<(String, String)>,
     pub extra_headers_source: InputSource,
     pub timeout: Duration,
@@ -77,15 +79,9 @@ pub struct OcrConnection {
     pub poll_timeout: Duration,
 }
 
-impl Default for OcrConnection {
+impl Default for OcrTransportConfig {
     fn default() -> Self {
         Self {
-            api_key: None,
-            dynamic_api_key: None,
-            api_key_source: InputSource::Deployment,
-            api_base: None,
-            dynamic_api_base: None,
-            api_base_source: InputSource::Deployment,
             extra_headers: Vec::new(),
             extra_headers_source: InputSource::Deployment,
             timeout: Duration::from_secs(OCR_HTTP_TIMEOUT_SECS),
@@ -96,10 +92,67 @@ impl Default for OcrConnection {
     }
 }
 
+#[derive(Clone)]
+pub struct OcrConnection {
+    pub api_key: Option<String>,
+    pub api_key_source: InputSource,
+    pub api_base: Option<String>,
+    pub api_base_source: InputSource,
+    pub extra_headers: Vec<(String, String)>,
+    pub extra_headers_source: InputSource,
+    pub timeout: Duration,
+    pub max_download_bytes: u64,
+    pub max_response_bytes: usize,
+    pub poll_timeout: Duration,
+}
+
+impl OcrConnection {
+    pub(crate) fn new(credentials: ResolvedOcrCredentials, transport: OcrTransportConfig) -> Self {
+        let api_key_source = credentials
+            .api_key
+            .as_ref()
+            .map(Sourced::source)
+            .unwrap_or(InputSource::Deployment);
+        let api_base_source = credentials
+            .api_base
+            .as_ref()
+            .map(Sourced::source)
+            .unwrap_or(InputSource::Deployment);
+        Self {
+            api_key: credentials.api_key.map(Sourced::into_value),
+            api_key_source,
+            api_base: credentials.api_base.map(Sourced::into_value),
+            api_base_source,
+            extra_headers: transport.extra_headers,
+            extra_headers_source: transport.extra_headers_source,
+            timeout: transport.timeout,
+            max_download_bytes: transport.max_download_bytes,
+            max_response_bytes: transport.max_response_bytes,
+            poll_timeout: transport.poll_timeout,
+        }
+    }
+}
+
+impl Default for OcrConnection {
+    fn default() -> Self {
+        Self::new(
+            ResolvedOcrCredentials::default(),
+            OcrTransportConfig::default(),
+        )
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct ResolvedOcrCredentials {
+    pub api_key: Option<Sourced<String>>,
+    pub api_base: Option<Sourced<String>>,
+}
+
 pub struct LiteLLMOcrRequest {
     pub model: String,
     pub document: OcrDocument,
-    pub connection: OcrConnection,
+    pub credentials: OcrCredentialInputs,
+    pub transport: OcrTransportConfig,
     pub hooks: Arc<dyn OcrHooks>,
     pub litellm_call_id: Option<String>,
     pub optional_params: CallArguments,
@@ -120,7 +173,8 @@ impl LiteLLMOcrRequest {
         Ok(Self {
             model,
             document,
-            connection: OcrConnection::default(),
+            credentials: OcrCredentialInputs::default(),
+            transport: OcrTransportConfig::default(),
             hooks: Arc::new(NoopOcrHooks),
             litellm_call_id: None,
             optional_params,
@@ -155,6 +209,59 @@ impl LiteLLMOcrRequest {
             litellm_call_id,
             ..self
         }
+    }
+}
+
+pub(crate) struct PreparedOcrRequest {
+    pub model: String,
+    pub document: OcrDocument,
+    pub connection: OcrConnection,
+    pub hooks: Arc<dyn OcrHooks>,
+    pub optional_params: CallArguments,
+    pub input_sources: BTreeMap<String, InputSource>,
+    pub azure_ad_token_provider: Option<TokenProviderHandle>,
+    pub(crate) config: OcrConfigKind,
+}
+
+impl PreparedOcrRequest {
+    pub(crate) fn new(request: LiteLLMOcrRequest, connection: OcrConnection) -> Self {
+        let LiteLLMOcrRequest {
+            model,
+            document,
+            credentials: _,
+            transport: _,
+            hooks,
+            litellm_call_id: _,
+            optional_params,
+            input_sources,
+            azure_ad_token_provider,
+            config,
+        } = request;
+        Self {
+            model,
+            document,
+            connection,
+            hooks,
+            optional_params,
+            input_sources,
+            azure_ad_token_provider,
+            config,
+        }
+    }
+
+    pub(crate) fn response_format(&self) -> Result<OcrResponseFormat, super::Error> {
+        self.optional_params
+            .get("req_format")
+            .filter(|value| !value.is_null())
+            .map(|value| {
+                serde_json::from_value(value.clone()).map_err(|_| super::Error::RequestFormat)
+            })
+            .transpose()
+            .map(|format| format.unwrap_or_default())
+    }
+
+    pub(crate) fn provider_name(&self) -> &'static str {
+        self.config.provider().into()
     }
 }
 

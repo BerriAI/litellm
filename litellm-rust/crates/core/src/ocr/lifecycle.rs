@@ -752,10 +752,10 @@ mod tests {
             mock_server(vec![MockResponse::json(json!({"pages": []}))]).await;
         let request = wire_request("mistral/model", "https://unused.invalid", json!({}));
         let request = crate::ocr::LiteLLMOcrRequest {
-            connection: crate::ocr::OcrConnection {
+            credentials: crate::ocr::types::OcrCredentialInputs {
                 dynamic_api_key: Some(Sourced::new("dynamic-key".into(), InputSource::Deployment)),
                 dynamic_api_base: Some(Sourced::new(base, InputSource::Deployment)),
-                ..request.connection
+                ..request.credentials
             },
             ..request
         };
@@ -1496,7 +1496,7 @@ mod tests {
             "http://localhost",
             json!({"max_response_bytes": 123}),
         );
-        assert_eq!(request.connection.max_response_bytes, 123);
+        assert_eq!(request.transport.max_response_bytes, 123);
         assert!(!request.optional_params.contains_key("max_response_bytes"));
         for value in [
             json!(0),
@@ -1555,9 +1555,9 @@ mod tests {
             let request =
                 wire_request("azure_ai/mistral-ocr", "https://example.invalid", json!({}));
             let request = crate::ocr::LiteLLMOcrRequest {
-                connection: crate::ocr::OcrConnection {
+                transport: crate::ocr::types::OcrTransportConfig {
                     extra_headers: vec![("authorization".into(), "Bearer test-key".into())],
-                    ..request.connection
+                    ..request.transport
                 },
                 azure_ad_token_provider: Some(litellm_auth::TokenProviderHandle::new(Arc::new(
                     PendingToken {

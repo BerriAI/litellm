@@ -10,7 +10,7 @@ use crate::ocr::OcrClient;
 use crate::ocr::document::InlineDocument;
 use crate::ocr::prepare::{build_http_request, credential_env, guardrail_document};
 use crate::ocr::types::{
-    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrUsageInfo,
+    LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrUsageInfo, PreparedOcrRequest,
 };
 use crate::params::OpaqueParams;
 use crate::url_utils::ApiUrl;
@@ -85,7 +85,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
 
     async fn validate_environment(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, crate::ocr::Error> {
         validate_environment(&request.connection, &credential_env)
@@ -93,7 +93,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
 
     fn get_complete_url(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         _params: &Self::OcrParams,
         _environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
@@ -156,7 +156,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
 impl ReductoParseV3Config {
     pub(crate) async fn prepare_request(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
@@ -194,7 +194,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
 
     async fn validate_environment(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<Self::Environment, crate::ocr::Error> {
         ReductoParseV3Config
@@ -204,7 +204,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
 
     fn get_complete_url(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
@@ -256,7 +256,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
 impl ReductoParseLegacyConfig {
     pub(crate) async fn prepare_request(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
@@ -766,7 +766,7 @@ mod tests {
         ])
         .await;
         let mut request = wire_request(&format!("reducto/{model}"), &base, json!({}));
-        request.connection.extra_headers = vec![
+        request.transport.extra_headers = vec![
             ("Content-Type".into(), "application/json".into()),
             ("X-Trace".into(), "upload-test".into()),
         ];
@@ -921,7 +921,7 @@ mod tests {
         let (base, seen, server) = mock_server(vec![MockResponse::json(raw)]).await;
         let mut request = wire_request("reducto/parse-v3", &base, json!({}));
         request.document = request.document.with_source("reducto://ready.pdf".into());
-        request.connection.extra_headers = vec![("authorization".into(), "Bearer existing".into())];
+        request.transport.extra_headers = vec![("authorization".into(), "Bearer existing".into())];
 
         let response = perform_ocr(request).await.unwrap();
         server.await.unwrap();
@@ -966,7 +966,7 @@ mod tests {
         ])
         .await;
         let mut request = wire_request(model, &base, json!({}));
-        request.connection.extra_headers = vec![("authorization".into(), "Bearer original".into())];
+        request.transport.extra_headers = vec![("authorization".into(), "Bearer original".into())];
         request.hooks = Arc::new(RewriteHeaders);
 
         perform_ocr(request).await.unwrap();

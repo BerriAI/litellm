@@ -4,7 +4,7 @@ use crate::llms::cohere::ocr::{CohereOptions, validate_document};
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::prepare::{credential_env, transform_request_body};
-use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrDocument};
+use crate::ocr::types::{LiteLLMOcrResponse, OcrDocument, PreparedOcrRequest};
 use crate::url_utils::ApiUrl;
 
 const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
@@ -27,7 +27,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
 
     async fn validate_environment(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<Self::Environment, crate::ocr::Error> {
         BaseOcrConfig::validate_environment(
@@ -40,7 +40,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
 
     fn get_complete_url(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         _params: &Self::OcrParams,
         _environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
@@ -103,7 +103,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
 impl AzureAICohereParseConfig {
     pub(crate) async fn prepare_request(
         &self,
-        request: &LiteLLMOcrRequest,
+        request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
