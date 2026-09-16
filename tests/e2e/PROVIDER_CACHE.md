@@ -2,7 +2,9 @@
 
 `E2E_PROVIDER_CACHE=1` enables automatic response reuse in the live E2E mode. Standard OpenAI and Anthropic model registrations use the provider edge, as do Anthropic-on-Bedrock registrations that carry no AWS identity of their own. Existing custom API bases, named credentials, mocked models and realtime WebSocket deployments keep their existing routing. Other provider protocols remain live
 
-The edge caches complete successful POST responses for `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings` and `/v1/responses` on the OpenAI and Anthropic mounts, and for `/model/{id}/converse` and `/model/{id}/invoke` on a Bedrock mount, including streams. Unsupported endpoints pass through. Each endpoint family has its own completeness rule, so a truncated embedding or a Responses run that never reached `response.completed` is not stored
+The edge caches complete successful POST responses for `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings` and `/v1/responses` on the OpenAI and Anthropic mounts, SSE streams included, and for `/model/{id}/converse` and `/model/{id}/invoke` on a Bedrock mount. Unsupported endpoints pass through. Each endpoint family has its own completeness rule, so a truncated embedding or a Responses run that never reached `response.completed` is not stored
+
+Bedrock's streaming endpoints, `converse-stream` and `invoke-with-response-stream`, are not cacheable. They still cross the edge and are still re-signed, so they need the same IAM, but they always call the provider. AWS frames them as binary `vnd.amazon.eventstream` rather than SSE, and reading a terminal event out of that is what a completeness rule for them would need. That matters more than the endpoint count suggests: the Claude Code compat cells drive the real CLI, which always streams, so most Bedrock traffic in the suite is not cached today
 
 ## Request identity
 
