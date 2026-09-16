@@ -5603,6 +5603,7 @@ def test_initialize_bedrock_wires_streaming_flags():
             streaming_buffer_until_moderated=False,
             streaming_sampling_rate=3,
             streaming_end_of_stream_only=True,
+            streaming_buffer_release_on_scan=True,
         ),
         {"guardrail_name": "bedrock-streaming"},
     )
@@ -5616,9 +5617,11 @@ def test_initialize_bedrock_wires_streaming_flags():
     assert configured.streaming_buffer_until_moderated is False
     assert configured.streaming_sampling_rate == 3
     assert configured.streaming_end_of_stream_only is True
+    assert configured.streaming_buffer_release_on_scan is True
     assert defaulted.streaming_buffer_until_moderated is True
     assert defaulted.streaming_sampling_rate == 5
     assert defaulted.streaming_end_of_stream_only is False
+    assert defaulted.streaming_buffer_release_on_scan is False
 
 
 def test_initialize_bedrock_rejects_non_positive_sampling_rate():
