@@ -4288,24 +4288,6 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
 
 
 class TestAnthropicPassthroughVirtualKeyLeak:
-    """Regression coverage for LIT-3550.
-
-    ``/anthropic/{endpoint}`` forwarded every incoming header to Anthropic, so the
-    header that carried the caller's LiteLLM virtual key (``Authorization``,
-    ``x-api-key``, ``x-litellm-api-key``, or an operator-configured name) reached
-    Anthropic and was rejected there as an invalid credential, with or without a
-    proxy-side Anthropic key layered on top. The virtual key must never leave the
-    proxy: it is dropped by value from the headers Anthropic reads as credentials
-    (``Authorization`` / ``x-api-key``), the proxy-only credential headers are
-    dropped by name, a caller's own Anthropic credential still passes through, and
-    a request with neither a proxy credential nor a caller credential fails with a
-    clean 401 instead of reaching ``create_pass_through_route``.
-
-    The forwarded set is rebuilt the way ``pass_through_request`` builds it from
-    the captured ``create_pass_through_route`` kwargs, so a route that re-enables
-    ``_forward_headers`` fails these tests the same way the original bug did.
-    """
-
     VKEY = "sk-litellm-victim-key"
     PROXY_KEY = "sk-ant-api03-proxy-configured-key"
     ENDPOINT = "v1/messages"
