@@ -146,10 +146,17 @@ def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
     return tx
 
 
+# The per-team advisory lock the team endpoints hold while changing a roster (TEAM_ADVISORY_LOCK_SQL),
+# taken in sorted order so the roster check below cannot interleave with their writes. A row lock would
+# deadlock with the access-group endpoints, which lock a team row after an access-group lock.
+_TEAM_ADVISORY_LOCKS_SQL: Final = """
+SELECT pg_advisory_xact_lock(hashtext(teams.team_id))
+FROM (SELECT DISTINCT team_id FROM unnest($1::text[]) AS team_id ORDER BY team_id) AS teams
+"""
+
 # One statement adds every member's cost to their membership row. A missing row is created only
-# while the user is still on the team's roster; FOR SHARE on the team row makes that check and
-# the insert atomic against /team/member_delete and /team/delete, which update or delete that row
-# before removing memberships, so a spend flush landing after a removal never recreates the member.
+# while the user is still on the team's roster, so a spend flush landing after a removal never
+# recreates the member.
 _TEAM_MEMBER_SPEND_SQL: Final = """
 INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id, spend, total_spend)
 SELECT p.user_id, p.team_id, p.cost, p.cost
@@ -158,7 +165,6 @@ WHERE EXISTS (
     SELECT 1 FROM "LiteLLM_TeamTable" t
     WHERE t.team_id = p.team_id
       AND t.members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', p.user_id))
-    FOR SHARE
 )
    OR EXISTS (SELECT 1 FROM "LiteLLM_TeamMembership" m WHERE m.user_id = p.user_id AND m.team_id = p.team_id)
 ON CONFLICT (user_id, team_id) DO UPDATE
@@ -171,10 +177,12 @@ async def _write_team_member_spend(transaction: _SpendTransaction, spend_by_memb
     # key is "team_id::<value>::user_id::<value>"; the string sort orders rows by (team_id, user_id),
     # keeping lock order consistent across pods to prevent deadlocks
     keys: Final = tuple(sorted(spend_by_member_key))
+    team_ids: Final = [key.split("::")[1] for key in keys]
+    _ = await transaction.execute_raw(_TEAM_ADVISORY_LOCKS_SQL, team_ids)
     _ = await transaction.execute_raw(
         _TEAM_MEMBER_SPEND_SQL,
         [key.split("::")[3] for key in keys],
-        [key.split("::")[1] for key in keys],
+        team_ids,
         [spend_by_member_key[key] for key in keys],
     )
 
