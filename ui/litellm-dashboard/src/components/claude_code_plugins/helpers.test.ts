@@ -156,6 +156,11 @@ describe("getSourceLink", () => {
   it("returns null when no repo or url", () => {
     expect(getSourceLink({ source: "github" })).toBeNull();
   });
+
+  it("returns null for an ssh clone url, which is not browsable", () => {
+    expect(getSourceLink({ source: "url", url: "git@ghe.example.com:org/repo.git" })).toBeNull();
+    expect(getSourceLink({ source: "url", url: "ssh://git@ghe.example.com/org/repo.git" })).toBeNull();
+  });
 });
 
 describe("getCategoryBadgeColor", () => {
@@ -466,6 +471,56 @@ describe("parseSkillSource", () => {
     expect(parseSkillSource("gitlab.com/org/repo", "a//b")).toBeNull();
   });
 
+  it("keeps an scp-style ssh clone url so private hosts authenticate with the user's key", () => {
+    expect(parseSkillSource("git@ghe.example.com:org/repo.git")?.parsed).toEqual({
+      source: "url",
+      url: "git@ghe.example.com:org/repo.git",
+    });
+    expect(parseSkillSource("git@ghe.example.com:org/repo")?.parsed).toEqual({
+      source: "url",
+      url: "git@ghe.example.com:org/repo.git",
+    });
+    expect(parseSkillSource("git@ghe.example.com:org/repo.git")?.suggestedName).toBe("repo");
+  });
+
+  it("normalizes an ssh:// clone url and keeps a custom port", () => {
+    expect(parseSkillSource("ssh://git@ghe.example.com/org/repo")?.parsed).toEqual({
+      source: "url",
+      url: "ssh://git@ghe.example.com/org/repo.git",
+    });
+    expect(parseSkillSource("ssh://git@ghe.example.com:2222/org/nested/repo.git")?.parsed).toEqual({
+      source: "url",
+      url: "ssh://git@ghe.example.com:2222/org/nested/repo.git",
+    });
+  });
+
+  it("combines an ssh clone url with an explicit subfolder", () => {
+    expect(parseSkillSource("git@ghe.example.com:org/repo.git", "plugins/my-skill")?.parsed).toEqual({
+      source: "git-subdir",
+      url: "git@ghe.example.com:org/repo.git",
+      path: "plugins/my-skill",
+    });
+    expect(parseSkillSource("git@ghe.example.com:org/repo.git", "../etc")).toBeNull();
+  });
+
+  it("rejects ssh-looking input without a host or repo path", () => {
+    expect(parseSkillSource("git@ghe.example.com:repo.git")).toBeNull();
+    expect(parseSkillSource("git@localhost:org/repo.git")).toBeNull();
+    expect(parseSkillSource("git@:org/repo.git")).toBeNull();
+    expect(parseSkillSource("ssh://ghe.example.com/org/repo.git")).toBeNull();
+  });
+
+  it("rejects ssh remotes with ip hosts or dot-only path segments", () => {
+    expect(parseSkillSource("git@10.0.0.5:org/repo.git")).toBeNull();
+    expect(parseSkillSource("ssh://git@169.254.169.254/org/repo")).toBeNull();
+    expect(parseSkillSource("git@ghe.example.com:../etc")).toBeNull();
+    expect(parseSkillSource("ssh://git@ghe.example.com/org/../repo")).toBeNull();
+    expect(parseSkillSource("git@ghe.example.com:org/.github")?.parsed).toEqual({
+      source: "url",
+      url: "git@ghe.example.com:org/.github.git",
+    });
+  });
+
   it("returns null for empty and garbage input", () => {
     expect(parseSkillSource("")).toBeNull();
     expect(parseSkillSource("   ")).toBeNull();
@@ -568,7 +623,7 @@ describe("parseSkillSource", () => {
 // Skill sources are served on the unauthenticated public feeds and cloned by clients, so the
 // parser must never publish an insecure, credentialed, internal, or malformed clone URL.
 describe("parseSkillSource — security boundary", () => {
-  it("rejects non-https schemes", () => {
+  it("rejects schemes other than https and user-qualified ssh", () => {
     for (const url of [
       "http://gitlab.com/org/repo",
       "HTTP://gitlab.com/org/repo",
