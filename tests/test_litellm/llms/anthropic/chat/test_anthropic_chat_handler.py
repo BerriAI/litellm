@@ -532,6 +532,42 @@ def test_regular_tool_finish_reason():
     assert model_response.choices[0].finish_reason == "tool_calls"
 
 
+def test_content_block_start_without_text_key_does_not_kill_the_stream():
+    """Some Anthropic-compatible gateways omit "text" on a text block start.
+
+    api.anthropic.com always sends "text": "", so absence carries the same meaning.
+    https://github.com/BerriAI/litellm/issues/40689
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        # no "text" key, unlike the official API
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "hi"},
+        },
+        {"type": "content_block_stop", "index": 0},
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+    parsed = [iterator.chunk_parser(chunk) for chunk in chunks]
+
+    start = parsed[1]
+    assert start.choices[0].delta.content == ""
+    delta = parsed[2]
+    assert delta.choices[0].delta.content == "hi"
+
+
 def test_text_only_streaming_has_index_zero():
     """Test that text-only streaming responses have choice index=0"""
     chunks = [

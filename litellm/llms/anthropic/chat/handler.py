@@ -907,7 +907,10 @@ class ModelResponseIterator:
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
                 if content_block_start["content_block"]["type"] == "text":
-                    text = content_block_start["content_block"]["text"]
+                    # Anthropic always sends "text": "" here, but some compatible gateways omit
+                    # the key. Absence on a text block start has the same meaning as the empty
+                    # string, so read it leniently rather than dropping the stream.
+                    text = content_block_start["content_block"].get("text", "")
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
