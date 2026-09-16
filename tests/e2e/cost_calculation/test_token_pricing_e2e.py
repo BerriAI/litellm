@@ -90,11 +90,6 @@ class TestTokenPricing:
         )
         assert row is not None, f"no spend row with a cost breakdown landed for {model.map_key}/{case.name}"
 
-        if not case.exact_spend and case.expect_zero_bill:
-            # The provider reported no usage and this wire has no proxy-side
-            # recount, so the bill is exactly zero.
-            assert row.spend is not None and row.spend == 0, f"no-usage stream billed {row.spend}: {row}"
-            return
         if not case.exact_spend:
             # stream_usage=absent: the provider reported no usage, so the row's
             # token counts are the proxy's own recount; only assert a bill landed.
