@@ -3,6 +3,7 @@ Test TogetherAI LLM
 """
 
 from base_llm_unit_tests import BaseLLMChatTest
+from tests._live_test_helpers import cheapest_together_chat_model
 import json
 import os
 from datetime import datetime
@@ -16,7 +17,11 @@ import pytest
 class TestTogetherAI(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         litellm.set_verbose = True
-        return {"model": "together_ai/openai/gpt-oss-20b"}
+        return {
+            "model": cheapest_together_chat_model(
+                "supports_function_calling", "supports_response_schema"
+            )
+        }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""

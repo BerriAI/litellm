@@ -1,6 +1,10 @@
 import asyncio
 import json
+import os
+import sys
 import traceback
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from dotenv import load_dotenv
 
@@ -12,6 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
+from tests._live_test_helpers import cheapest_together_chat_model
 from litellm import (
     RateLimitError,
     TextCompletionResponse,
@@ -4030,7 +4035,7 @@ def test_async_text_completion_together_ai():
     async def test_get_response():
         try:
             response = await litellm.atext_completion(
-                model="together_ai/openai/gpt-oss-20b",
+                model=cheapest_together_chat_model(),
                 prompt="good morning",
                 max_tokens=10,
             )
