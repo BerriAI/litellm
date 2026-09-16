@@ -905,7 +905,7 @@ async def _openapi_spec_health(
         return "unhealthy", f"OpenAPI specification request failed (HTTP {exc.response.status_code})"
     except HTTPResponseLimitError as exc:
         return "unknown", f"OpenAPI specification probe refused: {exc}"
-    except (httpx.RequestError, ValueError, OSError) as exc:
+    except (httpx.RequestError, TypeError, ValueError, OSError) as exc:
         return "unhealthy", f"OpenAPI specification could not be loaded ({type(exc).__name__})"
     return "healthy", None
 

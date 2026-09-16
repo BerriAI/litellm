@@ -9,6 +9,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
+from types import ModuleType
 from typing import Any, Final, TypedDict
 from urllib.parse import quote
 
@@ -55,6 +56,30 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
 from litellm.types.mcp import credential_redirect_hook, custom_credential_slot
+
+
+def _import_yaml() -> ModuleType:
+    """Import and return the yaml module, raising a clear error if missing."""
+    try:
+        import yaml as _yaml
+
+        return _yaml
+    except ImportError:
+        raise ImportError(
+            "PyYAML is required to parse YAML OpenAPI specs. Install it with: pip install pyyaml"
+        ) from None
+
+
+def _load_yaml_mapping(text: str) -> dict[str, Any]:
+    """Parse YAML text, requiring a mapping at the document root."""
+    yaml_mod = _import_yaml()
+    try:
+        parsed = yaml_mod.safe_load(text)
+    except yaml_mod.YAMLError as exc:
+        raise ValueError(f"Invalid YAML OpenAPI spec: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise TypeError("Invalid OpenAPI spec: expected a JSON/YAML mapping at the document root")
+    return parsed
 
 
 class _OpenAPIJSONSchema(TypedDict, total=False):
@@ -163,6 +188,48 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
+def _is_yaml_content(filepath: str, content_type: str | None = None) -> bool:
+    """Determine if the content should be parsed as YAML."""
+    # Check file extension
+    lower = filepath.lower()
+    if lower.endswith((".yaml", ".yml")):
+        return True
+    # Check Content-Type header
+    return bool(content_type and "yaml" in content_type)
+
+
+def _load_local_openapi_spec(filepath: str) -> dict[str, Any]:
+    """Read a local OpenAPI spec file, parsing YAML or JSON."""
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+    if _is_yaml_content(filepath):
+        return _load_yaml_mapping(content)
+    try:
+        return json.loads(content)
+    except ValueError as json_exc:
+        try:
+            return _load_yaml_mapping(content)
+        except (TypeError, ValueError):
+            raise json_exc from None
+
+
+def _load_remote_openapi_spec(text: str, as_yaml: bool) -> dict[str, Any]:
+    """Parse a fetched spec body. Runs in a worker thread: YAML parsing is
+    synchronous CPU work with no nesting/alias limits, so it must not run on
+    the event loop where a pathological document could stall the proxy."""
+    if as_yaml:
+        return _load_yaml_mapping(text)
+    try:
+        return json.loads(text)
+    except ValueError as json_exc:
+        try:
+            return _load_yaml_mapping(text)
+        except (TypeError, ValueError):
+            raise json_exc from None
+
+
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
@@ -172,14 +239,16 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
             else await async_safe_get(client, filepath, max_response_bytes=max_bytes)
         )
         r.raise_for_status()
-        return r.json()
 
-    # fallback: local file
-    # Local filesystem path
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
-    with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+        content_type = r.headers.get("content-type", "")
+        # Try JSON first; fall back to YAML for specs served without
+        # proper Content-Type headers (common with raw GitHub URLs).
+        as_yaml = _is_yaml_content(filepath, content_type)
+        return await asyncio.to_thread(_load_remote_openapi_spec, r.text, as_yaml)
+
+    # Local files go through a worker thread: the async path must not
+    # perform blocking disk I/O directly (ruff ASYNC230).
+    return await asyncio.to_thread(_load_local_openapi_spec, filepath)
 
 
 def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
