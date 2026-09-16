@@ -15,14 +15,10 @@ Anthropic ``error`` event so the stream stays valid and the client can retry.
 """
 
 import json
-import os
-import sys
 from typing import List, Optional
 from unittest.mock import MagicMock
 
 import pytest
-
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.exceptions import MidStreamFallbackError
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
