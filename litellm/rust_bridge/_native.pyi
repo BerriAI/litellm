@@ -1,6 +1,7 @@
 import datetime
 from asyncio import Future
 from collections.abc import Coroutine, Mapping
+from typing import Never, final
 
 import httpx
 
@@ -94,7 +95,9 @@ def chat_completions_decline(
     custom_llm_provider: str | None = ...,
 ) -> str | None: ...
 
+@final
 class ResponsesWebSocketConnection:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
     @classmethod
     def connect(
         cls, url: str, headers: object = ..., timeout_seconds: float | None = ...
@@ -103,8 +106,9 @@ class ResponsesWebSocketConnection:
     def recv_text(self) -> Future[str | None]: ...
     def close(self) -> Future[None]: ...
 
+@final
 class TokenCounter:
-    def __init__(self, tokenizer_json: str) -> None: ...
+    def __new__(cls, tokenizer_json: str) -> TokenCounter: ...
     @staticmethod
     def from_cl100k_ranks(rank_file: str) -> TokenCounter: ...
     @staticmethod
@@ -119,3 +123,21 @@ def _debug_setup(
     start: datetime.datetime,
     asynchronous: bool,
 ) -> tuple[object, dict[str, object]]: ...
+
+__all__ = [
+    "ResponsesWebSocketConnection",
+    "RustBridgeDeclined",
+    "RustUpstreamError",
+    "TokenCounter",
+    "_debug_setup",
+    "achat_completions",
+    "amessages",
+    "aocr",
+    "atranscription",
+    "chat_completions",
+    "chat_completions_decline",
+    "gil_stats",
+    "messages",
+    "ocr",
+    "transcription",
+]
