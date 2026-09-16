@@ -397,7 +397,7 @@ _STATIC_MODES: Final = frozenset(
 def _usable_credential_value(auth_type: MCPAuthType, name: str, value: str) -> bool:
     if not value:
         return False
-    if auth_type == MCPAuth.authorization or (auth_type == MCPAuth.api_key and name != "authorization"):
+    if auth_type == MCPAuth.api_key and name != "authorization":
         return True
     if value.lower() in ("bearer", "basic", "token", "apikey"):
         return False

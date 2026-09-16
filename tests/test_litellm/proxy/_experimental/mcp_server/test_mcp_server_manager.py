@@ -13577,18 +13577,45 @@ class TestProtectedCredentialPreparation:
         assert exc.value.status_code in (401, 500)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("auth_type,slot", [(MCPAuth.api_key, "X-API-Key"), (MCPAuth.authorization, "Authorization")])
-    async def test_raw_static_value_named_token_is_a_usable_credential(self, auth_type: MCPAuthType, slot: str) -> None:
+    @pytest.mark.parametrize("auth_type,slot,value", [
+        (MCPAuth.api_key, "X-API-Key", "token"),
+        (MCPAuth.authorization, "Authorization", "opaque-secret-value"),
+        (MCPAuth.authorization, "Authorization", "Bearer abc"),
+        (MCPAuth.authorization, "Authorization", "Custom abc"),
+    ])
+    async def test_raw_static_credentials_are_forwarded_unchanged(
+        self, auth_type: MCPAuthType, slot: str, value: str,
+    ) -> None:
         server = MCPServer(server_id="raw-key", name="raw-key", url="https://upstream.example/mcp",
-                           transport=MCPTransport.http, auth_type=auth_type, authentication_token="token")
+                           transport=MCPTransport.http, auth_type=auth_type, authentication_token=value)
         client = await MCPServerManager()._create_mcp_client(server)
         assert client._resolved_auth is not None
         request = httpx.Request("GET", server.url)
         flow = client._resolved_auth.auth_flow(request)
         try:
-            assert next(flow).headers[slot] == "token"
+            assert next(flow).headers[slot] == value
         finally:
             flow.close()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["Bearer", "basic", "token", "ApiKey", " bEaReR ", "\tTOKEN\t"])
+    @pytest.mark.parametrize("source", ["configured", "caller", "forwarded"])
+    async def test_raw_authorization_rejects_bare_schemes_before_dispatch(
+        self, respx_mock: MockRouter, value: str, source: str,
+    ) -> None:
+        server: Final = MCPServer(
+            server_id="raw-empty", name="raw-empty", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.authorization,
+            authentication_token=value if source == "configured" else None,
+        )
+        destination: Final = respx_mock.route().respond(200)
+        with pytest.raises(HTTPException, match="requires a usable upstream credential") as exc:
+            await MCPServerManager()._create_mcp_client(
+                server, mcp_auth_header=value if source == "caller" else None,
+                extra_headers={"Authorization": value} if source == "forwarded" else None,
+            )
+        assert exc.value.status_code == 500
+        assert destination.call_count == 0
 
     @pytest.mark.asyncio
     async def test_byok_flag_cannot_bypass_incomplete_obo(self) -> None:

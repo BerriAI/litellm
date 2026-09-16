@@ -50,7 +50,7 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
     (MCPAuth.api_key, "Authorization", "Custom Custom"),
     (MCPAuth.api_key, "X-API-Key", "Bearer Bearer"),
     (MCPAuth.api_key, "X-Custom", "ApiKey ApiKey"),
-    (MCPAuth.authorization, "Authorization", "Bearer Bearer"),
+    (MCPAuth.authorization, "Authorization", "opaque-secret-value"),
 ])
 def test_static_credential_preserves_supported_api_key_and_raw_headers(
     auth_type: MCPAuthType, header: str, value: str,
