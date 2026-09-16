@@ -209,6 +209,44 @@ def test_locked_aiohttp_version_is_not_pool_poisoning():
     )
 
 
+def _declared_hiredis_specifier():
+    from packaging.requirements import Requirement
+
+    pyproject = _load_toml(os.path.join(PROJECT_ROOT, "pyproject.toml"))
+    for requirement in pyproject["project"]["optional-dependencies"]["proxy"]:
+        parsed = Requirement(requirement)
+        if parsed.name.lower() == "hiredis":
+            return parsed.specifier
+    pytest.fail("hiredis is no longer declared in the proxy extra")
+
+
+def _locked_hiredis_version():
+    lock = _load_toml(os.path.join(PROJECT_ROOT, "uv.lock"))
+    for package in lock["package"]:
+        if package["name"].lower() == "hiredis":
+            return package["version"]
+    pytest.fail("hiredis is missing from uv.lock")
+
+
+def test_declared_hiredis_floor_excludes_3_4_0():
+    specifier = _declared_hiredis_specifier()
+
+    assert not specifier.contains("3.4.0"), (
+        f"litellm declares hiredis{specifier}, which still admits hiredis 3.4.0; "
+        "keep the floor at >=3.4.1"
+    )
+
+
+def test_locked_hiredis_version_includes_3_4_1_fixes():
+    from packaging.version import Version
+
+    locked = _locked_hiredis_version()
+
+    assert Version(locked) >= Version("3.4.1"), (
+        f"uv.lock resolves hiredis {locked}; re-run `uv lock` against a hiredis>=3.4.1 floor"
+    )
+
+
 import os
 import subprocess
 
