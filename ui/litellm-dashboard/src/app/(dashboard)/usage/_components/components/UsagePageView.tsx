@@ -908,7 +908,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <ActivityMetrics modelMetrics={modelMetrics} />
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
-                  <KeyActivityPanel keyMetrics={keyMetrics} />
+                  <KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={spendFetchState.apiKeyTruncation} />
                 </TabsContent>
                 <TabsContent value="mcp" keepMounted>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />
