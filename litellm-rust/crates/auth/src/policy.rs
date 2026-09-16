@@ -1,5 +1,4 @@
-use crate::AuthError;
-use crate::auth::error::AuthConfigurationError;
+use crate::Error;
 
 use super::http::apply_credential;
 use super::{CredentialPlacement, ResolvedCredential};
@@ -46,22 +45,18 @@ impl ProviderAuthPolicy {
         headers: Vec<(String, String)>,
         kind: CredentialPlanKind,
         credential: &ResolvedCredential,
-    ) -> Result<Vec<(String, String)>, AuthError> {
+    ) -> Result<Vec<(String, String)>, Error> {
         if self.has_existing_credential(&headers) {
             return match self.existing_header_behavior {
                 ExistingHeaderBehavior::Preserve => Ok(headers),
-                ExistingHeaderBehavior::Reject => Err(AuthError::Configuration(
-                    AuthConfigurationError::ExistingCredentialHeader,
-                )),
+                ExistingHeaderBehavior::Reject => Err(Error::ExistingCredentialHeader),
             };
         }
-        let rule =
-            self.rules
-                .iter()
-                .find(|rule| rule.kind == kind)
-                .ok_or(AuthError::Configuration(
-                    AuthConfigurationError::DisallowedCredentialPlan,
-                ))?;
+        let rule = self
+            .rules
+            .iter()
+            .find(|rule| rule.kind == kind)
+            .ok_or(Error::DisallowedCredentialPlan)?;
         apply_credential(headers, credential.secret().expose(), rule.placement)
     }
 }
@@ -69,7 +64,7 @@ impl ProviderAuthPolicy {
 #[cfg(test)]
 mod tests {
     use super::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
-    use crate::auth::{CredentialPlacement, ResolvedCredential, SecretValue};
+    use crate::{CredentialPlacement, ResolvedCredential, SecretValue};
 
     const RULES: &[CredentialRule] = &[CredentialRule {
         kind: CredentialPlanKind::Static,

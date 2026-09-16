@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-use crate::Error;
+use super::Error;
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType};
 
@@ -208,6 +208,7 @@ impl ResponsesWsInstrumentation {
 type LifecycleFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 
 impl CallLifecycleHooks<(), (), ()> for ResponsesWsInstrumentation {
+    type Error = Error;
     type PreCallFuture<'a> = LifecycleFuture<'a, ()>;
     type DuringCallFuture<'a> = LifecycleFuture<'a, ()>;
     type SuccessFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;

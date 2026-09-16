@@ -1,6 +1,6 @@
 use super::OcrAdapter;
-use crate::Error;
 use crate::constants::{COHERE_API_KEY_ENV, COHERE_PARSE_API_BASE};
+use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::codecs::cohere::{
     CohereParams, CohereResponse, transform_request, transform_response, validate_document,

@@ -1,6 +1,6 @@
 use super::OcrAdapter;
-use crate::Error;
 use crate::constants::MISTRAL_OCR_API_BASE;
+use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::codecs::mistral::{self, MistralOcrParams, MistralOcrResponse};
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};

@@ -1,4 +1,4 @@
-use litellm_core::Error;
+use litellm_core::ocr::Error;
 use std::future::Future;
 
 use litellm_core::ocr::wire::{OcrWireRequest, decode_request};

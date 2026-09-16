@@ -1,8 +1,8 @@
 mod legacy;
 mod v3;
 
-use crate::Error;
 use crate::constants::{REDUCTO_API_BASE, REDUCTO_API_KEY_ENV, REDUCTO_ID_PREFIX};
+use crate::ocr::Error;
 use crate::ocr::document::InlineDocument;
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::types::{OcrConnection, OcrDocument};
@@ -90,7 +90,7 @@ pub(super) async fn prepare_document(
     );
     let response = crate::http_utils::http_request(builder)
         .await
-        .map_err(crate::error::TransportError::from)?;
+        .map_err(crate::transport::Error::from)?;
     let uploaded = crate::ocr::client::read_json_response::<
         crate::ocr::codecs::reducto::ReductoUploadResponse,
     >(response, false, connection.max_response_bytes)

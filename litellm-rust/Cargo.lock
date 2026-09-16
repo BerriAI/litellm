@@ -1838,7 +1838,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
-name = "litellm-core"
+name = "litellm-auth"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "subtle",
+ "thiserror 2.0.19",
+ "tokio",
+ "veil",
+]
+
+[[package]]
+name = "litellm-auth-aws"
 version = "0.1.0"
 dependencies = [
  "aws-config",
@@ -1847,13 +1858,75 @@ dependencies = [
  "aws-sigv4",
  "aws-smithy-runtime-api",
  "aws-types",
+ "litellm-auth",
+ "moka",
+ "reqwest 0.12.28",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-auth-azure"
+version = "0.1.0"
+dependencies = [
  "azure_core",
  "azure_identity",
+ "litellm-auth",
+ "moka",
+ "serde_json",
+ "sha2 0.10.9",
+ "strum",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "litellm-auth-gcp"
+version = "0.1.0"
+dependencies = [
+ "gcp_auth",
+ "litellm-auth",
+ "moka",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-cache"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-cache-memory"
+version = "0.1.0"
+dependencies = [
+ "litellm-cache",
+ "rstest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-core"
+version = "0.1.0"
+dependencies = [
  "base64 0.22.1",
  "bytes",
  "data-url",
  "futures-util",
- "gcp_auth",
+ "litellm-auth",
+ "litellm-auth-aws",
+ "litellm-auth-azure",
+ "litellm-auth-gcp",
  "mime_guess",
  "moka",
  "rand 0.8.7",
@@ -1880,6 +1953,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "futures-util",
+ "litellm-auth",
  "litellm-core",
  "litellm-python-interop",
  "litellm-token-counter",

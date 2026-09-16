@@ -77,7 +77,7 @@ async fn poll_operation(
         let response = tokio::time::timeout_at(deadline, crate::http_utils::http_request(builder))
             .await
             .map_err(|_| OcrPollingError::PollTimeout)?
-            .map_err(crate::error::TransportError::from)?;
+            .map_err(crate::transport::Error::from)?;
         let retry = response
             .headers()
             .get(reqwest::header::RETRY_AFTER)

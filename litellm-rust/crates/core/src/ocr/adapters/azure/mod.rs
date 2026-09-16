@@ -4,12 +4,12 @@ mod mistral;
 
 use std::sync::OnceLock;
 
-use crate::Error;
-use crate::auth::error::AuthConfigurationError;
-use crate::auth::{InputSource, Sourced};
+use crate::ocr::Error;
+
 use crate::ocr::error::OcrError;
 use crate::ocr::types::OcrConnection;
-use crate::providers::azure_ai::auth::{AzureAuthInputs, AzureAuthService};
+use litellm_auth::{InputSource, Sourced};
+use litellm_auth_azure::{AzureAuthInputs, AzureAuthService};
 
 pub(crate) use cohere::AzureCohereAdapter;
 pub(crate) use document_intelligence::AzureDocumentIntelligenceAdapter;
@@ -26,7 +26,7 @@ async fn resolve_entra(
         .get_azure_ad_token(config, env_lookup)
         .await
         .or_else(|error| match error {
-            crate::AuthError::EmptyAzureToken => Ok(None),
+            litellm_auth::Error::EmptyAzureToken => Ok(None),
             other => Err(other),
         })
         .map(|credential| {
@@ -47,10 +47,7 @@ fn validate_destination(
         && connection.api_base_source == InputSource::Request
         && credential_source != InputSource::Request
     {
-        return Err(Error::from(crate::AuthError::Configuration(
-            AuthConfigurationError::RequestAzureCredentialDestination,
-        ))
-        .into());
+        return Err(Error::from(litellm_auth::Error::RequestAzureCredentialDestination).into());
     }
     Ok(())
 }

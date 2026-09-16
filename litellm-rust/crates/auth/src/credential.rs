@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use veil::Redact;
 
-use crate::AuthError;
+use crate::Error;
 
 use super::{ResolvedCredential, SecretValue, TokenProviderHandle};
 
@@ -48,7 +48,7 @@ pub enum CredentialLookup {
 }
 
 pub type CredentialLookupFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<CredentialLookup, AuthError>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Result<CredentialLookup, Error>> + Send + 'a>>;
 
 pub trait CredentialResolver: std::fmt::Debug + Send + Sync {
     fn resolve<'a>(&'a self, reference: &'a CredentialRef) -> CredentialLookupFuture<'a>;
@@ -62,7 +62,7 @@ impl CredentialResolverHandle {
         Self(resolver)
     }
 
-    pub async fn resolve(&self, reference: &CredentialRef) -> Result<CredentialLookup, AuthError> {
+    pub async fn resolve(&self, reference: &CredentialRef) -> Result<CredentialLookup, Error> {
         self.0.resolve(reference).await
     }
 }
@@ -84,7 +84,7 @@ impl CredentialPlan {
     pub async fn resolve(
         &self,
         resolver: &CredentialResolverHandle,
-    ) -> Result<CredentialPlanResolution, AuthError> {
+    ) -> Result<CredentialPlanResolution, Error> {
         match self {
             Self::Static(CredentialRef::Explicit(secret)) => Ok(
                 CredentialPlanResolution::Resolved(ResolvedCredential::Static(secret.clone())),
@@ -103,7 +103,7 @@ impl CredentialPlan {
             Self::Caller(caller) => {
                 let credential = caller.acquire().await?;
                 if credential.secret().expose().is_empty() {
-                    return Err(AuthError::EmptyCallerCredential);
+                    return Err(Error::EmptyCallerCredential);
                 }
                 Ok(CredentialPlanResolution::Resolved(credential))
             }
@@ -119,8 +119,8 @@ mod tests {
         CredentialLookup, CredentialLookupFuture, CredentialPlan, CredentialPlanResolution,
         CredentialRef, CredentialResolver, CredentialResolverHandle,
     };
-    use crate::AuthError;
-    use crate::auth::SecretValue;
+    use crate::Error;
+    use crate::SecretValue;
 
     #[derive(Debug)]
     struct HostResolver;
@@ -164,7 +164,7 @@ mod tests {
 
     impl CredentialResolver for FailingResolver {
         fn resolve<'a>(&'a self, _reference: &'a CredentialRef) -> CredentialLookupFuture<'a> {
-            Box::pin(async { Err(AuthError::UnresolvedOidcReference) })
+            Box::pin(async { Err(Error::UnresolvedOidcReference) })
         }
     }
 
@@ -178,6 +178,6 @@ mod tests {
             .await
             .expect_err("acquisition errors cannot become fallback");
 
-        assert_eq!(error, AuthError::UnresolvedOidcReference);
+        assert_eq!(error, Error::UnresolvedOidcReference);
     }
 }

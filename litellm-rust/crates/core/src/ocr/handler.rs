@@ -3,8 +3,8 @@ use super::adapters::OcrAdapter;
 use super::hooks::{OcrHooks, OcrLifecycleHooks, OcrPostCallRequest};
 use super::registry::OcrAdapterKind;
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
-use crate::Error;
 use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
+use crate::ocr::Error;
 use std::sync::Arc;
 
 pub(crate) async fn perform_ocr_request(
