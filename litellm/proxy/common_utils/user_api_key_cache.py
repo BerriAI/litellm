@@ -223,13 +223,11 @@ class UserApiKeyCache(DualCache):
         await super().async_delete_cache(key)
 
     async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
-        """Batch twin of ``async_delete_cache``, partitioned the way
-        ``async_set_cache_pipeline`` partitions its writes.
+        """Batch twin of ``async_delete_cache``, partitioned like
+        ``async_set_cache_pipeline``.
 
-        Both partitions are cleared even when one of them raises: a caller
-        batching these has already committed the rows they cache, so a partition
-        left holding pre-reset spend goes on being authorized against until the
-        entry expires. The first failure is re-raised for the caller to report.
+        Both partitions are cleared even when one raises, because a caller
+        batching these has already committed the rows they cache.
         """
         key_object_keys: Final = tuple(key for key in keys if is_user_key_cache_key(key))
         other_keys: Final = tuple(key for key in keys if not is_user_key_cache_key(key))

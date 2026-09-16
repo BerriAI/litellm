@@ -202,10 +202,8 @@ def _budget_link_where(
 def _enduser_invalidation_where(budget_ids: Sequence[str]) -> dict[str, object]:
     """Customers whose cached spend a committed reset of these tiers invalidated.
 
-    Mirrors ``_queue_enduser_resets``: the link, plus the NULL-budget_id rows
-    that ride the default tier when that tier is one of the expiring ones. The
-    write's ``spend > 0`` filter has no twin here because the commit already
-    zeroed those rows, so post-commit it would match nobody.
+    Mirrors ``_queue_enduser_resets`` without its ``spend > 0`` filter, which
+    post-commit would match nobody.
     """
     linked: Final = _budget_link_where(budget_ids)
     default_budget_id: Final = litellm.max_end_user_budget_id
@@ -279,9 +277,8 @@ class _BudgetCascade:
 
 @dataclass(frozen=True, slots=True)
 class _EndUserWalk:
-    """Where the post-commit customer walk stands: the keyset cursor its next
-    page resumes from, None once there is no next page, how many customers it
-    has reached, and whether a failed page read cut it short of the tail."""
+    """Where the customer walk stands. ``cursor`` is None once it is done, and
+    ``truncated`` says a failed page read cut it short of the tail."""
 
     cursor: str | None = ""
     invalidated: int = 0
@@ -306,8 +303,6 @@ class _BudgetCascadeFailed:
 
 _EMPTY_CASCADE: Final = _BudgetCascade()
 
-#: Which of the proxy's two caches a batch of keys belongs to. ``spend_counter_cache``
-#: holds the live running spend; ``user_api_key_cache`` holds the cached management rows.
 _InvalidatedCache = Literal["spend counter", "user_api_key_cache"]
 
 
@@ -623,20 +618,15 @@ class ResetBudgetJob:
     @staticmethod
     async def _invalidate_caches(counter_keys: Sequence[str], cache_keys: Sequence[str]) -> None:
         """Batch twin of ``_invalidate_spend_counter`` and
-        ``_invalidate_user_api_key_cache_entry``, carrying the same
-        after-the-commit requirement as both.
-
-        One round trip per chunk rather than one per key: a tier's dependent
-        population is unbounded, and awaiting each key in turn makes the last
-        dependent wait out every dependent ahead of it.
-        """
+        ``_invalidate_user_api_key_cache_entry``, after the commit like both:
+        one round trip per chunk where a tier's dependents are unbounded."""
         await ResetBudgetJob._invalidate_cache("spend counter", counter_keys)
         await ResetBudgetJob._invalidate_cache("user_api_key_cache", cache_keys)
 
     @staticmethod
     async def _invalidate_cache(cache: _InvalidatedCache, keys: Sequence[str]) -> None:
-        """One cache's share of a batch, awaited separately from the other's so a
-        failure against either still leaves the other one invalidated."""
+        """One cache's share of a batch, awaited separately so either failing
+        still leaves the other invalidated."""
         if not keys:
             return
         try:
@@ -679,21 +669,9 @@ class ResetBudgetJob:
     async def _invalidate_enduser_caches(self, budget_ids: Sequence[str]) -> _EndUserWalk:
         """Drop the cached spend of every customer the committed tier reset zeroed.
 
-        Walked a page at a time with a keyset cursor, for the same reason
-        ``_reset_windows_for_source`` is: the customers sharing one tier are
-        unbounded, so reading them into one result set puts a
-        customer-count-sized list in the proxy's heap on every tick, and a
-        deployment large enough turns that into an OOM rather than a slow tick.
-
-        No per-run page cap, also for that walk's reason: the position cannot
-        survive the run, so a cap would restart at the first customer every tick
-        and never reach the tail. The cursor strictly advances, so this
-        terminates on its own.
-
-        A page that fails to read stops the walk short of the tail. The window is
-        already advanced by then, so no later tick comes back for the customers
-        past it, which is why the walk reports that it was cut short instead of
-        passing the part it managed off as the whole.
+        Paged like ``_reset_windows_for``, and capless for its reason too: the
+        customers on one tier are unbounded, and a cap cannot keep its position
+        across pod elections, so it would restart at the first customer forever.
         """
         if not budget_ids:
             return _ENDUSER_WALK_DONE

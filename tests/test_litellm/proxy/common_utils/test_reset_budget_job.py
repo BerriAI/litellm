@@ -32,9 +32,15 @@ class MockTable:
         self.find_many_calls: List[Dict[str, Any]] = []
         self.update_many_calls: List[Dict[str, Any]] = []
         self._find_many_results: List[Any] = []
+        self._find_many_error: Optional[tuple[int, Exception]] = None
 
     def set_find_many_results(self, results: List[Any]):
         self._find_many_results = results
+
+    def set_find_many_error(self, after_reads: int, error: Exception):
+        """Fail every read past the first ``after_reads``, the way a connection
+        dropping partway through a paged walk does."""
+        self._find_many_error = (after_reads, error)
 
     async def find_many(
         self,
@@ -45,6 +51,8 @@ class MockTable:
         """Replays canned rows, honouring the keyset cursor + ``take`` a paged
         caller relies on: without that a paged walk never advances and the
         test would hang instead of failing."""
+        if self._find_many_error is not None and len(self.find_many_calls) >= self._find_many_error[0]:
+            raise self._find_many_error[1]
         paging = {k: v for k, v in (("order", order), ("take", take)) if v is not None}
         self.find_many_calls.append({"where": where, **paging})
         rows = list(self._find_many_results)
@@ -1686,14 +1694,7 @@ def test_enduser_invalidation_reports_a_page_read_failure_instead_of_a_clean_fin
             for i in range(RESET_BUDGET_JOB_BATCH_SIZE + 3)
         ]
     )
-    read_page: Final = endusers.find_many
-
-    async def fail_after_the_first_page(**kwargs):
-        if endusers.find_many_calls:
-            raise RuntimeError("connection reset while paging customers")
-        return await read_page(**kwargs)
-
-    endusers.find_many = fail_after_the_first_page
+    endusers.set_find_many_error(1, RuntimeError("connection reset while paging customers"))
     logging_obj: Final = RecordingProxyLogging()
     job: Final = ResetBudgetJob(proxy_logging_obj=logging_obj, prisma_client=mock_prisma_client)
 
