@@ -147,15 +147,9 @@ class _AggregatedSpendData(TypedDict):
     totals: SpendMetrics
 
 
-class _GroupingSetsRow(SimpleNamespace):
+class _RollupMetricsRow(SimpleNamespace):
     date: str
     api_key: str | None
-    model: str | None
-    model_group: str | None
-    custom_llm_provider: str | None
-    mcp_namespaced_tool_name: str | None
-    endpoint: str | None
-    group_level: int
     spend: float | None
     prompt_tokens: int | None
     completion_tokens: int | None
@@ -173,7 +167,17 @@ class _GroupingSetsRow(SimpleNamespace):
     timed_requests: int | None
 
 
-class _EntityRollupRow(_GroupingSetsRow):
+class _GroupingSetsRow(_RollupMetricsRow):
+    model: str | None
+    model_group: str | None
+    custom_llm_provider: str | None
+    mcp_namespaced_tool_name: str | None
+    endpoint: str | None
+    group_level: int
+    distinct_api_keys: int | None
+
+
+class _EntityRollupRow(_RollupMetricsRow):
     entity_id: str | None
     api_key_rolled: int
 
@@ -202,7 +206,7 @@ async def _query_raw_optional(
     return await prisma_client.db.query_raw(query[0], *query[1])
 
 
-def _reported_flat_cost(record: DailySpendRecord | _GroupingSetsRow) -> float:
+def _reported_flat_cost(record: DailySpendRecord | _RollupMetricsRow) -> float:
     """Flat cost a daily row reports, which is zero unless PTU cost attribution is enabled.
 
     Both read paths funnel through here: the paginated path reads the ``ptu_flat_cost``
@@ -823,16 +827,6 @@ def _build_aggregated_sql_query(
 ) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
     """Build the GROUPING SETS query for aggregated daily activity.
 
-    One statement, two UNION ALL arms over the same WHERE clause. The first arm is
-    key-free: grand total, per-date totals and the (date, model / model_group /
-    provider / mcp / endpoint) rollups, so its row count never grows with the number
-    of keys. With ``global_rollup_through`` it reads days through that marker from
-    ``LiteLLM_DailyGlobalSpend`` (whose row count never grew with the number of keys to
-    begin with) and only the days after it from the per-key table.
-    The second arm emits the (date, <dimension>, api_key) rollups for the
-    USAGE_TOP_API_KEYS_LIMIT highest-spend keys only. Both arms share the 7-bit
-    group_level bitmask (date, api_key, model, model_group, provider, mcp, endpoint).
-
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
     """
@@ -873,7 +867,8 @@ def _build_aggregated_sql_query(
             (GROUPING(date) << 6) | {_API_KEY_ROLLED_UP_BIT}
                 | GROUPING(model, {_MODEL_GROUP_EXPR},
                            custom_llm_provider, mcp_namespaced_tool_name,
-                           endpoint) AS group_level,{metric_select}
+                           endpoint) AS group_level,
+            NULL::bigint AS distinct_api_keys,{metric_select}
         FROM {_key_free_source(pg_table, where_clause, marker_param)}
         GROUP BY GROUPING SETS (
             (date),
@@ -886,7 +881,7 @@ def _build_aggregated_sql_query(
         ))
         UNION ALL
         (WITH top_api_keys AS (
-            SELECT api_key
+            SELECT api_key, COUNT(*) OVER () AS distinct_api_keys
             FROM "{pg_table}"
             WHERE {where_clause} AND api_key <> {sentinel_param}
             GROUP BY api_key
@@ -903,9 +898,10 @@ def _build_aggregated_sql_query(
             endpoint,
             GROUPING(date, api_key, model, {_MODEL_GROUP_EXPR},
                      custom_llm_provider, mcp_namespaced_tool_name,
-                     endpoint) AS group_level,{metric_select}
-        FROM "{pg_table}"
-        WHERE {where_clause} AND api_key IN (SELECT api_key FROM top_api_keys)
+                     endpoint) AS group_level,
+            MAX(top_api_keys.distinct_api_keys) AS distinct_api_keys,{metric_select}
+        FROM "{pg_table}" JOIN top_api_keys USING (api_key)
+        WHERE {where_clause}
         GROUP BY GROUPING SETS (
             (date, api_key),
             (date, model, api_key),
@@ -1064,7 +1060,7 @@ async def _aggregate_spend_records(
 # current grouping set's key), 0 when the column is part of the key.
 _GROUP_GRAND_TOTAL: Final = 127  # 0b1111111 — all rolled up
 _GROUP_DATE: Final = 63  # 0b0111111 — only date kept
-_API_KEY_ROLLED_UP_BIT: Final = 32  # 0b0100000 — api_key position in the 7-bit mask
+_API_KEY_ROLLED_UP_BIT: Final = 32  # 0b0100000
 _GROUP_DATE_API_KEY: Final = 31  # 0b0011111
 _GROUP_DATE_MODEL: Final = 47  # 0b0101111
 _GROUP_DATE_MODEL_API_KEY: Final = 15  # 0b0001111
@@ -1078,7 +1074,7 @@ _GROUP_DATE_ENDPOINT: Final = 62  # 0b0111110
 _GROUP_DATE_ENDPOINT_API_KEY: Final = 30  # 0b0011110
 
 
-def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
+def _record_to_spend_metrics(record: _RollupMetricsRow) -> SpendMetrics:
     """Build a SpendMetrics directly from one already-aggregated rollup row.
 
     SUM() over zero rows is SQL NULL, so rollup rows (notably the grand-total
@@ -1432,13 +1428,6 @@ async def get_daily_activity_aggregated(
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
-    Runs one GROUPING SETS statement with two UNION ALL arms: a key-free one for totals
-    and the model/provider/mcp/endpoint rollups (row count independent of key
-    cardinality) and a bounded one for the per-key rollups of the top
-    USAGE_TOP_API_KEYS_LIMIT keys by spend. breakdown.api_keys and every
-    api_key_breakdown therefore list at most that many keys, while the totals and the
-    key-free rollups cover every key.
-
     include_entity_breakdown runs a small companion rollup query and folds
     `breakdown.entities` onto the response, as entity-scoped views like Team Usage need.
 
@@ -1481,6 +1470,7 @@ async def get_daily_activity_aggregated(
         )
 
         records: Final = [_GroupingSetsRow(**row) for row in (raw_rows or ())]
+        total_api_keys: Final = next((r.distinct_api_keys for r in records if r.distinct_api_keys is not None), 0)
 
         # The grouping-sets dispatcher places each row directly in its bucket
         # using the row's GROUPING() bitmask. No Python-side summing needed.
@@ -1535,6 +1525,7 @@ async def get_daily_activity_aggregated(
                 total_pages=1,
                 has_more=False,
                 api_key_limit=USAGE_TOP_API_KEYS_LIMIT,
+                total_api_keys=total_api_keys,
             ),
         )
 
