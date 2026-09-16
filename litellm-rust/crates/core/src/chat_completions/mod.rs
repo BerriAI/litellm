@@ -22,7 +22,6 @@ use handler::execute_chat_completions_provider_call;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {

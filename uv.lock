@@ -3295,6 +3295,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad", size = 73517, upload-time = "2024-12-06T15:37:21.509Z" },
 ]
 
+[package.optional-dependencies]
+http2 = [
+    { name = "h2" },
+]
+
 [[package]]
 name = "httpx-sse"
 version = "0.4.3"
@@ -4464,7 +4469,7 @@ dependencies = [
     { name = "boto3" },
     { name = "click" },
     { name = "fastuuid" },
-    { name = "httpx" },
+    { name = "httpx", extra = ["http2"] },
     { name = "importlib-metadata" },
     { name = "jinja2" },
     { name = "jsonschema" },
@@ -4717,7 +4722,7 @@ requires-dist = [
     { name = "grpcio", marker = "extra == 'proxy-runtime'", specifier = "==1.78.0" },
     { name = "gunicorn", marker = "extra == 'proxy'", specifier = ">=23.0.0,<24.0" },
     { name = "hiredis", marker = "extra == 'proxy'", specifier = ">=3.0.0,<4.0" },
-    { name = "httpx", specifier = ">=0.28.0,<1.0" },
+    { name = "httpx", extras = ["http2"], specifier = ">=0.28.0,<1.0" },
     { name = "importlib-metadata", specifier = ">=8.0.0,<9.0" },
     { name = "inquirerpy", marker = "extra == 'cli'", specifier = ">=0.3.4,<1.0" },
     { name = "inquirerpy", marker = "extra == 'proxy'", specifier = ">=0.3.4,<1.0" },

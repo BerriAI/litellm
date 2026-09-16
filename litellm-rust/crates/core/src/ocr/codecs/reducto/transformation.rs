@@ -6,12 +6,6 @@ use super::types::*;
 use crate::ocr::error::{OcrRequestError, OcrResponseError};
 use crate::ocr::types::{LiteLLMOcrResponse, OcrDocument};
 
-#[tracing::instrument(
-    name = "transform_ocr_request",
-    target = "litellm::function_trace",
-    level = "trace",
-    skip_all
-)]
 pub(crate) fn transform_v3_ocr_request(
     _model: &str,
     document: OcrDocument,
@@ -23,12 +17,6 @@ pub(crate) fn transform_v3_ocr_request(
     })
 }
 
-#[tracing::instrument(
-    name = "transform_ocr_request",
-    target = "litellm::function_trace",
-    level = "trace",
-    skip_all
-)]
 pub(crate) fn transform_legacy_ocr_request(
     _model: &str,
     document: OcrDocument,

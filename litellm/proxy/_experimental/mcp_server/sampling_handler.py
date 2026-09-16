@@ -771,6 +771,7 @@ async def _check_model_access(model: str, user_api_key_auth: "UserAPIKeyAuth | N
 
     try:
         import litellm
+        from litellm.proxy._types import ModelAccessDeniedProxyException
         from litellm.proxy.auth.auth_checks import (
             _check_team_member_model_access,
             can_key_call_model,
@@ -884,11 +885,14 @@ async def _check_model_access(model: str, user_api_key_auth: "UserAPIKeyAuth | N
         )
         return None
     except Exception as access_err:
-        verbose_logger.warning(
-            "MCP sampling: model access denied for model=%s: %s",
-            model,
-            access_err,
-        )
+        if isinstance(access_err, ModelAccessDeniedProxyException):
+            verbose_logger.warning(
+                "MCP sampling: model access denied for model=%s: %s",
+                model,
+                access_err.sanitized_internal_message(),
+            )
+            return ErrorData(code=-1, message=access_err.message)
+        verbose_logger.warning("MCP sampling: model access denied for model=%s: %s", model, access_err)
         return ErrorData(
             code=-1,
             message=(f"Model access denied: the API key is not authorized to use model '{model}'. {access_err}"),

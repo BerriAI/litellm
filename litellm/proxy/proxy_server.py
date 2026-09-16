@@ -106,6 +106,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     PassThroughGenericEndpoint,
     ProxyErrorTypes,
     ProxyException,
@@ -1668,6 +1669,7 @@ class UserAPIKeyCacheTTLEnum(enum.Enum):
 @app.exception_handler(ProxyException)
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
+    _log_model_access_denial(exc)
     headers: Final = exc.headers
     error_dict: Final = exc.to_dict()
     status_code: Final = int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -1677,6 +1679,12 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
         content={"error": error_dict},
         headers=headers,
     )
+
+
+def _log_model_access_denial(exc: ProxyException) -> None:
+    if not isinstance(exc, ModelAccessDeniedProxyException):
+        return
+    verbose_proxy_logger.warning(exc.sanitized_internal_message())
 
 
 def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Exception | None = None) -> None:
@@ -11978,6 +11986,7 @@ async def realtime_websocket_endpoint(
             llm_router=llm_router,
         )
     except ProxyException as e:
+        _log_model_access_denial(e)
         await _reject_realtime_session(websocket, user_api_key_dict, code=1008, reason=e.message[:120])
         return
     await websocket.accept(**accept_kwargs)

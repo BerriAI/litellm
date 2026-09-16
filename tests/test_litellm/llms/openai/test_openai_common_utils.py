@@ -411,3 +411,5 @@ async def test_async_genuine_bad_request_still_raises(provider, stream):
 )
 def test_is_openai_backed_api_base_decides_by_hostname_only(api_base, expected):
     assert is_openai_backed_api_base(api_base) is expected
+
+
