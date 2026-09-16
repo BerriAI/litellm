@@ -22,6 +22,13 @@ from litellm.exceptions import (
 )
 
 
+class ProviderToolSchemaError(Exception):
+    def __init__(self, response: httpx.Response) -> None:
+        self.status_code = "tool_use_failed"
+        self.response = response
+        super().__init__("tool call validation failed")
+
+
 class TestExceptionHeaderPreservation:
     """Test that exception classes preserve headers from provider responses."""
 
@@ -254,6 +261,24 @@ class TestExceptionAttributes:
         assert midstream_fallback.status_code == 503
         assert midstream_fallback.response.status_code == 503
         assert str(midstream_fallback.response.request.url) == "https://openai.com/v1/"
+
+    def test_midstream_fallback_error_accepts_non_numeric_provider_status(self):
+        original_response = httpx.Response(
+            status_code=400,
+            request=httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions"),
+        )
+        provider_error = ProviderToolSchemaError(original_response)
+
+        midstream_error = MidStreamFallbackError(
+            message=str(provider_error),
+            model="openai/gpt-oss-120b",
+            llm_provider="groq",
+            original_exception=provider_error,
+        )
+
+        assert midstream_error.status_code == 400
+        assert midstream_error.response.status_code == 400
+        assert "tool call validation failed" in midstream_error.message
 
 
 class TestProxyHeaderExtraction:
