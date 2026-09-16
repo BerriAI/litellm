@@ -30,7 +30,12 @@ import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import RouterSettingsSummary from "../common_components/RouterSettingsSummary";
 import { hasRouterSettings } from "../common_components/routerSettingsPayload";
-import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import {
+  extractLoggingSettings,
+  formatMetadataForDisplay,
+  mergeKeyTags,
+  stripTagsFromMetadata,
+} from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import { toast } from "@/lib/toast";
@@ -294,13 +299,10 @@ export default function KeyInfoView({
       if (formValues.metadata && typeof formValues.metadata === "string") {
         try {
           const parsedMetadata = JSON.parse(formValues.metadata);
-          // Ensure tags are controlled via dedicated field, not in metadata textarea
-          if ("tags" in parsedMetadata) {
-            delete parsedMetadata["tags"];
-          }
+          const tags = mergeKeyTags(formValues.tags, parsedMetadata);
           formValues.metadata = {
-            ...parsedMetadata,
-            ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
+            ...stripTagsFromMetadata(parsedMetadata),
+            ...(tags.length > 0 ? { tags } : {}),
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
             ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
               ? { logging: formValues.logging_settings }
@@ -318,10 +320,10 @@ export default function KeyInfoView({
         }
       } else {
         const baseMetadata = formValues.metadata || {};
-        const { tags: _omitTags, ...rest } = baseMetadata;
+        const tags = mergeKeyTags(formValues.tags, baseMetadata);
         formValues.metadata = {
-          ...rest,
-          ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
+          ...stripTagsFromMetadata(baseMetadata),
+          ...(tags.length > 0 ? { tags } : {}),
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
           ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
             ? { logging: formValues.logging_settings }
@@ -334,7 +336,6 @@ export default function KeyInfoView({
         };
       }
 
-      // tags are merged into metadata; do not send as top-level field
       if ("tags" in formValues) {
         delete formValues.tags;
       }
