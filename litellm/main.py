@@ -105,7 +105,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 )
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
@@ -2341,6 +2341,10 @@ def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
 def _complete_aiohttp_openai(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
+    if http2_enabled():
+        verbose_logger.warning(
+            "litellm.http2 is enabled but aiohttp_openai/ always uses aiohttp, which has no HTTP/2 client; this request stays on HTTP/1.1"
+        )
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key

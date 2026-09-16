@@ -26,11 +26,13 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
+    CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
+    MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
@@ -76,6 +78,8 @@ from litellm.proxy.auth.auth_utils import (
     iter_request_fallback_targets,
     normalize_request_route,
     pre_db_read_auth_checks,
+    request_dispatched_to_pass_through_endpoint,
+    request_dispatched_to_provider_pass_through,
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
@@ -103,6 +107,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_set_request_parsed_body,
     populate_request_with_path_params,
     read_raw_json_body,
+    rewrite_request_model,
 )
 from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
@@ -124,6 +129,7 @@ from litellm.proxy.utils import (
     normalize_route_for_root_path,
 )
 from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
@@ -235,11 +241,45 @@ async def _normalize_claude_model(
         request.scope[_CLAUDE_MODEL_NORMALIZED] = True
     if source is None:
         return
-    request_data["model"] = source
-    _safe_set_request_parsed_body(request=request, parsed_body=request_data)
-    if request is not None:
-        request._json = request_data
-        request._body = orjson.dumps(request_data)
+    rewrite_request_model(request_data, request, source)
+
+
+async def _resolve_router_settings_model_group_alias(
+    request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
+    valid_token: UserAPIKeyAuth,
+    request: Request | None,
+    route: str,
+) -> None:
+    """Rewrite the requested model through the key's or team's ``router_settings.model_group_alias``
+    before the allowlist checks, so they authorize the model group the request is routed to.
+    """
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
+
+    if request is None or llm_router is None or not RouteChecks.is_llm_api_route(route=route):
+        return
+    if request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is True:
+        return
+    request.scope[MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY] = True
+    if request_dispatched_to_pass_through_endpoint(request) or request_dispatched_to_provider_pass_through(request):
+        return
+    requested: Final = request_data.get("model")
+    if not isinstance(requested, str) or await read_raw_json_body(request=request) is None:
+        return
+    settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=valid_token, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+    if not isinstance(settings, Mapping):
+        return
+    target: Final = resolve_model_group_alias(settings.get("model_group_alias"), requested)
+    if target is None or target == requested:
+        return
+    verbose_proxy_logger.debug(
+        "router_settings.model_group_alias resolved %s -> %s before auth",
+        requested.replace("\r", "").replace("\n", ""),
+        target.replace("\r", "").replace("\n", ""),
+    )
+    request.scope.setdefault(CLIENT_REQUESTED_MODEL_SCOPE_KEY, requested)
+    rewrite_request_model(request_data, request, target)
 
 
 def _get_model_names_for_budget_checks(
@@ -1629,13 +1669,11 @@ async def _user_api_key_auth_builder(
 
                     is_proxy_admin: Final = result["is_proxy_admin"]
                     team_id: Final = result["team_id"]
-                    team_object: Final = result["team_object"]
                     user_id: Final = result["user_id"]
                     user_email: Final = result["user_email"]
                     user_object: Final = result["user_object"]
                     end_user_id = result["end_user_id"]
                     org_id: Final = result["org_id"]
-                    team_membership: Final[LiteLLM_TeamMembership | None] = result.get("team_membership", None)
                     jwt_claims = result.get("jwt_claims", None)
                     agent_id: Final[str | None] = result.get("agent_id")
 
@@ -1653,40 +1691,9 @@ async def _user_api_key_auth_builder(
                                 value=_JWT_PROXY_ADMIN_SENTINEL,
                                 ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
                             )
-                        return UserAPIKeyAuth(
-                            api_key=None,
-                            user_role=LitellmUserRoles.PROXY_ADMIN,
-                            user_id=user_id,
-                            user_email=user_email,
-                            team_id=team_id,
-                            org_id=org_id,
-                            end_user_id=end_user_id,
-                            parent_otel_span=parent_otel_span,
-                            jwt_claims=jwt_claims,
-                            agent_id=agent_id,
-                            **team_grants(team_object=team_object, team_membership=team_membership, user_id=user_id),
-                        )
+                        return JWTAuthManager.user_api_key_auth_from_result(result, parent_otel_span)
 
-                    valid_token = UserAPIKeyAuth(
-                        api_key=None,
-                        team_id=team_id,
-                        user_role=(
-                            LitellmUserRoles(user_object.user_role)
-                            if user_object is not None and user_object.user_role is not None
-                            else LitellmUserRoles.INTERNAL_USER
-                        ),
-                        user_id=user_id,
-                        user_email=user_email,
-                        org_id=org_id,
-                        parent_otel_span=parent_otel_span,
-                        end_user_id=end_user_id,
-                        user_tpm_limit=(user_object.tpm_limit if user_object is not None else None),
-                        user_rpm_limit=(user_object.rpm_limit if user_object is not None else None),
-                        user_model_max_budget=(user_object.model_max_budget if user_object is not None else None),
-                        jwt_claims=jwt_claims,
-                        agent_id=agent_id,
-                        **team_grants(team_object=team_object, team_membership=team_membership, user_id=user_id),
-                    )
+                    valid_token = JWTAuthManager.user_api_key_auth_from_result(result, parent_otel_span)
 
                     # AUTO_REGISTER deferred from _resolve_jwt_to_virtual_key.
                     # JWT policy (RBAC, scope, custom_validate, email-domain)
@@ -2564,6 +2571,13 @@ def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseExc
     return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
 
 
+def is_no_auth_dev_mode(master_key: str | None, general_settings: Mapping[str, object]) -> bool:
+    return master_key is None and not any(
+        general_settings.get(flag, False)
+        for flag in ("enable_jwt_auth", "enable_oauth2_auth", "enable_oauth2_proxy_auth")
+    )
+
+
 @tracer.wrap()
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
@@ -2623,11 +2637,7 @@ async def _run_centralized_common_checks(
     # Running common_checks would block every admin route on these
     # deployments where that was previously not the contract. If any
     # authn is enabled (JWT, OAuth2, OAuth2-proxy), authz must run.
-    if master_key is None and not (
-        general_settings.get("enable_jwt_auth", False)
-        or general_settings.get("enable_oauth2_auth", False)
-        or general_settings.get("enable_oauth2_proxy_auth", False)
-    ):
+    if is_no_auth_dev_mode(master_key, general_settings):
         return
 
     if user_custom_auth is not None and not general_settings.get("custom_auth_run_common_checks", False):
@@ -2990,6 +3000,7 @@ async def _authorize_authenticated_request(
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
     await _normalize_claude_model(request_data, user_api_key_auth_obj, request, route)
+    await _resolve_router_settings_model_group_alias(request_data, user_api_key_auth_obj, request, route)
 
     # Single authorization point. Builder paths MUST NOT call common_checks.
     # Route through the same exception handler the builder uses so
@@ -3376,6 +3387,7 @@ async def _enforce_key_and_fallback_model_access(
     Not included in common_checks — common_checks enforces team/user/project model access only.
     """
     await _normalize_claude_model(request_data, valid_token, request, route)
+    await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
     config: Final = valid_token.config
 
     if config != {}:
