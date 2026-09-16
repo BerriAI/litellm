@@ -98,17 +98,18 @@ class DeepInfraConfig(OpenAIGPTConfig):
                 param == "temperature" and value == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1"
             ):  # this model does no support temperature == 0
                 value = MIN_NON_ZERO_TEMPERATURE  # close to 0
-            if param == "tool_choice":
-                if value != "auto" and value != "none":  # https://deepinfra.com/docs/advanced/function_calling
-                    ## UNSUPPORTED TOOL CHOICE VALUE
-                    if litellm.drop_params is True or drop_params is True:
-                        value = None
-                    else:
-                        raise litellm.utils.UnsupportedParamsError(
-                            message=f"Deepinfra doesn't support tool_choice={value}. To drop unsupported openai params from the call, set `litellm.drop_params = True`",
-                            status_code=400,
-                        )
-            elif param == "max_completion_tokens":
+            if param == "tool_choice" and value not in (
+                "auto",
+                "none",
+            ):  # https://deepinfra.com/docs/advanced/function_calling
+                ## UNSUPPORTED TOOL CHOICE VALUE
+                if litellm.drop_params is True or drop_params is True:
+                    continue
+                raise litellm.utils.UnsupportedParamsError(
+                    message=f"Deepinfra doesn't support tool_choice={value}. To drop unsupported openai params from the call, set `litellm.drop_params = True`",
+                    status_code=400,
+                )
+            if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param in supported_openai_params:
                 if value is not None:
