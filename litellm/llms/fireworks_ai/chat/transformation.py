@@ -49,6 +49,17 @@ if TYPE_CHECKING:
     import tiktoken
 
 
+def _map_reasoning_effort(value: object) -> object:
+    effort: Final[object] = cast(Mapping[str, object], value).get("effort") if isinstance(value, Mapping) else value
+    if effort is True:
+        return "medium"
+    if effort is False:
+        return "none"
+    if effort == "auto":
+        return None
+    return effort
+
+
 def _extract_fireworks_hidden_params(payload: dict) -> dict:
     """
     Collect Fireworks-specific response fields (perf_metrics, prompt_token_ids,
@@ -327,12 +338,8 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             elif param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param == "reasoning_effort":
-                effort: Final = value.get("effort") if isinstance(value, dict) else value
-                if effort is True:
-                    optional_params["reasoning_effort"] = "medium"
-                elif effort is False:
-                    optional_params["reasoning_effort"] = "none"
-                elif effort is not None and effort != "auto":
+                effort = _map_reasoning_effort(value)
+                if effort is not None:
                     optional_params["reasoning_effort"] = effort
             elif param in supported_openai_params:
                 if value is not None:
