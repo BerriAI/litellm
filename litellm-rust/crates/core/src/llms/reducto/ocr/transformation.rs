@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::call_arguments::compose_body;
+use crate::call_arguments::{CallArguments, compose_body};
 use crate::constants::{REDUCTO_API_BASE, REDUCTO_API_KEY_ENV, REDUCTO_ID_PREFIX};
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::ocr::OcrClient;
@@ -117,6 +117,16 @@ impl BaseOcrConfig for ReductoParseV3Config {
         &["formatting", "retrieval", "settings"]
     }
 
+    fn map_ocr_params(
+        &self,
+        arguments: &CallArguments,
+        model: &str,
+    ) -> Result<ReductoV3Params, crate::ocr::Error> {
+        Ok(arguments
+            .select(self.get_supported_ocr_params(model))
+            .into())
+    }
+
     #[tracing::instrument(
         name = "async_transform_ocr_request",
         target = "litellm::function_trace",
@@ -151,36 +161,13 @@ impl BaseOcrConfig for ReductoParseV3Config {
             normalize_response,
         )
     }
-}
 
-impl ReductoParseV3Config {
-    pub(crate) async fn prepare_request(
+    async fn prepare_request(
         &self,
         request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let headers = self.validate_environment(request, client).await?;
-        let url = self.get_complete_url(request, &params, &headers)?;
-        let (document, headers) = guardrail_document(request, &url, &headers).await?;
-        let body = self
-            .async_transform_ocr_request(
-                &request.model,
-                document,
-                &params,
-                &headers,
-                OcrRequestContext {
-                    client,
-                    connection: &request.connection,
-                },
-            )
-            .await?;
-        let body = compose_body(
-            &request.optional_params,
-            &body,
-            self.get_supported_ocr_params(&request.model),
-        )?;
-        build_http_request(client, request, &url, &headers, &body)
+        prepare_upload_request(self, request, client).await
     }
 }
 
@@ -225,6 +212,16 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         &["enhance"]
     }
 
+    fn map_ocr_params(
+        &self,
+        arguments: &CallArguments,
+        model: &str,
+    ) -> Result<ReductoLegacyParams, crate::ocr::Error> {
+        Ok(arguments
+            .select(self.get_supported_ocr_params(model))
+            .into())
+    }
+
     #[tracing::instrument(
         name = "async_transform_ocr_request",
         target = "litellm::function_trace",
@@ -251,37 +248,46 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
         ReductoParseV3Config.transform_ocr_response(model, raw_response, request_format)
     }
-}
 
-impl ReductoParseLegacyConfig {
-    pub(crate) async fn prepare_request(
+    async fn prepare_request(
         &self,
         request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let headers = self.validate_environment(request, client).await?;
-        let url = self.get_complete_url(request, &params, &headers)?;
-        let (document, headers) = guardrail_document(request, &url, &headers).await?;
-        let body = self
-            .async_transform_ocr_request(
-                &request.model,
-                document,
-                &params,
-                &headers,
-                OcrRequestContext {
-                    client,
-                    connection: &request.connection,
-                },
-            )
-            .await?;
-        let body = compose_body(
-            &request.optional_params,
-            &body,
-            self.get_supported_ocr_params(&request.model),
-        )?;
-        build_http_request(client, request, &url, &headers, &body)
+        prepare_upload_request(self, request, client).await
     }
+}
+
+/// Reducto differs from the shared `BaseOcrConfig::prepare_request` flow:
+/// guardrails see the *source* document before it is uploaded, because the
+/// final body only carries the opaque Reducto file id.
+async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, String)>>>(
+    config: &C,
+    request: &PreparedOcrRequest,
+    client: &OcrClient,
+) -> Result<reqwest::Request, crate::ocr::Error> {
+    let params = config.map_ocr_params(&request.optional_params, &request.model)?;
+    let headers = config.validate_environment(request, client).await?;
+    let url = config.get_complete_url(request, &params, &headers)?;
+    let (document, headers) = guardrail_document(request, &url, &headers).await?;
+    let body = config
+        .async_transform_ocr_request(
+            &request.model,
+            document,
+            &params,
+            &headers,
+            OcrRequestContext {
+                client,
+                connection: &request.connection,
+            },
+        )
+        .await?;
+    let body = compose_body(
+        &request.optional_params,
+        &body,
+        config.get_supported_ocr_params(&request.model),
+    )?;
+    build_http_request(client, request, &url, &headers, &body)
 }
 
 fn uploaded_file_id(document: OcrDocument) -> Result<ReductoFileId, crate::ocr::Error> {

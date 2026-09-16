@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::call_arguments::CallArguments;
 use crate::constants::MISTRAL_OCR_API_BASE;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::ocr::OcrClient;
-use crate::ocr::prepare::{credential_env, transform_request_body};
+use crate::ocr::prepare::credential_env;
 use crate::ocr::types::{
     LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrUsageInfo, PreparedOcrRequest,
 };
@@ -96,6 +97,16 @@ impl BaseOcrConfig for MistralOCRConfig {
         ]
     }
 
+    fn map_ocr_params(
+        &self,
+        arguments: &CallArguments,
+        model: &str,
+    ) -> Result<OpaqueParams, crate::ocr::Error> {
+        Ok(arguments
+            .select(self.get_supported_ocr_params(model))
+            .into())
+    }
+
     async fn async_transform_ocr_request(
         &self,
         model: &str,
@@ -119,31 +130,6 @@ impl BaseOcrConfig for MistralOCRConfig {
             request_format,
             normalize_response,
         )
-    }
-}
-
-impl MistralOCRConfig {
-    pub(crate) async fn prepare_request(
-        &self,
-        request: &PreparedOcrRequest,
-        client: &OcrClient,
-    ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let headers = BaseOcrConfig::validate_environment(self, request, client).await?;
-        let url = BaseOcrConfig::get_complete_url(self, request, &params, &headers)?;
-        let body = self
-            .async_transform_ocr_request(
-                &request.model,
-                request.document.clone(),
-                &params,
-                &headers,
-                OcrRequestContext {
-                    client,
-                    connection: &request.connection,
-                },
-            )
-            .await?;
-        transform_request_body(client, request, &url, &headers, true, body, |_| Ok(())).await
     }
 }
 
@@ -251,7 +237,7 @@ mod tests {
                 "usage_info.pages_processed",
             ),
         ] {
-            let error = crate::ocr::wire::decode_response::<MistralOcrResponse>(
+            let error = crate::ocr::json::decode_response::<MistralOcrResponse>(
                 &serde_json::to_vec(&payload).unwrap(),
                 false,
             )

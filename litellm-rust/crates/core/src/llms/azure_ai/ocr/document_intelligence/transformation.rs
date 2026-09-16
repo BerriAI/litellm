@@ -24,37 +24,16 @@ use crate::ocr::OcrClient;
 use crate::ocr::client::read_json_response;
 use crate::ocr::document::InlineDocument;
 use crate::ocr::hooks::OcrHooks;
-use crate::ocr::prepare::{credential_env, transform_request_body};
+use crate::ocr::json::DecodedOcrResponse;
+use crate::ocr::prepare::credential_env;
 use crate::ocr::types::{
     LiteLLMOcrResponse, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
     OcrPageDimensions, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest, ResolvedOcrCredentials,
 };
-use crate::ocr::wire::DecodedOcrResponse;
 use crate::serde_compat::{FiniteF64, LaxI64};
 use crate::url_utils::ApiUrl;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-enum PagesInput {
-    ZeroBasedIndices(Vec<i64>),
-    NativeTokens(Vec<String>),
-    NativeRange(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-enum FeaturesInput {
-    Names(Vec<String>),
-    CommaSeparated(String),
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-struct DocumentIntelligenceInputParams {
-    pub pages: Option<PagesInput>,
-    pub features: Option<FeaturesInput>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct DocumentIntelligenceParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pages: Option<String>,
@@ -145,79 +124,46 @@ struct AzureDocumentIntelligenceLine {
     pub content: Option<String>,
 }
 
-fn decode_input_params(
-    params: Map<String, Value>,
-    prefix: &str,
-) -> Result<DocumentIntelligenceInputParams, crate::ocr::Error> {
-    if let Some(Value::Array(pages)) = params.get("pages") {
-        if pages.iter().any(Value::is_boolean) {
-            return Err(crate::ocr::Error::Pages("boolean page index".into()));
-        }
-        if pages
-            .iter()
-            .any(|page| page.is_number() && page.as_i64().is_none())
-        {
-            return Err(crate::ocr::Error::Pages(
-                "page index is out of range".into(),
-            ));
-        }
-        if !pages.iter().all(Value::is_i64) && !pages.iter().all(Value::is_string) {
-            return Err(crate::ocr::Error::Pages("mixed page element types".into()));
-        }
-    }
-    crate::ocr::wire::decode_request_value(Value::Object(params), prefix)
-}
-
-fn normalize_ocr_params(
-    params: DocumentIntelligenceInputParams,
-) -> Result<DocumentIntelligenceParams, crate::ocr::Error> {
-    Ok(DocumentIntelligenceParams {
-        pages: params.pages.map(normalize_pages).transpose()?.flatten(),
-        features: params
-            .features
-            .map(normalize_features)
-            .transpose()?
-            .flatten(),
-    })
-}
-
-fn normalize_pages(pages: PagesInput) -> Result<Option<String>, crate::ocr::Error> {
+fn normalize_pages(pages: Option<&Value>) -> Result<Option<String>, crate::ocr::Error> {
     let normalized = match pages {
-        PagesInput::ZeroBasedIndices(indices) => {
-            if indices.is_empty() {
-                return Ok(None);
-            }
-            indices
-                .into_iter()
-                .map(|page| {
-                    if page < 0 {
-                        return Err(crate::ocr::Error::Pages("negative page index".into()));
-                    }
-                    page.checked_add(1).ok_or_else(|| {
-                        crate::ocr::Error::Pages("page index is out of range".into())
-                    })
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Array(pages)) if pages.is_empty() => return Ok(None),
+        Some(Value::Array(pages)) if pages.iter().all(Value::is_number) => pages
+            .iter()
+            .map(|page| {
+                let page = page
+                    .as_i64()
+                    .ok_or_else(|| crate::ocr::Error::Pages("page index is out of range".into()))?;
+                if page < 0 {
+                    return Err(crate::ocr::Error::Pages("negative page index".into()));
+                }
+                page.checked_add(1)
+                    .ok_or_else(|| crate::ocr::Error::Pages("page index is out of range".into()))
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?
+            .into_iter()
+            .map(|page| page.to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+        Some(Value::Array(tokens)) => tokens
+            .iter()
+            .map(|token| {
+                token.as_str().map(str::trim).ok_or_else(|| {
+                    crate::ocr::Error::Pages("expected only integers or only strings".into())
                 })
-                .collect::<Result<BTreeSet<_>, _>>()?
-                .into_iter()
-                .map(|page| page.to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        }
-        PagesInput::NativeTokens(tokens) => {
-            if tokens.is_empty() {
-                return Ok(None);
-            }
-            tokens
-                .iter()
-                .map(|token| token.trim())
-                .collect::<Vec<_>>()
-                .join(",")
-        }
-        PagesInput::NativeRange(range) => range
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join(","),
+        Some(Value::String(range)) => range
             .split(',')
             .map(str::trim)
             .collect::<Vec<_>>()
             .join(","),
+        Some(_) => {
+            return Err(crate::ocr::Error::Pages(
+                "expected an array of integers or strings, or a native page range".into(),
+            ));
+        }
     };
     if !normalized.split(',').all(valid_page_token) {
         return Err(crate::ocr::Error::Pages("invalid native page range".into()));
@@ -241,10 +187,15 @@ fn valid_page_token(token: &str) -> bool {
     }
 }
 
-fn normalize_features(features: FeaturesInput) -> Result<Option<String>, crate::ocr::Error> {
+fn normalize_features(features: Option<&Value>) -> Result<Option<String>, crate::ocr::Error> {
     let tokens = match features {
-        FeaturesInput::Names(names) => names,
-        FeaturesInput::CommaSeparated(names) => names.split(',').map(str::to_string).collect(),
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Array(names)) => names
+            .iter()
+            .map(|name| name.as_str().ok_or(crate::ocr::Error::Features))
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(Value::String(names)) => names.split(',').collect(),
+        Some(_) => return Err(crate::ocr::Error::Features),
     };
     if tokens.is_empty() {
         return Ok(None);
@@ -375,7 +326,7 @@ async fn read_operation_response(
             crate::ocr::client::read_response_bytes(response, connection.max_response_bytes)
                 .await?;
         crate::ocr::handler::post_call(hooks, &bytes).await?;
-        return crate::ocr::wire::decode_response(&bytes, native);
+        return crate::ocr::json::decode_response(&bytes, native);
     }
     let location = response
         .headers()
@@ -530,10 +481,10 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
         arguments: &CallArguments,
         _model: &str,
     ) -> Result<DocumentIntelligenceParams, crate::ocr::Error> {
-        normalize_ocr_params(decode_input_params(
-            arguments.select(&["pages", "features"]),
-            "optional_params",
-        )?)
+        Ok(DocumentIntelligenceParams {
+            pages: normalize_pages(arguments.get("pages"))?,
+            features: normalize_features(arguments.get("features"))?,
+        })
     }
 
     async fn async_transform_ocr_request(
@@ -591,30 +542,10 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
     ) -> Result<DocumentIntelligenceRequest, crate::ocr::Error> {
         build_request(document)
     }
-}
 
-impl AzureDocumentIntelligenceOCRConfig {
-    pub(crate) async fn prepare_request(
-        &self,
-        request: &PreparedOcrRequest,
-        client: &OcrClient,
-    ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let headers = BaseOcrConfig::validate_environment(self, request, client).await?;
-        let url = BaseOcrConfig::get_complete_url(self, request, &params, &headers)?;
-        let body = self
-            .async_transform_ocr_request(
-                &request.model,
-                request.document.clone(),
-                &params,
-                &headers,
-                OcrRequestContext {
-                    client,
-                    connection: &request.connection,
-                },
-            )
-            .await?;
-        transform_request_body(client, request, &url, &headers, false, body, |_| Ok(())).await
+    /// The body is `urlSource`/`base64Source`, not a `document` field.
+    fn retains_document(&self, _document: &OcrDocument) -> bool {
+        false
     }
 }
 
@@ -712,8 +643,8 @@ mod tests {
     use serde_json::{Value, json};
 
     fn map(value: Value) -> Result<DocumentIntelligenceParams, crate::ocr::Error> {
-        let fields = value.as_object().unwrap().clone();
-        normalize_ocr_params(decode_input_params(fields, "optional_params")?)
+        let arguments = serde_json::from_value(value).unwrap();
+        AzureDocumentIntelligenceOCRConfig.map_ocr_params(&arguments, "model")
     }
 
     #[test]
@@ -763,6 +694,8 @@ mod tests {
     #[case(json!([0, 1, 2]), Some("1,2,3"))]
     #[case(json!([2, 0, 0, 1]), Some("1,2,3"))]
     #[case(json!([]), None)]
+    #[case(Value::Null, None)]
+    #[case(json!([i64::MAX - 1]), Some("9223372036854775807"))]
     #[case(json!("3-9"), Some("3-9"))]
     #[case(json!("1-3, 5"), Some("1-3,5"))]
     #[case(json!(["1", "3-5"]), Some("1,3-5"))]
@@ -778,8 +711,14 @@ mod tests {
     #[case(json!([-1]))]
     #[case(json!([true, false]))]
     #[case(json!([1, "2"]))]
+    #[case(json!(["1", 2]))]
+    #[case(json!([1.0]))]
+    #[case(json!([i64::MAX]))]
+    #[case(json!([u64::MAX]))]
+    #[case(json!([null]))]
+    #[case(json!([[1]]))]
     #[case(json!(5))]
-    fn invalid_page_mapping_matches_python(#[case] input: Value) {
+    fn page_mapping_rejects_invalid_shapes_and_overflow(#[case] input: Value) {
         assert!(map(json!({"pages": input})).is_err());
     }
 
@@ -859,7 +798,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use crate::ocr::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
-    use crate::ocr::wire::{OcrWireRequest, decode_request};
 
     fn query_value(url: &str, key: &str) -> Option<String> {
         url::Url::parse(url)
@@ -913,21 +851,12 @@ mod tests {
             json!({"features":"languages&pages=1"}),
             json!({"req_format":"azure"}),
         ] {
-            let result = decode_request(OcrWireRequest {
-                model: "azure_ai/doc-intelligence/prebuilt-read".into(),
-                document: json!({"type":"document_url","document_url":"https://example.com/a.pdf"}),
-                api_key: Some("key".into()),
-                api_base: Some("http://127.0.0.1:1".into()),
-                custom_llm_provider: None,
-                extra_headers: None,
-                optional_params: options.as_object().unwrap().clone().into(),
-                input_sources: Default::default(),
-                timeout_seconds: None,
-            });
-            let rejected = match result {
-                Ok(request) => perform_ocr(request).await.is_err(),
-                Err(_) => true,
-            };
+            let request = wire_request(
+                "azure_ai/doc-intelligence/prebuilt-read",
+                "http://127.0.0.1:1",
+                options.clone(),
+            );
+            let rejected = perform_ocr(request).await.is_err();
             assert!(rejected, "accepted {options}");
         }
     }

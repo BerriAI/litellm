@@ -4,9 +4,10 @@ use serde_json::{Map, Value};
 use litellm_auth_gcp::{self as vertex, VertexConfig};
 
 use super::transformation::VertexAIOCRConfig;
+use crate::call_arguments::CallArguments;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::ocr::OcrClient;
-use crate::ocr::prepare::{credential_env, transform_request_body};
+use crate::ocr::prepare::credential_env;
 use crate::ocr::types::{
     LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage, OcrUsageInfo,
     PreparedOcrRequest,
@@ -106,6 +107,14 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         VertexAIOCRConfig.get_api_key_env_var()
     }
 
+    fn map_ocr_params(
+        &self,
+        _arguments: &CallArguments,
+        _model: &str,
+    ) -> Result<DeepSeekOcrParams, crate::ocr::Error> {
+        Ok(DeepSeekOcrParams::default())
+    }
+
     async fn validate_environment(
         &self,
         request: &PreparedOcrRequest,
@@ -183,40 +192,11 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
                 .collect(),
         })
     }
-}
 
-impl VertexAIDeepSeekOCRConfig {
-    pub(crate) async fn prepare_request(
-        &self,
-        request: &PreparedOcrRequest,
-        client: &OcrClient,
-    ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let authentication = self.validate_environment(request, client).await?;
-        let url = BaseOcrConfig::get_complete_url(self, request, &params, &authentication)?;
-
-        let body = self
-            .async_transform_ocr_request(
-                &request.model,
-                request.document.clone(),
-                &params,
-                &authentication.headers,
-                OcrRequestContext {
-                    client,
-                    connection: &request.connection,
-                },
-            )
-            .await?;
-        transform_request_body(
-            client,
-            request,
-            &url,
-            &authentication.headers,
-            false,
-            body,
-            |_| Ok(()),
-        )
-        .await
+    /// The body carries the document inside `messages`, not a top-level
+    /// `document` field, so there is nothing for guardrails to retain.
+    fn retains_document(&self, _document: &OcrDocument) -> bool {
+        false
     }
 }
 
@@ -267,7 +247,7 @@ pub(crate) fn normalize_response(
             .enumerate()
             .filter(|(_, page)| page.is_object())
             .map(|(position, page)| {
-                let page: DeepSeekPage = crate::ocr::wire::decode_response_value(
+                let page: DeepSeekPage = crate::ocr::json::decode_response_value(
                     page.clone(),
                     &format!("choices[0].message.content.pages[{position}]"),
                 )?;
@@ -288,7 +268,7 @@ pub(crate) fn normalize_response(
         .or_else(|| (!has_pages).then_some(&response.usage));
     let usage_info: Option<OcrUsageInfo> = usage
         .filter(|usage| usage.is_object())
-        .map(|usage| crate::ocr::wire::decode_response_value(usage.clone(), "usage_info"))
+        .map(|usage| crate::ocr::json::decode_response_value(usage.clone(), "usage_info"))
         .transpose()?;
     let model = match ocr_data.get("model") {
         Some(Value::String(model)) => model.clone(),
@@ -683,11 +663,11 @@ mod tests {
 
     #[test]
     fn host_registration_selects_deepseek_without_affecting_mistral() {
-        assert!(crate::ocr::wire::is_supported_request(
+        assert!(crate::ocr::is_supported_request(
             "deepseek-ocr-maas",
             Some("vertex_ai")
         ));
-        assert!(crate::ocr::wire::is_supported_request(
+        assert!(crate::ocr::is_supported_request(
             "mistral-ocr-maas",
             Some("vertex_ai")
         ));

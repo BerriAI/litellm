@@ -1,14 +1,16 @@
+use crate::call_arguments::CallArguments;
 use crate::constants::AZURE_AI_OCR_PATH;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::llms::mistral::ocr::transformation::{MistralOCRConfig, MistralOcrRequest};
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
-use crate::ocr::prepare::{credential_env, transform_request_body};
+use crate::ocr::prepare::credential_env;
 use crate::ocr::types::{LiteLLMOcrResponse, OcrConnection, OcrDocument, PreparedOcrRequest};
 use crate::params::OpaqueParams;
 use crate::url_utils::ApiUrl;
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::AzureAuthInputs;
+use serde_json::Value;
 
 const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
 const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
@@ -64,6 +66,14 @@ impl BaseOcrConfig for AzureAIOCRConfig {
         MistralOCRConfig.get_supported_ocr_params(model)
     }
 
+    fn map_ocr_params(
+        &self,
+        arguments: &CallArguments,
+        model: &str,
+    ) -> Result<OpaqueParams, crate::ocr::Error> {
+        MistralOCRConfig.map_ocr_params(arguments, model)
+    }
+
     async fn async_transform_ocr_request(
         &self,
         model: &str,
@@ -89,53 +99,40 @@ impl BaseOcrConfig for AzureAIOCRConfig {
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
         MistralOCRConfig.transform_ocr_response(model, raw_response, request_format)
     }
-}
 
-impl AzureAIOCRConfig {
-    pub(crate) async fn prepare_request(
-        &self,
-        request: &PreparedOcrRequest,
-        client: &OcrClient,
-    ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let url = BaseOcrConfig::get_complete_url(self, request, &params, &Vec::new())?;
-        let headers = BaseOcrConfig::validate_environment(self, request, client).await?;
-        let retains_document = !request.document.source().starts_with("http://")
-            && !request.document.source().starts_with("https://");
-        let body = self
-            .async_transform_ocr_request(
-                &request.model,
-                request.document.clone(),
-                &params,
-                &headers,
-                OcrRequestContext {
-                    client,
-                    connection: &request.connection,
-                },
-            )
-            .await?;
-        transform_request_body(
-            client,
-            request,
-            &url,
-            &headers,
-            retains_document,
-            body,
-            |body| validate_inline_document(&crate::ocr::prepare::body_document(body)?),
-        )
-        .await
+    fn retains_document(&self, document: &OcrDocument) -> bool {
+        !document.is_remote()
+    }
+
+    fn validate_request_body(&self, body: &Value) -> Result<(), crate::ocr::Error> {
+        validate_inline_document(&crate::ocr::prepare::body_document(body)?)
     }
 }
 
 impl AzureAIOCRConfig {
+    /// Python `AzureAIOCRConfig.validate_environment` requires the endpoint
+    /// before it resolves credentials; keep that order so a missing base is
+    /// reported without invoking any token provider.
+    pub(super) fn resolve_api_base(
+        api_base: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, crate::ocr::Error> {
+        nonblank(api_base.map(str::to_string))
+            .or_else(|| nonblank(env_lookup(AZURE_AI_API_BASE_ENV)))
+            .ok_or(crate::ocr::Error::Auth(
+                litellm_auth::Error::MissingApiBase {
+                    provider: "Azure AI",
+                    environment_variable: AZURE_AI_API_BASE_ENV,
+                },
+            ))
+    }
+
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, crate::ocr::Error> {
-        let base = nonblank(api_base.map(str::to_string))
-        .or_else(|| nonblank(env_lookup(AZURE_AI_API_BASE_ENV)))
-        .ok_or_else(|| crate::ocr::Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure AI API Base - Set AZURE_AI_API_BASE environment variable or pass api_base parameter".into())))?;
+        let base = Self::resolve_api_base(api_base, env_lookup)?;
         let path: Vec<&str> = AZURE_AI_OCR_PATH.trim_matches('/').split('/').collect();
         ApiUrl::parse(&base)
             .and_then(|url| url.complete_path(&path))
@@ -151,6 +148,7 @@ impl AzureAIOCRConfig {
         config: &AzureAuthInputs,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<(String, String)>, crate::ocr::Error> {
+        Self::resolve_api_base(connection.api_base.as_deref(), env_lookup)?;
         if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
             if config.azure_ad_token_provider.is_some() {
                 super::common_utils::resolve_entra(config, env_lookup).await?;
@@ -211,10 +209,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn missing_api_base_is_structured() {
+        assert!(matches!(
+            AzureAIOCRConfig::resolve_api_base(None, &|_| None),
+            Err(crate::ocr::Error::Auth(
+                litellm_auth::Error::MissingApiBase {
+                    provider: "Azure AI",
+                    environment_variable: AZURE_AI_API_BASE_ENV,
+                }
+            ))
+        ));
+    }
+
     #[tokio::test]
     async fn supplied_authorization_precedes_keys() {
         let connection = OcrConnection {
             api_key: Some("request-key".into()),
+            api_base: Some("https://example.com".into()),
             extra_headers: vec![("authorization".into(), "Bearer prepared".into())],
             ..Default::default()
         };
@@ -233,6 +245,7 @@ mod tests {
     async fn request_key_precedes_environment_key() {
         let connection = OcrConnection {
             api_key: Some("request-key".into()),
+            api_base: Some("https://example.com".into()),
             ..Default::default()
         };
         assert_eq!(
@@ -291,7 +304,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use serde_json::{Value, json};
+    use serde_json::json;
 
     use crate::ocr::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks};
     use crate::ocr::test_support::{MockResponse, mock_server, perform_ocr, wire_request};

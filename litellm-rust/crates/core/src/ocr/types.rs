@@ -39,6 +39,11 @@ impl OcrDocument {
         }
     }
 
+    pub(crate) fn is_remote(&self) -> bool {
+        let source = self.source();
+        source.starts_with("http://") || source.starts_with("https://")
+    }
+
     pub(crate) fn with_source(self, source: String) -> Self {
         match self {
             Self::DocumentUrl { extra_fields, .. } => Self::DocumentUrl {
@@ -50,6 +55,14 @@ impl OcrDocument {
                 extra_fields,
             },
         }
+    }
+}
+
+impl TryFrom<Value> for OcrDocument {
+    type Error = super::Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        super::json::decode_request_value(value, "document")
     }
 }
 
@@ -67,6 +80,22 @@ pub struct OcrCredentialInputs {
     pub dynamic_api_key: Option<Sourced<String>>,
     pub api_base: Option<Sourced<String>>,
     pub dynamic_api_base: Option<Sourced<String>>,
+}
+
+impl OcrCredentialInputs {
+    pub fn new(
+        api_key: Option<String>,
+        api_key_source: InputSource,
+        api_base: Option<String>,
+        api_base_source: InputSource,
+    ) -> Self {
+        Self {
+            api_key: nonblank(api_key).map(|value| Sourced::new(value, api_key_source)),
+            dynamic_api_key: None,
+            api_base: nonblank(api_base).map(|value| Sourced::new(value, api_base_source)),
+            dynamic_api_base: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -90,6 +119,28 @@ impl Default for OcrTransportConfig {
             poll_timeout: Duration::from_secs(crate::constants::OCR_POLL_TIMEOUT_SECS),
         }
     }
+}
+
+impl OcrTransportConfig {
+    pub fn with_overrides(
+        self,
+        extra_headers: Vec<(String, String)>,
+        extra_headers_source: InputSource,
+        timeout: Option<Duration>,
+    ) -> Self {
+        Self {
+            extra_headers,
+            extra_headers_source,
+            timeout: timeout.unwrap_or(self.timeout),
+            ..self
+        }
+    }
+}
+
+fn nonblank(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 #[derive(Clone)]
@@ -169,12 +220,34 @@ impl LiteLLMOcrRequest {
         optional_params: CallArguments,
     ) -> Result<Self, super::Error> {
         let (model, config) = resolve_provider_config(&model, custom_llm_provider)?;
+        let default_transport = OcrTransportConfig::default();
+        let max_response_bytes = optional_params
+            .get("max_response_bytes")
+            .map(|value| {
+                value
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| *value > 0 && *value <= default_transport.max_response_bytes)
+                    .ok_or_else(|| super::Error::RequestField {
+                        path: "max_response_bytes".into(),
+                    })
+            })
+            .transpose()?
+            .unwrap_or(default_transport.max_response_bytes);
+        let transport = OcrTransportConfig {
+            max_response_bytes,
+            ..default_transport
+        };
+        let optional_params = optional_params
+            .into_iter()
+            .filter(|(name, _)| name != "max_response_bytes")
+            .collect();
 
         Ok(Self {
             model,
             document,
             credentials: OcrCredentialInputs::default(),
-            transport: OcrTransportConfig::default(),
+            transport,
             hooks: Arc::new(NoopOcrHooks),
             litellm_call_id: None,
             optional_params,
@@ -207,6 +280,20 @@ impl LiteLLMOcrRequest {
         Self {
             hooks,
             litellm_call_id,
+            ..self
+        }
+    }
+
+    pub fn with_connection_inputs(
+        self,
+        credentials: OcrCredentialInputs,
+        transport: OcrTransportConfig,
+        input_sources: BTreeMap<String, InputSource>,
+    ) -> Self {
+        Self {
+            credentials,
+            transport,
+            input_sources,
             ..self
         }
     }

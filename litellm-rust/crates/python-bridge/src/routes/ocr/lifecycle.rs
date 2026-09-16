@@ -10,7 +10,7 @@ use litellm_python_interop::{
 
 use super::callbacks;
 use super::errors::to_pyerr as ocr_error_to_pyerr;
-use super::project::{ProjectedOcrFields, admitted_call, project_request};
+use super::project::{ProjectedOcrCall, ProjectedOcrFields, PythonOcrInput, admitted_call};
 use crate::lifecycle::{
     OperationClass, PythonCallState, PythonRoute, missing_state, now, run_call,
 };
@@ -193,7 +193,10 @@ impl PythonRoute for PythonOcrHost {
                 let OcrHostData::Unprojected { request } = &self.data else {
                     return Err(missing_state());
                 };
-                let projected = project_request(py, request.bind(py), self.state.kwargs.bind(py))?;
+                let projected = ProjectedOcrCall::try_from(PythonOcrInput {
+                    request: request.bind(py),
+                    kwargs: self.state.kwargs.bind(py),
+                })?;
                 let has_token_provider = projected.fields.azure_ad_token_provider.is_some();
                 let request = projected.request;
                 self.data = OcrHostData::Projected(Box::new(ProjectedOcrHost {

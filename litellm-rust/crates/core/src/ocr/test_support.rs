@@ -4,8 +4,9 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use crate::ocr::wire::{OcrWireRequest, decode_request};
-use crate::ocr::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
+use crate::ocr::{
+    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient, OcrCredentialInputs, OcrDocument,
+};
 
 pub(crate) fn ocr_client() -> OcrClient {
     let document_http = reqwest::Client::builder()
@@ -22,18 +23,31 @@ pub(crate) async fn perform_ocr(
 }
 
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOcrRequest {
-    decode_request(OcrWireRequest {
-        model: model.into(),
-        document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
-        api_key: Some("test-key".into()),
-        api_base: Some(base.into()),
-        custom_llm_provider: None,
-        extra_headers: None,
-        optional_params: options.as_object().unwrap().clone().into(),
-        input_sources: Default::default(),
-        timeout_seconds: Some(2.0),
-    })
-    .unwrap()
+    let request = LiteLLMOcrRequest::new(
+        model.into(),
+        OcrDocument::try_from(
+            json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        )
+        .unwrap(),
+        None,
+        options.as_object().unwrap().clone().into(),
+    )
+    .unwrap();
+    let transport = request.transport.clone().with_overrides(
+        Vec::new(),
+        Default::default(),
+        Some(std::time::Duration::from_secs(2)),
+    );
+    request.with_connection_inputs(
+        OcrCredentialInputs::new(
+            Some("test-key".into()),
+            Default::default(),
+            Some(base.into()),
+            Default::default(),
+        ),
+        transport,
+        Default::default(),
+    )
 }
 
 pub(crate) struct MockResponse {

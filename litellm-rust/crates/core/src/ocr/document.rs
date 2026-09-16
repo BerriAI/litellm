@@ -128,11 +128,11 @@ pub(crate) async fn inline_remote_document(
     document: OcrDocument,
     connection: &OcrConnection,
 ) -> Result<OcrDocument, crate::ocr::Error> {
-    let source = document.source();
-    if !source.starts_with("http://") && !source.starts_with("https://") {
+    if !document.is_remote() {
         validate_inline_document(&document)?;
         return Ok(document);
     }
+    let source = document.source();
     let url = Url::parse(source).map_err(|_| crate::ocr::Error::RequestField {
         path: "document URL".into(),
     })?;

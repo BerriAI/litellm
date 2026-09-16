@@ -9,8 +9,7 @@ use pyo3::types::PyDict;
 use pyo3::types::{PyBytes, PyString};
 
 use litellm_core::constants::OCR_INLINE_MAX_BYTES;
-use litellm_core::ocr::{OcrDocument, encode_file_document, mime_type_for_name, upload_mime_type};
-use litellm_python_interop::to_py_preserving_errors;
+use litellm_core::ocr::{OcrDocument, encode_file_document};
 
 enum FileBytes {
     Python(PyBackedBytes),
@@ -134,44 +133,6 @@ pub(super) fn file_document(py: Python<'_>, document: FileDocumentInput) -> PyRe
         )
     })
     .map_err(|error| PyValueError::new_err(error.to_string()))
-}
-
-#[pyfunction]
-fn _ocr_file_document(py: Python<'_>, document: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    to_py_preserving_errors(py, &file_document(py, document.extract()?)?)
-}
-
-#[pyfunction]
-fn _ocr_mime_type(file_name: &str) -> String {
-    mime_type_for_name(file_name).into()
-}
-
-#[pyfunction]
-#[pyo3(signature = (file_content, file_name=None, content_type=None))]
-fn _ocr_upload_document(
-    py: Python<'_>,
-    file_content: &Bound<'_, PyBytes>,
-    file_name: Option<&str>,
-    content_type: Option<&str>,
-) -> PyResult<Py<PyAny>> {
-    let bytes: PyBackedBytes = file_content.extract()?;
-    let document = py
-        .detach(|| {
-            encode_file_document(
-                &bytes,
-                None,
-                Some(upload_mime_type(file_name, content_type)),
-            )
-        })
-        .map_err(|error| PyValueError::new_err(error.to_string()))?;
-    to_py_preserving_errors(py, &document)
-}
-
-pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add("_OCR_MAX_FILE_BYTES", OCR_INLINE_MAX_BYTES)?;
-    module.add_function(wrap_pyfunction!(_ocr_upload_document, module)?)?;
-    module.add_function(wrap_pyfunction!(_ocr_file_document, module)?)?;
-    module.add_function(wrap_pyfunction!(_ocr_mime_type, module)?)
 }
 
 #[cfg(test)]
