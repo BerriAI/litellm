@@ -475,3 +475,25 @@ async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fet
         {"file_data": {"mime_type": "application/pdf", "file_uri": files_api_pdf}},
     ]
     assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])
+
+
+def test_no_text_in_user_content_is_logged_at_debug(caplog):
+    """Adding a blank text part is a handled condition; it should log at debug, not warning."""
+    import logging
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
+            ],
+        }
+    ]
+    from litellm._logging import verbose_logger
+
+    with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+        transformation._gemini_convert_messages_with_history(messages)
+
+    debug_records = [r for r in caplog.records if "No text in user content" in r.getMessage()]
+    assert len(debug_records) == 1
+    assert debug_records[0].levelno == logging.DEBUG

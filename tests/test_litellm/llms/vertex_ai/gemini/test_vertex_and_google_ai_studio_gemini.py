@@ -5836,3 +5836,65 @@ def test_supported_reasoning_efforts_still_map(model):
             drop_params=False,
         )
         assert "thinkingConfig" in result
+
+
+def test_gemini_3_sampling_deprecation_warning_logged_once_per_process(caplog):
+    """The Gemini 3+ sampling DeprecationWarning must fire once per process per model, not per request or per param."""
+    import logging
+
+    from litellm._logging import verbose_logger
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+        _warn_gemini_sampling_params_deprecated,
+    )
+
+    _warn_gemini_sampling_params_deprecated.cache_clear()
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        config = VertexGeminiConfig()
+        for _ in range(3):
+            result = config.map_openai_params(
+                non_default_params={"temperature": 0.2, "top_p": 0.9, "top_k": 5},
+                optional_params={},
+                model="gemini-3.1-flash-lite",
+                drop_params=True,
+            )
+            assert result["temperature"] == 0.2
+            assert result["top_p"] == 0.9
+            assert result["top_k"] == 5
+
+        config.map_openai_params(
+            non_default_params={"temperature": 0.2},
+            optional_params={},
+            model="gemini-3-pro",
+            drop_params=True,
+        )
+
+    warnings = [r for r in caplog.records if "DeprecationWarning" in r.getMessage()]
+    assert len(warnings) == 2
+    assert "gemini-3.1-flash-lite" in warnings[0].getMessage()
+    assert "gemini-3-pro" in warnings[1].getMessage()
+
+
+def test_gemini_2_5_sampling_params_do_not_warn(caplog):
+    """Gemini 2.x models must not emit the Gemini 3+ sampling DeprecationWarning."""
+    import logging
+
+    from litellm._logging import verbose_logger
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+        _warn_gemini_sampling_params_deprecated,
+    )
+
+    _warn_gemini_sampling_params_deprecated.cache_clear()
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result = VertexGeminiConfig().map_openai_params(
+            non_default_params={"temperature": 0.2, "top_p": 0.9, "top_k": 5},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=True,
+        )
+
+    assert result["temperature"] == 0.2
+    assert result["top_p"] == 0.9
+    assert result["top_k"] == 5
+    assert not any("DeprecationWarning" in r.getMessage() for r in caplog.records)
