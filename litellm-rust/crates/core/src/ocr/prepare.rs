@@ -10,7 +10,6 @@ pub(crate) async fn transform_request_body<B>(
     request: &PreparedOcrRequest,
     url: &str,
     headers: &[(String, String)],
-    retains_document: bool,
     body: B,
     validate: impl Fn(&Value) -> Result<(), super::Error>,
 ) -> Result<reqwest::Request, super::Error>
@@ -24,30 +23,15 @@ where
     )?;
     validate(&composed)?;
     let (body, headers) = if request.hooks.intercepts_requests() {
-        let body = composed;
-        let retained_fields = request
-            .optional_params
-            .keys()
-            .filter(|name| body.get(*name).is_some())
-            .cloned()
-            .chain(retains_document.then(|| "document".to_string()))
-            .filter(|name| {
-                request
-                    .optional_params
-                    .get("extra_body")
-                    .and_then(Value::as_object)
-                    .is_none_or(|overrides| !overrides.contains_key(name))
-            })
-            .collect();
         let changed = request
             .hooks
             .during_call(OcrDuringCallRequest {
                 model: request.model.clone(),
                 custom_llm_provider: request.provider_name().into(),
+                api_key: request.connection.api_key.clone(),
                 url: url.into(),
                 headers: headers.to_vec(),
-                body,
-                retained_fields,
+                body: composed,
             })
             .await?;
         if !changed.body.is_object() {
@@ -94,6 +78,7 @@ pub(crate) async fn guardrail_document(
         .during_call(OcrDuringCallRequest {
             model: request.model.clone(),
             custom_llm_provider: request.provider_name().into(),
+            api_key: request.connection.api_key.clone(),
             url: url.into(),
             headers: headers.to_vec(),
             body: serde_json::to_value(&request.document).map_err(|_| {
@@ -101,7 +86,6 @@ pub(crate) async fn guardrail_document(
                     path: "document".into(),
                 }
             })?,
-            retained_fields: Vec::new(),
         })
         .await?;
     let document = super::json::decode_request_value(changed.body, "guardrail.document")?;

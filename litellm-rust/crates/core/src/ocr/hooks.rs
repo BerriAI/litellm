@@ -22,11 +22,10 @@ pub struct OcrPreCallRequest {
 pub struct OcrDuringCallRequest {
     pub model: String,
     pub custom_llm_provider: String,
+    pub api_key: Option<String>,
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Value,
-    #[serde(skip)]
-    pub retained_fields: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]

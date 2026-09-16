@@ -1,48 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Coroutine, Mapping
-from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
-import httpx
 from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KEY, OCRResponse
 from litellm.rust_bridge.bindings import NativeBinding
-
-
-@dataclass(frozen=True, slots=True)
-class LiteLLMOcrRequest:
-    model: str
-    document: Mapping[str, object]
-    api_key: str | None
-    api_base: str | None
-    timeout: float | httpx.Timeout | None
-    custom_llm_provider: str | None
-    extra_headers: dict[str, object] | None
-    kwargs: Mapping[str, object]
-
-
-def _bind_request(
-    model: str,
-    document: Mapping[str, object],
-    api_key: str | None = None,
-    api_base: str | None = None,
-    timeout: float | httpx.Timeout | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: dict[str, object] | None = None,
-    **kwargs: object,  # kwargs-ok: public OCR accepts provider-specific options
-) -> LiteLLMOcrRequest:
-    return LiteLLMOcrRequest(model, document, api_key, api_base, timeout, custom_llm_provider, extra_headers, kwargs)
-
-
-def bind_request(name: str, args: tuple[object, ...], kwargs: dict[str, object]) -> LiteLLMOcrRequest:
-    try:
-        return _bind_request(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # Python binds arguments before native validation
-    except TypeError as error:
-        raise TypeError(str(error).replace("_bind_request()", f"{name}()")) from None
 
 
 class RustOcr(Protocol):
@@ -88,17 +54,17 @@ class ExceptionMapper(Protocol):
     ) -> Exception: ...
 
 
-def map_failure(error: Exception, request: LiteLLMOcrRequest, request_provider: str) -> Exception:
+def map_failure(error: Exception, model: str, provider: str, kwargs: Mapping[str, object]) -> Exception:
     mapper: Final = cast(
         ExceptionMapper, litellm.exception_type
     )  # cast-ok: bounded adapter for the public exception mapper
     try:
         return mapper(
-            model=request.model.removeprefix(f"{request_provider}/"),
-            custom_llm_provider=request_provider,
+            model=model,
+            custom_llm_provider=provider,
             original_exception=error,
-            completion_kwargs=dict(request.kwargs),  # mutable-ok: exception mapper requires owned kwargs
-            extra_kwargs=dict(request.kwargs),  # mutable-ok: exception mapper requires owned kwargs
+            completion_kwargs=dict(kwargs),  # mutable-ok: exception mapper requires owned kwargs
+            extra_kwargs=dict(kwargs),  # mutable-ok: exception mapper requires owned kwargs
         )
     except Exception as public_error:
         public_error.__context__ = error

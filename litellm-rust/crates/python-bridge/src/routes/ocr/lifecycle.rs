@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
 use litellm_auth::ResolvedCredential;
-use litellm_core::ocr::hooks::{OcrDuringCallRequest, OcrPostCallRequest, OcrPreCallRequest};
+use litellm_core::ocr::hooks::{OcrDuringCallRequest, OcrPostCallRequest};
 use litellm_core::ocr::{OcrAdmission, OcrCall, OcrClient, OcrHostOperation, OcrHostResult};
 use litellm_python_interop::{
     from_py_preserving_errors as from_py, to_py_preserving_errors as to_py,
@@ -10,81 +10,100 @@ use litellm_python_interop::{
 
 use super::callbacks;
 use super::errors::to_pyerr as ocr_error_to_pyerr;
-use super::project::{ProjectedOcrCall, ProjectedOcrFields, PythonOcrInput, admitted_call};
+use super::project::{admitted_call, project};
+use crate::auth::PythonTokenProvider;
 use crate::lifecycle::{
-    OperationClass, PythonCallState, PythonRoute, missing_state, now, run_call,
+    OperationClass, PythonCallState, PythonRoute, Signature, missing_state, now, run_call,
+};
+
+const SIGNATURE: Signature = Signature {
+    name: "ocr",
+    parameters: &[
+        "model",
+        "document",
+        "api_key",
+        "api_base",
+        "timeout",
+        "custom_llm_provider",
+        "extra_headers",
+    ],
+    required: 2,
+};
+
+const ASYNC_SIGNATURE: Signature = Signature {
+    name: "aocr",
+    ..SIGNATURE
 };
 
 struct PythonOcrHost {
     state: PythonCallState,
-    data: OcrHostData,
-}
-
-enum OcrHostData {
-    Unprojected { request: Py<PyAny> },
-    Projected(Box<ProjectedOcrHost>),
-    Released,
+    projected: Option<ProjectedOcrHost>,
 }
 
 struct ProjectedOcrHost {
-    fields: ProjectedOcrFields,
+    model: String,
+    provider: &'static str,
+    secret_fields: Vec<&'static str>,
+    azure_ad_token_provider: Option<PythonTokenProvider>,
     pre_call: Option<callbacks::OcrLoggingFields>,
-    callback_inputs: Option<Py<PyDict>>,
     body: Option<Py<PyDict>>,
     headers: Option<Py<PyDict>>,
 }
 
 impl PythonOcrHost {
     fn projected(&self) -> PyResult<&ProjectedOcrHost> {
-        match &self.data {
-            OcrHostData::Projected(projected) => Ok(projected),
-            _ => Err(missing_state()),
-        }
+        self.projected.as_ref().ok_or_else(missing_state)
     }
 
     fn projected_mut(&mut self) -> PyResult<&mut ProjectedOcrHost> {
-        match &mut self.data {
-            OcrHostData::Projected(projected) => Ok(projected),
-            _ => Err(missing_state()),
-        }
+        self.projected.as_mut().ok_or_else(missing_state)
     }
 
-    fn pre_call(
-        &mut self,
-        py: Python<'_>,
-        request: OcrPreCallRequest,
-    ) -> PyResult<OcrPreCallRequest> {
-        let kwargs = self.state.kwargs.bind(py);
-        let callback_inputs = kwargs.copy()?;
-        callback_inputs.set_item("document", &self.projected()?.fields.document)?;
-        let projected = self.projected_mut()?;
-        projected.callback_inputs = Some(callback_inputs.unbind());
-        projected.pre_call = Some((&request).into());
-        Ok(request)
+    fn project(&mut self, py: Python<'_>) -> PyResult<OcrHostResult> {
+        let signature = if self.state.asynchronous {
+            &ASYNC_SIGNATURE
+        } else {
+            &SIGNATURE
+        };
+        let arguments = signature.bind(self.state.args.bind(py), self.state.kwargs.bind(py))?;
+        let projected = project(py, &arguments)?;
+        let has_token_provider = projected.azure_ad_token_provider.is_some();
+        self.projected = Some(ProjectedOcrHost {
+            model: projected.request.model.clone(),
+            provider: projected.request.provider_name(),
+            secret_fields: projected.secret_fields,
+            azure_ad_token_provider: projected.azure_ad_token_provider,
+            pre_call: None,
+            body: None,
+            headers: None,
+        });
+        Ok(OcrHostResult::Request(Ok((
+            Box::new(projected.request),
+            has_token_provider,
+        ))))
     }
 
     fn acquire_azure_ad_token(&self, py: Python<'_>) -> PyResult<ResolvedCredential> {
-        let provider = self
-            .projected()?
-            .fields
+        self.projected()?
             .azure_ad_token_provider
             .as_ref()
-            .ok_or_else(missing_state)?;
-        provider.acquire(py)
+            .ok_or_else(missing_state)?
+            .acquire(py)
     }
 
-    fn python_pre_call(
+    fn during_call(
         &mut self,
         py: Python<'_>,
         mut request: OcrDuringCallRequest,
     ) -> PyResult<OcrDuringCallRequest> {
         let projected = self.projected()?;
         let pre_call = projected.pre_call.as_ref().ok_or_else(missing_state)?;
-        self.state.logger()?.update_ocr(
+        let logger = self.state.logger()?;
+        logger.update_ocr(
             py,
             &self.state.kwargs,
             pre_call,
-            &projected.fields.secret_fields,
+            &projected.secret_fields,
             &request.url,
         )?;
         let body = to_py(py, &request.body)?
@@ -94,23 +113,19 @@ impl PythonOcrHost {
         for (name, value) in &request.headers {
             headers.set_item(name, value)?;
         }
-        let api_key = self.projected()?.fields.api_key.clone_ref(py);
-        let projected = self.projected_mut()?;
-        projected.body = Some(body.clone().unbind());
-        projected.headers = Some(headers.clone().unbind());
-        self.state
-            .logger()?
-            .pre_ocr(py, &Some(api_key), &body, &headers, &request.url)?;
-        let headers = headers
+        logger.pre_ocr(py, request.api_key.as_deref(), &body, &headers, &request.url)?;
+        request.body = from_py(&body)?;
+        request.headers = headers
             .iter()
             .map(|(name, value)| Ok((name.extract::<String>()?, value.extract::<String>()?)))
             .collect::<PyResult<Vec<_>>>()?;
-        request.body = from_py(&body)?;
-        request.headers = headers;
+        let projected = self.projected_mut()?;
+        projected.body = Some(body.unbind());
+        projected.headers = Some(headers.unbind());
         Ok(request)
     }
 
-    fn python_post_call(
+    fn post_call(
         &mut self,
         py: Python<'_>,
         request: OcrPostCallRequest,
@@ -123,6 +138,24 @@ impl PythonOcrHost {
             projected.headers.as_ref(),
         )?;
         Ok(request)
+    }
+
+    fn map_failure(&mut self, py: Python<'_>, error: litellm_core::ocr::Error) -> PyResult<()> {
+        if self.state.error.is_none() {
+            self.state.retain_error(py, ocr_error_to_pyerr(error));
+        }
+        if self.state.end.is_none() {
+            self.state.end = Some(now(py)?);
+        }
+        let error = self.state.error.as_ref().ok_or_else(missing_state)?;
+        let (model, provider) = match &self.projected {
+            Some(projected) => (projected.model.as_str(), projected.provider),
+            None => ("", ""),
+        };
+        let mapped = callbacks::map_failure(py, error, model, provider, &self.state.kwargs)?;
+        self.state
+            .retain_error(py, PyErr::from_value(mapped.into_bound(py).into_any()));
+        Ok(())
     }
 }
 
@@ -157,36 +190,19 @@ impl PythonRoute for PythonOcrHost {
 
     fn invoke(&mut self, py: Python<'_>, operation: OcrHostOperation) -> PyResult<OcrHostResult> {
         Ok(match operation {
-            OcrHostOperation::ProjectRequest => {
-                let OcrHostData::Unprojected { request } = &self.data else {
-                    return Err(missing_state());
-                };
-                let projected = ProjectedOcrCall::try_from(PythonOcrInput {
-                    request: request.bind(py),
-                    kwargs: self.state.kwargs.bind(py),
-                })?;
-                let has_token_provider = projected.fields.azure_ad_token_provider.is_some();
-                let request = projected.request;
-                self.data = OcrHostData::Projected(Box::new(ProjectedOcrHost {
-                    fields: projected.fields,
-                    pre_call: None,
-                    callback_inputs: None,
-                    body: None,
-                    headers: None,
-                }));
-                OcrHostResult::Request(Ok((Box::new(request), has_token_provider)))
-            }
+            OcrHostOperation::ProjectRequest => self.project(py)?,
             OcrHostOperation::AcquireAzureAdToken => {
                 OcrHostResult::AzureAdToken(Ok(self.acquire_azure_ad_token(py)?))
             }
             OcrHostOperation::PreCall(request) => {
-                OcrHostResult::PreCall(Ok(self.pre_call(py, request)?))
+                self.projected_mut()?.pre_call = Some((&request).into());
+                OcrHostResult::PreCall(Ok(request))
             }
             OcrHostOperation::DuringCall(request) => {
-                OcrHostResult::DuringCall(Ok(self.python_pre_call(py, request)?))
+                OcrHostResult::DuringCall(Ok(self.during_call(py, request)?))
             }
             OcrHostOperation::PostCall(request) => {
-                OcrHostResult::PostCall(Ok(self.python_post_call(py, request)?))
+                OcrHostResult::PostCall(Ok(self.post_call(py, request)?))
             }
             OcrHostOperation::ConstructResponse(response) => {
                 self.state.end = Some(now(py)?);
@@ -194,24 +210,7 @@ impl PythonRoute for PythonOcrHost {
                 OcrHostResult::Lifecycle(Ok(()))
             }
             OcrHostOperation::MapFailure(error) => {
-                if self.state.error.is_none() {
-                    self.state.retain_error(py, ocr_error_to_pyerr(error));
-                }
-                if self.state.end.is_none() {
-                    self.state.end = Some(now(py)?);
-                }
-                let error = self.state.error.as_ref().ok_or_else(missing_state)?;
-                let (request, provider) = match &self.data {
-                    OcrHostData::Unprojected { request } => (request.bind(py), ""),
-                    OcrHostData::Projected(projected) => (
-                        projected.fields.boundary_request.bind(py),
-                        projected.fields.provider,
-                    ),
-                    OcrHostData::Released => return Err(missing_state()),
-                };
-                let mapped = callbacks::map_failure(py, error, request, provider)?;
-                self.state
-                    .retain_error(py, PyErr::from_value(mapped.into_bound(py).into_any()));
+                self.map_failure(py, error)?;
                 OcrHostResult::Lifecycle(Ok(()))
             }
             OcrHostOperation::Lifecycle(_)
@@ -221,24 +220,18 @@ impl PythonRoute for PythonOcrHost {
     }
 
     fn cleanup(&mut self) {
-        self.data = OcrHostData::Released;
+        self.projected = None;
     }
+
     fn traverse(&self, visit: &pyo3::gc::PyVisit<'_>) -> Result<(), pyo3::gc::PyTraverseError> {
-        match &self.data {
-            OcrHostData::Unprojected { request } => visit.call(request),
-            OcrHostData::Projected(projected) => {
-                visit.call(&projected.fields.boundary_request)?;
-                visit.call(&projected.fields.document)?;
-                visit.call(&projected.fields.api_key)?;
-                if let Some(provider) = &projected.fields.azure_ad_token_provider {
-                    provider.traverse(visit)?;
-                }
-                visit.call(&projected.callback_inputs)?;
-                visit.call(&projected.body)?;
-                visit.call(&projected.headers)
-            }
-            OcrHostData::Released => Ok(()),
+        let Some(projected) = &self.projected else {
+            return Ok(());
+        };
+        if let Some(provider) = &projected.azure_ad_token_provider {
+            provider.traverse(visit)?;
         }
+        visit.call(&projected.body)?;
+        visit.call(&projected.headers)
     }
 }
 
@@ -257,11 +250,12 @@ fn call(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     let kwargs = kwargs.unwrap_or_else(|| PyDict::new(py));
-    let name = if asynchronous { "aocr" } else { "ocr" };
-    let request = py
-        .import("litellm.rust_bridge.ocr")?
-        .getattr("bind_request")?
-        .call1((name, &args, &kwargs))?;
+    let signature = if asynchronous {
+        &ASYNC_SIGNATURE
+    } else {
+        &SIGNATURE
+    };
+    signature.bind(&args, &kwargs)?;
     let client = OcrClient::shared().map_err(ocr_error_to_pyerr)?;
     let call = admitted_call(OcrCall::admit(
         client,
@@ -276,11 +270,9 @@ fn call(
             args.unbind(),
             kwargs.copy()?.unbind(),
             asynchronous,
-            name,
+            signature.name,
         )?,
-        data: OcrHostData::Unprojected {
-            request: request.unbind(),
-        },
+        projected: None,
     };
     run_call(py, call, host)
 }

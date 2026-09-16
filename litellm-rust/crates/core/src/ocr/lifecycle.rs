@@ -863,12 +863,6 @@ mod tests {
             Box::pin(async move {
                 assert_eq!(request.body["pages"], json!([2]));
                 assert_eq!(request.body.get("future"), Some(&Value::Null));
-                assert!(
-                    !request
-                        .retained_fields
-                        .iter()
-                        .any(|field| field == "pages" || field == "document")
-                );
                 request.body.as_object_mut().unwrap().remove("future");
                 request.body["hook_option"] = json!({"nested":[null,false,0]});
                 Ok(request)

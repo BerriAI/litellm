@@ -75,7 +75,7 @@ impl PythonLogger {
     pub(crate) fn pre_ocr(
         &self,
         py: Python<'_>,
-        api_key: &Option<Py<PyAny>>,
+        api_key: Option<&str>,
         body: &Bound<'_, PyDict>,
         headers: &Bound<'_, PyDict>,
         url: &str,
@@ -152,12 +152,13 @@ pub(super) fn response(py: Python<'_>, response: &LiteLLMOcrResponse) -> PyResul
 pub(super) fn map_failure(
     py: Python<'_>,
     error: &Py<PyBaseException>,
-    request: &Bound<'_, PyAny>,
+    model: &str,
     provider: &str,
+    kwargs: &Py<PyDict>,
 ) -> PyResult<Py<PyBaseException>> {
     Ok(py
         .import("litellm.rust_bridge.ocr")?
         .getattr("map_failure")?
-        .call1((error, request, provider))?
+        .call1((error, model, provider, kwargs))?
         .extract()?)
 }

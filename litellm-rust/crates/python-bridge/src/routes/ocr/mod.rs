@@ -3,7 +3,6 @@ mod document;
 mod errors;
 mod lifecycle;
 mod project;
-mod request;
 
 use pyo3::prelude::*;
 

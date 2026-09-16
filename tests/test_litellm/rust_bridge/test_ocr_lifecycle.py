@@ -101,32 +101,33 @@ def test_public_binding_keeps_keyword_model_and_document_in_native_hook_kwargs()
 
 
 @pytest.mark.parametrize("enabled", [False, True], ids=["flag-disabled", "flag-enabled"])
-def test_public_duplicate_argument_error_does_not_depend_on_native_selection(enabled: bool) -> None:
-    native: Final = Mock(side_effect=AssertionError("binding errors precede admission"))
-    document: Final = {"type": "document_url", "document_url": "https://example.com"}
+@pytest.mark.parametrize(
+    "call, message",
+    [
+        (
+            lambda: litellm.ocr("mistral/mistral-ocr-latest", {"type": "document_url"}, model="duplicate"),
+            r"ocr\(\) got multiple values for argument 'model'",
+        ),
+        (
+            lambda: litellm.ocr("mistral/mistral-ocr-latest"),
+            r"ocr\(\) missing 1 required positional argument: 'document'",
+        ),
+    ],
+    ids=["duplicate", "missing"],
+)
+def test_public_binding_errors_do_not_depend_on_native_selection(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool, call, message: str
+) -> None:
+    fallback: Final = Mock(side_effect=AssertionError("legacy must not run after a native binding error"))
+    if enabled and NATIVE_OCR.load() is not None:
+        monkeypatch.setattr(legacy, "ocr", fallback)
     litellm.rust(enabled)
-    NATIVE_OCR.override(native)
     try:
-        with pytest.raises(TypeError, match=r"ocr\(\) got multiple values for argument 'model'"):
-            litellm.ocr("mistral/mistral-ocr-latest", document, model="duplicate")
+        with pytest.raises(TypeError, match=message):
+            call()
     finally:
-        NATIVE_OCR.reset()
         litellm.rust(None)
-    assert native.call_count == 0
-
-
-@pytest.mark.parametrize("enabled", [False, True], ids=["flag-disabled", "flag-enabled"])
-def test_public_missing_required_argument_error_does_not_depend_on_native_selection(enabled: bool) -> None:
-    native: Final = Mock(side_effect=AssertionError("binding errors precede admission"))
-    litellm.rust(enabled)
-    NATIVE_OCR.override(native)
-    try:
-        with pytest.raises(TypeError, match=r"ocr\(\) missing 1 required positional argument: 'document'"):
-            litellm.ocr("mistral/mistral-ocr-latest")
-    finally:
-        NATIVE_OCR.reset()
-        litellm.rust(None)
-    assert native.call_count == 0
+    assert fallback.call_count == 0
 
 
 @pytest.mark.asyncio

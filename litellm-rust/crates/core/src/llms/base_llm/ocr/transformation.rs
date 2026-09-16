@@ -135,14 +135,6 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
         }
     }
 
-    /// Whether the `document` field in the outgoing body is owned by the
-    /// provider transform and must survive guardrail body rewrites.
-    /// Providers that inline remote URLs return `false` for remote documents
-    /// so a hook may still replace the fetched payload.
-    fn retains_document(&self, _document: &OcrDocument) -> bool {
-        true
-    }
-
     /// Provider-specific check applied to the composed body, both before and
     /// after guardrail hooks. Defaults to accepting any body.
     fn validate_request_body(&self, _body: &Value) -> Result<(), crate::ocr::Error> {
@@ -178,7 +170,6 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
                 request,
                 &url,
                 headers,
-                self.retains_document(&request.document),
                 body,
                 |body| self.validate_request_body(body),
             )

@@ -193,11 +193,6 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         })
     }
 
-    /// The body carries the document inside `messages`, not a top-level
-    /// `document` field, so there is nothing for guardrails to retain.
-    fn retains_document(&self, _document: &OcrDocument) -> bool {
-        false
-    }
 }
 
 pub(crate) fn normalize_response(

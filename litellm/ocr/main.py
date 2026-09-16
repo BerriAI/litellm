@@ -6,7 +6,7 @@ from litellm.ocr import legacy
 from litellm.ocr.legacy import convert_file_document_to_url_document, get_mime_type
 from litellm.rust_bridge.bindings import native_exception_types
 from litellm.rust_bridge.configuration import rust_ocr_enabled
-from litellm.rust_bridge.ocr import NATIVE_AOCR, NATIVE_OCR, bind_request
+from litellm.rust_bridge.ocr import NATIVE_AOCR, NATIVE_OCR
 
 __all__ = ("aocr", "convert_file_document_to_url_document", "get_mime_type", "ocr")
 
@@ -15,7 +15,6 @@ def ocr(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public OCR call shape
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
-    bind_request("ocr", args, kwargs)
     native: Final = NATIVE_OCR.load() if rust_ocr_enabled() and not kwargs.get("aocr") else None
     if native is not None:
         try:
@@ -29,7 +28,6 @@ def ocr(
 
 
 async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: preserve the public OCR call shape
-    bind_request("aocr", args, kwargs)
     native: Final = NATIVE_AOCR.load() if rust_ocr_enabled() and not kwargs.get("aocr") else None
     if native is not None:
         try:

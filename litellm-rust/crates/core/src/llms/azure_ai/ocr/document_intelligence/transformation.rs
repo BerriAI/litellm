@@ -542,10 +542,6 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
         build_request(document)
     }
 
-    /// The body is `urlSource`/`base64Source`, not a `document` field.
-    fn retains_document(&self, _document: &OcrDocument) -> bool {
-        false
-    }
 }
 
 impl AzureDocumentIntelligenceOCRConfig {
