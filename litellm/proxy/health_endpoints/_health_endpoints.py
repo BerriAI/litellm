@@ -41,7 +41,7 @@ from litellm.proxy.auth.auth_checks import (
     _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
 )
 from litellm.proxy.auth.auth_utils import (
-    _CONNECTION_OVERRIDE_REQUEST_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
+    _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
     reject_server_owned_wif_params,
 )
 from litellm.proxy.auth.model_checks import get_key_models
@@ -76,6 +76,7 @@ from litellm.router_utils.clientside_credential_handler import (
     clientside_credential_keys,
 )
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.utils import CustomPricingLiteLLMParams
 
 #### Health ENDPOINTS ####
 
@@ -126,6 +127,15 @@ _CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
         *clientside_credential_keys,
         "litellm_credential_name",
     )
+)
+
+# The banned request-body params that actually describe a CONNECTION — the
+# banned list minus the custom-pricing fields. Pricing fields are banned from a
+# request body because they poison the shared model-cost registry, not because
+# they retarget or re-authenticate the outbound call, so the full list would
+# treat `input_cost_per_token` as a credential.
+_CONNECTION_OVERRIDE_REQUEST_PARAMS: Final[tuple[str, ...]] = tuple(
+    param for param in _BANNED_REQUEST_BODY_PARAMS if param not in CustomPricingLiteLLMParams.model_fields
 )
 
 
