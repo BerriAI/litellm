@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable, Generator, Mapping
 from contextlib import closing
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Final, Literal, Protocol
 from urllib.parse import urlsplit
 
@@ -35,6 +36,7 @@ SIGNATURE_HEADERS: Final = frozenset(
     {"authorization", "x-amz-date", "x-amz-security-token", "x-amz-content-sha256"}
 )
 BEDROCK_MOUNT_PREFIX: Final = "bedrock"
+OPENAI_JSON_PATHS: Final = frozenset({"/v1/chat/completions", "/v1/messages", "/v1/embeddings", "/v1/responses"})
 JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
@@ -63,6 +65,23 @@ class CacheUnavailable:
 
 type CacheLookup = CacheHit | CaptureLease | CacheBusy | CacheUnavailable
 type RequestSigner = Callable[[str, str, Mapping[str, str], bytes | None], dict[str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class MountPolicy:
+    """What a mount needs beyond plain forwarding.
+
+    ``sign`` mints a fresh credential over the upstream URL, for providers whose
+    auth covers the Host the edge rewrote. ``unkeyed_headers`` names headers that
+    must stay out of the cache key because they change on every call and would
+    otherwise make the mount a permanent miss: a minted signature, or an OAuth
+    token the provider rotates. Naming one costs the guarantee that a recording
+    can never cross credentials, so a mount with a rotating token relies on the
+    environment holding one identity for that provider. Mounts with a static API
+    key name nothing here and keep the guarantee whole."""
+
+    sign: RequestSigner | None = None
+    unkeyed_headers: frozenset[str] = frozenset()
 
 
 class ResponseStore(Protocol):
@@ -127,7 +146,7 @@ def cacheable_endpoint(mount: str, method: str, url: str, body: bytes | None) ->
     path: Final = urlsplit(url).path
     if is_bedrock(mount):
         return path.startswith("/model/") and path.endswith(("/converse", "/invoke"))
-    return path in {"/v1/chat/completions", "/v1/messages"}
+    return path in OPENAI_JSON_PATHS
 
 
 def successful_response(mount: str, url: str, status: int, headers: Mapping[str, str], body: bytes) -> bool:
@@ -150,6 +169,8 @@ def successful_response(mount: str, url: str, status: int, headers: Mapping[str,
             return False
         if not values or any(not isinstance(value, dict) or "error" in value or value.get("type") == "error" for value in values):
             return False
+        if urlsplit(url).path == "/v1/responses":
+            return complete_responses_stream(values)
         if urlsplit(url).path == "/v1/chat/completions":
             return events[-1] == "[DONE]" and "[DONE]" not in events[:-1] and complete_chat_stream(values)
         return (
@@ -168,8 +189,17 @@ def successful_response(mount: str, url: str, status: int, headers: Mapping[str,
         return False
     if not isinstance(value, dict) or "error" in value:
         return False
-    if urlsplit(url).path == "/v1/messages":
+    path: Final = urlsplit(url).path
+    if path == "/v1/messages":
         return value.get("type") == "message" and isinstance(value.get("content"), list) and isinstance(value.get("stop_reason"), str)
+    if path == "/v1/embeddings":
+        data: Final = value.get("data")
+        return isinstance(data, list) and bool(data) and isinstance(value.get("usage"), dict) and all(
+            isinstance(item, dict) and isinstance(item.get("embedding"), list) and bool(item["embedding"])
+            for item in data
+        )
+    if path == "/v1/responses":
+        return value.get("object") == "response" and value.get("status") == "completed"
     choices: Final = value.get("choices")
     return isinstance(choices, list) and bool(choices) and all(
         isinstance(choice, dict) and isinstance(choice.get("message"), dict) and isinstance(choice.get("finish_reason"), str)
@@ -195,6 +225,14 @@ def complete_bedrock_response(url: str, body: bytes) -> bool:
         and isinstance(value.get("content"), list)
         and isinstance(value.get("stop_reason"), str)
     )
+
+
+def complete_responses_stream(values: tuple[JsonValue, ...]) -> bool:
+    """The Responses API streams typed events and ends with ``response.completed``.
+    A run that failed, was cancelled, or ran out of tokens ends with a different
+    terminal event, so requiring that one keeps a half-finished response out."""
+    last: Final = values[-1]
+    return isinstance(last, dict) and last.get("type") == "response.completed"
 
 
 def complete_chat_stream(values: tuple[JsonValue, ...]) -> bool:
@@ -296,13 +334,16 @@ def response_steps(response: CachedResponse) -> Generator[StreamStep, None, None
         yield StreamChunk(base64.b64decode(chunk, validate=True))
 
 
+NO_POLICIES: Final[Mapping[str, MountPolicy]] = MappingProxyType({})
+
+
 @dataclass(frozen=True, slots=True)
 class CacheEdge:
     store: ResponseStore
     secret: bytes = field(repr=False)
     counters: CacheCounters = field(default_factory=CacheCounters)
     slots: SlotCounter = field(default_factory=SlotCounter)
-    signers: Mapping[str, RequestSigner] = field(default_factory=dict)
+    policies: Mapping[str, MountPolicy] = NO_POLICIES
     wait_seconds: float = 2.0
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
@@ -321,18 +362,18 @@ class CacheEdge:
     def outbound(self, mount: str, method: str, url: str, headers: dict[str, str], body: bytes | None) -> dict[str, str]:
         """The headers actually sent upstream. A signing mount gets a signature
         minted over the upstream URL, because the edge rewrote the Host the proxy
-        signed and Bedrock verifies it."""
-        signer: Final = self.signers.get(mount)
+        signed and the provider verifies it."""
+        signer: Final = self.policies.get(mount, MountPolicy()).sign
         return headers if signer is None else signer(method, url, headers, body)
 
     def keyed(self, mount: str, headers: Mapping[str, str]) -> Mapping[str, str]:
-        """A signing mount's signature headers are the edge's own and carry a
-        timestamp, so keying on them would make every request a permanent miss.
-        Every other mount keys on its headers whole, credentials included, so a
-        different account can never read another's recording."""
-        if mount not in self.signers:
+        """Headers the cache key is built from. A mount keeps its credentials in
+        the key unless its policy names them unkeyed, so by default one account
+        can never read another's recording."""
+        unkeyed: Final = self.policies.get(mount, MountPolicy()).unkeyed_headers
+        if not unkeyed:
             return headers
-        return {name: value for name, value in headers.items() if name.lower() not in SIGNATURE_HEADERS}
+        return {name: value for name, value in headers.items() if name.lower() not in unkeyed}
 
     def forward(
         self, mount: str, method: str, url: str, headers: dict[str, str], body: bytes | None, timeout: float,

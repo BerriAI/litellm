@@ -25,6 +25,7 @@ from provider_cache import (
     CacheEdge,
     CacheHit,
     CaptureLease,
+    MountPolicy,
     ResponseStore,
     cacheable_endpoint,
     request_identity,
@@ -179,7 +180,9 @@ def slot_key(
 def bedrock_cache_edge(store: ResponseStore, test_key: str = TEST_KEY) -> CacheEdge:
     return CacheEdge(
         store, SECRET, test_key=lambda: test_key,
-        signers={BEDROCK_MOUNT: bedrock_signer("us-east-1", lambda: STATIC_CREDENTIALS)},
+        policies={BEDROCK_MOUNT: MountPolicy(
+            sign=bedrock_signer("us-east-1", lambda: STATIC_CREDENTIALS), unkeyed_headers=SIGNATURE_HEADERS,
+        )},
     )
 
 
@@ -501,6 +504,98 @@ def test_counters_attribute_every_outcome_to_its_mount(
     assert counts["mount:anthropic:rejected"] == 1 and "mount:openai:rejected" not in counts
 
 
+EMBEDDING_SUCCESS: Final = (
+    b'{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],'
+    b'"model":"text-embedding-3-small","usage":{"prompt_tokens":2,"total_tokens":2}}'
+)
+RESPONSE_SUCCESS: Final = b'{"id":"resp_synthetic","object":"response","status":"completed","output":[]}'
+RESPONSE_STREAM_SUCCESS: Final = (
+    b'data: {"type":"response.created","response":{"id":"resp_synthetic"}}\n\n'
+    b'data: {"type":"response.completed","response":{"id":"resp_synthetic","status":"completed"}}\n\n'
+)
+
+
+@contextmanager
+def openai_edge(cache: CacheEdge, provider: Provider, path: str) -> Generator[str, None, None]:
+    upstream: Final = f"http://127.0.0.1:{provider.server_port}"
+    running: Final = start_provider_edge(cache, mounts={"openai": upstream})
+    try:
+        yield running.edge.api_base("openai") + path
+    finally:
+        running.shutdown()
+
+
+class TestNonChatOpenAiEndpoints:
+    """Chat and messages were the only cacheable paths. Embeddings and responses
+    are the other two JSON endpoints the suite drives through the same mount, and
+    each needs its own completeness rule: a chat response's ``choices`` check
+    would reject a perfectly good embedding."""
+
+    @pytest.mark.parametrize("path,response", [
+        ("/v1/embeddings", EMBEDDING_SUCCESS),
+        ("/v1/responses", RESPONSE_SUCCESS),
+    ])
+    def test_complete_responses_replay_on_the_next_run(
+        self, store: RedisResponseStore, provider: Provider, path: str, response: bytes,
+    ) -> None:
+        provider.response = response
+        for _ in range(2):
+            with openai_edge(cache_edge(store), provider, path) as url:
+                assert call(url, MARKED).body == response
+        assert len(provider.hits) == 1
+
+    def test_a_completed_response_stream_replays(
+        self, store: RedisResponseStore, provider: Provider,
+    ) -> None:
+        provider.stream = True
+        provider.response = RESPONSE_STREAM_SUCCESS
+        for _ in range(2):
+            with openai_edge(cache_edge(store), provider, "/v1/responses") as url:
+                assert call(url, MARKED).body == RESPONSE_STREAM_SUCCESS
+        assert len(provider.hits) == 1
+
+    @pytest.mark.parametrize("path,response", [
+        ("/v1/embeddings", b'{"object":"list","data":[],"usage":{"prompt_tokens":0}}'),
+        ("/v1/embeddings", b'{"object":"list","data":[{"object":"embedding","index":0,"embedding":[]}],"usage":{}}'),
+        ("/v1/embeddings", b'{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}]}'),
+        ("/v1/responses", b'{"id":"resp_x","object":"response","status":"incomplete","output":[]}'),
+        ("/v1/responses", b'{"id":"resp_x","object":"response","status":"in_progress","output":[]}'),
+        ("/v1/responses", b'{"id":"resp_x","object":"response","output":[]}'),
+    ])
+    def test_incomplete_bodies_never_enter_the_cache(
+        self, store: RedisResponseStore, provider: Provider, path: str, response: bytes,
+    ) -> None:
+        provider.response = response
+        for _ in range(2):
+            with openai_edge(cache_edge(store), provider, path) as url:
+                assert call(url, MARKED).body == response
+        assert len(provider.hits) == 2
+
+    @pytest.mark.parametrize("payload", [
+        b'data: {"type":"response.created","response":{"id":"resp_x"}}\n\n',
+        b'data: {"type":"response.created","response":{"id":"resp_x"}}\n\ndata: {"type":"response.failed"}\n\n',
+        b'data: {"type":"response.completed","response":{"id":"resp_x"}}\n\ndata: {"type":"response.created"}\n\n',
+    ])
+    def test_a_response_stream_that_never_completed_is_never_cached(
+        self, store: RedisResponseStore, provider: Provider, payload: bytes,
+    ) -> None:
+        provider.stream = True
+        provider.response = payload
+        for _ in range(2):
+            with openai_edge(cache_edge(store), provider, "/v1/responses") as url:
+                assert call(url, MARKED).body == payload
+        assert len(provider.hits) == 2
+
+    @pytest.mark.parametrize("path,cacheable", [
+        ("/v1/chat/completions", True), ("/v1/messages", True),
+        ("/v1/embeddings", True), ("/v1/responses", True),
+        ("/v1/audio/speech", False), ("/v1/images/generations", False),
+        ("/v1/files", False), ("/v1/batches", False),
+    ])
+    def test_only_the_json_endpoints_are_cacheable(self, path: str, cacheable: bool) -> None:
+        assert cacheable_endpoint("openai", "POST", f"https://api.openai.com{path}", MARKED) is cacheable
+
+
 class TestBedrockSigning:
     """Bedrock is the reason the edge could not mount it before: SigV4 covers the
     Host header, so forwarding through a rewritten api_base invalidates the
@@ -545,7 +640,10 @@ class TestBedrockSigning:
             return dict(headers) | {"authorization": f"AWS4-HMAC-SHA256 {url}", "x-amz-date": next(stamps)}
 
         def signing_edge() -> CacheEdge:
-            return CacheEdge(store, SECRET, test_key=lambda: TEST_KEY, signers={BEDROCK_MOUNT: varying})
+            return CacheEdge(
+                store, SECRET, test_key=lambda: TEST_KEY,
+                policies={BEDROCK_MOUNT: MountPolicy(sign=varying, unkeyed_headers=SIGNATURE_HEADERS)},
+            )
 
         for _ in range(2):
             with bedrock_edge(signing_edge(), provider) as url:

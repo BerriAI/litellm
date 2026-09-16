@@ -94,7 +94,7 @@ from fixture_mode import (
     parse_fixture_mode,
 )
 from fixture_profile import IneligibleRequest, MatchProfile, match_profile, strict_identity
-from provider_cache import CacheEdge, RequestSigner, is_bedrock
+from provider_cache import SIGNATURE_HEADERS, CacheEdge, MountPolicy, is_bedrock
 from provider_cache_routing import LIVE_PROVIDER_REQUIRED
 from pydantic import JsonValue, TypeAdapter
 
@@ -1139,16 +1139,21 @@ def configured_cache_backend() -> CacheEdge | None:
     from provider_cache_redis import configured_cache
 
     cache: Final = configured_cache()
-    return None if cache is None else replace(cache, signers=bedrock_signers())
+    return None if cache is None else replace(cache, policies=bedrock_policies())
 
 
 @functools.lru_cache(maxsize=1)
-def bedrock_signers() -> Mapping[str, RequestSigner]:
-    """One signer per mounted Bedrock region, built lazily so a run that never
+def bedrock_policies() -> Mapping[str, MountPolicy]:
+    """One policy per mounted Bedrock region, built lazily so a run that never
     mounts Bedrock neither imports botocore nor resolves an AWS identity."""
     from provider_edge_bedrock import bedrock_signer
 
-    return MappingProxyType({f"bedrock/{region}": bedrock_signer(region) for region in BEDROCK_REGIONS})
+    return MappingProxyType(
+        {
+            f"bedrock/{region}": MountPolicy(sign=bedrock_signer(region), unkeyed_headers=SIGNATURE_HEADERS)
+            for region in BEDROCK_REGIONS
+        }
+    )
 
 
 @functools.lru_cache(maxsize=8)
