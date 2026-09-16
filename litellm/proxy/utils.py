@@ -4324,6 +4324,7 @@ class PrismaClient:
                             v.*,
                             t.spend AS team_spend,
                             t.max_budget AS team_max_budget,
+                            t.model_max_budget AS team_model_max_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
                             t.tpd_limit AS team_tpd_limit
@@ -4763,6 +4764,7 @@ class PrismaClient:
                             t.spend AS team_spend, 
                             t.max_budget AS team_max_budget,
                             t.soft_budget AS team_soft_budget,
+                            t.model_max_budget AS team_model_max_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
                             t.tpd_limit AS team_tpd_limit,

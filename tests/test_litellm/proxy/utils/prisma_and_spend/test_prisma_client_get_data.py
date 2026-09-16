@@ -401,19 +401,20 @@ async def test_check_view_exists_creates_token_view_when_missing(
     prisma_client.db.execute_raw = AsyncMock()
     prisma_client.health_check = AsyncMock(return_value=[{"?column?": 1}])
     result = await prisma_client.check_view_exists()
+    created_sql = prisma_client.db.execute_raw.await_args.args[0]
     actual = {
         "result": result,
         "create_called": prisma_client.db.execute_raw.await_count,
-        "create_sql_starts_with_create_view": prisma_client.db.execute_raw.await_args.args[
-            0
-        ]
-        .strip()
-        .startswith('CREATE VIEW "LiteLLM_VerificationTokenView"'),
+        "create_sql_starts_with_create_view": created_sql.strip().startswith(
+            'CREATE VIEW "LiteLLM_VerificationTokenView"'
+        ),
+        "projects_team_model_max_budget": "t.model_max_budget AS team_model_max_budget" in created_sql,
     }
     assert actual == {
         "result": None,
         "create_called": 1,
         "create_sql_starts_with_create_view": True,
+        "projects_team_model_max_budget": True,
     }
 
 
