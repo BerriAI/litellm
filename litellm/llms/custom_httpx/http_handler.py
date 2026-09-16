@@ -7,7 +7,7 @@ import ssl
 import sys
 import threading
 import time
-from collections.abc import AsyncIterable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
 from types import MappingProxyType
@@ -562,6 +562,29 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         self.status_code = original_error.response.status_code
 
 
+class _HandlerResponseStream(httpx.AsyncByteStream):
+    def __init__(self, stream: httpx.AsyncByteStream, handler: "AsyncHTTPHandler") -> None:
+        self._stream = stream
+        self._handler: AsyncHTTPHandler | None = handler
+        self._closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        try:
+            async for chunk in self._stream:
+                yield chunk
+        finally:
+            await self.aclose()
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            await self._stream.aclose()
+        finally:
+            self._handler = None
+
+
 class AsyncHTTPHandler:
     def __init__(
         self,
@@ -772,6 +795,8 @@ class AsyncHTTPHandler:
             )
             response: Final = await self.client.send(req, stream=stream)
             response.raise_for_status()
+            if stream and isinstance(response.stream, httpx.AsyncByteStream):
+                response.stream = _HandlerResponseStream(response.stream, self)
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
@@ -976,6 +1001,8 @@ class AsyncHTTPHandler:
             )
             response: Final = await self.client.send(req, stream=stream)
             response.raise_for_status()
+            if stream and isinstance(response.stream, httpx.AsyncByteStream):
+                response.stream = _HandlerResponseStream(response.stream, self)
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error

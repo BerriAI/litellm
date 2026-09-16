@@ -6,14 +6,18 @@ import pathlib
 import ssl
 import threading
 import weakref
+from collections.abc import AsyncIterator
+from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
 import certifi
 import httpx
 import pytest
-from aiohttp import ClientSession, TCPConnector
+import pytest_asyncio
+from aiohttp import ClientSession, TCPConnector, web
 
 import litellm
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
@@ -23,6 +27,79 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_ssl_configuration,
 )
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def gated_response_server() -> AsyncIterator[tuple[str, asyncio.Event]]:
+    release_body: Final = asyncio.Event()
+
+    async def serve(request: web.Request) -> web.StreamResponse:
+        response: Final = web.StreamResponse()
+        await response.prepare(request)
+        await release_body.wait()
+        try:
+            await response.write(b"complete response")
+        except ConnectionResetError:
+            pass
+        return response
+
+    app: Final = web.Application()
+    app.router.add_route("*", "/", serve)
+    runner: Final = web.AppRunner(app)
+    await runner.setup()
+    site: Final = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    try:
+        yield f"http://127.0.0.1:{runner.addresses[0][1]}/", release_body
+    finally:
+        release_body.set()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("post", "delete"))
+@pytest.mark.parametrize("disable_aiohttp", (False, True))
+@pytest.mark.parametrize("finish", ("complete", "close", "cancel"))
+async def test_stream_outlives_expired_handler_and_releases_it_when_closed(
+    gated_response_server: tuple[str, asyncio.Event],
+    monkeypatch: pytest.MonkeyPatch,
+    method: Literal["post", "delete"],
+    disable_aiohttp: bool,
+    finish: Literal["complete", "close", "cancel"],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", disable_aiohttp)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+    url, release_body = gated_response_server
+    cache: Final = LLMClientCache()
+
+    async def start_request() -> tuple[httpx.Response, weakref.ReferenceType[AsyncHTTPHandler]]:
+        handler: Final = AsyncHTTPHandler()
+        cache.set_cache("stream", handler, litellm_owned_client=True, ttl=0)
+        response: Final = await (
+            handler.post(url, stream=True) if method == "post" else handler.delete(url, stream=True)
+        )
+        return response, weakref.ref(handler)
+
+    response, handler_ref = await start_request()
+    assert cache.get_cache("stream") is None
+    await asyncio.sleep(0)
+    try:
+        if finish == "complete":
+            release_body.set()
+            assert await asyncio.wait_for(response.aread(), timeout=2) == b"complete response"
+        elif finish == "cancel":
+            reading: Final = asyncio.create_task(response.aread())
+            await asyncio.sleep(0)
+            reading.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reading
+        else:
+            await response.aclose()
+    finally:
+        await response.aclose()
+    gc.collect()
+    await asyncio.sleep(0)
+    assert handler_ref() is None
 
 
 @pytest.mark.asyncio
