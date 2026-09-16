@@ -401,6 +401,11 @@ def _usable_credential_value(auth_type: MCPAuthType, name: str, value: str) -> b
         return True
     if value.lower() in ("bearer", "basic", "token", "apikey"):
         return False
+    if auth_type == MCPAuth.api_key:
+        api_scheme: Final = value.split(None, 1)[0]
+        if api_scheme.lower() in ("bearer", "token", "apikey"):
+            api_credential: Final = strip_auth_scheme(value, api_scheme).strip()
+            return api_credential.lower() != api_scheme.lower()
     if auth_type in (MCPAuth.bearer_token, MCPAuth.token):
         scheme: Final = "Bearer" if auth_type == MCPAuth.bearer_token else "token"
         credential: Final = strip_auth_scheme(value, scheme).strip()

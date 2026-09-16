@@ -7,6 +7,7 @@ maps each CredError onto its HTTP status. These pin the parity-critical mapping 
 
 import base64
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -20,7 +21,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
     raise_user_oauth_challenge,
     to_server_spec,
     to_subject,
+    validate_static_credential,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
@@ -34,8 +37,26 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     SharedKey,
     TokenExchangeConfig,
 )
-from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp import MCPAuth, MCPAuthType, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+@pytest.mark.parametrize("auth_type,header,value", [
+    (MCPAuth.api_key, "Authorization", "Bearer fixture-key"),
+    (MCPAuth.api_key, "Authorization", "ApiKey fixture-key"),
+    (MCPAuth.api_key, "Authorization", "token fixture-key"),
+    (MCPAuth.api_key, "Authorization", "Bearer token"),
+    (MCPAuth.api_key, "Authorization", "opaque-key"),
+    (MCPAuth.api_key, "Authorization", "Custom Custom"),
+    (MCPAuth.api_key, "X-API-Key", "Bearer Bearer"),
+    (MCPAuth.api_key, "X-Custom", "ApiKey ApiKey"),
+    (MCPAuth.authorization, "Authorization", "Bearer Bearer"),
+])
+def test_static_credential_preserves_supported_api_key_and_raw_headers(
+    auth_type: MCPAuthType, header: str, value: str,
+) -> None:
+    result: Final = validate_static_credential(auth_type, {header: value}, upstream_token_header=header)
+    assert isinstance(result, Ok)
 
 
 def _server(**kwargs) -> MCPServer:

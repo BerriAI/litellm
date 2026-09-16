@@ -13767,7 +13767,10 @@ class TestProtectedCredentialPreparation:
         assert custom_slot is None or custom_slot not in request.headers
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("value", ["", " ", "Bearer", "Basic", "token", "ApiKey"])
+    @pytest.mark.parametrize("value", [
+        "", " ", "Bearer", "Basic", "token", "ApiKey",
+        "Bearer Bearer", "ApiKey ApiKey", "token token", "bEaReR   BEARER", "aPiKeY\tAPIKEY",
+    ])
     async def test_api_key_rejects_authorization_without_a_credential(self, value: str) -> None:
         server: Final = MCPServer(
             server_id="caller-empty", name="caller-empty", url="https://upstream.example/mcp",
