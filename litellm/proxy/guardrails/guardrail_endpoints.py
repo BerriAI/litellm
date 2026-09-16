@@ -2244,10 +2244,7 @@ class _GuardrailProxyLogging(Protocol):
     def post_call_success_hook(self) -> "Callable[..., Awaitable[object]]": ...
 
 
-def _build_guardrail_request_data(data: dict, request: ApplyGuardrailRequest) -> dict:
-    """Proxy request dict (carries `litellm_logging_obj` and proxy metadata, so the guardrail's
-    `standard_logging_guardrail_information` reaches spend logs) with the caller's messages and
-    metadata layered on top."""
+def _build_guardrail_request_data(data: Mapping[str, object], request: ApplyGuardrailRequest) -> dict[str, object]:
     metadata_key: Final = get_metadata_variable_name_from_kwargs(data)
     proxy_metadata: Final = data.get(metadata_key)
     has_metadata: Final = isinstance(proxy_metadata, dict) or request.metadata is not None
@@ -2396,7 +2393,7 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
-        data = _build_guardrail_request_data(data, request)
+        data = _build_guardrail_request_data(data, request)  # rebind-ok: failure hooks below read the guardrail's metadata
         _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
             inputs={"texts": [request.text]},
