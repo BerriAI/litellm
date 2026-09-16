@@ -17,15 +17,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
-from fastapi import Response
+from fastapi import HTTPException, Response
 from fastapi.responses import StreamingResponse
+from openai import APIError as OpenAIAPIError
+from pydantic import BaseModel
 
 import litellm
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 import litellm.proxy.proxy_server as ps
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.proxy_server import (
     _apply_streaming_chunk_hooks,
@@ -41,6 +46,12 @@ from litellm.proxy.proxy_server import (
     async_data_generator,
     data_generator,
     select_data_generator,
+)
+from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseFailedEvent,
+    ResponsesAPIResponse,
 )
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 
@@ -870,6 +881,127 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
 
     # First entry is the successful "partial" chunk (bytes), last is the error.
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal,upstream_error,expected_code",
+    [
+        ("completed", None, None),
+        ("serialization_failure", None, "server_error"),
+        ("failure_after_completed", None, None),
+        pytest.param(
+            "upstream_failure",
+            litellm.AuthenticationError(
+                message="Upstream rejected request", llm_provider="openai", model="gpt-6-astra"
+            ),
+            "authentication_error", id="authentication_error",
+        ),
+        pytest.param(
+            "upstream_failure",
+            OpenAIAPIError(
+                message="Upstream rejected request",
+                request=httpx.Request("POST", "https://streaming.example/v1/responses"),
+                body={"code": {"reason": "overloaded"}, "type": {"unexpected": "object"}},
+            ),
+            "server_error", id="structured_provider_error_fields",
+        ),
+        *(
+            pytest.param(
+                "upstream_failure", HTTPException(status_code=status, detail="Upstream rejected request"),
+                code, id=f"http_{status}",
+            )
+            for status, code in (
+                (400, "invalid_request_error"), (403, "permission_error"), (404, "not_found_error"),
+                (408, "request_timeout"), (422, "invalid_request_error"), (500, "server_error"), (503, "server_error"),
+            )
+        ),
+    ],
+)
+async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_terminal(
+    terminal: Literal["completed", "serialization_failure", "failure_after_completed", "upstream_failure"],
+    upstream_error: HTTPException | OpenAIAPIError | None,
+    expected_code: str | None,
+) -> None:
+    class ToolDelta(BaseModel):
+        type: Literal["response.function_call_arguments.delta"]
+        sequence_number: int
+        item_id: str
+        output_index: int
+        delta: str
+
+    class UnserializableTerminal(BaseModel):
+        type: Literal["response.completed"]
+        sequence_number: int
+        response: ResponsesAPIResponse
+        invalid: object
+
+    response: Final = ResponsesAPIResponse(id="resp_visible", created_at=1, model="gpt-6-astra", output=[])
+    created: Final = ResponseCreatedEvent.model_validate(
+        {"type": "response.created", "sequence_number": 0, "response": response}
+    )
+    completed: Final = ResponseCompletedEvent.model_validate(
+        {"type": "response.completed", "sequence_number": 2, "response": response}
+    )
+    tool_delta: Final = ToolDelta(
+        type="response.function_call_arguments.delta", sequence_number=1, item_id="fc_stream_error",
+        output_index=0, delta='{"path":"partial',
+    )
+    original_status: Final = (
+        upstream_error.status_code if isinstance(upstream_error, (HTTPException, litellm.AuthenticationError)) else None
+    )
+
+    async def upstream() -> AsyncIterator[BaseModel]:
+        yield created
+        yield tool_delta
+        if upstream_error is not None:
+            raise upstream_error
+        yield (
+            UnserializableTerminal(type="response.completed", sequence_number=2, response=response, invalid=object())
+            if terminal == "serialization_failure" else completed
+        )
+        if terminal == "failure_after_completed":
+            raise litellm.APIError(
+                status_code=500, message="Stream close failed", llm_provider="openai", model="gpt-6-astra"
+            )
+
+    frames: Final = [
+        frame
+        async for frame in select_data_generator(
+            response=upstream(),
+            user_api_key_dict=_user_auth(),
+            request_data={},
+            responses_stream_errors=True,
+        )
+    ]
+    decoded: Final = tuple(frame.decode() if isinstance(frame, bytes) else frame for frame in frames)
+    event_frames: Final = tuple(frame for frame in decoded if frame != "data: [DONE]\n\n")
+    payloads: Final = tuple(
+        json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
+        for frame in event_frames
+    )
+
+    assert payloads[0]["response"]["id"] == "resp_visible"
+    assert payloads[1] == tool_delta.model_dump()
+    assert len(payloads) == 3
+    if terminal in ("serialization_failure", "upstream_failure"):
+        failure: Final = ResponseFailedEvent.model_validate(payloads[-1])
+        assert event_frames[-1].startswith("event: response.failed\n")
+        assert failure.response.id == "resp_visible"
+        assert failure.response.status == "failed"
+        assert failure.response.error is not None
+        assert failure.response.error["code"] == expected_code
+        if upstream_error is None:
+            assert "serialize" in failure.response.error["message"].lower()
+        else:
+            assert "Upstream rejected request" in failure.response.error["message"]
+            if isinstance(upstream_error, (HTTPException, litellm.AuthenticationError)):
+                assert upstream_error.status_code == original_status
+        assert payloads[-1]["sequence_number"] > payloads[1]["sequence_number"]
+    else:
+        assert payloads[-1]["type"] == "response.completed"
+        assert payloads[-1]["sequence_number"] == 2
+        assert "error" not in payloads[-1]
 
 
 # ---------------------------------------------------------------------------
