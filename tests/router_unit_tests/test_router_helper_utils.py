@@ -11,7 +11,12 @@ import pytest
 import litellm
 from unittest.mock import patch, MagicMock, AsyncMock
 from create_mock_standard_logging_payload import create_standard_logging_payload
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import ModelResponse, StandardLoggingPayload
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 
@@ -930,10 +935,6 @@ async def test_set_response_headers(model_list):
 
 @pytest.mark.asyncio
 async def test_set_response_headers_passes_through_post_increment_counters(model_list):
-    """
-    LIT-3058: `make_call` increments the router's TPM/RPM counter before the headers
-    are built, so `set_response_headers` writes the remaining values it reads as-is.
-    """
     from pydantic import BaseModel
 
     class _Usage(BaseModel):
@@ -980,17 +981,12 @@ def _rpm_tpm_router(model_id: str) -> Router:
     )
 
 
-def _ratelimit_headers(response) -> dict:
+def _ratelimit_headers(response: ModelResponse | CustomStreamWrapper) -> dict[str, int]:
     return {k: v for k, v in response._hidden_params["additional_headers"].items() if k.startswith("x-ratelimit-")}
 
 
 @pytest.mark.asyncio
 async def test_acompletion_headers_read_post_increment_counter_and_count_once():
-    """
-    LIT-3058 regression: the remaining-* headers on the response must already include
-    this request, and the request must land in the router counter exactly once even
-    though `deployment_callback_on_success` still runs after the response returns.
-    """
     router = _rpm_tpm_router("lit-3058-async")
 
     response = await router.acompletion(
@@ -1010,7 +1006,6 @@ async def test_acompletion_headers_read_post_increment_counter_and_count_once():
 
 @pytest.mark.asyncio
 async def test_acompletion_wildcard_route_headers_and_counter_use_resolved_deployment_name():
-    """The counter key is written under the resolved model name, which is what the usage reader looks up."""
     router = Router(
         model_list=[
             {
@@ -1034,10 +1029,6 @@ async def test_acompletion_wildcard_route_headers_and_counter_use_resolved_deplo
 
 @pytest.mark.asyncio
 async def test_acompletion_stream_counts_request_before_headers_and_tokens_once_on_completion():
-    """
-    A stream has no usage when the headers are built: the request is counted before the
-    headers and the final token usage is added once when the stream completes.
-    """
     router = _rpm_tpm_router("lit-3058-stream")
 
     stream = await router.acompletion(
@@ -1062,10 +1053,6 @@ async def test_acompletion_stream_counts_request_before_headers_and_tokens_once_
 
 @pytest.mark.asyncio
 async def test_deployment_callback_on_success_adds_only_uncounted_tokens():
-    """
-    When the request was already counted before the headers, the success callback adds
-    only the tokens that were not known at that point and never a second request.
-    """
     import time
 
     router = _rpm_tpm_router("lit-3058-callback")
@@ -1094,9 +1081,54 @@ async def test_deployment_callback_on_success_adds_only_uncounted_tokens():
     assert await router.get_model_group_usage("gpt-5-mini") == (40, None)
 
 
+class _GatedIncrementCache(DualCache):
+    def __init__(self) -> None:
+        super().__init__(in_memory_cache=InMemoryCache())
+        self.first_increment_started = asyncio.Event()
+        self.release_first_increment = asyncio.Event()
+        self.increment_calls = 0
+
+    async def async_increment_cache_pipeline(
+        self,
+        increment_list: list[RedisPipelineIncrementOperation],
+        local_only: bool = False,
+        parent_otel_span: object = None,
+        **kwargs: object,
+    ) -> list[float] | None:
+        self.increment_calls += 1
+        if self.increment_calls == 1:
+            self.first_increment_started.set()
+            await self.release_first_increment.wait()
+        return await super().async_increment_cache_pipeline(
+            increment_list, local_only=local_only, parent_otel_span=parent_otel_span, **kwargs
+        )
+
+
+@pytest.mark.asyncio
+async def test_success_callback_running_during_pre_header_increment_does_not_double_count():
+    router = _rpm_tpm_router("lit-3058-race")
+    cache = _GatedIncrementCache()
+    router.cache = cache
+
+    request = asyncio.ensure_future(
+        router.acompletion(model="gpt-5-mini", messages=[{"role": "user", "content": "hi"}], mock_response="pong")
+    )
+    await asyncio.wait_for(cache.first_increment_started.wait(), timeout=5)
+    for _ in range(50):
+        if get_deployment_successes_for_current_minute(router, "lit-3058-race") == 1:
+            break
+        await asyncio.sleep(0.1)
+    assert get_deployment_successes_for_current_minute(router, "lit-3058-race") == 1
+    assert cache.increment_calls == 1
+
+    cache.release_first_increment.set()
+    response = await request
+
+    assert await router.get_model_group_usage("gpt-5-mini") == (response.usage.total_tokens, 1)
+
+
 @pytest.mark.asyncio
 async def test_increment_deployment_usage_for_response_skips_session_wrappers():
-    """WebSocket and realtime session wrappers return None and are not counted as a request."""
     router = _rpm_tpm_router("lit-3058-ws")
     request_kwargs = {
         "model": "gpt-5-mini",
@@ -1179,9 +1211,6 @@ def _shared_redis_stub(store: dict) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
-    from litellm.caching.dual_cache import DualCache
-    from litellm.caching.in_memory_cache import InMemoryCache
-
     store: dict = {}
     worker_a = _rpm_tpm_router("lit-3058-workers")
     worker_b = _rpm_tpm_router("lit-3058-workers")
