@@ -59,8 +59,14 @@ const numberOrNull = (value: string | number | null | undefined): number | null 
 
 export const teamAdminSettingsChanges = (
   values: TeamAdminSettingsValues,
+  initialValues: TeamAdminSettingsValues,
   editableFields: ReadonlySet<string>,
-): TeamAdminSettingsChanges => (editableFields.has("tpm_limit") ? { tpm_limit: numberOrNull(values.tpm_limit) } : {});
+): TeamAdminSettingsChanges => {
+  const tpmLimit = numberOrNull(values.tpm_limit);
+  return editableFields.has("tpm_limit") && tpmLimit !== numberOrNull(initialValues.tpm_limit)
+    ? { tpm_limit: tpmLimit }
+    : {};
+};
 
 export const parseTeamEditAccess = (callerEditAccess: unknown): TeamEditAccess => {
   const parsed = callerEditAccessSchema.safeParse(callerEditAccess);

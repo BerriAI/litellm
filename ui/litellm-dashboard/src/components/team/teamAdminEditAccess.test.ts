@@ -20,21 +20,31 @@ describe("teamAdminFieldLabel", () => {
 
 describe("teamAdminSettingsChanges", () => {
   const tpmEnabled = new Set(["tpm_limit"]);
+  const stored = { tpm_limit: 1000 };
 
   it.each([
     ["a typed number string", "5000", 5000],
-    ["a stored number", 1200, 1200],
+    ["a number", 1200, 1200],
     ["zero", "0", 0],
     ["an emptied input", "", null],
     ["whitespace", "  ", null],
-    ["no stored limit", null, null],
+    ["no limit", null, null],
     ["an unset value", undefined, null],
-  ])("sends tpm_limit for %s", (_label, tpm_limit, expected) => {
-    expect(teamAdminSettingsChanges({ tpm_limit }, tpmEnabled)).toStrictEqual({ tpm_limit: expected });
+  ])("sends tpm_limit changed to %s", (_label, tpm_limit, expected) => {
+    expect(teamAdminSettingsChanges({ tpm_limit }, stored, tpmEnabled)).toStrictEqual({ tpm_limit: expected });
+  });
+
+  it.each([
+    ["the stored number", 1000, { tpm_limit: 1000 }],
+    ["the stored number typed back in", "1000", { tpm_limit: 1000 }],
+    ["an emptied input over no stored limit", "", { tpm_limit: null }],
+    ["an unset value over no stored limit", undefined, { tpm_limit: null }],
+  ])("sends nothing for %s", (_label, tpm_limit, initialValues) => {
+    expect(teamAdminSettingsChanges({ tpm_limit }, initialValues, tpmEnabled)).toStrictEqual({});
   });
 
   it("leaves tpm_limit out when the proxy did not enable it for team admins", () => {
-    expect(teamAdminSettingsChanges({ tpm_limit: "5000" }, new Set(["max_budget"]))).toStrictEqual({});
+    expect(teamAdminSettingsChanges({ tpm_limit: "5000" }, stored, new Set(["max_budget"]))).toStrictEqual({});
   });
 });
 
