@@ -37,9 +37,34 @@ pub(crate) struct MistralOcrResponse {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct MistralOCRConfig;
 
-impl MistralOCRConfig {
+impl BaseOcrConfig for MistralOCRConfig {
+    type OcrParams = OpaqueParams;
+    type ProviderRequest = MistralOcrRequest;
+    type Environment = Vec<(String, String)>;
+
+    fn get_api_key_env_var(&self) -> Option<&'static str> {
+        Some(MISTRAL_API_KEY_ENV)
+    }
+
+    async fn validate_environment(
+        &self,
+        request: &LiteLLMOcrRequest,
+        _client: &OcrClient,
+    ) -> Result<Self::Environment, crate::ocr::Error> {
+        self.validate_environment(&request.connection, &credential_env)
+    }
+
+    fn get_complete_url(
+        &self,
+        request: &LiteLLMOcrRequest,
+        _params: &Self::OcrParams,
+        _environment: &Self::Environment,
+    ) -> Result<String, crate::ocr::Error> {
+        self.get_complete_url(request.connection.api_base.as_deref())
+    }
+
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    pub(crate) fn transform_ocr_request(
+    fn transform_ocr_request(
         &self,
         model: &str,
         document: OcrDocument,
@@ -52,12 +77,6 @@ impl MistralOCRConfig {
             params: optional_params.clone(),
         })
     }
-}
-
-impl BaseOcrConfig for MistralOCRConfig {
-    type OcrParams = OpaqueParams;
-    type ProviderRequest = MistralOcrRequest;
-    type ProviderResponse = MistralOcrResponse;
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &[
@@ -88,12 +107,18 @@ impl BaseOcrConfig for MistralOCRConfig {
         self.transform_ocr_request(model, document, optional_params, headers)
     }
 
-    fn normalize_response(
+    fn transform_ocr_response(
         &self,
         model: &str,
-        response: MistralOcrResponse,
+        raw_response: &[u8],
+        request_format: crate::ocr::types::OcrResponseFormat,
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        normalize_response(model, response)
+        crate::llms::base_llm::ocr::transformation::decode_and_normalize_response(
+            model,
+            raw_response,
+            request_format,
+            normalize_response,
+        )
     }
 }
 
@@ -104,8 +129,8 @@ impl MistralOCRConfig {
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let headers = self.validate_environment(&request.connection, &credential_env)?;
-        let url = self.get_complete_url(request.connection.api_base.as_deref())?;
+        let headers = BaseOcrConfig::validate_environment(self, request, client).await?;
+        let url = BaseOcrConfig::get_complete_url(self, request, &params, &headers)?;
         let body = self
             .async_transform_ocr_request(
                 &request.model,
@@ -170,7 +195,11 @@ impl MistralOCRConfig {
             .map(str::trim)
             .filter(|key| !key.is_empty())
             .map(str::to_string)
-            .or_else(|| env_lookup(MISTRAL_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
+            .or_else(|| {
+                self.get_api_key_env_var()
+                    .and_then(env_lookup)
+                    .filter(|key| !key.trim().is_empty())
+            })
             .ok_or(litellm_auth::Error::MissingApiKey {
                 provider: "Mistral",
                 environment_variable: MISTRAL_API_KEY_ENV,
@@ -292,11 +321,7 @@ mod tests {
     fn raw_response_transform_keeps_native_payload_separate_from_typed_normalization() {
         let raw = br#"{"pages":[{"index":"2","markdown":"text"}],"provider_extension":false}"#;
         let response = MistralOCRConfig
-            .decode_and_normalize_response(
-                "model",
-                raw,
-                crate::ocr::types::OcrResponseFormat::Native,
-            )
+            .transform_ocr_response("model", raw, crate::ocr::types::OcrResponseFormat::Native)
             .unwrap();
         assert_eq!(response.pages[0].index, 2);
         let native = response.provider_native_response.unwrap();
@@ -305,7 +330,7 @@ mod tests {
         assert!(response.extra_fields.is_empty());
         assert!(
             MistralOCRConfig
-                .decode_and_normalize_response(
+                .transform_ocr_response(
                     "model",
                     br#"{"pages":[{"index":0}]}"#,
                     crate::ocr::types::OcrResponseFormat::Litellm

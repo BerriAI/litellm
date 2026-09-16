@@ -37,13 +37,13 @@ pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOc
 }
 
 pub(crate) struct MockResponse {
-    pub status: u16,
-    pub headers: Vec<(&'static str, String)>,
-    pub body: Value,
+    pub(crate) status: u16,
+    pub(crate) headers: Vec<(&'static str, String)>,
+    pub(crate) body: Value,
 }
 
 impl MockResponse {
-    pub fn json(body: Value) -> Self {
+    pub(crate) fn json(body: Value) -> Self {
         Self {
             status: 200,
             headers: vec![],

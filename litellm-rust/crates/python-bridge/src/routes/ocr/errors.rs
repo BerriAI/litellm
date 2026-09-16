@@ -6,6 +6,21 @@ use pyo3::prelude::*;
 use crate::errors::{RustUpstreamError, core_error_to_pyerr};
 
 pub(super) fn to_pyerr(error: Error) -> PyErr {
+    if let Error::Provider {
+        status,
+        body,
+        headers,
+    } = error
+    {
+        let mapped = attach_status(RustUpstreamError::new_err((status, body)), Some(status));
+        return Python::attach(|py| -> PyResult<PyErr> {
+            let headers =
+                pyo3::types::PyDict::from_sequence(&headers.into_pyobject(py)?.into_any())?;
+            mapped.value(py).setattr("headers", headers)?;
+            Ok(mapped)
+        })
+        .unwrap_or_else(|error| error);
+    }
     let (mapped, status) = match error {
         Error::MissingDocumentUrl => (
             PyValueError::new_err(Error::MissingDocumentUrl.to_string()),
@@ -46,6 +61,39 @@ fn attach_status(error: PyErr, status: Option<u16>) -> PyErr {
 mod tests {
     use super::*;
     use pyo3::exceptions::PyValueError;
+
+    #[test]
+    fn provider_error_retains_headers_at_the_python_boundary() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = to_pyerr(Error::Provider {
+                status: 429,
+                body: "rate limited".into(),
+                headers: vec![("retry-after".into(), "17".into())],
+            });
+            assert!(error.is_instance_of::<RustUpstreamError>(py));
+            assert_eq!(
+                error
+                    .value(py)
+                    .getattr("args")
+                    .unwrap()
+                    .extract::<(u16, String)>()
+                    .unwrap(),
+                (429, "rate limited".into())
+            );
+            assert_eq!(
+                error
+                    .value(py)
+                    .getattr("headers")
+                    .unwrap()
+                    .get_item("retry-after")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "17"
+            );
+        });
+    }
 
     #[test]
     fn preserves_python_validation_and_provider_details() {

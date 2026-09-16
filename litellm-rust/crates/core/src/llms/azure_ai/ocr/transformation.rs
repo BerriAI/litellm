@@ -1,6 +1,5 @@
 use crate::constants::AZURE_AI_OCR_PATH;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
-use crate::llms::mistral::ocr::MistralOcrResponse;
 use crate::llms::mistral::ocr::transformation::{MistralOCRConfig, MistralOcrRequest};
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
@@ -20,7 +19,46 @@ pub(crate) struct AzureAIOCRConfig;
 impl BaseOcrConfig for AzureAIOCRConfig {
     type OcrParams = OpaqueParams;
     type ProviderRequest = MistralOcrRequest;
-    type ProviderResponse = MistralOcrResponse;
+    type Environment = Vec<(String, String)>;
+
+    fn get_api_key_env_var(&self) -> Option<&'static str> {
+        Some(AZURE_AI_API_KEY_ENV)
+    }
+
+    async fn validate_environment(
+        &self,
+        request: &LiteLLMOcrRequest,
+        _client: &OcrClient,
+    ) -> Result<Self::Environment, crate::ocr::Error> {
+        let config = AzureAuthInputs {
+            azure_ad_token_provider: request.azure_ad_token_provider.clone(),
+            ..AzureAuthInputs::from_sourced_optional_params(
+                &request.optional_params,
+                &request.input_sources,
+            )?
+        };
+        self.validate_environment(&request.connection, &config, &credential_env)
+            .await
+    }
+
+    fn get_complete_url(
+        &self,
+        request: &LiteLLMOcrRequest,
+        _params: &Self::OcrParams,
+        _environment: &Self::Environment,
+    ) -> Result<String, crate::ocr::Error> {
+        self.get_complete_url(request.connection.api_base.as_deref(), &credential_env)
+    }
+
+    fn transform_ocr_request(
+        &self,
+        model: &str,
+        document: OcrDocument,
+        params: &OpaqueParams,
+        headers: &[(String, String)],
+    ) -> Result<MistralOcrRequest, crate::ocr::Error> {
+        MistralOCRConfig.transform_ocr_request(model, document, params, headers)
+    }
 
     fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
         MistralOCRConfig.get_supported_ocr_params(model)
@@ -40,15 +78,16 @@ impl BaseOcrConfig for AzureAIOCRConfig {
             context.connection,
         )
         .await?;
-        MistralOCRConfig.transform_ocr_request(model, document, optional_params, headers)
+        self.transform_ocr_request(model, document, optional_params, headers)
     }
 
-    fn normalize_response(
+    fn transform_ocr_response(
         &self,
         model: &str,
-        response: MistralOcrResponse,
+        raw_response: &[u8],
+        request_format: crate::ocr::types::OcrResponseFormat,
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        MistralOCRConfig.normalize_response(model, response)
+        MistralOCRConfig.transform_ocr_response(model, raw_response, request_format)
     }
 }
 
@@ -59,18 +98,8 @@ impl AzureAIOCRConfig {
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
         let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let config = AzureAuthInputs {
-            azure_ad_token_provider: request.azure_ad_token_provider.clone(),
-            ..AzureAuthInputs::from_sourced_optional_params(
-                &request.optional_params,
-                &request.input_sources,
-            )
-            .map_err(crate::ocr::Error::from)?
-        };
-        let url = self.get_complete_url(request.connection.api_base.as_deref(), &credential_env)?;
-        let headers = self
-            .validate_environment(&request.connection, &config, &credential_env)
-            .await?;
+        let url = BaseOcrConfig::get_complete_url(self, request, &params, &Vec::new())?;
+        let headers = BaseOcrConfig::validate_environment(self, request, client).await?;
         let retains_document = !request.document.source().starts_with("http://")
             && !request.document.source().starts_with("https://");
         let body = self
@@ -132,7 +161,7 @@ impl AzureAIOCRConfig {
         let key = nonblank(connection.api_key.clone())
             .map(|value| Sourced::new(value, connection.api_key_source))
             .or_else(|| {
-                nonblank(env_lookup(AZURE_AI_API_KEY_ENV))
+                nonblank(self.get_api_key_env_var().and_then(env_lookup))
                     .map(|value| Sourced::new(value, InputSource::Environment))
             });
         if let Some(key) = key {
@@ -258,5 +287,104 @@ mod tests {
             headers[0],
             ("Authorization".into(), "Bearer request-key".into())
         );
+    }
+
+    use std::sync::Arc;
+
+    use serde_json::{Value, json};
+
+    use crate::ocr::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks};
+    use crate::ocr::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+
+    #[tokio::test]
+    async fn facade_executes_azure_mistral_with_prepared_auth() {
+        let (base, seen, server) = mock_server(vec![MockResponse::json(json!({
+            "pages":[{"index":0,"markdown":"hello"}],
+            "usage_info":{"pages_processed":1}
+        }))])
+        .await;
+        let mut request = wire_request(
+            "azure_ai/model",
+            &base,
+            json!({"include_image_base64":true}),
+        );
+        request.connection.api_key = None;
+        request.connection.extra_headers = vec![(
+            "Authorization".into(),
+            "Bearer python-prepared-token".into(),
+        )];
+
+        let result = perform_ocr(request).await.unwrap();
+        server.await.unwrap();
+        assert_eq!(result.pages[0].markdown, "hello");
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("POST /providers/mistral/azure/ocr "));
+        assert!(
+            requests[0]
+                .to_ascii_lowercase()
+                .contains("authorization: bearer python-prepared-token\r\n")
+        );
+        let body: Value =
+            serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            body,
+            json!({
+                "model":"model",
+                "document":{"type":"document_url","document_url":"data:application/pdf;base64,YWJj"},
+                "include_image_base64":true
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn facade_acquires_supplied_entra_token_for_final_request() {
+        let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+        let mut request = wire_request(
+            "azure_ai/model",
+            &base,
+            json!({"azure_ad_token":"rust-owned-token"}),
+        );
+        request.connection.api_key = None;
+
+        perform_ocr(request).await.unwrap();
+        server.await.unwrap();
+
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0]
+                .to_ascii_lowercase()
+                .contains("authorization: bearer rust-owned-token\r\n")
+        );
+    }
+
+    struct ReplaceBodyDocument;
+
+    impl OcrHooks for ReplaceBodyDocument {
+        fn intercepts_requests(&self) -> bool {
+            true
+        }
+
+        fn during_call(
+            &self,
+            mut request: OcrDuringCallRequest,
+        ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
+            Box::pin(async move {
+                request.body["document"] = json!({
+                    "type":"document_url",
+                    "document_url":"https://example.com/not-inline.pdf"
+                });
+                Ok(request)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_non_inline_body_after_guardrails() {
+        let mut request = wire_request("azure_ai/model", "http://127.0.0.1:1", json!({}));
+        request.hooks = Arc::new(ReplaceBodyDocument);
+        let error = perform_ocr(request).await.unwrap_err();
+        assert!(error.to_string().contains("data URI"));
     }
 }
