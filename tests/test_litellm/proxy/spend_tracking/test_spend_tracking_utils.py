@@ -27,6 +27,7 @@ from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_messages_for_spend_logs_payload,
+    _get_mcp_tool_call_metadata_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
     _get_request_duration_ms,
     _get_response_for_spend_logs_payload,
@@ -39,6 +40,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_error_information_for_spend_logs,
     _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
+    _should_store_responses_in_spend_logs,
     get_logging_payload,
     get_spend_logs_id,
     should_store_prompts_and_responses_in_spend_logs,
@@ -46,9 +48,11 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 from litellm.proxy.utils import hash_token
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
+    StandardLoggingMCPToolCall,
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingVectorStoreRequest,
 )
 
 
@@ -79,10 +83,16 @@ def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch
         "classifier_input": {"system": "rubric" * 1000, "messages": [{"role": "user", "content": "ask"}]},
         "originating_request_masked": {"input": "source-only", "api_key": "REDACTED"},
     }
-    stored: Final = json.loads(_get_proxy_server_request_for_spend_logs_payload(
-        metadata={}, litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
-        kwargs={"standard_logging_object": audit, "standard_callback_dynamic_params": {"turn_off_message_logging": redact}},
-    ))
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
+            kwargs={
+                "standard_logging_object": audit,
+                "standard_callback_dynamic_params": {"turn_off_message_logging": redact},
+            },
+        )
+    )
     if not store_prompts or redact:
         assert "classifier_input" not in stored
         assert "originating_request_masked" not in stored
@@ -208,9 +218,7 @@ def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
 
     create_session: Final = _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1")
-    cost_session: Final = _get_batch_trace_session_id(
-        call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost"
-    )
+    cost_session: Final = _get_batch_trace_session_id(call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost")
     assert create_session == cost_session == "batch-uid-1"
 
 
@@ -656,50 +664,84 @@ def test_sanitize_request_body_for_spend_logs_payload_circular_reference():
     assert sanitized == {"b": {"a": {}}}  # Should return empty dict for circular reference
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
-def test_get_vector_store_request_for_spend_logs_payload_store_prompts_true(
-    mock_should_store,
+@pytest.mark.parametrize(
+    ("store_responses", "expected_response_stored"),
+    [
+        (False, False),
+        (True, True),
+    ],
+)
+def test_get_vector_store_request_for_spend_logs_payload_uses_response_setting(
+    store_responses: bool, expected_response_stored: bool
 ):
-    # When should_store_prompts_and_responses_in_spend_logs returns True
-    mock_should_store.return_value = True
-
-    # Sample vector store request metadata
-    vector_store_request = [
-        {"vector_store_search_response": {"data": [{"content": [{"text": "sensitive information", "type": "text"}]}]}}
+    vector_store_request: Final[list[StandardLoggingVectorStoreRequest]] = [
+        {
+            "vector_store_id": "vs-123",
+            "custom_llm_provider": "openai",
+            "query": "request content",
+            "start_time": 1.0,
+            "end_time": 2.0,
+            "vector_store_search_response": {
+                "search_query": "request content",
+                "data": [
+                    {
+                        "file_id": "file-123",
+                        "filename": "sensitive-filename.txt",
+                        "attributes": {"source_url": "https://sensitive.example"},
+                        "content": [{"text": "sensitive information", "type": "text"}],
+                    }
+                ],
+            },
+        }
     ]
 
-    # When store_prompts is True, the original data should be returned unchanged
-    result = _get_vector_store_request_for_spend_logs_payload(vector_store_request)
-    assert result == vector_store_request
-    assert result[0]["vector_store_search_response"]["data"][0]["content"][0]["text"] == "sensitive information"
+    result: Final = _get_vector_store_request_for_spend_logs_payload(
+        vector_store_request,
+        store_responses=store_responses,
+    )
 
-
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
-def test_get_vector_store_request_for_spend_logs_payload_store_prompts_false(
-    mock_should_store,
-):
-    # When should_store_prompts_and_responses_in_spend_logs returns False
-    mock_should_store.return_value = False
-
-    # Sample vector store request metadata
-    vector_store_request = [
-        {"vector_store_search_response": {"data": [{"content": [{"text": "sensitive information", "type": "text"}]}]}}
-    ]
-
-    # When store_prompts is False, text should be redacted
-    result = _get_vector_store_request_for_spend_logs_payload(vector_store_request)
     assert result is not None
-    assert result[0]["vector_store_search_response"]["data"][0]["content"][0]["text"] == REDACTED_BY_LITELM_STRING
-    # Ensure other fields are unchanged
-    assert result[0]["vector_store_search_response"]["data"][0]["content"][0]["type"] == "text"
+    assert result[0]["vector_store_id"] == "vs-123"
+    assert result[0]["custom_llm_provider"] == "openai"
+    assert result[0]["query"] == "request content"
+    assert result[0]["start_time"] == 1.0
+    assert result[0]["end_time"] == 2.0
+    expected_response: Final = (
+        vector_store_request[0]["vector_store_search_response"] if expected_response_stored else None
+    )
+    assert result[0].get("vector_store_search_response") == expected_response
+    assert ("vector_store_search_response" in result[0]) is expected_response_stored
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
-def test_get_vector_store_request_for_spend_logs_payload_null_input(mock_should_store):
-    # When input is None
-    mock_should_store.return_value = False
-    result = _get_vector_store_request_for_spend_logs_payload(None)
+def test_get_vector_store_request_for_spend_logs_payload_null_input():
+    result = _get_vector_store_request_for_spend_logs_payload(None, store_responses=False)
     assert result is None
+
+
+@pytest.mark.parametrize(
+    ("store_responses", "expected_result"),
+    [
+        (False, None),
+        (True, {"content": "sensitive response"}),
+    ],
+)
+def test_get_spend_logs_metadata_uses_response_setting_for_mcp_result(
+    store_responses: bool, expected_result: Mapping[str, str] | None
+):
+    mcp_metadata: Final[StandardLoggingMCPToolCall] = {
+        "name": "search",
+        "arguments": {"query": "request content"},
+        "result": {"content": "sensitive response"},
+    }
+
+    stored_mcp_metadata: Final = _get_mcp_tool_call_metadata_for_spend_logs_payload(
+        mcp_metadata,
+        store_responses=store_responses,
+    )
+    assert stored_mcp_metadata is not None
+    assert stored_mcp_metadata["name"] == "search"
+    assert stored_mcp_metadata["arguments"] == {"query": "request content"}
+    assert stored_mcp_metadata.get("result") == expected_result
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
@@ -1706,6 +1748,78 @@ def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_strin
         mock_get_secret_bool.return_value = False
         result = should_store_prompts_and_responses_in_spend_logs()
         assert result is False, "Expected False (from env var) when key missing, got True"
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        ({"store_prompts_in_spend_logs": True}, True),
+        ({"store_prompts_in_spend_logs": False}, False),
+        (
+            {
+                "store_prompts_in_spend_logs": True,
+                "store_responses_in_spend_logs": False,
+            },
+            False,
+        ),
+        (
+            {
+                "store_prompts_in_spend_logs": False,
+                "store_responses_in_spend_logs": True,
+            },
+            True,
+        ),
+        (
+            {
+                "store_prompts_in_spend_logs": True,
+                "store_responses_in_spend_logs": "FALSE",
+            },
+            False,
+        ),
+    ],
+)
+def test_should_store_responses_in_spend_logs(
+    settings,
+    expected,
+):
+    with patch(  # test-quality-ok: isolates the process-wide settings source for retention resolution
+        "litellm.proxy.proxy_server.general_settings", settings
+    ):
+        assert _should_store_responses_in_spend_logs() is expected
+
+
+def test_spend_logs_can_store_request_without_response():
+    settings = {
+        "store_prompts_in_spend_logs": True,
+        "store_responses_in_spend_logs": False,
+    }
+    kwargs = {
+        "litellm_params": {
+            "proxy_server_request": {
+                "body": {
+                    "model": "gpt-5-mini",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            }
+        }
+    }
+    payload = cast(
+        StandardLoggingPayload,
+        {"response": {"role": "assistant", "content": "Hi there!"}},
+    )
+
+    with patch(  # test-quality-ok: isolates the process-wide settings source for the retention integration check
+        "litellm.proxy.proxy_server.general_settings", settings
+    ):
+        request_result = _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params=kwargs["litellm_params"],
+            kwargs=kwargs,
+        )
+        response_result = _get_response_for_spend_logs_payload(payload=payload, kwargs=kwargs)
+
+    assert json.loads(request_result)["messages"] == [{"role": "user", "content": "Hello!"}]
+    assert response_result == "{}"
 
 
 def test_get_spend_logs_metadata_guardrail_info_fallback_from_metadata():
@@ -4460,7 +4574,7 @@ ANTHROPIC_MESSAGES_SSE_CHUNKS: Final = (
     'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
     'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
     '"usage":{"output_tokens":4}}\n\n',
-    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
 )
 
 
@@ -4498,9 +4612,7 @@ def test_spend_log_request_id_is_the_message_id_a_non_streaming_messages_caller_
     """
     logging_obj = _anthropic_messages_logging_obj(stream=False)
 
-    logged_response = logging_obj._handle_anthropic_messages_response_logging(
-        result=ANTHROPIC_MESSAGES_RESPONSE
-    )
+    logged_response = logging_obj._handle_anthropic_messages_response_logging(result=ANTHROPIC_MESSAGES_RESPONSE)
 
     assert logged_response.id == "msg_01Lit6806NonStreaming"
     assert (
@@ -4576,9 +4688,7 @@ def test_spend_log_request_id_still_falls_back_to_litellm_call_id_without_a_prov
         end_time=datetime.datetime.now(timezone.utc),
         logging_obj=logging_obj,
     )
-    assert logging_obj.model_call_details["complete_streaming_response"].id == (
-        "6806cafe-0000-4000-8000-000000000001"
-    )
+    assert logging_obj.model_call_details["complete_streaming_response"].id == ("6806cafe-0000-4000-8000-000000000001")
 
 
 def test_spend_log_request_id_for_chat_completions_is_untouched():

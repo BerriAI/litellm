@@ -53,7 +53,6 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
     StandardLoggingVectorStoreRequest,
-    VectorStoreSearchResponse,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -199,14 +198,19 @@ def _get_spend_logs_metadata(
     _already_redacted: Final = (
         isinstance(_trusted_hash, str) and _is_non_secret_key_value(_trusted_hash) and _trusted_hash == _raw_key
     )
+    store_responses: Final = _should_store_responses_in_spend_logs()
     clean_metadata["user_api_key"] = _redact_logged_api_key(_raw_key, already_redacted=_already_redacted)
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["batch_successful_requests"] = batch_successful_requests
     clean_metadata["batch_failed_requests"] = batch_failed_requests
-    clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
+    clean_metadata["mcp_tool_call_metadata"] = _get_mcp_tool_call_metadata_for_spend_logs_payload(
+        mcp_tool_call_metadata,
+        store_responses=store_responses,
+    )
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
-        vector_store_request_metadata
+        vector_store_request_metadata,
+        store_responses=store_responses,
     )
     clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(guardrail_information)
     clean_metadata["usage_object"] = usage_object
@@ -1322,28 +1326,36 @@ def _get_proxy_server_request_for_spend_logs_payload(
     return "{}"
 
 
+def _get_mcp_tool_call_metadata_for_spend_logs_payload(
+    mcp_tool_call_metadata: StandardLoggingMCPToolCall | None,
+    *,
+    store_responses: bool,
+) -> StandardLoggingMCPToolCall | None:
+    if mcp_tool_call_metadata is None or store_responses:
+        return mcp_tool_call_metadata
+    return cast(
+        StandardLoggingMCPToolCall,
+        {key: value for key, value in mcp_tool_call_metadata.items() if key != "result"},
+    )
+
+
 def _get_vector_store_request_for_spend_logs_payload(
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None,
+    *,
+    store_responses: bool,
 ) -> list[StandardLoggingVectorStoreRequest] | None:
-    """
-    If user does not want to store prompts and responses, then remove the content from the vector store request metadata
-    """
-    if should_store_prompts_and_responses_in_spend_logs():
+    if store_responses:
         return vector_store_request_metadata
 
-    # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
     if vector_store_request_metadata is None:
         return None
-    for vector_store_request in vector_store_request_metadata:
-        vector_store_search_response: VectorStoreSearchResponse = (
-            vector_store_request.get("vector_store_search_response") or VectorStoreSearchResponse()
+    return [
+        cast(
+            StandardLoggingVectorStoreRequest,
+            {key: value for key, value in vector_store_request.items() if key != "vector_store_search_response"},
         )
-        response_data = vector_store_search_response.get("data", []) or []
-        for response_item in response_data:
-            for content_item in response_item.get("content", []) or []:
-                if "text" in content_item:
-                    content_item["text"] = REDACTED_BY_LITELM_STRING
-    return vector_store_request_metadata
+        for vector_store_request in vector_store_request_metadata
+    ]
 
 
 def _get_response_for_spend_logs_payload(
@@ -1352,7 +1364,7 @@ def _get_response_for_spend_logs_payload(
 ) -> str:
     if payload is None:
         return "{}"
-    if should_store_prompts_and_responses_in_spend_logs():
+    if _should_store_responses_in_spend_logs():
         response_obj: object = payload.get("response")
         if response_obj is None:
             return "{}"
@@ -1417,6 +1429,18 @@ def should_store_prompts_and_responses_in_spend_logs() -> bool:
 
     # Also check environment variable
     return get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
+
+
+def _should_store_responses_in_spend_logs() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    store_responses_value: Final = general_settings.get("store_responses_in_spend_logs")
+    if store_responses_value is not None:
+        if isinstance(store_responses_value, str):
+            return store_responses_value.lower() == "true"
+        return store_responses_value is True
+
+    return should_store_prompts_and_responses_in_spend_logs()
 
 
 def _get_status_for_spend_log(
