@@ -21,6 +21,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.utils import _hash_token_if_needed
+from litellm.secret_managers.base_secret_manager import BaseSecretManager
 
 # NOTE: This is the prefix for all virtual keys stored in AWS Secrets Manager
 LITELLM_PREFIX_STORED_VIRTUAL_KEYS: Final = "litellm/"
@@ -100,6 +101,7 @@ class KeyManagementEventHooks:
         Post /key/update processing hook
 
         Handles the following:
+        - Renaming the key's secret in the secret manager when the alias changes
         - Storing Audit Logs for key update
         """
         from litellm.proxy.management_helpers.audit_logs import (
@@ -108,6 +110,16 @@ class KeyManagementEventHooks:
             is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+        if data.key_alias is not None and data.key_alias != existing_key_row.key_alias:
+            try:
+                await KeyManagementEventHooks._rename_virtual_key_in_secret_manager(
+                    current_secret_name=existing_key_row.key_alias or f"virtual-key-{existing_key_row.token}",
+                    new_secret_name=data.key_alias,
+                    team_id=existing_key_row.team_id,
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning("Failed to rename virtual key in secret manager: %s", e)
 
         if is_audit_logging_enabled():
             updated_fields: Final = {
@@ -306,21 +318,66 @@ class KeyManagementEventHooks:
             new_secret_value: New value of the virtual key (example: sk-1234)
             team_id: Optional team ID to get team-specific secret manager settings
         """
-        if litellm._key_management_settings is not None:
-            if litellm._key_management_settings.store_virtual_keys is True:
-                from litellm.secret_managers.base_secret_manager import (
-                    BaseSecretManager,
-                )
+        secret_manager: Final = KeyManagementEventHooks._stored_virtual_key_secret_manager()
+        if secret_manager is None:
+            return
+        optional_params: Final = await KeyManagementEventHooks._get_secret_manager_optional_params(team_id)
+        await secret_manager.async_rotate_secret(
+            current_secret_name=KeyManagementEventHooks._get_secret_name(current_secret_name),
+            new_secret_name=KeyManagementEventHooks._get_secret_name(new_secret_name),
+            new_secret_value=new_secret_value,
+            optional_params=optional_params,
+        )
 
-                # store the key in the secret manager
-                if isinstance(litellm.secret_manager_client, BaseSecretManager):
-                    optional_params: Final = await KeyManagementEventHooks._get_secret_manager_optional_params(team_id)
-                    await litellm.secret_manager_client.async_rotate_secret(
-                        current_secret_name=KeyManagementEventHooks._get_secret_name(current_secret_name),
-                        new_secret_name=KeyManagementEventHooks._get_secret_name(new_secret_name),
-                        new_secret_value=new_secret_value,
-                        optional_params=optional_params,
-                    )
+    @staticmethod
+    def _stored_virtual_key_secret_manager() -> BaseSecretManager | None:
+        """
+        The secret manager client that stores virtual keys, or None when virtual keys are not stored in one
+        """
+        if litellm._key_management_settings is None or litellm._key_management_settings.store_virtual_keys is not True:
+            return None
+        if not isinstance(litellm.secret_manager_client, BaseSecretManager):
+            return None
+        return litellm.secret_manager_client
+
+    @staticmethod
+    async def _rename_virtual_key_in_secret_manager(
+        current_secret_name: str,
+        new_secret_name: str,
+        team_id: str | None = None,
+    ) -> None:
+        """
+        Move a virtual key to a new secret name, keeping its current value
+
+        Args:
+            current_secret_name: Current name of the virtual key
+            new_secret_name: New name of the virtual key
+            team_id: Optional team ID to get team-specific secret manager settings
+        """
+        secret_manager: Final = KeyManagementEventHooks._stored_virtual_key_secret_manager()
+        if secret_manager is None:
+            return
+        optional_params: Final = await KeyManagementEventHooks._get_secret_manager_optional_params(team_id)
+        current_secret_value: Final = await secret_manager.async_read_secret(
+            secret_name=KeyManagementEventHooks._get_secret_name(current_secret_name),
+            optional_params=optional_params,
+        )
+        if current_secret_value is None:
+            verbose_proxy_logger.warning(
+                "Secret %s not found in secret manager, skipping rename to %s", current_secret_name, new_secret_name
+            )
+            return
+        verbose_proxy_logger.info(
+            "Renaming secret in secret manager: current_secret_name=%s new_secret_name=%s",
+            current_secret_name,
+            new_secret_name,
+        )
+        await secret_manager.async_rotate_secret(
+            current_secret_name=KeyManagementEventHooks._get_secret_name(current_secret_name),
+            new_secret_name=KeyManagementEventHooks._get_secret_name(new_secret_name),
+            new_secret_value=current_secret_value,
+            optional_params=optional_params,
+        )
 
     @staticmethod
     def _get_secret_name(secret_name: str) -> str:
