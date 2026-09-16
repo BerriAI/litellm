@@ -416,6 +416,46 @@ class TestRotateVirtualKeyInSecretManager:
             assert call_kwargs["new_secret_name"] == "test-key-alias-new"
             assert call_kwargs["new_secret_value"] == "sk-new-key"
 
+    @pytest.mark.parametrize("key_alias", ["test-key-alias", None])
+    @pytest.mark.asyncio
+    async def test_rotated_hook_without_request_body_syncs_secret_manager(
+        self, monkeypatch: pytest.MonkeyPatch, key_alias: str | None
+    ):
+        """POST /key/{key}/regenerate with no body (data=None) must still write the new key to the secret manager."""
+        import litellm
+        from litellm.proxy._types import GenerateKeyResponse, LiteLLM_VerificationToken
+        from litellm.secret_managers.base_secret_manager import BaseSecretManager
+        from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
+
+        mock_secret_manager: Final = MagicMock(spec=BaseSecretManager)
+        mock_secret_manager.async_rotate_secret = AsyncMock(return_value={"status": "success"})
+        monkeypatch.setattr(litellm, "secret_manager_client", mock_secret_manager)
+        monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.AWS_SECRET_MANAGER)
+        monkeypatch.setattr(
+            litellm,
+            "_key_management_settings",
+            KeyManagementSettings(store_virtual_keys=True, prefix_for_stored_virtual_keys="litellm/"),
+        )
+        monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+        existing_key_row: Final = LiteLLM_VerificationToken(token="hashed-old-token", key_alias=key_alias)
+        response: Final = GenerateKeyResponse(token_id="hashed-new-token", key="sk-new-key", key_alias=key_alias)
+
+        await KeyManagementEventHooks.async_key_rotated_hook(
+            data=None,
+            existing_key_row=existing_key_row,
+            response=response,
+            user_api_key_dict=MagicMock(),
+        )
+
+        expected_secret_name: Final = f"litellm/{key_alias or 'virtual-key-hashed-old-token'}"
+        mock_secret_manager.async_rotate_secret.assert_awaited_once_with(
+            current_secret_name=expected_secret_name,
+            new_secret_name=expected_secret_name,
+            new_secret_value="sk-new-key",
+            optional_params=None,
+        )
+
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_when_store_virtual_keys_disabled(self):
         """Test that rotation is skipped when store_virtual_keys is False."""
