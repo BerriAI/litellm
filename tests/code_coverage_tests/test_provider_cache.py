@@ -546,13 +546,25 @@ def test_a_rejection_says_whether_the_body_was_cut_short_or_simply_unfinished(
     finally:
         second.shutdown()
 
+    refused: Final = cache_edge(store)
+    provider.status = 429
+    provider.response = b'{"message":"Too many requests"}'
+    third: Final = start_provider_edge(refused, mounts={"openai": upstream})
+    try:
+        call(third.edge.api_base("openai") + "/v1/chat/completions", MARKED)
+    finally:
+        third.shutdown()
+
     cut: Final = dict(cut_short.counters.counts)
     turned_down: Final = dict(unfinished.counters.counts)
-    assert cut["mount:openai:rejected"] == 1 and turned_down["mount:openai:rejected"] == 1
+    errored: Final = dict(refused.counters.counts)
+    assert cut["mount:openai:rejected"] == turned_down["mount:openai:rejected"] == errored["mount:openai:rejected"] == 1
     assert cut["mount:openai:rejected_cut_short"] == 1
-    assert "mount:openai:rejected_incomplete" not in cut
     assert turned_down["mount:openai:rejected_incomplete"] == 1
-    assert "mount:openai:rejected_cut_short" not in turned_down
+    assert errored["mount:openai:rejected_error_status"] == 1
+    assert not {"mount:openai:rejected_incomplete", "mount:openai:rejected_error_status"} & set(cut)
+    assert not {"mount:openai:rejected_cut_short", "mount:openai:rejected_error_status"} & set(turned_down)
+    assert not {"mount:openai:rejected_cut_short", "mount:openai:rejected_incomplete"} & set(errored)
 
 
 EMBEDDING_SUCCESS: Final = (

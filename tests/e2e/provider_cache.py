@@ -55,6 +55,7 @@ EVENTSTREAM_PRELUDE_BYTES: Final = 4
 CUT_SHORT: Final = "cut_short"
 INCOMPLETE: Final = "incomplete"
 UNREACHABLE: Final = "unreachable"
+ERROR_STATUS: Final = "error_status"
 EVENT_TYPE_HEADER: Final = ":event-type"
 EVENTSTREAM_HEADERS: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict[str, str])
 OPENAI_JSON_PATHS: Final = frozenset({"/v1/chat/completions", "/v1/messages", "/v1/embeddings", "/v1/responses"})
@@ -610,6 +611,8 @@ class CacheEdge:
         headers: Final = {
             name: value for name, value in head.headers.items() if name.lower() not in UNRECORDED_RESPONSE_HEADERS
         }
+        if not 200 <= head.status_code < 300:
+            return ERROR_STATUS
         chunks: Final = capture.chunks()
         if not successful_response(mount, url, head.status_code, headers, b"".join(chunks)):
             return INCOMPLETE
