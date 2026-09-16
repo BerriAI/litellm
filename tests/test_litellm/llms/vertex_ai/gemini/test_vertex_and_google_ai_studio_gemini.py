@@ -5899,11 +5899,6 @@ def test_streaming_chunk_carries_model_version():
 
 
 def test_served_model_version_reaches_assembled_stream_through_custom_stream_wrapper():
-    """Greptile claimed CustomStreamWrapper drops the served modelVersion before
-    pricing. It does not: chunk_creator stashes the parser chunk's model into each
-    yielded chunk's _hidden_params["provider_response_model"], and
-    stream_chunk_builder carries it onto the assembled response. The wrapper's
-    trailing bookkeeping chunk is the one emission that legitimately omits it."""
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
