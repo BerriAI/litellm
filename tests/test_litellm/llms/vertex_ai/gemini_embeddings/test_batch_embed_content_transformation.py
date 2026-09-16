@@ -22,7 +22,6 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
 from litellm.types.llms.vertex_ai import VertexAIBatchEmbeddingsResponseObject
 from litellm.types.utils import EmbeddingResponse
 
-
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
 GCS_URL = "gs://my-bucket/image.png"
 
@@ -74,9 +73,7 @@ class TestBuildPartForInput:
         assert part["file_data"]["file_uri"] == GCS_URL
 
     def test_file_reference_resolved(self):
-        resolved = {
-            "files/abc": {"mime_type": "image/jpeg", "uri": "https://example.com/abc"}
-        }
+        resolved = {"files/abc": {"mime_type": "image/jpeg", "uri": "https://example.com/abc"}}
         part = _build_part_for_input("files/abc", resolved_files=resolved)
         assert part["file_data"] is not None
         assert part["file_data"]["mime_type"] == "image/jpeg"
@@ -115,10 +112,7 @@ class TestTransformOpenaiInputGeminiContent:
         )
         assert len(result["requests"]) == 2
         # First request is text
-        assert (
-            result["requests"][0]["content"]["parts"][0]["text"]
-            == "The food was delicious"
-        )
+        assert result["requests"][0]["content"]["parts"][0]["text"] == "The food was delicious"
         # Second request is image
         assert result["requests"][1]["content"]["parts"][0]["inline_data"] is not None
 
@@ -217,9 +211,7 @@ class TestProcessResponse:
     """Test that process_response sets correct indices."""
 
     def test_single_embedding_index(self):
-        predictions: VertexAIBatchEmbeddingsResponseObject = {
-            "embeddings": [{"values": [0.1, 0.2]}]
-        }
+        predictions: VertexAIBatchEmbeddingsResponseObject = {"embeddings": [{"values": [0.1, 0.2]}]}
         model_response = EmbeddingResponse()
         result = process_response(
             input="hello",
@@ -270,9 +262,7 @@ class TestProcessResponse:
 
     def test_nested_input_token_counting(self):
         """Nested list: only plain-text sub-elements should be counted."""
-        predictions: VertexAIBatchEmbeddingsResponseObject = {
-            "embeddings": [{"values": [0.1, 0.2]}]
-        }
+        predictions: VertexAIBatchEmbeddingsResponseObject = {"embeddings": [{"values": [0.1, 0.2]}]}
         result = process_response(
             input=[["a red shoe", IMAGE_DATA_URI]],
             model_response=EmbeddingResponse(),
@@ -307,7 +297,7 @@ class TestProcessEmbedContentResponseUsage:
 
     MODEL = "gemini-embedding-2"
 
-    def test_multimodal_image_preserves_usage_metadata(self):
+    def test_multimodal_image_preserves_usage_metadata(self, local_model_cost_map):
         response_json = {
             "embedding": {"values": [0.1, 0.2, 0.3]},
             "usageMetadata": {
@@ -374,9 +364,7 @@ class TestProcessEmbedContentResponseUsage:
             response_json=response_json,
         )
         assert result.usage.prompt_tokens == 516
-        assert result.usage.prompt_tokens_details.video_length_seconds == pytest.approx(
-            2.0
-        )
+        assert result.usage.prompt_tokens_details.video_length_seconds == pytest.approx(2.0)
         assert result.usage.prompt_tokens_details.text_tokens == 1
 
     def test_missing_usage_metadata_does_not_estimate_from_base64(self):
@@ -400,7 +388,7 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert result.usage.prompt_tokens > 0
 
-    def test_file_reference_image_billed_per_image_not_text(self):
+    def test_file_reference_image_billed_per_image_not_text(self, local_model_cost_map):
         """files/... image refs must bill per-image, not at the text token rate."""
         response_json = {
             "embedding": {"values": [0.1, 0.2, 0.3]},
@@ -432,7 +420,7 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert prompt_cost == pytest.approx(0.00012)
 
-    def test_file_reference_non_image_not_counted_as_image(self):
+    def test_file_reference_non_image_not_counted_as_image(self, local_model_cost_map):
         """A files/... ref resolving to a non-image mime must not be image-counted."""
         response_json = {
             "embedding": {"values": [0.1, 0.2]},
@@ -456,9 +444,7 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert result.usage.prompt_tokens_details.image_count == 0
         assert result.usage.prompt_tokens_details.audio_tokens == 64
-        assert result.usage.prompt_tokens_details.audio_length_seconds == pytest.approx(
-            2.0
-        )
+        assert result.usage.prompt_tokens_details.audio_length_seconds == pytest.approx(2.0)
 
         prompt_cost, _ = generic_cost_per_token(
             model=self.MODEL,
@@ -467,7 +453,7 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert prompt_cost == pytest.approx(2.0 * 0.00016)
 
-    def test_video_plus_audio_does_not_double_bill_text(self):
+    def test_video_plus_audio_does_not_double_bill_text(self, local_model_cost_map):
         """Video+audio responses must not get video tokens reassigned to text."""
         response_json = {
             "embedding": {"values": [0.1]},
@@ -487,12 +473,8 @@ class TestProcessEmbedContentResponseUsage:
             response_json=response_json,
         )
         assert result.usage.prompt_tokens_details.text_tokens == 1
-        assert result.usage.prompt_tokens_details.video_length_seconds == pytest.approx(
-            2.0
-        )
-        assert result.usage.prompt_tokens_details.audio_length_seconds == pytest.approx(
-            2.0
-        )
+        assert result.usage.prompt_tokens_details.video_length_seconds == pytest.approx(2.0)
+        assert result.usage.prompt_tokens_details.audio_length_seconds == pytest.approx(2.0)
 
         prompt_cost, _ = generic_cost_per_token(
             model=self.MODEL,

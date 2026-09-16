@@ -128,6 +128,7 @@ describe("ModelsAndEndpointsPage", () => {
       "All Models",
       "Add Model",
       "Auto-Routers Beta",
+      "ADEPT Routers",
       "LLM Credentials",
       "Pass-Through Endpoints",
       "Health Status",
