@@ -1,4 +1,4 @@
-use litellm_core::error::Error;
+use litellm_core::ocr::Error;
 use pyo3::prelude::*;
 
 use crate::errors::{RustUpstreamError, core_error_to_pyerr};
@@ -7,7 +7,7 @@ pub(super) fn to_pyerr(error: Error) -> PyErr {
     let status = error.http_status_code();
     let mapped = match error {
         Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
-        other => core_error_to_pyerr(other),
+        other => core_error_to_pyerr(other.into()),
     };
     attach_status(mapped, status)
 }

@@ -1,7 +1,6 @@
 use super::super::OcrAdapter;
 use super::validate_destination;
-use crate::Error;
-use crate::auth::vertex::{self, VertexConfig};
+use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::codecs::deepseek::{self, DeepSeekOcrParams, DeepSeekOcrResponse};
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
@@ -11,6 +10,7 @@ use crate::ocr::prepare::{
 use crate::ocr::registry::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use crate::url_utils::ApiUrl;
+use litellm_auth_gcp::{self as vertex, VertexConfig};
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
 const MODEL_NAMESPACE: &str = "deepseek-ai";
 const DEFAULT_LOCATION: &str = "us-central1";

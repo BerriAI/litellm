@@ -7,9 +7,9 @@ use serde_json::{Map, Value};
 
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::registry::{OcrAdapterKind, resolve_wire_adapter};
-use crate::Error;
-use crate::auth::{InputSource, TokenProviderHandle};
 use crate::constants::OCR_HTTP_TIMEOUT_SECS;
+use crate::ocr::Error;
+use litellm_auth::{InputSource, TokenProviderHandle};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]

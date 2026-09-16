@@ -177,7 +177,7 @@ pub(super) fn admitted_call(outcome: NativeOutcome<OcrCall>) -> PyResult<OcrCall
 
 #[cfg(test)]
 mod tests {
-    use litellm_core::Error;
+    use litellm_core::ocr::Error;
     use litellm_core::ocr::OcrDecline;
     use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 

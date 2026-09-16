@@ -1,8 +1,6 @@
 mod credential;
-pub mod error;
-pub(crate) mod vertex;
-pub use error::AuthError;
-pub(crate) mod http;
+mod error;
+pub mod http;
 mod policy;
 mod secret;
 mod token;
@@ -51,6 +49,7 @@ pub use credential::{
     CredentialPlanResolution, CredentialRef, CredentialResolver, CredentialResolverHandle,
     credential_default_fields, credential_index,
 };
+pub use error::Error;
 pub use http::{CredentialPlacement, RequestAuth};
 pub use policy::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
 pub use secret::SecretValue;

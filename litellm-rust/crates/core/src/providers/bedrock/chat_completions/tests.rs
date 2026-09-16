@@ -1,5 +1,5 @@
 use super::*;
-use crate::Error;
+use crate::chat_completions::Error;
 use serde_json::json;
 
 fn messages(value: Value) -> Vec<ChatMessage> {

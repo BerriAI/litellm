@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::responses::Error;
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsTransformResult};
 use crate::responses::websocket::{ResponsesWebSocketProviderConfig, enforce_model};
 

@@ -3,6 +3,7 @@ pub mod client;
 mod codecs;
 mod document;
 pub mod error;
+pub use error::Error;
 mod handler;
 pub mod hooks;
 mod lifecycle;

@@ -9,7 +9,28 @@ use reqwest::Url;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 use crate::constants::MEDIA_CONNECT_TIMEOUT_SECS;
-use crate::error::{MediaError, TransportError};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum Error {
+    #[error("media URL rejected by network policy")]
+    BlockedUrl,
+    #[error("media download is disabled")]
+    DownloadDisabled,
+    #[error("media download exceeds the maximum size")]
+    DownloadTooLarge,
+    #[error("too many redirects while fetching media")]
+    TooManyRedirects,
+    #[error("media redirect is missing a Location header")]
+    MissingRedirectLocation,
+    #[error("invalid media redirect")]
+    InvalidRedirect,
+    #[error("media download failed with status {0}")]
+    Http(u16),
+    #[error("media download timed out")]
+    Timeout,
+    #[error("{0}")]
+    Transport(#[from] crate::transport::Error),
+}
 
 #[derive(Clone)]
 pub(crate) struct MediaFetcher {
@@ -75,20 +96,20 @@ impl MediaFetcher {
         &self,
         url: Url,
         policy: DownloadPolicy,
-    ) -> Result<DownloadedMedia, MediaError> {
+    ) -> Result<DownloadedMedia, Error> {
         if policy.max_bytes == 0 {
-            return Err(MediaError::DownloadDisabled);
+            return Err(Error::DownloadDisabled);
         }
         tokio::time::timeout(policy.timeout, self.fetch_before_deadline(url, policy))
             .await
-            .map_err(|_| MediaError::Timeout)?
+            .map_err(|_| Error::Timeout)?
     }
 
     async fn fetch_before_deadline(
         &self,
         mut url: Url,
         policy: DownloadPolicy,
-    ) -> Result<DownloadedMedia, MediaError> {
+    ) -> Result<DownloadedMedia, Error> {
         let mut redirects_followed = 0;
         loop {
             self.validate_url(&url).await?;
@@ -97,24 +118,22 @@ impl MediaFetcher {
                 .get(url.clone())
                 .send()
                 .await
-                .map_err(TransportError::from)?;
+                .map_err(crate::transport::Error::from)?;
             if response.status().is_redirection() {
                 if redirects_followed == policy.max_redirects {
-                    return Err(MediaError::TooManyRedirects);
+                    return Err(Error::TooManyRedirects);
                 }
                 let location = response
                     .headers()
                     .get(reqwest::header::LOCATION)
                     .and_then(|value| value.to_str().ok())
-                    .ok_or(MediaError::MissingRedirectLocation)?;
-                url = url
-                    .join(location)
-                    .map_err(|_| MediaError::InvalidRedirect)?;
+                    .ok_or(Error::MissingRedirectLocation)?;
+                url = url.join(location).map_err(|_| Error::InvalidRedirect)?;
                 redirects_followed += 1;
                 continue;
             }
             if !response.status().is_success() {
-                return Err(MediaError::Http(response.status().as_u16()));
+                return Err(Error::Http(response.status().as_u16()));
             }
             enforce_download_size(response.content_length().unwrap_or(0), policy.max_bytes)?;
             let content_type = response
@@ -127,7 +146,11 @@ impl MediaFetcher {
                 .unwrap_or("application/octet-stream")
                 .to_string();
             let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(TransportError::from)? {
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(crate::transport::Error::from)?
+            {
                 enforce_download_size(bytes.len() as u64 + chunk.len() as u64, policy.max_bytes)?;
                 bytes.extend_from_slice(&chunk);
             }
@@ -138,42 +161,40 @@ impl MediaFetcher {
         }
     }
 
-    async fn validate_url(&self, url: &Url) -> Result<(), MediaError> {
+    async fn validate_url(&self, url: &Url) -> Result<(), Error> {
         if !matches!(url.scheme(), "http" | "https")
             || !url.username().is_empty()
             || url.password().is_some()
         {
-            return Err(MediaError::BlockedUrl);
+            return Err(Error::BlockedUrl);
         }
-        let host = url.host_str().ok_or(MediaError::BlockedUrl)?;
+        let host = url.host_str().ok_or(Error::BlockedUrl)?;
         if self.allow_private_network {
             return Ok(());
         }
         if let Ok(ip) = host.parse::<IpAddr>() {
-            return (!is_blocked_ip(ip))
-                .then_some(())
-                .ok_or(MediaError::BlockedUrl);
+            return (!is_blocked_ip(ip)).then_some(()).ok_or(Error::BlockedUrl);
         }
-        let port = url.port_or_known_default().ok_or(MediaError::BlockedUrl)?;
+        let port = url.port_or_known_default().ok_or(Error::BlockedUrl)?;
         let addresses = self
             .address_resolver
             .resolve(host, port)
             .await
-            .map_err(|error| TransportError::Network(error.to_string()))?;
+            .map_err(|error| crate::transport::Error::Network(error.to_string()))?;
         validate_addresses(&addresses)
     }
 }
 
-fn enforce_download_size(length: u64, max_bytes: u64) -> Result<(), MediaError> {
+fn enforce_download_size(length: u64, max_bytes: u64) -> Result<(), Error> {
     if length > max_bytes {
-        return Err(MediaError::DownloadTooLarge);
+        return Err(Error::DownloadTooLarge);
     }
     Ok(())
 }
 
-fn validate_addresses(addresses: &[SocketAddr]) -> Result<(), MediaError> {
+fn validate_addresses(addresses: &[SocketAddr]) -> Result<(), Error> {
     if addresses.is_empty() || addresses.iter().any(|address| is_blocked_ip(address.ip())) {
-        return Err(MediaError::BlockedUrl);
+        return Err(Error::BlockedUrl);
     }
     Ok(())
 }
@@ -415,7 +436,7 @@ mod tests {
             .await
             .expect_err("oversize body is rejected");
         server.await.expect("server completes");
-        assert!(matches!(error, MediaError::DownloadTooLarge));
+        assert!(matches!(error, Error::DownloadTooLarge));
     }
 
     #[tokio::test]
@@ -433,7 +454,7 @@ mod tests {
             .await
             .expect_err("stream crossing limit is rejected");
         server.await.expect("server completes");
-        assert!(matches!(error, MediaError::DownloadTooLarge));
+        assert!(matches!(error, Error::DownloadTooLarge));
     }
 
     #[tokio::test]
@@ -469,7 +490,7 @@ mod tests {
             .expect_err("private redirect is rejected");
         let requests = server.await.expect("server completes");
         assert_eq!(requests.len(), 1);
-        assert!(matches!(error, MediaError::BlockedUrl));
+        assert!(matches!(error, Error::BlockedUrl));
     }
 
     #[tokio::test]
@@ -496,7 +517,7 @@ mod tests {
             .await
             .expect_err("fetch times out");
         server.await.expect("server completes");
-        assert!(matches!(error, MediaError::Timeout));
+        assert!(matches!(error, Error::Timeout));
     }
 
     #[tokio::test]
@@ -522,7 +543,7 @@ mod tests {
             Url::parse("https://user:password@8.8.8.8/document").expect("credentialed URL parses");
         assert!(matches!(
             fetcher.validate_url(&url).await,
-            Err(MediaError::BlockedUrl)
+            Err(Error::BlockedUrl)
         ));
     }
 }

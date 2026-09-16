@@ -1,11 +1,11 @@
-use litellm_core::Error;
+use litellm_core::messages::Error;
 use litellm_core::messages::messages as run_messages;
 use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
 use pyo3::prelude::*;
 use serde_json::Value;
 use std::future::Future;
 
-use crate::errors::core_error_to_pyerr;
+use crate::errors::messages_error_to_pyerr;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, required_object};
 
 fn prepare_messages(
@@ -61,5 +61,5 @@ bridge_route! {
         timeout_seconds: Option<f64>,
     },
     prepare = prepare_messages,
-    errors = core_error_to_pyerr,
+    errors = messages_error_to_pyerr,
 }

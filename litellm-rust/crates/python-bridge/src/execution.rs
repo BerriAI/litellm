@@ -165,7 +165,7 @@ mod tests {
     use std::thread;
     use std::time::Instant;
 
-    use litellm_core::error::Error;
+    use litellm_core::messages::Error;
     use pyo3::panic::PanicException;
     use pyo3::types::{PyDict, PyModule};
     use rstest::{fixture, rstest};

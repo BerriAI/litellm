@@ -1,10 +1,9 @@
-use crate::auth::error::AuthConfigurationError;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use strum::EnumString;
 
-use crate::AuthError;
-use crate::auth::{
+use litellm_auth::Error;
+use litellm_auth::{
     CredentialResolverHandle, InputSource, SecretValue, Sourced, TokenProviderHandle,
 };
 
@@ -54,14 +53,14 @@ pub struct AzureAuthInputs {
 
 impl AzureAuthInputs {
     #[cfg(test)]
-    pub fn from_optional_params(params: &Map<String, Value>) -> Result<Self, AuthError> {
+    pub fn from_optional_params(params: &Map<String, Value>) -> Result<Self, Error> {
         Self::from_sourced_optional_params(params, &BTreeMap::new())
     }
 
     pub fn from_sourced_optional_params(
         params: &Map<String, Value>,
         sources: &BTreeMap<String, InputSource>,
-    ) -> Result<Self, AuthError> {
+    ) -> Result<Self, Error> {
         Ok(Self {
             azure_ad_token: secret_config(params, sources, "azure_ad_token")?,
             azure_ad_token_provider: None,
@@ -88,15 +87,13 @@ fn string_config(
     params: &Map<String, Value>,
     sources: &BTreeMap<String, InputSource>,
     name: &str,
-) -> Result<ConfigValue<String>, AuthError> {
+) -> Result<ConfigValue<String>, Error> {
     let source = source_for(sources, name);
     match params.get(name) {
         None => Ok(ConfigValue::Absent),
         Some(Value::Null) => Ok(ConfigValue::ExplicitNone(source)),
         Some(Value::String(value)) => Ok(ConfigValue::Value(Sourced::new(value.clone(), source))),
-        Some(_) => Err(AuthError::Configuration(
-            AuthConfigurationError::InvalidFieldType(name.to_string()),
-        )),
+        Some(_) => Err(Error::InvalidFieldType(name.to_string())),
     }
 }
 
@@ -104,7 +101,7 @@ fn secret_config(
     params: &Map<String, Value>,
     sources: &BTreeMap<String, InputSource>,
     name: &str,
-) -> Result<ConfigValue<SecretValue>, AuthError> {
+) -> Result<ConfigValue<SecretValue>, Error> {
     Ok(match string_config(params, sources, name)? {
         ConfigValue::Absent => ConfigValue::Absent,
         ConfigValue::ExplicitNone(source) => ConfigValue::ExplicitNone(source),
@@ -123,7 +120,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{AzureAuthInputs, AzureCredentialType, ConfigValue};
-    use crate::auth::{InputSource, Sourced};
+    use litellm_auth::{InputSource, Sourced};
 
     #[test]
     fn selector_parsing_is_exact() {

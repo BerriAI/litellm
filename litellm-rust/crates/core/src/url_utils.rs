@@ -1,9 +1,8 @@
 use std::marker::PhantomData;
 
-use thiserror::Error;
 use url::Url;
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum ApiUrlError {
     #[error("invalid URL: {0}")]
     Parse(#[from] url::ParseError),
