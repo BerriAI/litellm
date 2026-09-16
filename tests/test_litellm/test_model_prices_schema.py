@@ -274,3 +274,128 @@ def test_every_bedrock_openai_gpt_row_advertises_xhigh(prices: dict):
         and "xhigh" not in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
     ]
     assert missing == []
+
+
+STANDARD_RATE_KEYS: Final = ("input_cost_per_token", "output_cost_per_token")
+DISCOUNT_TIER_SUFFIXES: Final = ("_batch", "_flex")
+REGIONAL_AZURE_PREFIXES: Final = ("azure/eu/", "azure/us/")
+REGIONAL_AZURE_RATE_KEYS: Final = (*STANDARD_RATE_KEYS, "cache_read_input_token_cost")
+REGIONAL_UPLIFT_CEILING: Final = 2.0
+
+
+def rate(entry: dict, key: str) -> float | None:
+    value: Final = entry.get(key)
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def price_entries(prices: dict) -> list[tuple[str, dict]]:
+    return [(name, entry) for name, entry in prices.items() if isinstance(entry, dict)]
+
+
+def test_cache_read_never_costs_more_than_a_fresh_input_token(prices: dict):
+    pricier: Final = [
+        f"{name}: cache_read={cached} > input={fresh}"
+        for name, entry in price_entries(prices)
+        for cached in [rate(entry, "cache_read_input_token_cost")]
+        for fresh in [rate(entry, "input_cost_per_token")]
+        if cached is not None and fresh is not None and cached > fresh * (1 + 1e-9)
+    ]
+    assert pricier == []
+
+
+def test_cache_write_costs_at_least_as_much_as_cache_read_unless_free(prices: dict):
+    inverted: Final = [
+        f"{name}: cache_write={write} < cache_read={read}"
+        for name, entry in price_entries(prices)
+        for write in [rate(entry, "cache_creation_input_token_cost")]
+        for read in [rate(entry, "cache_read_input_token_cost")]
+        if write is not None and read is not None and 0 < write < read
+    ]
+    assert inverted == []
+
+
+def test_one_hour_cache_write_costs_at_least_the_five_minute_write(prices: dict):
+    inverted: Final = [
+        f"{name}: 1h={long} < 5m={short}"
+        for name, entry in price_entries(prices)
+        for long in [rate(entry, "cache_creation_input_token_cost_above_1hr")]
+        for short in [rate(entry, "cache_creation_input_token_cost")]
+        if long is not None and short is not None and long < short
+    ]
+    assert inverted == []
+
+
+def test_batch_and_flex_tiers_never_cost_more_than_standard(prices: dict):
+    pricier: Final = [
+        f"{name}: {key}{suffix}={discounted} > {key}={standard}"
+        for name, entry in price_entries(prices)
+        for key in STANDARD_RATE_KEYS
+        for suffix in DISCOUNT_TIER_SUFFIXES
+        for discounted in [rate(entry, f"{key}{suffix}")]
+        for standard in [rate(entry, key)]
+        if discounted is not None and standard is not None and discounted > standard
+    ]
+    assert pricier == []
+
+
+def test_priority_tier_never_costs_less_than_standard(prices: dict):
+    cheaper: Final = [
+        f"{name}: {key}_priority={priority} < {key}={standard}"
+        for name, entry in price_entries(prices)
+        for key in STANDARD_RATE_KEYS
+        for priority in [rate(entry, f"{key}_priority")]
+        for standard in [rate(entry, key)]
+        if priority is not None and standard is not None and priority < standard
+    ]
+    assert cheaper == []
+
+
+def long_context_anchor(key: str) -> str:
+    base, _, remainder = key.partition("_above_")
+    _, _, tier = remainder.partition("_tokens")
+    return f"{base}{tier}"
+
+
+def test_long_context_rates_never_undercut_the_same_tier_base_rate(prices: dict):
+    cheaper: Final = [
+        f"{name}: {key}={above} < {long_context_anchor(key)}={base}"
+        for name, entry in price_entries(prices)
+        for key in entry
+        if "_above_" in key and "cost_per_token" in key
+        for above in [rate(entry, key)]
+        for base in [rate(entry, long_context_anchor(key))]
+        if above is not None and base is not None and above < base
+    ]
+    assert cheaper == []
+
+
+def test_max_output_tokens_fit_inside_max_tokens(prices: dict):
+    oversized: Final = [
+        f"{name}: max_output_tokens={output} > max_tokens={total}"
+        for name, entry in price_entries(prices)
+        for output in [rate(entry, "max_output_tokens")]
+        for total in [rate(entry, "max_tokens")]
+        if output is not None and total is not None and output > total
+    ]
+    assert oversized == []
+
+
+def test_regional_azure_rows_are_priced_between_1x_and_2x_the_global_row(prices: dict):
+    """Data zone deployments carry a fixed uplift over the global row; a regional row priced below
+    global, or more than double it, is a mis-keyed or mis-scaled sync, not a real price."""
+    drifted: Final = [
+        f"{name}: {key}={regional} vs azure/{suffix}: {key}={global_rate}"
+        for name, entry in price_entries(prices)
+        for prefix in REGIONAL_AZURE_PREFIXES
+        if name.startswith(prefix)
+        for suffix in [name[len(prefix) :]]
+        for base in [prices.get(f"azure/{suffix}")]
+        if isinstance(base, dict)
+        for key in REGIONAL_AZURE_RATE_KEYS
+        for regional in [rate(entry, key)]
+        for global_rate in [rate(base, key)]
+        if regional is not None
+        and global_rate is not None
+        and not global_rate * (1 - 1e-9) <= regional <= global_rate * REGIONAL_UPLIFT_CEILING * (1 + 1e-9)
+    ]
+    assert drifted == []
