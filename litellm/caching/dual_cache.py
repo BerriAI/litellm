@@ -522,13 +522,8 @@ class DualCache(BaseCache):
             await self.redis_cache.async_delete_cache(key)
 
     async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
-        """Batch twin of ``async_delete_cache``: one Redis round trip per chunk
-        instead of one per key.
-
-        Chunked because Redis takes the whole list as a single DELETE command,
-        and a caller holding a population-sized list would otherwise build one
-        command out of it.
-        """
+        """Batch twin of ``async_delete_cache``, chunked because Redis takes the
+        whole list as one DELETE command."""
         if not keys:
             return
         for key in keys:
