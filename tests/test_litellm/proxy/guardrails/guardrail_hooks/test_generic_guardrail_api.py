@@ -462,6 +462,8 @@ class TestMetadataExtraction:
                 "Authorization": "Bearer should-not-forward",
                 "Cookie": "session=should-not-forward",
                 "X-Request-Id": "req_123",
+                "x-litellm-api-key": "sk-virtual-key-must-not-leak",
+                "x-litellm-model": "gpt-4o-mini",
             }
         }
 
@@ -497,6 +499,12 @@ class TestMetadataExtraction:
             assert req_headers.get("Authorization") == _HEADER_PRESENT_PLACEHOLDER
             assert req_headers.get("Cookie") == _HEADER_PRESENT_PLACEHOLDER
             assert req_headers.get("X-Request-Id") == _HEADER_PRESENT_PLACEHOLDER
+
+            # Credential header matched by x-litellm-* allowlist glob: value still redacted
+            assert req_headers.get("x-litellm-api-key") == _HEADER_PRESENT_PLACEHOLDER
+
+            # Non-credential x-litellm-* header: value forwarded
+            assert req_headers.get("x-litellm-model") == "gpt-4o-mini"
 
 
 class TestGuardrailActions:

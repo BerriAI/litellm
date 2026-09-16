@@ -1,0 +1,98 @@
+# +-------------------------------------------------------------+
+#
+#           Use Wingback for your LLM calls
+#                   https://wingback.ai/
+#
+# +-------------------------------------------------------------+
+
+import os
+from typing import TYPE_CHECKING, Final, Literal
+
+from litellm.integrations.custom_guardrail import log_guardrail_information
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
+    GenericGuardrailAPI,
+)
+from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.proxy.guardrails.guardrail_hooks.wingback import (
+    WingbackGuardrailConfigModel,
+)
+from litellm.types.utils import GenericGuardrailAPIInputs
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+GUARDRAIL_NAME: Final = "wingback"
+DEFAULT_WINGBACK_API_BASE: Final = "https://api.wingback.ai/connectors"
+
+
+class WingbackGuardrail(GenericGuardrailAPI):
+    """Wingback runtime security via the LiteLLM Generic Guardrail API contract."""
+
+    def __init__(
+        self,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        wingback_app_id: str | None = None,
+        additional_provider_specific_params: dict[str, object] | None = None,
+        unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
+        fail_on_error: bool | None = True,
+        extra_headers: list[str] | None = None,
+        guardrail_name: str | None = None,
+        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
+        default_on: bool = False,
+    ) -> None:
+        resolved_api_base: Final = api_base or os.environ.get("WINGBACK_API_BASE") or DEFAULT_WINGBACK_API_BASE
+        resolved_api_key: Final = api_key or os.environ.get("WINGBACK_INTEGRATION_API_KEY")
+
+        existing_params: Final = additional_provider_specific_params
+        additional_params: Final = (
+            {  # mutable-ok: one-shot merge for guardrail API payload
+                **existing_params,
+                "wingback_app_id": wingback_app_id,
+            }
+            if wingback_app_id and existing_params is not None and "wingback_app_id" not in existing_params
+            else (
+                {  # mutable-ok: default provider params when only app id is configured
+                    "wingback_app_id": wingback_app_id
+                }
+                if wingback_app_id and existing_params is None
+                else existing_params
+            )
+        )
+
+        super().__init__(
+            api_base=resolved_api_base,
+            api_key=resolved_api_key,
+            additional_provider_specific_params=additional_params,
+            unreachable_fallback=unreachable_fallback,
+            fail_on_error=fail_on_error,
+            extra_headers=extra_headers,
+            guardrail_name=guardrail_name or GUARDRAIL_NAME,
+            event_hook=event_hook,
+            default_on=default_on,
+        )
+
+    @log_guardrail_information
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> GenericGuardrailAPIInputs:
+        """
+        Apply Wingback to the given inputs.
+
+        NOTE: This override must live on this class so LiteLLM unified guardrail
+        routing detects apply_guardrail in type(callback).__dict__.
+        """
+        return await super().apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type=input_type,
+            logging_obj=logging_obj,
+        )
+
+    @classmethod
+    def get_config_model(cls) -> type[WingbackGuardrailConfigModel] | None:
+        return WingbackGuardrailConfigModel

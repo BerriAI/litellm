@@ -62,6 +62,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.wingback import (
+    WingbackGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
     XecGuardConfigModel,
 )
@@ -138,6 +141,7 @@ class SupportedGuardrailIntegrations(Enum):
     STRAIKER = "straiker"
     ALICE = "alice"
     CONDUCT = "conduct"
+    WINGBACK = "wingback"
 
 
 class Role(Enum):
@@ -1083,6 +1087,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
+    WingbackGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: str | list[str] | Mode = Field(

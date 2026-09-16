@@ -484,6 +484,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Security", "Prompt Injection", "PII", "Policy"],
     providerKey: "Conduct",
   },
+  {
+    id: "wingback",
+    name: "Wingback",
+    description:
+      "Wingback runtime security for LiteLLM — PII detection, prompt injection, toxic content, and policy enforcement via the Wingback connectors service.",
+    category: "partner",
+    logo: guardrailLogoMap["Wingback"],
+    tags: ["Security", "PII", "Prompt Injection", "Runtime"],
+    providerKey: "Wingback",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];
