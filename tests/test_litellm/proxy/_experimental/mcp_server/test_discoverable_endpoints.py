@@ -7572,8 +7572,8 @@ async def test_reload_active_user_by_id_permanent_engine_fault_is_faulted(proxy_
 async def test_load_active_user_by_id_reads_the_row_from_the_database_not_the_cache(proxy_globals):
     """JWT auth caches the user it creates before it adds that user to the JWT's team, and adding a
     member never evicts the cached row, so a credential minted off the cached row refused the very first
-    token exchange as not a member. The loader has to read the row from the database and leave the fresh
-    row in the cache for the requests the credential makes next."""
+    token exchange as not a member. The database source has to read the row from the database and leave
+    the fresh row in the cache for the requests the credential makes next."""
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import load_active_user_by_id
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -7589,13 +7589,46 @@ async def test_load_active_user_by_id_reads_the_row_from_the_database_not_the_ca
     proxy_globals.user_api_key_cache = cache
     proxy_globals.prisma_client = prisma
 
-    loaded = await load_active_user_by_id("fresh-jwt-user")
+    loaded = await load_active_user_by_id("fresh-jwt-user", source="database")
 
     assert not isinstance(loaded, str)
     assert loaded.teams == ["team-a"]
     cached = await cache.async_get_cache(key="fresh-jwt-user", model_type=LiteLLM_UserTable)
     assert cached is not None
     assert cached.teams == ["team-a"]
+
+
+@pytest.mark.asyncio
+async def test_load_active_user_by_id_serves_a_cached_row_without_a_database_read(proxy_globals):
+    """Introspection and refresh revalidation run per call, so the loader's default source is the cache: a
+    cached row answers without a database read, and only a caller that asks for the database row pays for
+    one."""
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
+        _reload_active_user_by_id,
+        load_active_user_by_id,
+    )
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="cached-jwt-user",
+        value=LiteLLM_UserTable(user_id="cached-jwt-user", teams=["team-a"]),
+        model_type=LiteLLM_UserTable,
+    )
+    prisma = MagicMock()
+    prisma.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="cached-jwt-user", teams=[])
+    )
+    proxy_globals.user_api_key_cache = cache
+    proxy_globals.prisma_client = prisma
+
+    loaded = await load_active_user_by_id("cached-jwt-user")
+
+    assert not isinstance(loaded, str)
+    assert loaded.teams == ["team-a"]
+    assert await _reload_active_user_by_id("cached-jwt-user") is None
+    prisma.db.litellm_usertable.find_unique.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -42,7 +42,7 @@ async def mint_proxy_credential(
     user_id: str, team_id: str | None
 ) -> MintedProxyCredential | ProxyCredentialMintFailure:
     """Mint the ``lite login`` credential for a consented grant. Membership is checked
-    live, so a team the user left between consent and redemption (or between refreshes)
+    live against the database row, so a team the user left between consent and redemption (or between refreshes)
     refuses the grant instead of minting a credential attributed to a team they are no
     longer on. The team is exactly the one the consent page sealed into the grant; nothing
     is picked on the user's behalf here, so a refresh can never move the credential, and a
@@ -54,7 +54,7 @@ async def mint_proxy_credential(
     the minter's own first-team fallback stays inert. The credential carries the role the
     proxy already enforces for the user on every request, so a row with no role (JWT auth's
     upsert writes none) mints as an internal user instead of being refused."""
-    user: Final = await load_active_user_by_id(user_id)
+    user: Final = await load_active_user_by_id(user_id, source="database")
     if isinstance(user, str):
         return user
     if team_id is not None and team_id not in user.teams:
