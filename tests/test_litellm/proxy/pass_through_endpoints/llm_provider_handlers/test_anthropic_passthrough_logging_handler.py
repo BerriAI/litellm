@@ -1141,6 +1141,63 @@ class TestBuildCompleteStreamingResponseRobustness:
         assert result.choices[0].message.content == "The stream ends with [DONE]"
 
 
+class TestInputTransformationsSurviveStreamAssembly:
+    """``input_transformations`` (thinking-binding beta) arrives only on
+    ``message_start``; the assembled response logged to callbacks must keep it."""
+
+    _DROPPED = [{"type": "thinking_dropped", "path": "messages.1.content.0", "reason": "prefix_binding_mismatch"}]
+
+    @staticmethod
+    def _chunks(message_extra: Dict[str, Any]) -> List[str]:
+        message = {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "model": "claude-fable-5-1",
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 1},
+            **message_extra,
+        }
+        return [
+            "event: message_start\ndata: " + json.dumps({"type": "message_start", "message": message}),
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"4"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ]
+
+    @staticmethod
+    def _builders():
+        return [
+            AnthropicPassthroughLoggingHandler._build_complete_streaming_response,
+            AnthropicPassthroughLoggingHandler._build_complete_streaming_response_legacy,
+        ]
+
+    @pytest.mark.parametrize("input_transformations", [_DROPPED, []])
+    def test_message_start_input_transformations_land_on_assembled_message(self, input_transformations):
+        for build in self._builders():
+            result = build(
+                all_chunks=self._chunks({"input_transformations": input_transformations}),
+                litellm_logging_obj=MagicMock(),
+                model="claude-fable-5-1",
+            )
+            assert result.choices[0].message.content == "4"
+            assert result.choices[0].message.provider_specific_fields["input_transformations"] == input_transformations
+
+    def test_absent_input_transformations_leave_provider_fields_untouched(self):
+        for build in self._builders():
+            result = build(
+                all_chunks=self._chunks({}),
+                litellm_logging_obj=MagicMock(),
+                model="claude-fable-5-1",
+            )
+            provider_fields = result.choices[0].message.provider_specific_fields
+            assert provider_fields is None or "input_transformations" not in provider_fields
+
+
 class TestPureTextFastPathParity:
     """
     The pure-text fast path in _build_complete_streaming_response must produce

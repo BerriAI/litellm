@@ -2452,3 +2452,43 @@ def test_served_model_reaches_assembled_stream_through_custom_stream_wrapper():
         assert chunk._hidden_params["provider_response_model"] == served_model
     assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks), messages=[{"role": "user", "content": "hi"}])
     assert assembled._hidden_params["provider_response_model"] == served_model
+
+
+def _message_start_chunk(**message_extra):
+    return {
+        "type": "message_start",
+        "message": {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-fable-5-1",
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 1},
+            **message_extra,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "input_transformations",
+    [
+        [{"type": "thinking_dropped", "path": "messages.1.content.0", "reason": "prefix_binding_mismatch"}],
+        [],
+    ],
+)
+def test_chunk_parser_message_start_carries_input_transformations(input_transformations):
+    """In a stream ``input_transformations`` only ever appears on ``message_start``;
+    it must be emitted on that chunk's delta so stream_chunk_builder keeps it."""
+    parsed = ModelResponseIterator(None, sync_stream=True).chunk_parser(
+        _message_start_chunk(input_transformations=input_transformations)
+    )
+
+    assert parsed.choices[0].delta.provider_specific_fields == {"input_transformations": input_transformations}
+
+
+def test_chunk_parser_message_start_without_input_transformations_has_no_provider_fields():
+    parsed = ModelResponseIterator(None, sync_stream=True).chunk_parser(_message_start_chunk())
+
+    assert parsed.choices[0].delta.provider_specific_fields is None
