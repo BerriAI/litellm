@@ -30,6 +30,8 @@ const SUMMABLE_METADATA_KEYS = [
   "total_cache_read_input_tokens",
   "total_cache_creation_input_tokens",
   "total_flat_cost",
+  "total_response_time_ms",
+  "total_timed_requests",
 ] as const;
 
 interface DailyActivityResponse {
@@ -78,6 +80,8 @@ const EMPTY_DATA: DailyActivityResponse = {
     total_failed_requests: 0,
     total_cache_read_input_tokens: 0,
     total_cache_creation_input_tokens: 0,
+    total_response_time_ms: 0,
+    total_timed_requests: 0,
     total_pages: 1,
     has_more: false,
     page: 1,
