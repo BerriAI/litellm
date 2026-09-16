@@ -23,11 +23,12 @@ pub struct ArgumentError {
 }
 
 pub fn parse_options<T: DeserializeOwned>(arguments: &CallArguments) -> Result<T, ArgumentError> {
-    use serde::de::IntoDeserializer;
-    serde_path_to_error::deserialize(Value::Object(arguments.0.clone()).into_deserializer())
-        .map_err(|error| ArgumentError {
-            path: error.path().to_string(),
-        })
+    let deserializer = serde::de::value::MapDeserializer::new(
+        arguments.iter().map(|(name, value)| (name.as_str(), value)),
+    );
+    serde_path_to_error::deserialize(deserializer).map_err(|error| ArgumentError {
+        path: error.path().to_string(),
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

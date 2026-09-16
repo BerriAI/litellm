@@ -2,18 +2,9 @@ use std::sync::Arc;
 
 use super::OcrClient;
 use super::hooks::{OcrHooks, OcrLifecycleHooks, OcrPostCallRequest};
-use super::provider_config::OcrConfigKind;
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, PreparedOcrRequest};
 use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
-use crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig;
-use crate::llms::azure_ai::ocr::document_intelligence::transformation::AzureDocumentIntelligenceOCRConfig;
-use crate::llms::azure_ai::ocr::transformation::AzureAIOCRConfig;
-use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrResponseContext};
-use crate::llms::cohere::ocr::transformation::CohereParseConfig;
-use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
-use crate::llms::reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config};
-use crate::llms::vertex_ai::ocr::deepseek_transformation::VertexAIDeepSeekOCRConfig;
-use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
+use crate::llms::base_llm::ocr::transformation::OcrResponseContext;
 
 pub(crate) async fn perform_ocr_request(
     client: &OcrClient,
@@ -55,37 +46,7 @@ impl PreparedOcrCall {
         request: LiteLLMOcrRequest,
     ) -> Result<Self, super::Error> {
         let request = super::prepare::prepare_request(request);
-        let http = match request.config {
-            OcrConfigKind::Cohere => CohereParseConfig.prepare_request(&request, &client).await?,
-            OcrConfigKind::Mistral => MistralOCRConfig.prepare_request(&request, &client).await?,
-            OcrConfigKind::AzureAi => AzureAIOCRConfig.prepare_request(&request, &client).await?,
-            OcrConfigKind::AzureCohere => {
-                AzureAICohereParseConfig
-                    .prepare_request(&request, &client)
-                    .await?
-            }
-            OcrConfigKind::AzureDocumentIntelligence => {
-                AzureDocumentIntelligenceOCRConfig
-                    .prepare_request(&request, &client)
-                    .await?
-            }
-            OcrConfigKind::ReductoLegacy => {
-                ReductoParseLegacyConfig
-                    .prepare_request(&request, &client)
-                    .await?
-            }
-            OcrConfigKind::ReductoV3 => {
-                ReductoParseV3Config
-                    .prepare_request(&request, &client)
-                    .await?
-            }
-            OcrConfigKind::VertexAi => VertexAIOCRConfig.prepare_request(&request, &client).await?,
-            OcrConfigKind::VertexDeepSeek => {
-                VertexAIDeepSeekOCRConfig
-                    .prepare_request(&request, &client)
-                    .await?
-            }
-        };
+        let http = request.config.prepare_request(&request, &client).await?;
         Ok(Self {
             client,
             request,
@@ -133,53 +94,10 @@ impl PreparedOcrCall {
             url: &url,
             headers: &headers,
         };
-        match self.request.config {
-            OcrConfigKind::Cohere => {
-                CohereParseConfig
-                    .async_transform_ocr_response(model, response, context)
-                    .await
-            }
-            OcrConfigKind::Mistral => {
-                MistralOCRConfig
-                    .async_transform_ocr_response(model, response, context)
-                    .await
-            }
-            OcrConfigKind::AzureAi => {
-                AzureAIOCRConfig
-                    .async_transform_ocr_response(model, response, context)
-                    .await
-            }
-            OcrConfigKind::AzureCohere => {
-                AzureAICohereParseConfig
-                    .async_transform_ocr_response(model, response, context)
-                    .await
-            }
-            OcrConfigKind::AzureDocumentIntelligence => {
-                AzureDocumentIntelligenceOCRConfig
-                    .async_transform_ocr_response(model, response, context)
-                    .await
-            }
-            OcrConfigKind::ReductoLegacy => {
-                ReductoParseLegacyConfig
-                    .async_transform_ocr_response(model, response, context)
-                    .await
-            }
-            OcrConfigKind::ReductoV3 => {
-                ReductoParseV3Config
-                    .async_transform_ocr_response(model, response, context)
-                    .await
-            }
-            OcrConfigKind::VertexAi => {
-                VertexAIOCRConfig
-                    .async_transform_ocr_response(model, response, context)
-                    .await
-            }
-            OcrConfigKind::VertexDeepSeek => {
-                VertexAIDeepSeekOCRConfig
-                    .async_transform_ocr_response(model, response, context)
-                    .await
-            }
-        }
+        self.request
+            .config
+            .async_transform_ocr_response(model, response, context)
+            .await
     }
 }
 

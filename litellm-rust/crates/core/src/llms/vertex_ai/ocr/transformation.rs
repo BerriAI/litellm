@@ -1,11 +1,15 @@
 use litellm_auth_gcp::{self as vertex, VertexConfig};
+use serde_json::Value;
 
 use super::common_utils::validate_destination;
-use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
+use crate::call_arguments::CallArguments;
+use crate::llms::base_llm::ocr::transformation::{
+    BaseOcrConfig, OcrEnvironment, OcrRequestContext,
+};
 use crate::llms::mistral::ocr::transformation::{MistralOCRConfig, MistralOcrRequest};
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
-use crate::ocr::prepare::{credential_env, transform_request_body};
+use crate::ocr::prepare::credential_env;
 use crate::ocr::types::{LiteLLMOcrResponse, OcrConnection, OcrDocument, PreparedOcrRequest};
 use crate::params::OpaqueParams;
 use crate::url_utils::ApiUrl;
@@ -71,6 +75,14 @@ impl BaseOcrConfig for VertexAIOCRConfig {
         MistralOCRConfig.get_supported_ocr_params(model)
     }
 
+    fn map_ocr_params(
+        &self,
+        arguments: &CallArguments,
+        model: &str,
+    ) -> Result<OpaqueParams, crate::ocr::Error> {
+        MistralOCRConfig.map_ocr_params(arguments, model)
+    }
+
     async fn async_transform_ocr_request(
         &self,
         model: &str,
@@ -96,41 +108,19 @@ impl BaseOcrConfig for VertexAIOCRConfig {
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
         MistralOCRConfig.transform_ocr_response(model, raw_response, request_format)
     }
+
+    fn retains_document(&self, document: &OcrDocument) -> bool {
+        !document.is_remote()
+    }
+
+    fn validate_request_body(&self, body: &Value) -> Result<(), crate::ocr::Error> {
+        validate_inline_document(&crate::ocr::prepare::body_document(body)?)
+    }
 }
 
-impl VertexAIOCRConfig {
-    pub(crate) async fn prepare_request(
-        &self,
-        request: &PreparedOcrRequest,
-        client: &OcrClient,
-    ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let authentication = BaseOcrConfig::validate_environment(self, request, client).await?;
-        let url = BaseOcrConfig::get_complete_url(self, request, &params, &authentication)?;
-        let retains_document = !request.document.source().starts_with("http://")
-            && !request.document.source().starts_with("https://");
-        let body = self
-            .async_transform_ocr_request(
-                &request.model,
-                request.document.clone(),
-                &params,
-                &authentication.headers,
-                OcrRequestContext {
-                    client,
-                    connection: &request.connection,
-                },
-            )
-            .await?;
-        transform_request_body(
-            client,
-            request,
-            &url,
-            &authentication.headers,
-            retains_document,
-            body,
-            |body| validate_inline_document(&crate::ocr::prepare::body_document(body)?),
-        )
-        .await
+impl OcrEnvironment for vertex::VertexEnvironment {
+    fn headers(&self) -> &[(String, String)] {
+        &self.headers
     }
 }
 

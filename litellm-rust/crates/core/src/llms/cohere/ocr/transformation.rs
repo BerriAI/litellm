@@ -2,11 +2,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
+use crate::call_arguments::{CallArguments, parse_options};
 use crate::constants::{COHERE_API_KEY_ENV, COHERE_PARSE_API_BASE};
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::ocr::OcrClient;
 use crate::ocr::document::InlineDocument;
-use crate::ocr::prepare::{credential_env, transform_request_body};
+use crate::ocr::prepare::credential_env;
 use crate::ocr::types::{
     LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrPageImage, OcrUsageInfo,
     PreparedOcrRequest,
@@ -136,6 +137,14 @@ impl BaseOcrConfig for CohereParseConfig {
         &["output_format", "req_format"]
     }
 
+    fn map_ocr_params(
+        &self,
+        arguments: &CallArguments,
+        _model: &str,
+    ) -> Result<CohereOptions, crate::ocr::Error> {
+        Ok(parse_options(arguments)?)
+    }
+
     async fn async_transform_ocr_request(
         &self,
         model: &str,
@@ -160,33 +169,9 @@ impl BaseOcrConfig for CohereParseConfig {
             normalize_response,
         )
     }
-}
 
-impl CohereParseConfig {
-    pub(crate) async fn prepare_request(
-        &self,
-        request: &PreparedOcrRequest,
-        client: &OcrClient,
-    ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let headers = BaseOcrConfig::validate_environment(self, request, client).await?;
-        let url = BaseOcrConfig::get_complete_url(self, request, &params, &headers)?;
-        let body = self
-            .async_transform_ocr_request(
-                &request.model,
-                request.document.clone(),
-                &params,
-                &headers,
-                OcrRequestContext {
-                    client,
-                    connection: &request.connection,
-                },
-            )
-            .await?;
-        transform_request_body(client, request, &url, &headers, true, body, |body| {
-            validate_document(&crate::ocr::prepare::body_document(body)?)
-        })
-        .await
+    fn validate_request_body(&self, body: &Value) -> Result<(), crate::ocr::Error> {
+        validate_document(&crate::ocr::prepare::body_document(body)?)
     }
 }
 
@@ -255,7 +240,7 @@ fn page_image(
     if let Some(Value::Object(bbox)) = image.get("bounding_box") {
         image.insert("bbox".into(), Value::Object(bbox.clone()));
     }
-    crate::ocr::wire::decode_response_value(Value::Object(image), path)
+    crate::ocr::json::decode_response_value(Value::Object(image), path)
 }
 
 fn normalize_page(page: CoherePage, position: usize) -> Result<OcrPage, crate::ocr::Error> {
@@ -418,7 +403,11 @@ mod tests {
         assert_eq!(arguments["req_format"], "native");
         assert_eq!(arguments["extension"], false);
         let invalid = serde_json::from_value(json!({"output_format":"html"})).unwrap();
-        assert!(CohereParseConfig.map_ocr_params(&invalid, "parse").is_err());
+        assert!(matches!(
+            CohereParseConfig.map_ocr_params(&invalid, "parse"),
+            Err(crate::ocr::Error::RequestField { path })
+                if path == "optional_params.output_format"
+        ));
     }
 
     #[test]

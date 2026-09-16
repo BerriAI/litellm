@@ -12,32 +12,16 @@ Tests that:
 import base64
 import os
 import tempfile
-from collections.abc import Generator
 from io import BytesIO
 from pathlib import Path
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock
 
 import orjson
 import pytest
 from starlette.datastructures import FormData
 
-from litellm.ocr.input import convert_file_document_to_url_document, get_mime_type
-
-
-@pytest.fixture(autouse=True, params=["native", "disabled", "unavailable"])
-def document_runtime(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    from litellm.rust_bridge import bindings, configuration
-
-    configuration.reset_rust_configuration()
-    monkeypatch.delenv("LITELLM_RUST", raising=False)
-    if request.param == "disabled":
-        monkeypatch.setenv("LITELLM_RUST", "0")
-        monkeypatch.setattr(bindings, "get_native_bridge", Mock(side_effect=AssertionError("Rust is disabled")))
-    elif request.param == "unavailable":
-        monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
-    yield
-    configuration.reset_rust_configuration()
+from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 
 
 class TestGetMimeType:
@@ -503,10 +487,9 @@ class TestProxySecurityGuard:
 async def test_proxy_upload_stops_reading_at_size_limit() -> None:
     from starlette.datastructures import UploadFile
 
-    from litellm.ocr.input import get_max_file_bytes
     from litellm.proxy.ocr_endpoints.endpoints import _parse_multipart_form
 
-    limit: Final = get_max_file_bytes()
+    limit: Final = 50 * 1024 * 1024
     with tempfile.TemporaryFile() as stream:
         stream.truncate(limit * 2)
         upload: Final = UploadFile(file=stream, filename="large.pdf")

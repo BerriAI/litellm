@@ -1,11 +1,12 @@
 use litellm_core::ocr::Error;
 use std::future::Future;
 
-use litellm_core::ocr::wire::{OcrWireRequest, decode_request};
+use litellm_core::ocr::LiteLLMOcrRequest;
 use pyo3::prelude::*;
 use serde_json::Value;
 
 use super::errors::to_pyerr as ocr_error_to_pyerr;
+use super::request::BridgeOcrRequest;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
 fn prepare_ocr(
@@ -37,7 +38,7 @@ fn prepare_ocr(
             extra_headers,
             timeout,
         } = options;
-        let request = decode_request(OcrWireRequest {
+        let request = LiteLLMOcrRequest::try_from(BridgeOcrRequest {
             model,
             document,
             api_key,

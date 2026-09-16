@@ -1,8 +1,5 @@
 use litellm_core::ocr::Error;
-use litellm_core::ocr::{
-    OcrClient,
-    wire::{OcrWireRequest, decode_request},
-};
+use litellm_core::ocr::{LiteLLMOcrRequest, OcrClient};
 use serde_json::Value;
 
 mod types;
@@ -17,17 +14,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
 async fn core_ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
     validate_host_hooks(&request)?;
     let client = OcrClient::new(crate::client::http_client().clone())?;
-    let core_request = decode_request(OcrWireRequest {
-        model: request.model.to_string(),
-        document: request.document,
-        api_key: request.api_key.map(str::to_string),
-        api_base: request.api_base.map(str::to_string),
-        custom_llm_provider: request.custom_llm_provider.map(str::to_string),
-        extra_headers: request.extra_headers,
-        optional_params: request.optional_params.into_inner().into(),
-        input_sources: Default::default(),
-        timeout_seconds: request.timeout.map(|timeout| timeout.as_secs_f64()),
-    })?;
+    let core_request = LiteLLMOcrRequest::try_from(request)?;
     client
         .perform(core_request)
         .await
@@ -52,10 +39,10 @@ fn validate_host_hooks(request: &OcrRequest<'_>) -> Result<(), Error> {
 mod tests {
     use std::sync::Arc;
 
-    use litellm_core::ocr::wire::is_supported_request;
+    use litellm_core::ocr::is_supported_request;
     use serde_json::json;
 
-    use super::{OcrRequest, validate_host_hooks};
+    use super::{LiteLLMOcrRequest, OcrRequest, validate_host_hooks};
     use crate::integrations::custom_guardrail::{CustomGuardrail, GuardrailEventHook};
     use crate::integrations::custom_logger::CustomLogger;
 
@@ -103,6 +90,34 @@ mod tests {
         assert!(is_supported_request("parse-v3", Some("reducto")));
         assert!(is_supported_request("mistral-ocr", Some("vertex_ai")));
         assert!(is_supported_request("deepseek-ocr", Some("vertex_ai")));
+    }
+
+    #[test]
+    fn gateway_request_converts_to_typed_core_request() {
+        let request = LiteLLMOcrRequest::try_from(OcrRequest {
+            api_key: Some(" key "),
+            api_base: Some(" https://example.com "),
+            timeout: Some(std::time::Duration::from_secs(3)),
+            ..request()
+        })
+        .unwrap();
+        assert_eq!(request.credentials.api_key.unwrap().into_value(), "key");
+        assert_eq!(
+            request.credentials.api_base.unwrap().into_value(),
+            "https://example.com"
+        );
+        assert_eq!(request.transport.timeout, std::time::Duration::from_secs(3));
+    }
+
+    #[test]
+    fn gateway_request_rejects_non_string_headers() {
+        let error = LiteLLMOcrRequest::try_from(OcrRequest {
+            extra_headers: Some(serde_json::Map::from_iter([("x-test".into(), json!(1))])),
+            ..request()
+        })
+        .err()
+        .expect("non-string header accepted");
+        assert!(error.to_string().contains("extra_headers.x-test"));
     }
 
     #[test]

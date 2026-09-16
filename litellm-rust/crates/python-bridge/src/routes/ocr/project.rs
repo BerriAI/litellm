@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use litellm_core::ocr::wire::{OcrWireRequest, consumed_optional_params, decode_request};
-use litellm_core::ocr::{LiteLLMOcrRequest, NativeOutcome, OcrCall};
+use litellm_core::ocr::{LiteLLMOcrRequest, NativeOutcome, OcrCall, consumed_optional_params};
 use litellm_python_interop::{
     from_py_preserving_errors as from_py, to_py_preserving_errors as to_py,
 };
@@ -11,9 +10,12 @@ use serde_json::{Map, Value};
 
 use super::errors::to_pyerr as ocr_error_to_pyerr;
 use super::lifecycle::BridgeOcrHooks;
+use super::request::BridgeOcrRequest;
 use crate::auth::{AZURE_AD_TOKEN_PROVIDER, PythonTokenProvider};
 use crate::errors::RustBridgeDeclined;
 use crate::marshal::{project_optional_fields, python_timeout_seconds, request_input_sources};
+
+const BOUND_FIELDS: &[&str] = &["model", "document", "timeout", "input_sources"];
 
 pub(super) struct ProjectedOcrFields {
     pub boundary_request: Py<PyAny>,
@@ -27,6 +29,11 @@ pub(super) struct ProjectedOcrFields {
 pub(super) struct ProjectedOcrCall {
     pub request: LiteLLMOcrRequest,
     pub fields: ProjectedOcrFields,
+}
+
+pub(super) struct PythonOcrInput<'a, 'py> {
+    pub request: &'a Bound<'py, PyAny>,
+    pub kwargs: &'a Bound<'py, PyDict>,
 }
 
 struct PythonOcrFields<'a, 'py> {
@@ -110,60 +117,63 @@ impl ProjectedDocument {
     }
 }
 
-pub(super) fn project_request(
-    py: Python<'_>,
-    request: &Bound<'_, PyAny>,
-    kwargs: &Bound<'_, PyDict>,
-) -> PyResult<ProjectedOcrCall> {
-    let boundary_request = request.clone().unbind();
-    let arguments = PythonOcrFields { request, kwargs };
-    let model = arguments.model()?;
-    let custom_llm_provider = arguments.custom_llm_provider()?;
-    let (wire_document, retained_document) =
-        ProjectedDocument::project(py, &arguments.document()?)?.into_parts();
-    let api_key = arguments.api_key()?;
-    let specs = consumed_optional_params(&model, custom_llm_provider.as_deref())
+impl TryFrom<PythonOcrInput<'_, '_>> for ProjectedOcrCall {
+    type Error = PyErr;
+
+    fn try_from(input: PythonOcrInput<'_, '_>) -> PyResult<Self> {
+        let request = input.request;
+        let kwargs = input.kwargs;
+        let py = request.py();
+        let boundary_request = request.clone().unbind();
+        let arguments = PythonOcrFields { request, kwargs };
+        let model = arguments.model()?;
+        let custom_llm_provider = arguments.custom_llm_provider()?;
+        let (wire_document, retained_document) =
+            ProjectedDocument::project(py, &arguments.document()?)?.into_parts();
+        let api_key = arguments.api_key()?;
+        let specs = consumed_optional_params(&model, custom_llm_provider.as_deref())
+            .map_err(ocr_error_to_pyerr)?;
+        let optional_params = project_optional_fields(kwargs, &specs, BOUND_FIELDS)?;
+        let input_sources = request_input_sources(
+            kwargs,
+            optional_params.keys().map(String::as_str).chain([
+                "api_key",
+                "api_base",
+                "extra_headers",
+            ]),
+        )?;
+        let azure_ad_token_provider = kwargs
+            .get_item("azure_ad_token_provider")?
+            .and_then(|provider| PythonTokenProvider::select(provider, AZURE_AD_TOKEN_PROVIDER));
+        let request = LiteLLMOcrRequest::try_from(BridgeOcrRequest {
+            model,
+            document: wire_document,
+            api_key: api_key.extract()?,
+            api_base: arguments.api_base()?,
+            custom_llm_provider,
+            extra_headers: arguments.extra_headers()?,
+            optional_params: optional_params.into(),
+            input_sources,
+            timeout_seconds: arguments.timeout_seconds()?,
+        })
         .map_err(ocr_error_to_pyerr)?;
-    let optional_params =
-        project_optional_fields(kwargs, &specs, litellm_core::ocr::wire::BOUND_FIELDS)?;
-    let input_sources = request_input_sources(
-        kwargs,
-        optional_params
-            .keys()
-            .map(String::as_str)
-            .chain(["api_key", "api_base", "extra_headers"]),
-    )?;
-    let azure_ad_token_provider = kwargs
-        .get_item("azure_ad_token_provider")?
-        .and_then(|provider| PythonTokenProvider::select(provider, AZURE_AD_TOKEN_PROVIDER));
-    let wire = OcrWireRequest {
-        model,
-        document: wire_document,
-        api_key: api_key.extract()?,
-        api_base: arguments.api_base()?,
-        custom_llm_provider,
-        extra_headers: arguments.extra_headers()?,
-        optional_params: optional_params.into(),
-        input_sources,
-        timeout_seconds: arguments.timeout_seconds()?,
-    };
-    let request = decode_request(wire).map_err(ocr_error_to_pyerr)?;
-    let provider = request.provider_name();
-    Ok(ProjectedOcrCall {
-        request: request.with_host_hooks(Arc::new(BridgeOcrHooks), None),
-        fields: ProjectedOcrFields {
-            boundary_request,
-            document: retained_document,
-            api_key: api_key.unbind(),
-            azure_ad_token_provider,
-            provider,
-            secret_fields: specs
-                .into_iter()
-                .filter(|spec| spec.secret)
-                .map(|spec| spec.name)
-                .collect(),
-        },
-    })
+        let provider = request.provider_name();
+        Ok(Self {
+            request: request.with_host_hooks(Arc::new(BridgeOcrHooks), None),
+            fields: ProjectedOcrFields {
+                boundary_request,
+                document: retained_document,
+                api_key: api_key.unbind(),
+                azure_ad_token_provider,
+                provider,
+                secret_fields: specs
+                    .into_iter()
+                    .filter(|spec| spec.secret)
+                    .map(|spec| spec.name)
+                    .collect(),
+            },
+        })
+    }
 }
 
 pub(super) fn admitted_call(outcome: NativeOutcome<OcrCall>) -> PyResult<OcrCall> {
@@ -182,6 +192,19 @@ mod tests {
     use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 
     use super::*;
+
+    #[test]
+    fn projection_selects_consumed_values_without_serializing_host_objects() {
+        let fields = consumed_optional_params("mistral/model", None).unwrap();
+        use litellm_core::call_arguments::should_project;
+        assert!(should_project("future_option", &fields, BOUND_FIELDS));
+        assert!(should_project("extra_body", &fields, BOUND_FIELDS));
+        assert!(should_project("id", &fields, BOUND_FIELDS));
+        assert!(!should_project("metadata", &fields, BOUND_FIELDS));
+        assert!(!should_project("callbacks", &fields, BOUND_FIELDS));
+        assert!(!should_project("api_key", &fields, BOUND_FIELDS));
+        assert!(!should_project("document", &fields, BOUND_FIELDS));
+    }
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);
@@ -493,7 +516,7 @@ kwargs = {'api_key': key}
                 wire_document,
                 serde_json::json!({"type": "mystery", "mystery": "x"})
             );
-            let error = match decode_request(OcrWireRequest {
+            let error = match LiteLLMOcrRequest::try_from(BridgeOcrRequest {
                 model: "mistral/mistral-ocr-latest".into(),
                 document: wire_document,
                 api_key: None,

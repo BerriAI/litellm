@@ -666,42 +666,37 @@ mod tests {
         OcrPreCallRequest,
     };
     use crate::ocr::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
-    use crate::ocr::wire::{OcrWireRequest, decode_request};
     use crate::ocr::{
-        NativeOutcome, NoopOcrHost, OcrAdmission, OcrCall, OcrCallStep, OcrDecline, OcrHost,
-        OcrHostOperation, OcrHostResult,
+        LiteLLMOcrRequest, NativeOutcome, NoopOcrHost, OcrAdmission, OcrCall, OcrCallStep,
+        OcrDecline, OcrDocument, OcrHost, OcrHostOperation, OcrHostResult,
     };
 
     #[test]
     fn request_boundary_selects_mistral_and_rejects_unknown_providers() {
-        let request = OcrWireRequest {
-            model: "mistral/model".into(),
-            document: json!({"type":"document_url","document_url":"https://example.com/doc.pdf"}),
-            api_key: Some("key".into()),
-            api_base: None,
-            custom_llm_provider: None,
-            extra_headers: None,
-            optional_params: json!({"extract_header":true,"unknown":42})
-                .as_object()
-                .unwrap()
-                .clone()
-                .into(),
-            input_sources: Default::default(),
-            timeout_seconds: None,
-        };
-        assert!(decode_request(request).is_ok());
+        let document = OcrDocument::try_from(
+            json!({"type":"document_url","document_url":"https://example.com/doc.pdf"}),
+        )
+        .unwrap();
         assert!(
-            decode_request(OcrWireRequest {
-                model: "model".into(),
-                document: json!({"type":"document_url","document_url":"https://example.com/doc.pdf"}),
-                api_key: Some("key".into()),
-                api_base: None,
-                custom_llm_provider: Some("unknown".into()),
-                extra_headers: None,
-                optional_params: Default::default(),
-                input_sources: Default::default(),
-                timeout_seconds: None,
-            })
+            LiteLLMOcrRequest::new(
+                "mistral/model".into(),
+                document.clone(),
+                None,
+                json!({"extract_header":true,"unknown":42})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+                    .into(),
+            )
+            .is_ok()
+        );
+        assert!(
+            LiteLLMOcrRequest::new(
+                "model".into(),
+                document,
+                Some("unknown"),
+                Default::default()
+            )
             .is_err()
         );
     }
@@ -1507,11 +1502,20 @@ mod tests {
             json!(crate::constants::OCR_RESPONSE_MAX_BYTES + 1),
             Value::Null,
         ] {
-            let wire = serde_json::from_value(json!({
-                "model": "mistral/model", "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
-                "optional_params": {"max_response_bytes": value}
-            })).unwrap();
-            let Err(error) = decode_request(wire) else {
+            let Err(error) = LiteLLMOcrRequest::new(
+                "mistral/model".into(),
+                OcrDocument::try_from(json!({
+                    "type": "document_url",
+                    "document_url": "data:application/pdf;base64,YWJj"
+                }))
+                .unwrap(),
+                None,
+                json!({"max_response_bytes": value})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+                    .into(),
+            ) else {
                 panic!("invalid response limit accepted")
             };
             assert!(error.to_string().contains("max_response_bytes"));

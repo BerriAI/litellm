@@ -4,8 +4,8 @@ use std::time::Duration;
 use bytes::{Bytes, BytesMut};
 use serde::de::DeserializeOwned;
 
+use super::json::{DecodedOcrResponse, decode_response};
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
-use super::wire::{DecodedOcrResponse, decode_response};
 use crate::constants::OCR_CONNECT_TIMEOUT_SECS;
 use crate::media::MediaFetcher;
 use litellm_auth_gcp::VertexAuth;

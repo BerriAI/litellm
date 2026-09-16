@@ -104,7 +104,7 @@ pub(crate) async fn guardrail_document(
             retained_fields: Vec::new(),
         })
         .await?;
-    let document = super::wire::decode_request_value(changed.body, "guardrail.document")?;
+    let document = super::json::decode_request_value(changed.body, "guardrail.document")?;
     Ok((document, changed.headers))
 }
 
@@ -120,7 +120,7 @@ pub(crate) fn body_document(body: &Value) -> Result<OcrDocument, super::Error> {
         .filter(|(name, _)| matches!(name.as_str(), "type" | "image_url" | "document_url"))
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
-    super::wire::decode_request_value(Value::Object(source), "body.document")
+    super::json::decode_request_value(Value::Object(source), "body.document")
 }
 
 pub(crate) fn credential_env(name: &str) -> Option<String> {

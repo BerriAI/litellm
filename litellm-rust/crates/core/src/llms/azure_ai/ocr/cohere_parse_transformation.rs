@@ -1,13 +1,12 @@
+use crate::call_arguments::CallArguments;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::llms::cohere::ocr::transformation::{CohereParseConfig, CohereRequest};
 use crate::llms::cohere::ocr::{CohereOptions, validate_document};
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
-use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::types::{LiteLLMOcrResponse, OcrDocument, PreparedOcrRequest};
 use crate::url_utils::ApiUrl;
-
-const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
+use serde_json::Value;
 
 #[derive(Default)]
 pub(crate) struct AzureAICohereParseConfig;
@@ -44,17 +43,10 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         _params: &Self::OcrParams,
         _environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
-        let base = request
-            .connection
-            .api_base
-            .clone()
-            .or_else(|| credential_env(AZURE_AI_API_BASE_ENV))
-            .filter(|base| !base.trim().is_empty())
-            .ok_or_else(|| {
-                crate::ocr::Error::Auth(litellm_auth::Error::ProviderAuthentication(
-                    "Missing Azure AI API Base - Set AZURE_AI_API_BASE or pass api_base".into(),
-                ))
-            })?;
+        let base = super::transformation::AzureAIOCRConfig::resolve_api_base(
+            request.connection.api_base.as_deref(),
+            &crate::ocr::prepare::credential_env,
+        )?;
         self.get_complete_url(&base)
     }
 
@@ -70,6 +62,14 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
 
     fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
         CohereParseConfig.get_supported_ocr_params(model)
+    }
+
+    fn map_ocr_params(
+        &self,
+        arguments: &CallArguments,
+        model: &str,
+    ) -> Result<CohereOptions, crate::ocr::Error> {
+        CohereParseConfig.map_ocr_params(arguments, model)
     }
 
     async fn async_transform_ocr_request(
@@ -98,37 +98,15 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
         CohereParseConfig.transform_ocr_response(model, raw_response, request_format)
     }
-}
 
-impl AzureAICohereParseConfig {
-    pub(crate) async fn prepare_request(
-        &self,
-        request: &PreparedOcrRequest,
-        client: &OcrClient,
-    ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
-        let url = BaseOcrConfig::get_complete_url(self, request, &params, &Vec::new())?;
-        let headers = self.validate_environment(request, client).await?;
-        let remote = request.document.source().starts_with("http://")
-            || request.document.source().starts_with("https://");
-        let body = self
-            .async_transform_ocr_request(
-                &request.model,
-                request.document.clone(),
-                &params,
-                &headers,
-                OcrRequestContext {
-                    client,
-                    connection: &request.connection,
-                },
-            )
-            .await?;
-        transform_request_body(client, request, &url, &headers, !remote, body, |body| {
-            let document = crate::ocr::prepare::body_document(body)?;
-            validate_document(&document)?;
-            validate_inline_document(&document)
-        })
-        .await
+    fn retains_document(&self, document: &OcrDocument) -> bool {
+        !document.is_remote()
+    }
+
+    fn validate_request_body(&self, body: &Value) -> Result<(), crate::ocr::Error> {
+        let document = crate::ocr::prepare::body_document(body)?;
+        validate_document(&document)?;
+        validate_inline_document(&document)
     }
 }
 
