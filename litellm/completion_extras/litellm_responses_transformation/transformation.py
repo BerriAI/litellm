@@ -532,7 +532,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             dict(responses_api_request).get("text") or {},  # mutable-ok: one-shot merge seed
         )
         return cast(  # cast-ok: merged mapping is a valid ResponseText shape
-            "ResponseText", {**existing, **update}  # mutable-ok: one-shot merged payload
+            "ResponseText",
+            {**existing, **update},  # mutable-ok: one-shot merged payload
         )
 
     def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
