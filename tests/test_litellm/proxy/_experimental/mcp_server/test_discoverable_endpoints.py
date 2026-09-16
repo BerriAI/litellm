@@ -11444,11 +11444,13 @@ def _oauth_identity_jwt(
 @pytest.mark.parametrize("header", ["Authorization", "x-litellm-api-key"])
 @pytest.mark.parametrize("policy_allowed", [False, True])
 @pytest.mark.parametrize("admin", [False, True])
+@pytest.mark.parametrize("owner_state", ["active", "missing", "inactive", "database_error"])
 async def test_oauth_exchange_stores_token_for_validated_jwt_user(
     jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
     header: str,
     policy_allowed: bool,
     admin: bool,
+    owner_state: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import httpx
@@ -11475,6 +11477,7 @@ async def test_oauth_exchange_stores_token_for_validated_jwt_user(
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.proxy import proxy_server
+    from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -11485,6 +11488,18 @@ async def test_oauth_exchange_stores_token_for_validated_jwt_user(
         return httpx.Response(200, json={"access_token": "upstream-token", "token_type": "Bearer"})
 
     database: Final = MagicMock()
+    users: Final = database.db.litellm_usertable
+    users.find_unique = AsyncMock(return_value=None)
+    users.find_first = AsyncMock(return_value=None)
+    users.create = AsyncMock()
+    if owner_state in ("missing", "database_error"):
+        handler.user_api_key_cache.delete_cache("jwt-owner")
+    if owner_state == "database_error":
+        users.find_unique.side_effect = RuntimeError("database unavailable")
+    if owner_state == "inactive":
+        handler.user_api_key_cache.set_cache(
+            "jwt-owner", LiteLLM_UserTable(user_id="jwt-owner", metadata={"scim_active": False})
+        )
     table: Final = database.db.litellm_mcpusercredentials
     table.find_unique = AsyncMock(return_value=None)
     table.upsert = AsyncMock()
@@ -11509,7 +11524,8 @@ async def test_oauth_exchange_stores_token_for_validated_jwt_user(
         )
     assert response.status_code == 200
     assert json.loads(response.body)["access_token"] == "upstream-token"
-    if not policy_allowed:
+    users.create.assert_not_awaited()
+    if not policy_allowed or owner_state in ("inactive", "database_error") or (owner_state == "missing" and not admin):
         table.upsert.assert_not_awaited()
         return
     table.upsert.assert_awaited_once()
