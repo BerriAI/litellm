@@ -3144,7 +3144,7 @@
         "max_tokens": 100000,
         "mode": "responses",
         "output_cost_per_token": 6e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -3536,7 +3536,7 @@
         "max_tokens": 1024,
         "mode": "chat",
         "output_cost_per_token": 1.2e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -3569,7 +3569,7 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -4182,7 +4182,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_batches": 5.5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -4203,7 +4203,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_batches": 5.5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -4221,7 +4221,7 @@
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 6.6e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -4309,7 +4309,7 @@
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_batches": 5.5e-06,
         "output_cost_per_token_priority": 2.2e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -4348,7 +4348,7 @@
         "output_cost_per_token": 2.2e-06,
         "output_cost_per_token_batches": 1.1e-06,
         "output_cost_per_token_priority": 3.96e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -4412,7 +4412,7 @@
         "input_cost_per_token_priority": 2.75e-06,
         "output_cost_per_token_batches": 5.5e-06,
         "output_cost_per_token_priority": 2.2e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.375e-07,
@@ -4449,7 +4449,7 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "default_reasoning_effort": "none",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
@@ -4461,7 +4461,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 1.1e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -4493,7 +4493,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 2.2e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -4527,7 +4527,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-07,
         "output_cost_per_token_batches": 2.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -4563,7 +4563,7 @@
         "mode": "chat",
         "output_cost_per_token": 6.6e-05,
         "output_cost_per_token_batches": 3.3e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -4581,7 +4581,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.84e-06,
         "output_cost_per_token_batches": 2.42e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -4596,7 +4596,7 @@
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 6.6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -4614,7 +4614,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.84e-06,
         "output_cost_per_token_batches": 2.42e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -4632,7 +4632,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_batches": 5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -4652,7 +4652,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_batches": 5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -4686,7 +4686,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_batches": 5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -4706,7 +4706,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_batches": 5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -4754,7 +4754,7 @@
         "input_cost_per_token_priority": 2.5e-06,
         "output_cost_per_token_batches": 5e-06,
         "output_cost_per_token_priority": 2e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/global/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -4791,7 +4791,7 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "default_reasoning_effort": "none",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/global/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
@@ -4803,7 +4803,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 1e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -4835,7 +4835,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 2e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -5080,7 +5080,7 @@
         "output_cost_per_token": 8e-06,
         "output_cost_per_token_batches": 4e-06,
         "output_cost_per_token_priority": 1.4e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -5118,7 +5118,7 @@
         "output_cost_per_token": 8e-06,
         "output_cost_per_token_batches": 4e-06,
         "output_cost_per_token_priority": 1.4e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -5156,7 +5156,7 @@
         "output_cost_per_token": 1.6e-06,
         "output_cost_per_token_batches": 8e-07,
         "output_cost_per_token_priority": 2.8e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -5194,7 +5194,7 @@
         "output_cost_per_token": 1.6e-06,
         "output_cost_per_token_batches": 8e-07,
         "output_cost_per_token_priority": 2.8e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -5229,7 +5229,7 @@
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "output_cost_per_token_batches": 2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -5263,7 +5263,7 @@
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "output_cost_per_token_batches": 2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -5331,7 +5331,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_batches": 7.5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -5350,7 +5350,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_batches": 5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -5370,7 +5370,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_batches": 5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -5566,7 +5566,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "output_cost_per_token_batches": 3e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -6019,7 +6019,7 @@
         "default_reasoning_effort": "none",
         "input_cost_per_token_batches": 6.25e-07,
         "output_cost_per_token_batches": 5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_minimal_reasoning_effort": true
     },
     "azure/gpt-5.1-chat-2025-11-13": {
@@ -6059,7 +6059,7 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "default_reasoning_effort": "none",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/gpt-5.1-codex-2025-11-13": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -6074,7 +6074,7 @@
         "mode": "responses",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_priority": 2e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -6109,7 +6109,7 @@
         "mode": "responses",
         "output_cost_per_token": 2e-06,
         "output_cost_per_token_priority": 3.6e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -6146,7 +6146,7 @@
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_batches": 5e-06,
         "output_cost_per_token_priority": 2e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -6185,7 +6185,7 @@
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_batches": 5e-06,
         "output_cost_per_token_priority": 2e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -6219,7 +6219,7 @@
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -6286,7 +6286,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 1e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -6323,7 +6323,7 @@
         "output_cost_per_token": 2e-06,
         "output_cost_per_token_batches": 1e-06,
         "output_cost_per_token_priority": 3.6e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -6362,7 +6362,7 @@
         "output_cost_per_token": 2e-06,
         "output_cost_per_token_batches": 1e-06,
         "output_cost_per_token_priority": 3.6e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -6398,7 +6398,7 @@
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "output_cost_per_token_batches": 2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -6434,7 +6434,7 @@
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "output_cost_per_token_batches": 2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -6469,7 +6469,7 @@
         "mode": "responses",
         "output_cost_per_token": 0.00012,
         "output_cost_per_token_batches": 6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -6530,7 +6530,7 @@
         "input_cost_per_token_priority": 2.5e-06,
         "output_cost_per_token_batches": 5e-06,
         "output_cost_per_token_priority": 2e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -6567,7 +6567,7 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "default_reasoning_effort": "none",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
@@ -6579,7 +6579,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 1e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -6611,7 +6611,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 1e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -6643,7 +6643,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 2e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -6680,7 +6680,7 @@
         "output_cost_per_token": 1.4e-05,
         "output_cost_per_token_batches": 7e-06,
         "output_cost_per_token_priority": 2.8e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -6720,7 +6720,7 @@
         "output_cost_per_token": 1.4e-05,
         "output_cost_per_token_batches": 7e-06,
         "output_cost_per_token_priority": 2.8e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -6758,7 +6758,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.4e-05,
         "output_cost_per_token_priority": 2.8e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -6794,7 +6794,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.4e-05,
         "output_cost_per_token_priority": 2.8e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -6827,7 +6827,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 1.4e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -6862,7 +6862,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.4e-05,
         "output_cost_per_token_priority": 2.8e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -6898,7 +6898,7 @@
         "mode": "responses",
         "output_cost_per_token": 1.4e-05,
         "output_cost_per_token_priority": 2.8e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -6935,7 +6935,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/batch",
             "/v1/responses"
@@ -6974,7 +6974,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/batch",
             "/v1/responses"
@@ -7048,7 +7048,7 @@
         "output_cost_per_token_above_272k_tokens_flex": 1.125e-05,
         "output_cost_per_token_batches": 7.5e-06,
         "output_cost_per_token_flex": 7.5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -7094,7 +7094,7 @@
         "input_cost_per_token_batches": 1.375e-06,
         "output_cost_per_token_above_272k_tokens": 2.475e-05,
         "output_cost_per_token_batches": 8.25e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -7140,7 +7140,7 @@
         "input_cost_per_token_batches": 1.375e-06,
         "output_cost_per_token_above_272k_tokens": 2.475e-05,
         "output_cost_per_token_batches": 8.25e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -7194,7 +7194,7 @@
         "output_cost_per_token_above_272k_tokens_flex": 1.125e-05,
         "output_cost_per_token_batches": 7.5e-06,
         "output_cost_per_token_flex": 7.5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -7240,7 +7240,7 @@
         "input_cost_per_token_batches": 1.375e-06,
         "output_cost_per_token_above_272k_tokens": 2.475e-05,
         "output_cost_per_token_batches": 8.25e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -7286,7 +7286,7 @@
         "input_cost_per_token_batches": 1.375e-06,
         "output_cost_per_token_above_272k_tokens": 2.475e-05,
         "output_cost_per_token_batches": 8.25e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_xhigh_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -7314,7 +7314,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/batch",
             "/v1/responses"
@@ -7362,7 +7362,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/batch",
             "/v1/responses"
@@ -7476,7 +7476,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -7540,7 +7540,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -7604,7 +7604,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -7651,7 +7651,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -7836,7 +7836,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -7892,7 +7892,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -7948,7 +7948,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -7995,7 +7995,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -8143,7 +8143,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -8199,7 +8199,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -8255,7 +8255,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -8312,7 +8312,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -8363,7 +8363,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -8414,7 +8414,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -8494,7 +8494,7 @@
         "input_cost_per_token_batches": 2.5e-06,
         "input_cost_per_token_flex": 2.5e-06,
         "output_cost_per_token_batches": 1.5e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.5-2026-04-23": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -8542,7 +8542,7 @@
         "deprecation_date": "2027-10-26",
         "input_cost_per_token_batches": 2.75e-06,
         "output_cost_per_token_batches": 1.65e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.5-2026-04-23": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -8590,7 +8590,7 @@
         "deprecation_date": "2027-10-26",
         "input_cost_per_token_batches": 2.75e-06,
         "output_cost_per_token_batches": 1.65e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/gpt-5.5-pro": {
         "cache_read_input_token_cost": 3e-06,
@@ -8724,7 +8724,7 @@
         "output_cost_per_token_batches": 2.25e-06,
         "output_cost_per_token_flex": 2.25e-06,
         "output_cost_per_token_priority": 9e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_xhigh_reasoning_effort": true
     },
     "azure/gpt-5.4-mini-2026-03-17": {
@@ -8775,7 +8775,7 @@
         "output_cost_per_token_batches": 2.25e-06,
         "output_cost_per_token_flex": 2.25e-06,
         "output_cost_per_token_priority": 9e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_xhigh_reasoning_effort": true
     },
     "azure/gpt-5.4-nano": {
@@ -8823,7 +8823,7 @@
         "input_cost_per_token_flex": 1e-07,
         "output_cost_per_token_batches": 6.25e-07,
         "output_cost_per_token_flex": 6.25e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_xhigh_reasoning_effort": true
     },
     "azure/gpt-5.4-nano-2026-03-17": {
@@ -8871,7 +8871,7 @@
         "input_cost_per_token_flex": 1e-07,
         "output_cost_per_token_batches": 6.25e-07,
         "output_cost_per_token_flex": 6.25e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_xhigh_reasoning_effort": true
     },
     "azure/gpt-image-1": {
@@ -9201,7 +9201,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-05,
         "output_cost_per_token_batches": 3e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -9220,7 +9220,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "output_cost_per_token_batches": 2.2e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -9238,7 +9238,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "output_cost_per_token_batches": 2.2e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -9254,7 +9254,7 @@
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -9270,7 +9270,7 @@
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -9320,7 +9320,7 @@
         "mode": "chat",
         "output_cost_per_token": 8e-06,
         "output_cost_per_token_batches": 4e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -9356,7 +9356,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -9408,7 +9408,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "output_cost_per_token_batches": 2.2e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -9425,7 +9425,7 @@
         "mode": "responses",
         "output_cost_per_token": 8e-05,
         "output_cost_per_token_batches": 4e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -9457,7 +9457,7 @@
         "mode": "responses",
         "output_cost_per_token": 8e-05,
         "output_cost_per_token_batches": 4e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -9520,7 +9520,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "output_cost_per_token_batches": 2.2e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_prompt_caching": true,
@@ -9561,7 +9561,7 @@
         "max_tokens": 8191,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/text-embedding-3-small": {
         "deprecation_date": "2028-02-09",
@@ -9571,7 +9571,7 @@
         "max_tokens": 8191,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/text-embedding-ada-002": {
         "deprecation_date": "2028-02-09",
@@ -9581,7 +9581,7 @@
         "max_tokens": 8191,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/speech/azure-tts": {
         "input_cost_per_character": 1.5e-05,
@@ -9633,7 +9633,7 @@
         "output_cost_per_token": 8.8e-06,
         "output_cost_per_token_batches": 4.4e-06,
         "output_cost_per_token_priority": 1.54e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -9671,7 +9671,7 @@
         "output_cost_per_token": 1.76e-06,
         "output_cost_per_token_batches": 8.8e-07,
         "output_cost_per_token_priority": 3.08e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -9706,7 +9706,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-07,
         "output_cost_per_token_batches": 2.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -9740,7 +9740,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_batches": 5.5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -9761,7 +9761,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_batches": 5.5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -9779,7 +9779,7 @@
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 6.6e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -9867,7 +9867,7 @@
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_batches": 5.5e-06,
         "output_cost_per_token_priority": 2.2e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -9906,7 +9906,7 @@
         "output_cost_per_token": 2.2e-06,
         "output_cost_per_token_batches": 1.1e-06,
         "output_cost_per_token_priority": 3.96e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -9942,7 +9942,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-07,
         "output_cost_per_token_batches": 2.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -10006,7 +10006,7 @@
         "input_cost_per_token_priority": 2.75e-06,
         "output_cost_per_token_batches": 5.5e-06,
         "output_cost_per_token_priority": 2.2e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.1-chat": {
         "cache_read_input_token_cost": 1.375e-07,
@@ -10043,7 +10043,7 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "default_reasoning_effort": "none",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.1-codex": {
         "deprecation_date": "2027-05-15",
@@ -10055,7 +10055,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 1.1e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -10087,7 +10087,7 @@
         "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 2.2e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -10121,7 +10121,7 @@
         "mode": "chat",
         "output_cost_per_token": 6.6e-05,
         "output_cost_per_token_batches": 3.3e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -10139,7 +10139,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.84e-06,
         "output_cost_per_token_batches": 2.42e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -10154,7 +10154,7 @@
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 6.6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -10172,7 +10172,7 @@
         "mode": "chat",
         "output_cost_per_token": 8.8e-06,
         "output_cost_per_token_batches": 4.4e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/batch",
@@ -10205,7 +10205,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.84e-06,
         "output_cost_per_token_batches": 2.42e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -10223,7 +10223,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.84e-06,
         "output_cost_per_token_batches": 2.42e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_prompt_caching": true,
@@ -10269,7 +10269,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 9e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -10318,7 +10318,7 @@
         "max_tokens": 163840,
         "mode": "chat",
         "output_cost_per_token": 1.85e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -10333,7 +10333,7 @@
         "max_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 3.828e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -10349,7 +10349,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3.52e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -10365,7 +10365,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 4.84e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -10380,7 +10380,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 4.84e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -10395,7 +10395,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 7.26e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -10410,7 +10410,7 @@
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 4.46e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_modalities": [
             "text"
         ],
@@ -10432,7 +10432,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 3.3e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_modalities": [
             "text",
             "image"
@@ -10455,7 +10455,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_modalities": [
             "text",
             "image"
@@ -10478,7 +10478,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_modalities": [
             "text",
             "image"
@@ -10506,7 +10506,7 @@
             "high",
             "max"
         ],
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_modalities": [
             "text",
             "image"
@@ -10530,7 +10530,7 @@
         "max_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -10545,7 +10545,7 @@
         "max_tokens": 512000,
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_modalities": [
             "text",
             "image"
@@ -10566,7 +10566,7 @@
         "max_input_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 2.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_modalities": [
             "text"
         ],
@@ -10588,7 +10588,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 2.64e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_modalities": [
             "text"
         ],
@@ -10607,7 +10607,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.05,
         "output_cost_per_image_token": 4.7e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/images/generations",
             "/v1/images/edits"
@@ -10621,7 +10621,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.0338,
         "output_cost_per_image_token": 3.3e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/images/generations",
             "/v1/images/edits"
@@ -10635,7 +10635,7 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.02,
         "output_cost_per_image_token": 1.95e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
@@ -10649,7 +10649,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 8e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -10700,7 +10700,7 @@
         "max_tokens": 2048,
         "mode": "chat",
         "output_cost_per_token": 7.1e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -10712,7 +10712,7 @@
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 1e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -10783,7 +10783,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6.8e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -10795,7 +10795,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6.8e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -10807,7 +10807,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 5.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -10819,7 +10819,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 5.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -10831,7 +10831,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -10843,7 +10843,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -10855,7 +10855,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 6.4e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -10867,7 +10867,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 5.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_tool_choice": true,
         "supports_vision": false
     },
@@ -10879,7 +10879,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 5.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -10891,7 +10891,7 @@
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": false
@@ -10904,7 +10904,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true
     },
     "azure_ai/Phi-4-multimodal-instruct": {
@@ -10916,7 +10916,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 3.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_audio_input": true,
         "supports_function_calling": true,
         "supports_vision": true
@@ -10929,7 +10929,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 3e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true
     },
     "azure_ai/Phi-4-reasoning": {
@@ -10940,7 +10940,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true
@@ -10992,7 +10992,7 @@
         "max_tokens": 8182,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -11031,7 +11031,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 5.4e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -11096,7 +11096,7 @@
         "max_tokens": 163840,
         "mode": "chat",
         "output_cost_per_token": 1.68e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -11111,7 +11111,7 @@
         "max_tokens": 163840,
         "mode": "chat",
         "output_cost_per_token": 1.68e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -11127,7 +11127,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 5.4e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -11139,7 +11139,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 4.56e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_tool_choice": true
     },
     "azure_ai/deepseek-v3-0324": {
@@ -11151,7 +11151,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 4.56e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -11164,7 +11164,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 4.94e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -11178,7 +11178,7 @@
         "max_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 3.48e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -11194,7 +11194,7 @@
         "max_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 5.1e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -11211,7 +11211,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -11225,7 +11225,7 @@
         "mode": "embedding",
         "output_cost_per_token": 0.0,
         "output_vector_size": 3072,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_endpoints": [
             "/v1/embeddings"
         ],
@@ -11244,7 +11244,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_response_schema": false,
         "supports_tool_choice": true,
@@ -11259,7 +11259,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.27e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": false,
@@ -11275,7 +11275,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_response_schema": false,
         "supports_tool_choice": true,
@@ -11290,7 +11290,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.27e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": false,
@@ -11305,7 +11305,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -11320,7 +11320,7 @@
         "max_tokens": 200000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -11338,7 +11338,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 6e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -11357,7 +11357,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -11375,7 +11375,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -11391,7 +11391,7 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -11406,7 +11406,7 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -11420,7 +11420,7 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -11434,7 +11434,7 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -11449,7 +11449,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -11484,7 +11484,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
@@ -11501,7 +11501,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 4e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_modalities": [
             "text",
             "image"
@@ -11571,7 +11571,7 @@
         "max_tokens": 8191,
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -62237,7 +62237,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 4e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'",
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supported_modalities": [
             "text",
             "image"
@@ -66577,14 +66577,14 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 6.6e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/computer-use-preview": {
         "input_cost_per_token": 3.3e-06,
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 1.32e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-4.1": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -66597,7 +66597,7 @@
         "output_cost_per_token": 8.8e-06,
         "output_cost_per_token_batches": 4.4e-06,
         "output_cost_per_token_priority": 1.54e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-4.1-mini": {
         "cache_read_input_token_cost": 1.1e-07,
@@ -66610,7 +66610,7 @@
         "output_cost_per_token": 1.76e-06,
         "output_cost_per_token_batches": 8.8e-07,
         "output_cost_per_token_priority": 3.08e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-4.1-nano": {
         "cache_read_input_token_cost": 2.8e-08,
@@ -66620,7 +66620,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-07,
         "output_cost_per_token_batches": 2.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-4o-2024-05-13": {
         "input_cost_per_token": 5.5e-06,
@@ -66629,7 +66629,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
         "output_cost_per_token_batches": 8.25e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5": {
         "cache_read_input_token_cost": 1.375e-07,
@@ -66642,7 +66642,7 @@
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_batches": 5.5e-06,
         "output_cost_per_token_priority": 2.2e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5-codex": {
         "cache_read_input_token_cost": 1.38e-07,
@@ -66650,7 +66650,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 1.1e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5-mini": {
         "cache_read_input_token_cost": 2.75e-08,
@@ -66663,7 +66663,7 @@
         "output_cost_per_token": 2.2e-06,
         "output_cost_per_token_batches": 1.1e-06,
         "output_cost_per_token_priority": 3.96e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5-nano": {
         "cache_read_input_token_cost": 5.5e-09,
@@ -66673,7 +66673,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-07,
         "output_cost_per_token_batches": 2.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5-pro": {
         "input_cost_per_token": 1.65e-05,
@@ -66682,7 +66682,7 @@
         "mode": "chat",
         "output_cost_per_token": 0.000132,
         "output_cost_per_token_batches": 6.6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.1-codex-max": {
         "cache_read_input_token_cost": 1.375e-07,
@@ -66690,7 +66690,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 1.1e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.2": {
         "cache_read_input_token_cost": 1.925e-07,
@@ -66703,7 +66703,7 @@
         "output_cost_per_token": 1.54e-05,
         "output_cost_per_token_batches": 7.7e-06,
         "output_cost_per_token_priority": 3.08e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.2-chat": {
         "cache_read_input_token_cost": 1.925e-07,
@@ -66711,7 +66711,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 1.54e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.2-codex": {
         "cache_read_input_token_cost": 1.925e-07,
@@ -66719,7 +66719,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 1.54e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.2-pro": {
         "input_cost_per_token": 2.31e-05,
@@ -66728,7 +66728,7 @@
         "mode": "chat",
         "output_cost_per_token": 0.0001848,
         "output_cost_per_token_batches": 9.24e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.3-chat": {
         "cache_read_input_token_cost": 1.925e-07,
@@ -66736,7 +66736,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 1.54e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.3-codex": {
         "cache_read_input_token_cost": 1.925e-07,
@@ -66747,7 +66747,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.54e-05,
         "output_cost_per_token_priority": 3.08e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.4-mini": {
         "cache_read_input_token_cost": 8.25e-08,
@@ -66760,7 +66760,7 @@
         "output_cost_per_token": 4.95e-06,
         "output_cost_per_token_batches": 2.475e-06,
         "output_cost_per_token_priority": 9.9e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.4-nano": {
         "cache_read_input_token_cost": 2.2e-08,
@@ -66770,7 +66770,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.375e-06,
         "output_cost_per_token_batches": 6.875e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.4-pro": {
         "input_cost_per_token": 3.3e-05,
@@ -66781,7 +66781,7 @@
         "output_cost_per_token": 0.000198,
         "output_cost_per_token_above_272k_tokens": 0.000297,
         "output_cost_per_token_batches": 9.9e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-6-astra": {
         "cache_creation_input_token_cost": 1.375e-05,
@@ -66794,7 +66794,7 @@
         "mode": "chat",
         "output_cost_per_token": 5.5e-05,
         "output_cost_per_token_above_272k_tokens": 8.25e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/o1-mini": {
         "cache_read_input_token_cost": 6.05e-07,
@@ -66804,7 +66804,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.84e-06,
         "output_cost_per_token_batches": 2.42e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/o1-preview": {
         "cache_read_input_token_cost": 8.25e-06,
@@ -66812,7 +66812,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 6.6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/o3-2025-04-16": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -66822,7 +66822,7 @@
         "mode": "chat",
         "output_cost_per_token": 8.8e-06,
         "output_cost_per_token_batches": 4.4e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/o3-deep-research": {
         "cache_read_input_token_cost": 2.75e-06,
@@ -66830,7 +66830,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 4.4e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/o4-mini-2025-04-16": {
         "cache_read_input_token_cost": 3.03e-07,
@@ -66840,25 +66840,25 @@
         "mode": "chat",
         "output_cost_per_token": 4.84e-06,
         "output_cost_per_token_batches": 2.42e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/text-embedding-3-large": {
         "input_cost_per_token": 1.43e-07,
         "litellm_provider": "azure",
         "mode": "embedding",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/text-embedding-3-small": {
         "input_cost_per_token": 2.2e-08,
         "litellm_provider": "azure",
         "mode": "embedding",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/text-embedding-ada-002": {
         "input_cost_per_token": 1.1e-07,
         "litellm_provider": "azure",
         "mode": "embedding",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "gemini/gemini-3.8-live": {
         "input_cost_per_audio_token": 3e-06,
@@ -66902,14 +66902,14 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 6.6e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/computer-use-preview": {
         "input_cost_per_token": 3.3e-06,
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 1.32e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-4.1": {
         "cache_read_input_token_cost": 5.5e-07,
@@ -66922,7 +66922,7 @@
         "output_cost_per_token": 8.8e-06,
         "output_cost_per_token_batches": 4.4e-06,
         "output_cost_per_token_priority": 1.54e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-4.1-mini": {
         "cache_read_input_token_cost": 1.1e-07,
@@ -66935,7 +66935,7 @@
         "output_cost_per_token": 1.76e-06,
         "output_cost_per_token_batches": 8.8e-07,
         "output_cost_per_token_priority": 3.08e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-4.1-nano": {
         "cache_read_input_token_cost": 2.8e-08,
@@ -66945,7 +66945,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-07,
         "output_cost_per_token_batches": 2.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-4o-2024-05-13": {
         "input_cost_per_token": 5.5e-06,
@@ -66954,7 +66954,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
         "output_cost_per_token_batches": 8.25e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5": {
         "cache_read_input_token_cost": 1.375e-07,
@@ -66967,7 +66967,7 @@
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_batches": 5.5e-06,
         "output_cost_per_token_priority": 2.2e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5-codex": {
         "cache_read_input_token_cost": 1.38e-07,
@@ -66975,7 +66975,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 1.1e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5-mini": {
         "cache_read_input_token_cost": 2.75e-08,
@@ -66988,7 +66988,7 @@
         "output_cost_per_token": 2.2e-06,
         "output_cost_per_token_batches": 1.1e-06,
         "output_cost_per_token_priority": 3.96e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5-nano": {
         "cache_read_input_token_cost": 5.5e-09,
@@ -66998,7 +66998,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-07,
         "output_cost_per_token_batches": 2.2e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5-pro": {
         "input_cost_per_token": 1.65e-05,
@@ -67007,7 +67007,7 @@
         "mode": "chat",
         "output_cost_per_token": 0.000132,
         "output_cost_per_token_batches": 6.6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.1-codex-max": {
         "cache_read_input_token_cost": 1.375e-07,
@@ -67015,7 +67015,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 1.1e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.2": {
         "cache_read_input_token_cost": 1.925e-07,
@@ -67028,7 +67028,7 @@
         "output_cost_per_token": 1.54e-05,
         "output_cost_per_token_batches": 7.7e-06,
         "output_cost_per_token_priority": 3.08e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.2-chat": {
         "cache_read_input_token_cost": 1.925e-07,
@@ -67036,7 +67036,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 1.54e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.2-codex": {
         "cache_read_input_token_cost": 1.925e-07,
@@ -67044,7 +67044,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 1.54e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.2-pro": {
         "input_cost_per_token": 2.31e-05,
@@ -67053,7 +67053,7 @@
         "mode": "chat",
         "output_cost_per_token": 0.0001848,
         "output_cost_per_token_batches": 9.24e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.3-chat": {
         "cache_read_input_token_cost": 1.925e-07,
@@ -67061,7 +67061,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 1.54e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.3-codex": {
         "cache_read_input_token_cost": 1.925e-07,
@@ -67072,7 +67072,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.54e-05,
         "output_cost_per_token_priority": 3.08e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.4-mini": {
         "cache_read_input_token_cost": 8.25e-08,
@@ -67085,7 +67085,7 @@
         "output_cost_per_token": 4.95e-06,
         "output_cost_per_token_batches": 2.475e-06,
         "output_cost_per_token_priority": 9.9e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.4-nano": {
         "cache_read_input_token_cost": 2.2e-08,
@@ -67095,7 +67095,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.375e-06,
         "output_cost_per_token_batches": 6.875e-07,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.4-pro": {
         "input_cost_per_token": 3.3e-05,
@@ -67106,7 +67106,7 @@
         "output_cost_per_token": 0.000198,
         "output_cost_per_token_above_272k_tokens": 0.000297,
         "output_cost_per_token_batches": 9.9e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/o1-mini": {
         "cache_read_input_token_cost": 6.05e-07,
@@ -67116,7 +67116,7 @@
         "mode": "chat",
         "output_cost_per_token": 4.84e-06,
         "output_cost_per_token_batches": 2.42e-06,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/o1-preview": {
         "cache_read_input_token_cost": 8.25e-06,
@@ -67124,7 +67124,7 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 6.6e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/o3-deep-research": {
         "cache_read_input_token_cost": 2.75e-06,
@@ -67132,25 +67132,25 @@
         "litellm_provider": "azure",
         "mode": "chat",
         "output_cost_per_token": 4.4e-05,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/text-embedding-3-large": {
         "input_cost_per_token": 1.43e-07,
         "litellm_provider": "azure",
         "mode": "embedding",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/text-embedding-3-small": {
         "input_cost_per_token": 2.2e-08,
         "litellm_provider": "azure",
         "mode": "embedding",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/text-embedding-ada-002": {
         "input_cost_per_token": 1.1e-07,
         "litellm_provider": "azure",
         "mode": "embedding",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus2'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "aihubmix/agnes-2.5-flash": {
         "input_cost_per_token": 3e-08,
