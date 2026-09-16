@@ -1,8 +1,9 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { keyDeleteCall, keyUpdateCall } from "../networking";
@@ -319,6 +320,95 @@ describe("KeyInfoView", () => {
       expect(params?.has("key_tab")).toBe(false);
       expect(params?.has("key_savings_view")).toBe(false);
       expect(params?.get("filter_team")).toBe("t-1");
+    });
+
+    it("clears the detail tab and savings view from the URL after deleting the key", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "proxy_admin" });
+      const onClose = vi.fn();
+      const onDelete = vi.fn();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(
+        <KeyInfoView keyData={MOCK_KEY_DATA} onClose={onClose} onDelete={onDelete} keyId="test-key-id" teams={[]} />,
+        { searchParams: "?key=test-key-id&key_tab=settings&key_savings_view=per-interval", onUrlUpdate },
+      );
+
+      await openMoreKeyActions();
+      await userEvent.click(await screen.findByRole("menuitem", { name: /delete key/i }));
+      await userEvent.type(await screen.findByPlaceholderText(MOCK_KEY_DATA.key_alias), MOCK_KEY_DATA.key_alias);
+      await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(onDelete).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.has("key_tab")).toBe(false));
+      expect(lastParams(onUrlUpdate)?.has("key_savings_view")).toBe(false);
+      expect(lastParams(onUrlUpdate)?.get("key")).toBe("test-key-id");
+    });
+
+    it("clears the detail tab from the URL when leaving the key-not-found view", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+      const onClose = vi.fn();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<KeyInfoView keyData={undefined} onClose={onClose} keyId="test-key-id" teams={[]} />, {
+        searchParams: "?key=test-key-id&key_tab=savings",
+        onUrlUpdate,
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /back to keys/i }));
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.has("key_tab")).toBe(false));
+      expect(lastParams(onUrlUpdate)?.get("key")).toBe("test-key-id");
+    });
+
+    const renderInHost = (searchParams: string, onUrlUpdate: OnUrlUpdateFunction, reactStrictMode = false) => {
+      const Host = () => {
+        const [open, setOpen] = useState(true);
+        return (
+          <>
+            <button type="button" onClick={() => setOpen(false)}>
+              Close host
+            </button>
+            {open && keyInfoView()}
+          </>
+        );
+      };
+      return render(
+        <NuqsTestingAdapter
+          searchParams={searchParams}
+          onUrlUpdate={onUrlUpdate}
+          hasMemory
+          resetUrlUpdateQueueOnMount={false}
+        >
+          <QueryClientProvider client={testQueryClient}>
+            <Host />
+          </QueryClientProvider>
+        </NuqsTestingAdapter>,
+        { reactStrictMode },
+      );
+    };
+
+    it("clears the detail tab and savings view when a host unmounts the view without calling onClose", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderInHost("?time_range=7d&key_tab=settings&key_savings_view=per-interval", onUrlUpdate);
+      expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+
+      await userEvent.click(screen.getByRole("button", { name: "Close host" }));
+
+      await waitFor(() => expect(lastParams(onUrlUpdate)?.has("key_tab")).toBe(false));
+      expect(lastParams(onUrlUpdate)?.has("key_savings_view")).toBe(false);
+      expect(lastParams(onUrlUpdate)?.get("time_range")).toBe("7d");
+    });
+
+    it("keeps a ?key_tab= deep link through the StrictMode mount, unmount, remount cycle", async () => {
+      vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderInHost("?key=test-key-id&key_tab=settings", onUrlUpdate, true);
+
+      await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+      expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
     });
   });
 

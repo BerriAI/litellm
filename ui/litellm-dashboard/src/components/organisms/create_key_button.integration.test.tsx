@@ -773,6 +773,26 @@ describe("CreateKey", () => {
       expect(onAutoOpened).toHaveBeenCalledTimes(1);
     });
 
+    it("still prefills models when the deep link props are cleared before the model list arrives", async () => {
+      const models = Promise.withResolvers<{ data: { id: string }[] }>();
+      vi.mocked(modelAvailableCall).mockReturnValue(models.promise);
+      const onAutoOpened = vi.fn();
+      const { rerender } = renderCreateKey({
+        autoOpenCreate: true,
+        prefillData: { models: ["gpt-4"] },
+        onAutoOpened,
+      });
+
+      await screen.findByLabelText(/Key Name/);
+      expect(onAutoOpened).toHaveBeenCalledTimes(1);
+      rerender(<CreateKey team={null} teams={[]} data={[]} addKey={vi.fn()} onAutoOpened={onAutoOpened} />);
+      expect(screen.queryByLabelText("gpt-4")).not.toBeInTheDocument();
+
+      await act(async () => models.resolve({ data: [{ id: "gpt-4" }] }));
+
+      expect(await screen.findByLabelText("gpt-4", {}, { timeout: 5000 })).toBeInTheDocument();
+    });
+
     it("does not report an auto-open for a role without write access", async () => {
       state.authorized = { ...state.authorized, userRole: "Admin Viewer" };
       const onAutoOpened = vi.fn();

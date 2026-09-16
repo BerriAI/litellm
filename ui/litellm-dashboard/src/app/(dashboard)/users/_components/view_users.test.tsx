@@ -390,6 +390,40 @@ describe("ViewUserDashboard", () => {
       });
     });
 
+    it("clears the selection when the search changes", async () => {
+      const user = userEvent.setup();
+      renderDashboard();
+      await screen.findByText("ada@example.com");
+
+      await user.click(screen.getByTestId("toggle-user-selection"));
+      await user.click(screen.getByTestId("datatable-select-row-user-1"));
+      expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (1 selected)");
+
+      fireEvent.change(screen.getByPlaceholderText("Search by email or ID…"), { target: { value: "ada" } });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (0 selected)");
+      });
+    });
+
+    it("clears the selection when a drawer filter is applied", async () => {
+      const user = userEvent.setup();
+      renderDashboard();
+      await screen.findByText("ada@example.com");
+
+      await user.click(screen.getByTestId("toggle-user-selection"));
+      await user.click(screen.getByTestId("datatable-select-row-user-1"));
+      expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (1 selected)");
+
+      await user.click(screen.getByTestId("datatable-filters-trigger"));
+      fireEvent.change(await screen.findByTestId("users-filter-user-id"), { target: { value: "u-7" } });
+      await user.click(screen.getByTestId("filter-drawer-apply"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (0 selected)");
+      });
+    });
+
     it("clears the selection when selection mode is cancelled", async () => {
       const user = userEvent.setup();
       renderDashboard();

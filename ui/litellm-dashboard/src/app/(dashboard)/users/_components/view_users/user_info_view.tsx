@@ -93,7 +93,6 @@ export default function UserInfoView({
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const { tab, setTab, isEditing, setIsEditing } = useUserDetailUrlState({
-    userRole,
     defaultTab: initialTab === 1 ? "details" : "overview",
     defaultEditing: startInEditMode,
   });

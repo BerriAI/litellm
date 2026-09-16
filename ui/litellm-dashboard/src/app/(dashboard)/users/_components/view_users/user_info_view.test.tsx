@@ -361,13 +361,13 @@ describe("UserInfoView", () => {
       expect(screen.queryByRole("button", { name: "Edit Settings" })).not.toBeInTheDocument();
     });
 
-    it("keeps a role without write access out of the editor even when the URL asks for it", async () => {
-      render(<UserInfoView {...defaultProps} userRole="Admin Viewer" />, {
+    it("opens the editor from ?edit=true for an Org Admin, like the row Edit user action did before", async () => {
+      render(<UserInfoView {...defaultProps} userRole="Org Admin" />, {
         searchParams: "?user=user-123&user_tab=details&edit=true",
       });
 
-      expect(await screen.findByText("User Settings")).toBeVisible();
-      expect(screen.queryByText("Save Changes")).not.toBeInTheDocument();
+      expect(await screen.findByText("Save Changes")).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Edit Settings" })).not.toBeInTheDocument();
     });
 
     it("records edit mode in the URL and clears it on cancel", async () => {
