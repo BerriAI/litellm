@@ -6,8 +6,8 @@ import uuid
 import pytest
 import yaml
 
-from integration._support.client import Gateway, eventually, object_value, string_value
-from integration._support.database import read_rows
+from tests.integration._support.client import Gateway, eventually, object_value, string_value
+from tests.integration._support.database import read_rows
 
 
 @pytest.mark.covers("quota_management.spend_tracking.custom_price.matches_input_rates")
