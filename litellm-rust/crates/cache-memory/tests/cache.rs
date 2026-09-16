@@ -46,6 +46,24 @@ fn default_explicit_and_override_ttls_follow_python_rules(clock: Arc<AtomicU64>)
 }
 
 #[rstest]
+fn write_at_expiry_boundary_refreshes_ttl(clock: Arc<AtomicU64>) {
+    let cache = cache(clock.clone(), 4);
+    cache
+        .set_cache("key", "first".into(), Some(Duration::from_secs(10)))
+        .unwrap();
+    clock.store(110, Ordering::SeqCst);
+    cache
+        .set_cache("key", "second".into(), Some(Duration::from_secs(10)))
+        .unwrap();
+    assert_eq!(
+        cache.expires_at("key").unwrap(),
+        Some(Duration::from_secs(120))
+    );
+    clock.store(115, Ordering::SeqCst);
+    assert_eq!(cache.get_cache("key").unwrap(), Some("second".into()));
+}
+
+#[rstest]
 fn capacity_evicts_earliest_and_ignores_stale_heap_entries(clock: Arc<AtomicU64>) {
     let cache = cache(clock, 2);
     cache
