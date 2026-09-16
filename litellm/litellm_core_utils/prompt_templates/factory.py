@@ -1500,19 +1500,33 @@ def convert_to_gemini_tool_call_result(
     return _part
 
 
-def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
-    """
-    Sanitize tool_use_id to match Anthropic's required pattern: ^[a-zA-Z0-9_-]+$
+_TOOL_USE_ID_FALLBACK: Final = "tool_use_id"
+_ANTHROPIC_TOOL_USE_ID_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
+_BEDROCK_TOOL_USE_ID_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_.:-]")
+_BEDROCK_TOOL_USE_ID_MAX_LEN: Final = 64
+_BEDROCK_TOOL_USE_ID_HASH_LEN: Final = 8
 
-    Anthropic requires tool_use_id to only contain alphanumeric characters, underscores, and hyphens.
-    This function replaces any invalid characters with underscores.
+
+def _replace_invalid_tool_use_id_chars(tool_use_id: str, invalid_chars: re.Pattern[str]) -> str:
+    return invalid_chars.sub("_", tool_use_id) or _TOOL_USE_ID_FALLBACK
+
+
+def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
+    """Anthropic requires tool_use_id to match ^[a-zA-Z0-9_-]+$."""
+    return _replace_invalid_tool_use_id_chars(tool_use_id, _ANTHROPIC_TOOL_USE_ID_INVALID_CHARS)
+
+
+def _sanitize_bedrock_tool_use_id(tool_use_id: str) -> str:
     """
-    # Replace any character that's not alphanumeric, underscore, or hyphen with underscore
-    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", tool_use_id)
-    # Ensure it's not empty (fallback to a default if needed)
-    if not sanitized:
-        sanitized = "tool_use_id"
-    return sanitized
+    Bedrock Converse requires toolUseId to match [a-zA-Z0-9_.:-]+ and be at most 64 chars.
+    Ids that need rewriting get a short hash of the original appended so two ids that only
+    differ in a replaced char or past the cut still map to distinct values.
+    """
+    sanitized: Final = _replace_invalid_tool_use_id_chars(tool_use_id, _BEDROCK_TOOL_USE_ID_INVALID_CHARS)
+    if sanitized == tool_use_id and len(sanitized) <= _BEDROCK_TOOL_USE_ID_MAX_LEN:
+        return sanitized
+    digest: Final = hashlib.sha256(tool_use_id.encode()).hexdigest()[:_BEDROCK_TOOL_USE_ID_HASH_LEN]
+    return f"{sanitized[: _BEDROCK_TOOL_USE_ID_MAX_LEN - _BEDROCK_TOOL_USE_ID_HASH_LEN - 1]}_{digest}"
 
 
 _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES: Final = {"application/pdf", "text/plain"}
@@ -3661,7 +3675,9 @@ def _convert_to_bedrock_tool_call_invoke(
                         if parsed_objects:
                             # First object keeps the original tool id.
                             for obj_idx, obj in enumerate(parsed_objects):
-                                block_id = tool_id if obj_idx == 0 else f"{tool_id}_{obj_idx}"
+                                block_id = _sanitize_bedrock_tool_use_id(
+                                    tool_id if obj_idx == 0 else f"{tool_id}_{obj_idx}"
+                                )
                                 bedrock_tool = BedrockToolUseBlock(input=obj, name=name, toolUseId=block_id)
                                 _parts_list.append(BedrockContentBlock(toolUse=bedrock_tool))
                             # cache_control applies to the whole original
@@ -3678,7 +3694,9 @@ def _convert_to_bedrock_tool_call_invoke(
                         # Fallback: no objects extracted — use empty dict.
                         arguments_dict = {}
 
-                bedrock_tool = BedrockToolUseBlock(input=arguments_dict, name=name, toolUseId=tool_id)
+                bedrock_tool = BedrockToolUseBlock(
+                    input=arguments_dict, name=name, toolUseId=_sanitize_bedrock_tool_use_id(tool_id)
+                )
                 bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
                 _parts_list.append(bedrock_content_block)
 
@@ -3849,7 +3867,7 @@ def _convert_to_bedrock_tool_call_result(
     tool_result_content_blocks, used_search_results = _build_bedrock_tool_result_content_blocks(message)
 
     message.get("name", "")
-    id: Final = str(message.get("tool_call_id", str(uuid.uuid4())))
+    id: Final = _sanitize_bedrock_tool_use_id(str(message.get("tool_call_id", str(uuid.uuid4()))))
 
     tool_result: Final = BedrockToolResultBlock(content=tool_result_content_blocks, toolUseId=id)
     if used_search_results:
