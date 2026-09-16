@@ -3834,6 +3834,7 @@ all_litellm_params = (
         "rust",
         "prompt_label",
         "shared_session",
+        "ssl_verify",
         "search_tool_name",
         "order",
         "enable_tag_filtering",
