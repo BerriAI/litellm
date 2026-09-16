@@ -4049,6 +4049,61 @@ def test_get_logging_payload_router_rejected_request_without_router_leaves_provi
     assert _router_rejected_failure_payload("openai-group", None)["custom_llm_provider"] == ""
 
 
+@pytest.mark.parametrize(
+    "litellm_params,expected_provider",
+    [
+        ({"model": "github_copilot/gpt-4o"}, "github_copilot"),
+        ({"model": "gpt-5", "custom_llm_provider": "chatgpt"}, "chatgpt"),
+    ],
+)
+def test_get_logging_payload_inferred_provider_never_resolves_declared_authenticating_providers(
+    monkeypatch, litellm_params: dict[str, str], expected_provider: str
+):
+    resolution_attempts: list[str] = []
+
+    def _router_init_stub(model, custom_llm_provider=None, *args, **kwargs):
+        return model.split("/", 1)[-1], custom_llm_provider or model.split("/", 1)[0], None, None
+
+    def _oauth_tripwire(model, *args, **kwargs):
+        resolution_attempts.append(model)
+        raise AssertionError("get_llm_provider would run the OAuth device flow")
+
+    monkeypatch.setattr(litellm, "get_llm_provider", _router_init_stub)
+    llm_router = litellm.Router(model_list=[{"model_name": "oauth-group", "litellm_params": litellm_params}])
+    monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire)
+
+    payload = _router_rejected_failure_payload("oauth-group", llm_router)
+
+    assert payload["custom_llm_provider"] == expected_provider
+    assert resolution_attempts == []
+
+
+def test_get_logging_payload_inferred_provider_does_not_rewrite_spend_log_model():
+    llm_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-group",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+                    "aws_region_name": "us-east-1",
+                },
+            },
+            {
+                "model_name": "bedrock-group",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+                    "aws_region_name": "us-west-2",
+                },
+            },
+        ]
+    )
+
+    payload = _router_rejected_failure_payload("bedrock-group", llm_router)
+
+    assert payload["custom_llm_provider"] == "bedrock"
+    assert payload["model"] == "bedrock-group"
+
+
 def test_get_logging_payload_logged_provider_wins_over_model_group_provider():
     payload = get_logging_payload(
         kwargs={
