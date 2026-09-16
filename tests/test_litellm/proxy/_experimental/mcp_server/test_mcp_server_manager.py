@@ -5,11 +5,13 @@ import logging
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from respx import MockRouter
 
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
@@ -5127,7 +5129,8 @@ class TestMCPServerManager:
         captured: dict = {}
 
         def fake_create_tool_function(
-            path, method, operation, base_url, headers=None, server_label=None, relays_upstream_auth=False
+            path, method, operation, base_url, headers=None, server_label=None, relays_upstream_auth=False,
+            auth_type=None, upstream_token_header=None,
         ):
             captured["headers"] = headers
             captured["server_label"] = server_label
@@ -5212,7 +5215,8 @@ class TestMCPServerManager:
         captured: dict = {}
 
         def fake_create_tool_function(
-            path, method, operation, base_url, headers=None, server_label=None, relays_upstream_auth=False
+            path, method, operation, base_url, headers=None, server_label=None, relays_upstream_auth=False,
+            auth_type=None, upstream_token_header=None,
         ):
             captured["headers"] = headers
 
@@ -13472,6 +13476,41 @@ async def test_discovery_cache_returns_oversized_results_without_retaining_them(
 
 class TestProtectedCredentialPreparation:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type,credential", [
+        (MCPAuth.bearer_token, None),
+        (MCPAuth.bearer_token, "Bearer"),
+        (MCPAuth.api_key, None),
+        (MCPAuth.basic, "Basic"),
+    ])
+    @pytest.mark.parametrize("dispatch", ["managed", "local"])
+    async def test_openapi_dispatch_rejects_unusable_effective_credentials(
+        self, tmp_path: Path, respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
+        auth_type: MCPAuthType, credential: str | None, dispatch: str,
+    ) -> None:
+        from litellm.proxy._experimental.mcp_server.server import _handle_local_mcp_tool
+        from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_name, get_server_prefix
+
+        spec_path: Final = tmp_path / "openapi.json"
+        spec_path.write_text(json.dumps({"openapi": "3.0.0", "info": {"title": "Auth", "version": "1"},
+                                        "paths": {"/echo": {"get": {"operationId": "echo"}}}}))
+        server: Final = MCPServer(
+            server_id="dispatch-auth", name="dispatch-auth", url="https://upstream.example",
+            transport=MCPTransport.http, auth_type=auth_type, authentication_token=credential,
+        )
+        manager: Final = MCPServerManager()
+        await manager._register_openapi_tools(str(spec_path), server, server.url)
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="unexpected success")
+        result: Final = (
+            await manager._call_openapi_tool_handler(server, "echo", {})
+            if dispatch == "managed"
+            else await _handle_local_mcp_tool(add_server_prefix_to_name("echo", get_server_prefix(server)), {})
+        )
+        assert result.isError is True
+        assert "requires a usable upstream credential" in result.content[0].text
+        assert destination.call_count == 0
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("transport", [MCPTransport.http, MCPTransport.sse])
     @pytest.mark.parametrize("client_secret", [None, ""])
     @pytest.mark.parametrize("subject", [None, "caller-subject"])
@@ -13523,7 +13562,7 @@ class TestProtectedCredentialPreparation:
         assert client._get_auth_headers() == headers
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("auth_type", [MCPAuth.oauth2_token_exchange, MCPAuth.api_key, MCPAuth.bearer_token])
+    @pytest.mark.parametrize("auth_type", [MCPAuth.oauth2_token_exchange])
     async def test_openapi_protected_auth_rejects_missing_credentials(self, auth_type: MCPAuthType) -> None:
         server = MCPServer(
             server_id="openapi-empty", name="openapi-empty", url="https://upstream.example/mcp",
@@ -13594,22 +13633,35 @@ class TestProtectedCredentialPreparation:
         ({"X-API-Key": "static"}, {"Authorization": ""}, None),
     ])
     async def test_openapi_static_credentials_remain_supported(
-        self, static: dict[str, str], forwarded: dict[str, str] | None, caller: str | None
+        self, respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
+        static: dict[str, str], forwarded: dict[str, str] | None, caller: str | None
     ) -> None:
-        server = MCPServer(server_id="openapi-static", name="openapi-static", url="https://upstream.example",
-                           transport=MCPTransport.http, auth_type=MCPAuth.api_key, static_headers=static)
-        resolved, retained = await MCPServerManager().resolve_openapi_upstream_auth(
-            mcp_server=server, oauth2_headers=None, raw_headers=None, mcp_auth_header=None,
-            user_api_key_auth=None, forwarded_headers=forwarded, caller_authorization=caller,
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _request_auth_header, _request_extra_headers, create_tool_function,
         )
-        assert resolved is None
-        assert retained == forwarded
+        tool: Final = create_tool_function(
+            "/echo", "get", {}, "https://upstream.example", headers=static, auth_type=MCPAuth.api_key,
+        )
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
+        caller_token: Final = _request_auth_header.set(caller)
+        extra_token: Final = _request_extra_headers.set(forwarded)
+        try:
+            assert await tool() == "authenticated"
+            sent: Final = destination.calls.last.request.headers
+            assert sent.get("x-api-key") == static.get("X-API-Key", (forwarded or {}).get("X-API-Key"))
+            if caller:
+                assert sent["authorization"] == caller
+            assert destination.call_count == 1
+        finally:
+            _request_auth_header.reset(caller_token)
+            _request_extra_headers.reset(extra_token)
 
     @pytest.mark.asyncio
     async def test_static_resolution_cancellation_closes_flow(self) -> None:
         from collections.abc import AsyncGenerator
         from litellm.experimental_mcp_client.client import MCPClient
-        from litellm.proxy._experimental.mcp_server.upstream import prepare_mcp_client
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import prepare_mcp_client
 
         class CancelledAuth(httpx.Auth):
             closed = False

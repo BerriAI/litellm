@@ -20,7 +20,6 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPOpenApiUpstreamError,
     MCPUpstreamAuthError,
 )
-from litellm.proxy._experimental.mcp_server.utils import merge_openapi_headers
 
 # Tool names emitted from OpenAPI specs must work across all major LLM providers.
 # OpenAI/Anthropic/Bedrock all enforce a character class roughly equivalent to
@@ -55,7 +54,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
-from litellm.types.mcp import credential_redirect_hook, custom_credential_slot
+from litellm.types.mcp import MCPAuthType, credential_redirect_hook, custom_credential_slot
 
 
 class _OpenAPIJSONSchema(TypedDict, total=False):
@@ -416,9 +415,26 @@ def _merge_openapi_tool_request_headers(
     Header names are compared case-insensitively so different casing cannot
     bypass the precedence rules.
     """
-    return merge_openapi_headers(
-        static_headers, _request_extra_headers.get(), _request_auth_header.get(), _request_resolved_auth_headers.get()
-    )
+    request_extra: Final = _request_extra_headers.get() or {}
+    static: Final = static_headers or {}
+
+    static_lower_names: Final = {k.lower() for k in static}
+    effective_headers: dict[str, str] = {k: v for k, v in request_extra.items() if k.lower() not in static_lower_names}
+    effective_headers.update(static)
+
+    override_auth: Final = _request_auth_header.get()
+    if override_auth:
+        for existing in [k for k in effective_headers if k.lower() == "authorization"]:
+            del effective_headers[existing]
+        effective_headers["Authorization"] = override_auth
+
+    resolved_auth_headers: Final = _request_resolved_auth_headers.get() or {}
+    for name, value in resolved_auth_headers.items():
+        for existing in [k for k in effective_headers if k.lower() == name.lower()]:
+            del effective_headers[existing]
+        effective_headers[name] = value
+
+    return effective_headers
 
 
 def _raise_for_upstream_failure(
@@ -455,6 +471,8 @@ def create_tool_function(
     headers: dict[str, str] | None = None,
     server_label: str | None = None,
     relays_upstream_auth: bool = False,
+    auth_type: MCPAuthType = None,
+    upstream_token_header: str | None = None,
 ):
     """Create a tool function for an OpenAPI operation.
 
@@ -487,6 +505,18 @@ def create_tool_function(
         by using **kwargs instead of named parameters.
         """
         effective_headers: Final = _merge_openapi_tool_request_headers(headers)
+        if auth_type is not None:
+            from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+                raise_public,
+                validate_static_credential,
+            )
+            from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok
+
+            match validate_static_credential(auth_type, effective_headers, upstream_token_header):
+                case Error(error):
+                    raise_public(error)
+                case Ok():
+                    pass
 
         # Build URL from base_url and path
         url = base_url + path

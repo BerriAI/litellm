@@ -3141,7 +3141,6 @@ if MCP_AVAILABLE:
                 mcp_auth_header=upstream_credential,
                 user_api_key_auth=user_api_key_auth,
                 forwarded_headers=openapi_forwarded_headers,
-                caller_authorization=auth_header_value,
             )
 
             _auth_token: Final = _request_auth_header.set(auth_header_value)

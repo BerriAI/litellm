@@ -756,22 +756,6 @@ def build_env_var_setup_url(server_id: str) -> str:
     return f"{base}{path}" if base else path
 
 
-def merge_openapi_headers(
-    static_headers: Mapping[str, str],
-    extra_headers: Mapping[str, str] | None,
-    caller_authorization: str | None,
-    resolved_headers: Mapping[str, str] | None,
-) -> dict[str, str]:
-    sources: Final = (
-        extra_headers or {},
-        static_headers,
-        {"Authorization": caller_authorization} if caller_authorization else {},
-        resolved_headers or {},
-    )
-    entries: Final = {name.lower(): (name, value) for source in sources for name, value in source.items()}
-    return dict(entries.values())
-
-
 def merge_mcp_headers(
     *,
     extra_headers: Mapping[str, str] | None = None,
