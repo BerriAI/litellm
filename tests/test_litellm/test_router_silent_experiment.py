@@ -1,11 +1,70 @@
 import asyncio
 import time
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.router import Router
+from litellm.router import _silent_experiment_targets
+
+
+class _RecordingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.success_kwargs: list[dict[str, object]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.success_kwargs.append(kwargs)
+
+    def shadow_successes(self) -> list[dict[str, object]]:
+        return [
+            call
+            for call in self.success_kwargs
+            if call.get("litellm_params", {}).get("metadata", {}).get("is_silent_experiment") is True
+        ]
+
+
+@pytest.fixture
+def recording_logger():
+    original_callbacks: Final = litellm.callbacks
+    logger: Final = _RecordingLogger()
+    litellm.callbacks = [logger]
+    try:
+        yield logger
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+async def _wait_for_shadow_successes(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
+    deadline: Final = time.monotonic() + timeout
+    while len(logger.shadow_successes()) < expected and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+
+
+def _wait_for_shadow_successes_sync(logger: _RecordingLogger, expected: int, timeout: float = 5.0) -> None:
+    deadline: Final = time.monotonic() + timeout
+    while len(logger.shadow_successes()) < expected and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
+def _streaming_model_list(silent_model: object) -> list[dict[str, object]]:
+    return [
+        {
+            "model_name": "primary-model",
+            "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake-key", "silent_model": silent_model},
+        },
+        {
+            "model_name": "shadow-a",
+            "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "fake-key", "silent_model": "shadow-b"},
+        },
+        {
+            "model_name": "shadow-b",
+            "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "fake-key"},
+        },
+    ]
 
 
 class _NonCopyableSpan:
@@ -65,8 +124,8 @@ def test_get_silent_experiment_kwargs():
     assert result["metadata"]["is_silent_experiment"] is True
     assert result["metadata"]["foo"] == "bar"
     assert "litellm_call_id" not in result
-    # stream must be forced to False so callbacks fire in background
-    assert result["stream"] is False
+    # the shadow must stream exactly like the primary so TTFT / ITL metrics are comparable
+    assert result["stream"] is True
     # proxy_server_request must be preserved for spend log metadata
     assert "proxy_server_request" in result
     # CRITICAL: metadata must be a DIFFERENT dict object than the original,
@@ -84,6 +143,131 @@ def test_get_silent_experiment_kwargs():
     # Shallow copy must preserve user_api_key_auth so the silent experiment
     # can attribute billing / spend logs to the correct key/team.
     assert result["metadata"]["user_api_key_auth"] is mock_auth
+
+
+def test_get_silent_experiment_kwargs_without_stream_stays_non_streaming():
+    router = Router(model_list=[{"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "k"}}])
+    result = router._get_silent_experiment_kwargs(metadata={"foo": "bar"}, stream=False)
+    assert result["stream"] is False
+    assert "stream" not in router._get_silent_experiment_kwargs(metadata={"foo": "bar"})
+
+
+@pytest.mark.parametrize(
+    "silent_model, expected",
+    [
+        ("shadow-a", ("shadow-a",)),
+        (["shadow-a", "shadow-b"], ("shadow-a", "shadow-b")),
+        ([], ()),
+        (None, ()),
+        (42, ()),
+        (["shadow-a", 42], ()),
+    ],
+)
+def test_silent_experiment_targets(silent_model, expected):
+    assert _silent_experiment_targets(silent_model) == expected
+
+
+@pytest.mark.asyncio
+async def test_streaming_shadow_is_streamed_and_drained_async(recording_logger):
+    router = Router(model_list=_streaming_model_list("shadow-a"))
+    response = await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        stream_options={"include_usage": True},
+        mock_response="pong",
+        metadata={"foo": "bar"},
+    )
+    chunks = [chunk async for chunk in response]
+    assert chunks
+    await _wait_for_shadow_successes(recording_logger, expected=1)
+
+    shadow_successes = recording_logger.shadow_successes()
+    assert len(shadow_successes) == 1
+    shadow = shadow_successes[0]
+    assert shadow["stream"] is True
+    assert shadow["stream_options"] == {"include_usage": True}
+    assert shadow["litellm_params"]["metadata"]["model_group"] == "shadow-a"
+    assert shadow["async_complete_streaming_response"] is not None
+
+
+def test_streaming_shadow_is_streamed_and_drained_sync(recording_logger):
+    router = Router(model_list=_streaming_model_list("shadow-a"))
+    response = router.completion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        mock_response="pong",
+        metadata={"foo": "bar"},
+    )
+    chunks = list(response)
+    assert chunks
+    _wait_for_shadow_successes_sync(recording_logger, expected=1)
+
+    shadow_successes = recording_logger.shadow_successes()
+    assert len(shadow_successes) == 1
+    assert shadow_successes[0]["stream"] is True
+    assert shadow_successes[0]["litellm_params"]["metadata"]["model_group"] == "shadow-a"
+    assert shadow_successes[0]["async_complete_streaming_response"] is not None
+
+
+@pytest.mark.asyncio
+async def test_multiple_shadow_targets_fan_out_async(recording_logger):
+    router = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
+    metadata = {"foo": "bar"}
+    response = await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        mock_response="pong",
+        metadata=metadata,
+    )
+    assert [chunk async for chunk in response]
+    await _wait_for_shadow_successes(recording_logger, expected=2)
+
+    shadow_successes = recording_logger.shadow_successes()
+    model_groups = sorted(call["litellm_params"]["metadata"]["model_group"] for call in shadow_successes)
+    assert model_groups == ["shadow-a", "shadow-b"]
+    shadow_metadatas = [call["litellm_params"]["metadata"] for call in shadow_successes]
+    assert shadow_metadatas[0] is not shadow_metadatas[1]
+    assert all(call["stream"] is True for call in shadow_successes)
+    assert "is_silent_experiment" not in metadata
+    assert metadata.get("model_group") != "shadow-a"
+    primary_successes = [call for call in recording_logger.success_kwargs if call not in shadow_successes]
+    assert len(primary_successes) == 1
+    assert primary_successes[0]["litellm_params"]["metadata"]["model_group"] == "primary-model"
+
+
+def test_multiple_shadow_targets_fan_out_sync(recording_logger):
+    router = Router(model_list=_streaming_model_list(["shadow-a", "shadow-b"]))
+    response = router.completion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+        metadata={"foo": "bar"},
+    )
+    assert response.choices[0].message.content == "pong"
+    _wait_for_shadow_successes_sync(recording_logger, expected=2)
+
+    shadow_successes = recording_logger.shadow_successes()
+    model_groups = sorted(call["litellm_params"]["metadata"]["model_group"] for call in shadow_successes)
+    assert model_groups == ["shadow-a", "shadow-b"]
+    assert all(call["stream"] is False for call in shadow_successes)
+
+
+@pytest.mark.asyncio
+async def test_shadow_of_a_shadow_is_not_launched(recording_logger):
+    router = Router(model_list=_streaming_model_list(["shadow-a"]))
+    response = await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+    )
+    assert response.choices[0].message.content == "pong"
+    await _wait_for_shadow_successes(recording_logger, expected=2, timeout=1.0)
+
+    model_groups = [call["litellm_params"]["metadata"]["model_group"] for call in recording_logger.shadow_successes()]
+    assert model_groups == ["shadow-a"]
 
 
 def test_silent_experiment_completion_direct():
@@ -125,6 +309,25 @@ async def test_silent_experiment_acompletion_direct():
             silent_model="gpt-3.5-turbo",
             messages=messages,
         )
+
+
+@pytest.mark.asyncio
+async def test_run_silent_experiment_drains_stream_so_callbacks_fire(recording_logger):
+    router = Router(model_list=_streaming_model_list(None))
+    silent_kwargs: Final = {
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "mock_response": "pong",
+        "metadata": {"is_silent_experiment": True, "model_group": "shadow-b"},
+    }
+    await router._run_silent_experiment("shadow-b", [{"role": "user", "content": "hi"}], silent_kwargs)
+    await _wait_for_shadow_successes(recording_logger, expected=1)
+
+    shadow_successes = recording_logger.shadow_successes()
+    assert len(shadow_successes) == 1
+    assert shadow_successes[0]["stream"] is True
+    assert shadow_successes[0]["async_complete_streaming_response"] is not None
+    assert silent_kwargs["stream"] is True
 
 
 @pytest.mark.asyncio
