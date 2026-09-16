@@ -59,7 +59,7 @@ def _content_block_with_cache_point(block: ContentBlock, cache_point: CachePoint
     return {**block, "cachePoint": cache_point}
 
 
-def _inline_cache_points(
+def _inline_block_cache_points(
     blocks: Sequence[_CachePointCarrier],
     with_cache_point: Callable[[_CachePointCarrier, CachePointBlock], _CachePointCarrier],
 ) -> list[_CachePointCarrier]:
@@ -153,11 +153,11 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         """
         return {
             **request,
-            "system": _inline_cache_points(request.get("system", []), _system_block_with_cache_point),
+            "system": _inline_block_cache_points(request.get("system", []), _system_block_with_cache_point),
             "messages": [
                 MessageBlock(
                     role=message["role"],
-                    content=_inline_cache_points(message["content"], _content_block_with_cache_point),
+                    content=_inline_block_cache_points(message["content"], _content_block_with_cache_point),
                 )
                 for message in request.get("messages", [])
             ],
