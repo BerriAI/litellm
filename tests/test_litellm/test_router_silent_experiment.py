@@ -312,6 +312,25 @@ async def test_silent_experiment_acompletion_direct():
 
 
 @pytest.mark.asyncio
+async def test_run_silent_experiment_drains_stream_so_callbacks_fire(recording_logger):
+    router = Router(model_list=_streaming_model_list(None))
+    silent_kwargs: Final = {
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "mock_response": "pong",
+        "metadata": {"is_silent_experiment": True, "model_group": "shadow-b"},
+    }
+    await router._run_silent_experiment("shadow-b", [{"role": "user", "content": "hi"}], silent_kwargs)
+    await _wait_for_shadow_successes(recording_logger, expected=1)
+
+    shadow_successes = recording_logger.shadow_successes()
+    assert len(shadow_successes) == 1
+    assert shadow_successes[0]["stream"] is True
+    assert shadow_successes[0]["async_complete_streaming_response"] is not None
+    assert silent_kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
 async def test_router_silent_experiment_acompletion():
     """
     Test that silent_model triggers a background acompletion call
