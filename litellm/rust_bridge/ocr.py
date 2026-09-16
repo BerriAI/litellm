@@ -22,10 +22,6 @@ class OcrLoggingProtocol(Protocol):
         custom_llm_provider: str,
     ) -> object: ...
 
-    def pre_call(self, *, input: str, api_key: str | None, additional_args: dict[str, object]) -> object: ...
-
-    def post_call(self, *, original_response: object, additional_args: dict[str, object]) -> object: ...
-
 
 def _redact(params: Mapping[str, object], secret_fields: Sequence[str]) -> dict[str, object]:
     return {
@@ -59,32 +55,6 @@ def update_logging(
             },
         },
         custom_llm_provider=custom_llm_provider,
-    )
-
-
-def pre_call(
-    logger: OcrLoggingProtocol,
-    api_key: str | None,
-    body: dict[str, object],
-    headers: dict[str, str],
-    url: str,
-) -> None:
-    logger.pre_call(
-        input="OCR document processing",
-        api_key=api_key,
-        additional_args={"complete_input_dict": body, "headers": headers, "api_base": url},
-    )
-
-
-def post_call(
-    logger: OcrLoggingProtocol,
-    original_response: object,
-    body: dict[str, object],
-    headers: dict[str, str],
-) -> None:
-    logger.post_call(
-        original_response=original_response,
-        additional_args={"complete_input_dict": body, "headers": headers},
     )
 
 

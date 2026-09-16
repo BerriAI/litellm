@@ -8,7 +8,8 @@ import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr import legacy
 from litellm.rust_bridge import bindings, configuration
-from litellm.rust_bridge.ocr import NATIVE_AOCR, NATIVE_OCR, post_call, pre_call, update_logging
+from litellm.rust_bridge.leaves import record_post_call, record_pre_call
+from litellm.rust_bridge.ocr import NATIVE_AOCR, NATIVE_OCR, update_logging
 
 
 @pytest.fixture(autouse=True)
@@ -65,25 +66,26 @@ def test_logging_redacts_views_and_preserves_opaque_arguments_and_pricing() -> N
 
 
 def test_logging_callbacks_receive_captured_payload_roots_and_propagate_errors() -> None:
-    logger: Final = Mock()
+    logger: Final = Mock(log_raw_request_response=False, logger_fn=None, model_call_details={})
     body: Final[dict[str, object]] = {"document": "original"}
     headers: Final = {"authorization": "key"}
     response: Final = object()
-    pre_call(logger, "key", body, headers, "https://provider")
-    post_call(logger, response, body, headers)
-    logger.pre_call.assert_called_once_with(
+    record_pre_call(logger, api_key="key", body=body, headers=headers, url="https://provider")
+    record_post_call(logger, original_response=response, body=body, headers=headers)
+    logger._pre_call.assert_called_once_with(
         input="OCR document processing",
         api_key="key",
+        model=None,
         additional_args={"complete_input_dict": body, "headers": headers, "api_base": "https://provider"},
     )
-    for callback in (logger.pre_call, logger.post_call):
+    for callback in (logger._pre_call, logger.record_post_call):
         assert callback.call_args.kwargs["additional_args"]["complete_input_dict"] is body
         assert callback.call_args.kwargs["additional_args"]["headers"] is headers
-    assert logger.post_call.call_args.kwargs["original_response"] is response
+    assert logger.record_post_call.call_args.kwargs["original_response"] is response
     failure: Final = RuntimeError("callback failed")
-    failing_logger: Final = Mock(pre_call=Mock(side_effect=failure))
+    failing_logger: Final = Mock(_pre_call=Mock(side_effect=failure))
     with pytest.raises(RuntimeError) as caught:
-        pre_call(failing_logger, None, body, headers, "https://provider")
+        record_pre_call(failing_logger, api_key=None, body=body, headers=headers, url="https://provider")
     assert caught.value is failure
 
 

@@ -235,6 +235,7 @@ fn split_dynamic<'py>(
 pub(super) struct Setup {
     pub logger: PythonLogger,
     pub kwargs: Py<PyDict>,
+    pub supplied: bool,
 }
 
 pub(super) fn setup(
@@ -259,6 +260,7 @@ pub(super) fn setup(
             return Ok(Setup {
                 logger: supplied.extract()?,
                 kwargs: kwargs.unbind(),
+                supplied: true,
             });
         }
     }
@@ -330,5 +332,6 @@ pub(super) fn setup(
     Ok(Setup {
         logger: logger.extract()?,
         kwargs: kwargs.unbind(),
+        supplied: false,
     })
 }

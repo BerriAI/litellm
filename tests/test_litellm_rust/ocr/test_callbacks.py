@@ -10,6 +10,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
@@ -18,7 +19,6 @@ from tests.test_litellm_rust.support.requests import (
     request_body,
     request_headers,
 )
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -309,6 +309,7 @@ async def test_native_azure_ocr_resolves_token_before_pre_call_on_caller_context
     asynchronous: bool,
 ) -> None:
     from contextvars import ContextVar
+
     context: Final = ContextVar("azure-token-context", default="missing")
     context.set("caller")
     caller_thread: Final = threading.current_thread()
@@ -337,9 +338,7 @@ async def test_native_azure_ocr_resolves_token_before_pre_call_on_caller_context
         "callbacks": [Edit()],
     }
     response: Final = (
-        await call_native_aocr(ocr_server, **arguments)
-        if asynchronous
-        else call_native_ocr(ocr_server, **arguments)
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
     )
     assert response.pages[0].markdown == "native OCR response"
     assert observations == ["token", "pre_call"]
@@ -368,9 +367,7 @@ async def test_native_azure_ocr_token_provider_can_make_nested_native_ocr_call(
         "azure_ad_token_provider": provider,
     }
     response: Final = (
-        await call_native_aocr(ocr_server, **arguments)
-        if asynchronous
-        else call_native_ocr(ocr_server, **arguments)
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
     )
     assert response.pages[0].markdown == "native OCR response"
     assert calls == ["token"]
@@ -425,7 +422,9 @@ async def test_native_azure_ocr_releases_token_provider_after_terminal_outcome(
 ) -> None:
     import gc
     import weakref
+
     from tests.test_litellm_rust.support.callback_recorder import drain_logging
+
     class Provider:
         def __call__(self) -> str:
             if outcome == "failure":
@@ -471,3 +470,238 @@ async def test_native_azure_ocr_releases_token_provider_after_terminal_outcome(
     await asyncio.sleep(0)
     gc.collect()
     assert reference() is None
+
+
+FORBIDDEN_ORCHESTRATION: Final = (
+    "pre_call",
+    "post_call",
+    "success_handler",
+    "async_success_handler",
+    "failure_handler",
+    "async_failure_handler",
+    "_success_handler_body",
+    "_async_success_handler_body",
+    "_failure_handler_body",
+    "_async_failure_handler_body",
+    "dispatch_success_handlers",
+    "dispatch_failure_handlers",
+    "handle_sync_success_callbacks_for_async_calls",
+)
+
+
+@pytest.fixture
+def legacy_orchestration_disabled(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    from litellm import utils
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    reached: Final[list[str]] = []
+
+    def forbid(name: str):
+        def method(self, *args, **kwargs):
+            reached.append(name)
+            raise AssertionError(f"legacy orchestration reached: {name}")
+
+        return method
+
+    for name in FORBIDDEN_ORCHESTRATION:
+        monkeypatch.setattr(Logging, name, forbid(name))
+
+    def forbidden_setup(*args, **kwargs):
+        reached.append("function_setup")
+        raise AssertionError("legacy orchestration reached: function_setup")
+
+    monkeypatch.setattr(utils, "function_setup", forbidden_setup)
+    return reached
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_ocr_success_runs_integrations_without_legacy_orchestration(
+    ocr_server: RecordingServer, legacy_orchestration_disabled: list[str], asynchronous: bool
+) -> None:
+    recorder: Final = RecordingLogger()
+    arguments: Final = {"callbacks": [recorder]}
+    response: Final = (
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
+    )
+    assert response.pages[0].markdown == "native OCR response"
+    success_event: Final = "async_log_success_event" if asynchronous else "log_success_event"
+    events: Final = await recorder.wait_for_async(success_event)
+    assert legacy_orchestration_disabled == []
+    assert recorder.names.count("log_pre_api_call") == 1
+    assert events[0].kwargs["standard_logging_object"]["status"] == "success"
+    assert events[0].kwargs["response_cost"] is not None
+    assert events[0].kwargs["litellm_params"]["api_base"] == f"{ocr_server.base_url}/v1/ocr"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_ocr_failure_runs_integrations_without_legacy_orchestration(
+    ocr_server: RecordingServer, legacy_orchestration_disabled: list[str], asynchronous: bool
+) -> None:
+    ocr_server.enqueue(ResponseSpec(body={"message": "provider unavailable"}, status=500))
+    recorder: Final = RecordingLogger()
+    arguments: Final = {"callbacks": [recorder]}
+    with pytest.raises(litellm.InternalServerError) as caught:
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
+    assert legacy_orchestration_disabled == []
+    failures: Final = tuple(event for event in recorder.events if event.name.endswith("log_failure_event"))
+    assert [event.name for event in failures] == (
+        ["log_failure_event", "async_log_failure_event"] if asynchronous else ["log_failure_event"]
+    )
+    assert all(event.kwargs["exception"] is caught.value for event in failures)
+    assert all(event.kwargs["standard_logging_object"]["status"] == "failure" for event in failures)
+    assert "log_success_event" not in recorder.names
+
+
+def test_native_ocr_success_hooks_all_run_before_any_success_dispatch(ocr_server: RecordingServer) -> None:
+    order: Final = []
+    finished: Final = threading.Event()
+
+    class Hooked(CustomLogger):
+        def __init__(self, name: str) -> None:
+            super().__init__()
+            self.name = name
+
+        def logging_hook(self, kwargs, result, call_type):
+            order.append(("hook", self.name))
+            kwargs[f"seen-by-{self.name}"] = True
+            return kwargs, result
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            order.append(("log", self.name, kwargs.get("seen-by-a"), kwargs.get("seen-by-b")))
+            if self.name == "b":
+                finished.set()
+
+    call_native_ocr_with_callbacks(ocr_server, [Hooked("a"), Hooked("b")])
+
+    assert finished.wait(10)
+    assert order == [("hook", "a"), ("hook", "b"), ("log", "a", True, True), ("log", "b", True, True)]
+
+
+def test_native_ocr_hook_failure_is_contained_and_target_still_dispatches(ocr_server: RecordingServer) -> None:
+    order: Final = []
+    finished: Final = threading.Event()
+
+    class Broken(CustomLogger):
+        def logging_hook(self, kwargs, result, call_type):
+            raise RuntimeError("hook failed")
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            order.append("broken-log")
+
+    class Healthy(CustomLogger):
+        def logging_hook(self, kwargs, result, call_type):
+            order.append("healthy-hook")
+            return kwargs, result
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            order.append("healthy-log")
+            finished.set()
+
+    call_native_ocr_with_callbacks(ocr_server, [Broken(), Healthy()])
+
+    assert finished.wait(10)
+    assert order == ["healthy-hook", "broken-log", "healthy-log"]
+
+
+@pytest.mark.asyncio
+async def test_native_aocr_hook_replacement_of_result_reaches_success_dispatch(ocr_server: RecordingServer) -> None:
+    replacement: Final = object()
+    observed: Final = []
+
+    class Replace(CustomLogger):
+        async def async_logging_hook(self, kwargs, result, call_type):
+            return kwargs, replacement
+
+    class Observe(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            observed.append(response_obj)
+
+    recorder: Final = RecordingLogger()
+    await call_native_aocr_with_callbacks(ocr_server, [Replace(), Observe(), recorder])
+    await recorder.wait_for_async("async_log_success_event")
+
+    assert observed == [replacement]
+
+
+@pytest.mark.asyncio
+async def test_native_aocr_shared_logging_object_dispatches_success_once(ocr_server: RecordingServer) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    ocr_server.expected_requests = 2
+    recorder: Final = RecordingLogger()
+    litellm.callbacks.append(recorder)
+    logger: Final = Logging(
+        model="mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type="aocr",
+        start_time=__import__("datetime").datetime.now(),
+        litellm_call_id="shared",
+        function_id="shared",
+    )
+    logger.dynamic_async_success_callbacks = [recorder]
+
+    await call_native_aocr(ocr_server, litellm_logging_obj=logger)
+    await call_native_aocr(ocr_server, litellm_logging_obj=logger)
+    await recorder.wait_for_async("async_log_success_event")
+    from tests.test_litellm_rust.support.callback_recorder import drain_logging
+
+    await drain_logging()
+
+    assert logger.model_call_details["has_logged_async_success"] is True
+    assert recorder.names.count("async_log_success_event") == 1
+
+
+def test_native_ocr_logging_preparation_failure_does_not_fail_request(
+    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.litellm_core_utils import litellm_logging
+
+    def broken_payload(*args, **kwargs):
+        raise RuntimeError("payload unavailable")
+
+    monkeypatch.setattr(litellm_logging, "get_standard_logging_object_payload", broken_payload)
+    unraisable: Final = []
+    monkeypatch.setattr(__import__("sys"), "unraisablehook", lambda event: unraisable.append(event.exc_value))
+    recorder: Final = RecordingLogger()
+
+    response: Final = call_native_ocr_with_callbacks(ocr_server, [recorder])
+    events: Final = recorder.wait_for("log_success_event")
+
+    assert response.pages[0].markdown == "native OCR response"
+    assert len(events) == 1
+    assert events[0].thread is not threading.current_thread()
+    assert any(str(error) == "payload unavailable" for error in unraisable)
+
+
+def test_native_ocr_writes_success_marker_and_honours_existing_marker(
+    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.rust_bridge import setup as native_setup
+
+    ocr_server.expected_requests = 2
+    loggers: Final = []
+    original_build: Final = native_setup.build_logging
+
+    def build_logging(**kwargs):
+        logger = original_build(**kwargs)
+        if loggers:
+            logger.model_call_details["has_logged_sync_success"] = True
+        loggers.append(logger)
+        return logger
+
+    monkeypatch.setattr(native_setup, "build_logging", build_logging)
+    recorder: Final = RecordingLogger()
+
+    call_native_ocr_with_callbacks(ocr_server, [recorder])
+    recorder.wait_for("log_success_event")
+    assert loggers[0].model_call_details["has_logged_sync_success"] is True
+
+    call_native_ocr_with_callbacks(ocr_server, [recorder])
+    from litellm.litellm_core_utils.thread_pool_executor import executor
+
+    executor.submit(lambda: None).result(10)
+    assert recorder.names.count("log_success_event") == 1
+    assert recorder.names.count("logging_hook") == 1

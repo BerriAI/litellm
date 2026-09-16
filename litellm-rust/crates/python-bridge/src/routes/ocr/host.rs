@@ -128,7 +128,7 @@ impl PythonOcrHost {
             &retained.secret_fields,
         )?;
         let payload = PythonPayload::from_request(py, &request)?;
-        callbacks::pre_call(py, logger, &request, &payload)?;
+        callbacks::pre_call(py, &self.state, &request, &payload)?;
         let request = payload.write_back(py, request)?;
         self.retained_mut()?.payload = Some(payload);
         Ok(request)
@@ -144,12 +144,7 @@ impl PythonOcrHost {
             .payload
             .as_ref()
             .ok_or_else(missing_state)?;
-        callbacks::post_call(
-            py,
-            self.state.logger()?,
-            &request.original_response,
-            payload,
-        )?;
+        callbacks::post_call(py, &self.state, &request.original_response, payload)?;
         Ok(request)
     }
 

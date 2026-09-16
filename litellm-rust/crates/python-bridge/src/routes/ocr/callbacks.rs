@@ -6,8 +6,10 @@ use litellm_core::ocr::LiteLLMOcrResponse;
 use litellm_core::ocr::hooks::OcrDuringCallRequest;
 use litellm_python_interop::to_py_preserving_errors as to_py;
 
+use litellm_core::call_lifecycle::CallbackFamily;
+
 use super::host::PythonPayload;
-use crate::lifecycle::PythonLogger;
+use crate::lifecycle::{PythonCallState, PythonLogger};
 
 pub(super) fn update_logging(
     py: Python<'_>,
@@ -32,37 +34,63 @@ pub(super) fn update_logging(
 
 pub(super) fn pre_call(
     py: Python<'_>,
-    logger: &PythonLogger,
+    state: &PythonCallState,
     request: &OcrDuringCallRequest,
     payload: &PythonPayload,
 ) -> PyResult<()> {
-    py.import("litellm.rust_bridge.ocr")?
-        .getattr("pre_call")?
-        .call1((
-            logger.object(py),
-            request.api_key.as_deref(),
-            &payload.body,
-            &payload.headers,
-            &request.url,
-        ))?;
-    Ok(())
+    let logger = state.logger()?;
+    if state.supplied {
+        let additional_args = PyDict::new(py);
+        additional_args.set_item("complete_input_dict", &payload.body)?;
+        additional_args.set_item("headers", &payload.headers)?;
+        additional_args.set_item("api_base", &request.url)?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("input", "OCR document processing")?;
+        kwargs.set_item("api_key", request.api_key.as_deref())?;
+        kwargs.set_item("additional_args", additional_args)?;
+        logger
+            .object(py)
+            .call_method("pre_call", (), Some(&kwargs))?;
+        return Ok(());
+    }
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("api_key", request.api_key.as_deref())?;
+    kwargs.set_item("body", &payload.body)?;
+    kwargs.set_item("headers", &payload.headers)?;
+    kwargs.set_item("url", &request.url)?;
+    py.import("litellm.rust_bridge.leaves")?
+        .getattr("record_pre_call")?
+        .call((logger.object(py),), Some(&kwargs))?;
+    state.dispatch_request(py, CallbackFamily::RequestPreCall)
 }
 
 pub(super) fn post_call(
     py: Python<'_>,
-    logger: &PythonLogger,
+    state: &PythonCallState,
     original_response: &Value,
     payload: &PythonPayload,
 ) -> PyResult<()> {
-    py.import("litellm.rust_bridge.ocr")?
-        .getattr("post_call")?
-        .call1((
-            logger.object(py),
-            to_py(py, original_response)?,
-            &payload.body,
-            &payload.headers,
-        ))?;
-    Ok(())
+    let logger = state.logger()?;
+    if state.supplied {
+        let additional_args = PyDict::new(py);
+        additional_args.set_item("complete_input_dict", &payload.body)?;
+        additional_args.set_item("headers", &payload.headers)?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("original_response", to_py(py, original_response)?)?;
+        kwargs.set_item("additional_args", additional_args)?;
+        logger
+            .object(py)
+            .call_method("post_call", (), Some(&kwargs))?;
+        return Ok(());
+    }
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("original_response", to_py(py, original_response)?)?;
+    kwargs.set_item("body", &payload.body)?;
+    kwargs.set_item("headers", &payload.headers)?;
+    py.import("litellm.rust_bridge.leaves")?
+        .getattr("record_post_call")?
+        .call((logger.object(py),), Some(&kwargs))?;
+    state.dispatch_request(py, CallbackFamily::RequestPostCall)
 }
 
 pub(super) fn response(py: Python<'_>, response: &LiteLLMOcrResponse) -> PyResult<Py<PyAny>> {

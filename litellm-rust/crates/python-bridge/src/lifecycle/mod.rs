@@ -1,26 +1,30 @@
 use std::sync::Arc;
 use std::task::Poll;
 
-use futures_util::future::{AbortHandle, Abortable};
-#[cfg(test)]
-use litellm_core::call_lifecycle::host::HostCallFuture;
-use litellm_core::call_lifecycle::host::{
-    HostCall as NativeCall, HostCallStep as NativeCallStep, HostFailure, HostPhase, HostStep,
-};
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
+
+use futures_util::future::{AbortHandle, Abortable};
 use tokio::sync::Mutex;
 
-use crate::execution::{poll_async_value, run_async_value, run_sync_value};
+use litellm_core::call_lifecycle::host::{
+    HostCall as NativeCall, HostCallStep as NativeCallStep, HostFailure, HostPhase, HostStep,
+};
+use litellm_core::call_lifecycle::{
+    CallbackFamily, Delivery, ReleaseGate, SuccessFacts, plan_failure, plan_success,
+};
 
 mod arguments;
 mod bindings;
+mod compat;
+mod dispatch;
 mod handle;
 mod preparation;
 mod setup;
 
+use crate::execution::{poll_async_value, run_async_value, run_sync_value};
 pub(crate) use arguments::{BoundArguments, Signature};
 use bindings::DeploymentHooks;
 pub(crate) use bindings::PythonLogger;
@@ -300,6 +304,7 @@ pub(crate) struct PythonCallState {
     pub error: Option<Py<PyBaseException>>,
     pub asynchronous: bool,
     pub internal: bool,
+    pub supplied: bool,
     pub call_type: &'static str,
 }
 
@@ -389,6 +394,7 @@ impl PythonCallState {
             error: None,
             asynchronous,
             internal: false,
+            supplied: false,
             call_type,
         })
     }
@@ -412,6 +418,7 @@ impl PythonCallState {
         )?;
         self.logger = Some(result.logger);
         self.kwargs = result.kwargs;
+        self.supplied = result.supplied;
         Ok(())
     }
 
@@ -431,6 +438,16 @@ impl PythonCallState {
         )
     }
 
+    pub fn dispatch_request(&self, py: Python<'_>, family: CallbackFamily) -> PyResult<()> {
+        dispatch::dispatch_request(
+            py,
+            dispatch::RequestJob {
+                logger: self.logger()?,
+                family,
+            },
+        )
+    }
+
     pub fn dispatch_success(&self, py: Python<'_>) -> PyResult<()> {
         match self.try_dispatch_success(py) {
             Err(error) if error.is_instance_of::<PyException>(py) => {
@@ -441,40 +458,71 @@ impl PythonCallState {
         }
     }
 
+    fn job(&self, py: Python<'_>, family: CallbackFamily) -> PyResult<dispatch::Job> {
+        let logger = self.logger()?;
+        let (targets, ids) = dispatch::family_targets(py, logger, family)?;
+        Ok(dispatch::Job {
+            logger: logger.clone_ref(py),
+            targets,
+            ids,
+            family,
+            response: self.response.as_ref().map(|value| value.clone_ref(py)),
+            error: self.error.as_ref().map(|value| value.clone_ref(py)),
+            start: self.start.clone_ref(py),
+            end: self
+                .end
+                .as_ref()
+                .map(|value| value.clone_ref(py))
+                .unwrap_or_else(|| py.None()),
+            stream: false,
+        })
+    }
+
     fn try_dispatch_success(&self, py: Python<'_>) -> PyResult<()> {
         let logger = self.logger()?;
-        let pending = || PendingSuccess {
-            logger: logger.clone_ref(py),
-            response: self.response.as_ref().map(|value| value.clone_ref(py)),
-            start: self.start.clone_ref(py),
-            end: self.end.as_ref().map(|value| value.clone_ref(py)),
+        if self.supplied {
+            return compat::dispatch_success(py, self, logger);
+        }
+        let (sync_targets, sync_ids) =
+            dispatch::family_targets(py, logger, CallbackFamily::SyncSuccess)?;
+        let facts = SuccessFacts {
+            asynchronous: self.asynchronous,
+            internal: self.internal,
+            fallbacks: !self
+                .kwargs
+                .bind(py)
+                .get_item("fallbacks")?
+                .is_none_or(|value| value.is_none()),
+            deferred: logger.defers_async_logging(py),
+            sync_target_kinds: sync_targets.kinds(&sync_ids),
         };
-        if !self.asynchronous {
-            pending().sync(py)
-        } else {
-            if !self.internal
-                && self
-                    .kwargs
-                    .bind(py)
-                    .get_item("fallbacks")?
-                    .is_none_or(|value| value.is_none())
-            {
-                if logger.defers_async_logging(py) {
+        for selected in plan_success(&facts) {
+            let runner = dispatch::Runner::start(py, self.job(py, selected.family)?)?;
+            match (selected.delivery, selected.gate) {
+                (Delivery::Worker, _) => {
+                    let job = Py::new(py, dispatch::WorkerJob::new(runner))?;
+                    dispatch::leaves(py)?
+                        .getattr("submit_worker")?
+                        .call1((job,))?;
+                }
+                (Delivery::Background, ReleaseGate::Immediate) => {
+                    DeferredSuccess::release(py, runner)?;
+                }
+                (Delivery::Background, ReleaseGate::Deferred) => {
                     logger.defer_success(
                         py,
                         Py::new(
                             py,
-                            PendingLogging {
-                                pending: Some(pending()),
+                            DeferredSuccess {
+                                runner: Some(runner),
                             },
                         )?,
                     )?;
-                } else {
-                    pending().asynchronous(py)?;
                 }
+                (Delivery::Inline | Delivery::Await, _) => return Err(missing_state()),
             }
-            logger.sync_success_for_async_call(py, &self.response, &self.start, &self.end)
         }
+        Ok(())
     }
 
     pub fn dispatch_failure(
@@ -482,19 +530,39 @@ impl PythonCallState {
         py: Python<'_>,
         asynchronous: bool,
     ) -> PyResult<Option<Py<PyAny>>> {
-        if self.logger.is_none() || (self.asynchronous && self.internal) {
+        if self.logger.is_none() || self.error.is_none() {
             return Ok(None);
         }
-        let Some(error) = &self.error else {
+        let phase = if asynchronous {
+            HostPhase::AsyncFailure
+        } else {
+            HostPhase::Failure
+        };
+        let Some(family) = plan_failure(phase, self.asynchronous, self.internal) else {
             return Ok(None);
         };
-        self.logger()?
-            .failure(py, error, &self.start, &self.end, asynchronous)
+        if self.supplied {
+            return compat::dispatch_failure(py, self, family);
+        }
+        let mut runner = dispatch::Runner::start(py, self.job(py, family)?)?;
+        match family.delivery() {
+            Delivery::Inline => match runner.resume(py, None)? {
+                dispatch::Step::Done => Ok(None),
+                dispatch::Step::Await(_) => Err(missing_state()),
+            },
+            Delivery::Await => Ok(Some(dispatch::coroutine(py, runner)?)),
+            Delivery::Worker | Delivery::Background => Err(missing_state()),
+        }
     }
 
     pub fn cleanup(&mut self, py: Python<'_>) {
         if let Some(logger) = self.logger.take()
-            && let Err(error) = logger.restore_context(py)
+            && let Err(error) = dispatch::leaves(py).and_then(|leaves| {
+                leaves
+                    .getattr("restore_correlation_context")?
+                    .call1((logger.object(py),))
+                    .map(|_| ())
+            })
         {
             error.write_unraisable(py, None);
         }
@@ -530,58 +598,53 @@ impl PythonCallState {
     }
 }
 
-struct PendingSuccess {
-    logger: PythonLogger,
-    response: Option<Py<PyAny>>,
-    start: Py<PyAny>,
-    end: Option<Py<PyAny>>,
-}
-
-impl PendingSuccess {
-    fn sync(&self, py: Python<'_>) -> PyResult<()> {
-        self.logger
-            .submit_success(py, &self.response, &self.start, &self.end)
-    }
-
-    fn asynchronous(&self, py: Python<'_>) -> PyResult<()> {
-        self.logger
-            .enqueue_success(py, &self.response, &self.start, &self.end)
-    }
-}
-
 #[pyclass]
-struct PendingLogging {
-    pending: Option<PendingSuccess>,
+struct DeferredSuccess {
+    runner: Option<dispatch::Runner>,
+}
+
+impl DeferredSuccess {
+    fn release(py: Python<'_>, runner: dispatch::Runner) -> PyResult<()> {
+        let coroutine = dispatch::coroutine(py, runner)?;
+        let enqueue = dispatch::leaves(py)?
+            .getattr("enqueue_background")?
+            .call1((&coroutine,));
+        if enqueue.is_err()
+            && let Err(error) = coroutine.call_method0(py, "close")
+        {
+            error.write_unraisable(py, Some(coroutine.bind(py)));
+        }
+        enqueue.map(|_| ())
+    }
 }
 
 #[pymethods]
-impl PendingLogging {
+impl DeferredSuccess {
     fn __call__(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<()> {
-        let pending = slf.borrow_mut().pending.take();
-        if let Some(pending) = pending {
-            match pending.asynchronous(py) {
-                Err(error) if error.is_instance_of::<PyException>(py) => {
-                    error.write_unraisable(py, Some(pending.logger.object(py)));
-                }
-                result => return result,
+        let runner = slf.borrow_mut().runner.take();
+        let Some(runner) = runner else {
+            return Ok(());
+        };
+        let logger = runner.logger(py).clone().unbind();
+        match Self::release(py, runner) {
+            Err(error) if error.is_instance_of::<PyException>(py) => {
+                error.write_unraisable(py, Some(logger.bind(py)));
+                Ok(())
             }
+            result => result,
         }
-        Ok(())
     }
 
     fn __traverse__(&self, visit: pyo3::gc::PyVisit<'_>) -> Result<(), pyo3::gc::PyTraverseError> {
-        if let Some(pending) = &self.pending {
-            pending.logger.traverse(&visit)?;
-            visit.call(&pending.response)?;
-            visit.call(&pending.start)?;
-            visit.call(&pending.end)?;
+        match &self.runner {
+            Some(runner) => runner.traverse(&visit),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     fn close(slf: &Bound<'_, Self>) {
-        let pending = slf.borrow_mut().pending.take();
-        drop(pending);
+        let runner = slf.borrow_mut().runner.take();
+        drop(runner);
     }
 
     fn __clear__(slf: &Bound<'_, Self>) {
@@ -592,14 +655,39 @@ impl PendingLogging {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use pyo3::types::PyDict;
     use std::sync::Mutex;
 
+    use litellm_core::call_lifecycle::host::HostCallFuture;
+
     static PYTHON_GLOBALS: Mutex<()> = Mutex::new(());
 
-    fn install_logging_worker(py: Python<'_>, worker: &Bound<'_, PyAny>) -> PyResult<()> {
-        py.import("litellm.litellm_core_utils.logging_worker")?
-            .setattr("GLOBAL_LOGGING_WORKER", worker)
+    fn load_lifecycle_module(py: Python<'_>) -> Bound<'_, PyModule> {
+        py.run(
+            pyo3::ffi::c_str!(
+                r#"
+import sys
+import types
+for name in ("litellm", "litellm.rust_bridge"):
+    sys.modules.setdefault(name, types.ModuleType(name))
+"#
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+        let source = std::ffi::CString::new(include_str!(
+            "../../../../../litellm/rust_bridge/lifecycle.py"
+        ))
+        .unwrap();
+        PyModule::from_code(
+            py,
+            &source,
+            pyo3::ffi::c_str!("lifecycle.py"),
+            pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
+        )
+        .unwrap()
     }
 
     struct RetainingHost {
@@ -771,17 +859,7 @@ mod tests {
             .unwrap_or_else(|error| error.into_inner());
         Python::initialize();
         Python::attach(|py| {
-            let source = std::ffi::CString::new(include_str!(
-                "../../../../../litellm/rust_bridge/lifecycle.py"
-            ))
-            .unwrap();
-            PyModule::from_code(
-                py,
-                &source,
-                pyo3::ffi::c_str!("lifecycle.py"),
-                pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
-            )
-            .unwrap();
+            load_lifecycle_module(py);
             let route = SyntheticRoute(
                 PythonCallState::new(
                     py,
@@ -817,17 +895,7 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             py.import("asyncio").unwrap();
-            let source = std::ffi::CString::new(include_str!(
-                "../../../../../litellm/rust_bridge/lifecycle.py"
-            ))
-            .unwrap();
-            let module = PyModule::from_code(
-                py,
-                &source,
-                pyo3::ffi::c_str!("lifecycle.py"),
-                pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
-            )
-            .unwrap();
+            let module = load_lifecycle_module(py);
             let locals = PyDict::new(py);
             locals
                 .set_item("drive", module.getattr("drive").unwrap())
@@ -935,62 +1003,9 @@ assert reference() is None
             error: None,
             asynchronous,
             internal: false,
+            supplied: false,
             call_type: "test",
         }
-    }
-
-    #[test]
-    fn success_dispatch_reports_ordinary_failures_without_replacing_response() {
-        let _guard = PYTHON_GLOBALS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-import sys
-
-response = object()
-failure = ValueError('terminal diagnostic')
-diagnostics = []
-old_hook = sys.unraisablehook
-sys.unraisablehook = lambda event: diagnostics.append(event.exc_value)
-
-class Logger:
-    def handle_sync_success_callbacks_for_async_calls(self, *args):
-        raise failure
-
-logger = Logger()
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let response = locals.get_item("response").unwrap().unwrap().unbind();
-            let mut lifecycle_state = state(
-                py,
-                locals.get_item("logger").unwrap().unwrap().unbind(),
-                response.clone_ref(py),
-                true,
-            );
-            lifecycle_state.internal = true;
-            lifecycle_state.dispatch_success(py).unwrap();
-            assert!(lifecycle_state.response.as_ref().unwrap().is(&response));
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-assert diagnostics == [failure]
-sys.unraisablehook = old_hook
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-        });
     }
 
     #[test]
@@ -1005,201 +1020,6 @@ sys.unraisablehook = old_hook
             lifecycle_state.retain_error(py, failure);
             let retained = lifecycle_state.error.take().unwrap();
             assert!(retained.is(&failure_value));
-        });
-    }
-
-    #[test]
-    fn deferred_logging_uses_call_context_and_allows_reentry_once() {
-        let _guard = PYTHON_GLOBALS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-import sys
-import types
-from contextvars import ContextVar
-
-litellm = types.ModuleType('litellm')
-core_utils = types.ModuleType('litellm.litellm_core_utils')
-logging_worker = types.ModuleType('litellm.litellm_core_utils.logging_worker')
-litellm.litellm_core_utils = core_utils
-core_utils.logging_worker = logging_worker
-sys.modules['litellm'] = litellm
-sys.modules['litellm.litellm_core_utils'] = core_utils
-sys.modules['litellm.litellm_core_utils.logging_worker'] = logging_worker
-
-marker = ContextVar('marker', default='unset')
-observed = []
-
-class Coroutine:
-    def close(self):
-        observed.append('closed')
-
-class Worker:
-    def ensure_initialized_and_enqueue(self, coroutine):
-        observed.append(marker.get())
-        pending()
-        coroutine.close()
-
-class Logger:
-    def async_success_handler(self, *args):
-        observed.append('created')
-        return Coroutine()
-
-worker = Worker()
-logger = Logger()
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            install_logging_worker(py, &locals.get_item("worker").unwrap().unwrap()).unwrap();
-            let pending = Py::new(
-                py,
-                PendingLogging {
-                    pending: Some(PendingSuccess {
-                        logger: locals
-                            .get_item("logger")
-                            .unwrap()
-                            .unwrap()
-                            .extract()
-                            .unwrap(),
-                        response: Some(py.None()),
-                        start: py.None(),
-                        end: Some(py.None()),
-                    }),
-                },
-            )
-            .unwrap();
-            locals.set_item("pending", &pending).unwrap();
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-marker.set('call')
-pending()
-pending()
-assert observed == ['created', 'call', 'closed']
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-        });
-    }
-
-    #[test]
-    fn deferred_logging_close_is_reentry_safe_and_invalidates_aliases() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-observed = []
-
-class Retained:
-    def __del__(self):
-        observed.append('finalized')
-        alias()
-
-class Logger:
-    def async_success_handler(self, *args):
-        observed.append('enqueued')
-
-logger = Logger()
-retained = Retained()
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let pending = Py::new(
-                py,
-                PendingLogging {
-                    pending: Some(PendingSuccess {
-                        logger: locals
-                            .get_item("logger")
-                            .unwrap()
-                            .unwrap()
-                            .extract()
-                            .unwrap(),
-                        response: Some(locals.get_item("retained").unwrap().unwrap().unbind()),
-                        start: py.None(),
-                        end: None,
-                    }),
-                },
-            )
-            .unwrap();
-            locals.set_item("pending", &pending).unwrap();
-            locals.set_item("alias", &pending).unwrap();
-            locals.del_item("retained").unwrap();
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-pending.close()
-alias()
-assert observed == ['finalized']
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-        });
-    }
-
-    #[test]
-    fn deferred_logging_collects_cycles_through_typed_logger() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!("class Logger: pass\nlogger = Logger()"),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let pending = Py::new(
-                py,
-                PendingLogging {
-                    pending: Some(PendingSuccess {
-                        logger: locals
-                            .get_item("logger")
-                            .unwrap()
-                            .unwrap()
-                            .extract()
-                            .unwrap(),
-                        response: None,
-                        start: py.None(),
-                        end: None,
-                    }),
-                },
-            )
-            .unwrap();
-            locals.set_item("pending", pending).unwrap();
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-import gc
-import weakref
-logger.pending = pending
-reference = weakref.ref(logger)
-del logger, pending
-gc.collect()
-assert reference() is None
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
         });
     }
 
