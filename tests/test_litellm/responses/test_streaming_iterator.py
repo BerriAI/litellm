@@ -801,7 +801,7 @@ async def test_completed_event_survives_a_failing_usage_estimate():
     break a stream that previously completed: the estimate is best-effort and
     falls back to usage None."""
     malformed_input: Final = [{"type": "message", "role": "user", "content": 42}]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Invalid content type"):
         _estimate_usage_from_text("gpt-4o-mini", malformed_input, {"input": malformed_input}, "hello world")
 
     response = _responses_api_response_without_usage()
