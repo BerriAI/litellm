@@ -21,7 +21,6 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
     filter_internal_params,
-    map_finish_reason,
     safe_deep_copy,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -2480,7 +2479,7 @@ class AmazonConverseConfig(BaseConfig):
 
         ## HANDLE TOOL CALLS
         _message: Final = Message(**chat_completion_message)
-        initial_finish_reason = map_finish_reason(completion_response["stopReason"])
+        initial_finish_reason = completion_response["stopReason"]
 
         # When json_mode filtered out all synthetic tool calls the response
         # is plain content, not a pending tool invocation. Fix finish_reason
