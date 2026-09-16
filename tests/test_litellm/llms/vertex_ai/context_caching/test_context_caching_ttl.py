@@ -334,7 +334,7 @@ class TestTransformationWithTTL:
 
         assert "ttl" in result
         assert result["ttl"] == "7200s"
-        assert "system_instruction" in result
+        assert "systemInstruction" in result
 
         if custom_llm_provider == "gemini":
             assert result["model"] == "models/gemini-2.5-pro"

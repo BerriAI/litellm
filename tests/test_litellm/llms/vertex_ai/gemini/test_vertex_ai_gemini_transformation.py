@@ -123,7 +123,7 @@ def test_cached_content_respects_modify_params_for_cache_incompatible_fields():
             cached_content=cache_name,
         )
         assert result.get("cachedContent") == cache_name
-        assert "system_instruction" in result
+        assert "systemInstruction" in result
         assert "tools" in result
         assert "toolConfig" in result
         assert "contents" in result
@@ -139,7 +139,7 @@ def test_cached_content_respects_modify_params_for_cache_incompatible_fields():
             cached_content=cache_name,
         )
         assert result_modify_true.get("cachedContent") == cache_name
-        assert "system_instruction" not in result_modify_true
+        assert "systemInstruction" not in result_modify_true
         assert "tools" not in result_modify_true
         assert "toolConfig" not in result_modify_true
         assert "contents" in result_modify_true
@@ -153,11 +153,30 @@ def test_cached_content_respects_modify_params_for_cache_incompatible_fields():
             litellm_params={},
             cached_content=None,
         )
-        assert "system_instruction" in result_no_cache
+        assert "systemInstruction" in result_no_cache
         assert "tools" in result_no_cache
         assert "toolConfig" in result_no_cache
     finally:
         litellm.modify_params = original_modify_params
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_system_instruction_uses_canonical_rest_key(custom_llm_provider):
+    """Regression for #37028: strict generateContent endpoints reject the snake_case alias."""
+    result = _transform_request_body(
+        messages=[
+            {"role": "system", "content": "You are a concise assistant."},
+            {"role": "user", "content": "Reply with exactly: ok"},
+        ],
+        model="gemini-2.5-pro",
+        optional_params={},
+        custom_llm_provider=custom_llm_provider,
+        litellm_params={},
+        cached_content=None,
+    )
+
+    assert "system_instruction" not in result
+    assert result["systemInstruction"]["parts"][0]["text"] == "You are a concise assistant."
 
 
 # Tests for issue #14556: Labels field provider-aware filtering
