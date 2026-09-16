@@ -346,6 +346,9 @@ class TestLiteLLMCompletionResponsesConfig:
         assert reasoning_item.content[0].type == "output_text"
         assert "step by step" in reasoning_item.content[0].text
         assert "42" in reasoning_item.content[0].text
+        # Regression for #40519: summary must be an empty array, not null
+        assert hasattr(reasoning_item, "summary"), "reasoning item should have summary attribute"
+        assert reasoning_item.summary == [], f"summary should be empty list, got {reasoning_item.summary}"
 
         message_items = [
             item for item in responses_api_response.output if item.type == "message"
@@ -4592,6 +4595,22 @@ class TestBridgedOutputItemIdPrefixes:
 
         assert not suffix.lstrip("-").isdigit()
         assert not suffix.startswith("-")
+
+    def test_reasoning_item_summary_is_empty_list_not_null(self):
+        """Regression: reasoning output items must have summary as an empty array, not null.
+
+        OpenAI Responses API spec requires reasoning items to have a 'summary'
+        field as an array. A null summary causes strict SDK clients to crash.
+        See issue #40519.
+        """
+        items = self._reasoning_items()
+        assert len(items) == 1
+        # summary must be an empty list, never None/null
+        summary = getattr(items[0], "summary", "MISSING")
+        assert summary != "MISSING", "summary attribute should be present"
+        assert summary is not None, "summary should not be None"
+        assert isinstance(summary, list), f"summary should be a list, got {type(summary)}"
+        assert summary == [], f"summary should be an empty list, got {summary}"
 
 
 class TestStreamingSnapshotItemIds:
