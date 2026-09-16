@@ -9,6 +9,9 @@ from typing import Final
 from fastapi import status
 
 from litellm.constants import STRINGIFIED_NONE
+from litellm.proxy._types import ProxyException
+
+LITELLM_CALL_ID_HEADER: Final = "x-litellm-call-id"
 
 _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
     {
@@ -52,3 +55,16 @@ def openai_error_param(exc: object) -> str | None:
     serializes as JSON ``null``."""
     carried: Final = attribute_of(exc, "param")
     return carried if isinstance(carried, str) and carried != STRINGIFIED_NONE else None
+
+
+def litellm_call_id_headers(litellm_call_id: str | None) -> dict[str, str] | None:  # mutable-ok: ProxyException.headers
+    if litellm_call_id is None:
+        return None
+    return {LITELLM_CALL_ID_HEADER: litellm_call_id}  # mutable-ok: ProxyException mutates its headers dict
+
+
+def with_litellm_call_id(exc: ProxyException, litellm_call_id: str | None) -> ProxyException:
+    """The same error object, answering with ``x-litellm-call-id`` when it was raised without one."""
+    if litellm_call_id is not None:
+        exc.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
+    return exc

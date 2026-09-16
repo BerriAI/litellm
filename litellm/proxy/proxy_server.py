@@ -348,7 +348,10 @@ from litellm.proxy.common_request_processing import (
     _is_azure_model_router_request,
     _should_return_raw_model_name,
     create_response,
+    log_llm_api_exception,
     open_sse_before_first_byte,
+    request_litellm_call_id,
+    resolve_litellm_call_id,
     ttft_keepalive_interval,
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -386,6 +389,11 @@ from litellm.proxy.common_utils.model_listing_utils import (
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
+)
+from litellm.proxy.common_utils.openai_error_payload import (
+    LITELLM_CALL_ID_HEADER,
+    litellm_call_id_headers,
+    with_litellm_call_id,
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
     MODEL_COST_MAP_RELOAD_PARAM_NAME,
@@ -11291,12 +11299,14 @@ async def completion(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.completion(): Exception occured - %s", e)
+        litellm_call_id: Final = request_litellm_call_id(data)
+        log_llm_api_exception(e, litellm_call_id)
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
+            headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
         )
@@ -11454,6 +11464,7 @@ async def moderations(
     """
     global proxy_logging_obj
     data: dict = {}
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body: Final = await request.body()
@@ -11468,6 +11479,7 @@ async def moderations(
             version=version,
             proxy_config=proxy_config,
         )
+        data["litellm_call_id"] = litellm_call_id
 
         data["model"] = (
             general_settings.get("moderation_model", None)  # server default
@@ -11494,9 +11506,7 @@ async def moderations(
         response: Final = await llm_call
 
         ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(litellm_call_id=data.get("litellm_call_id", ""), status="success")
-        )
+        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
 
         ### RESPONSE HEADERS ###
         hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
@@ -11522,14 +11532,15 @@ async def moderations(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.moderations(): Exception occured - %s", e)
+        log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, ProxyException):
-            raise
+            raise with_litellm_call_id(e, litellm_call_id)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
+                headers=litellm_call_id_headers(litellm_call_id),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
@@ -11538,6 +11549,7 @@ async def moderations(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
+                headers=litellm_call_id_headers(litellm_call_id),
                 code=getattr(e, "status_code", 500),
             )
 
@@ -11576,6 +11588,7 @@ async def audio_speech(
     """
     global proxy_logging_obj
     data: dict = {}
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body: Final = await request.body()
@@ -11590,6 +11603,7 @@ async def audio_speech(
             version=version,
             proxy_config=proxy_config,
         )
+        data["litellm_call_id"] = litellm_call_id
 
         if data.get("user", None) is None and user_api_key_dict.user_id is not None:
             data["user"] = user_api_key_dict.user_id
@@ -11612,9 +11626,7 @@ async def audio_speech(
         response: Final = await llm_call
 
         ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(litellm_call_id=data.get("litellm_call_id", ""), status="success")
-        )
+        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
 
         ### RESPONSE HEADERS ###
         hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
@@ -11622,7 +11634,7 @@ async def audio_speech(
         cache_key: Final = hidden_params.get("cache_key", None) or ""
         api_base: Final = hidden_params.get("api_base", None) or ""
         response_cost: Final = hidden_params.get("response_cost", None) or ""
-        litellm_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
+        response_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
 
         custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
@@ -11633,7 +11645,7 @@ async def audio_speech(
             response_cost=response_cost,
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             fastest_response_batch_completion=None,
-            call_id=litellm_call_id,
+            call_id=response_call_id,
             request_data=data,
             hidden_params=hidden_params,
         )
@@ -11669,14 +11681,20 @@ async def audio_speech(
             original_exception=e,
             request_data=data,
         )
-        verbose_proxy_logger.error("litellm.proxy.proxy_server.audio_speech(): Exception occured - %s", e)
-        verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, (ProxyException, HTTPException)):
-            raise e
+        log_llm_api_exception(e, litellm_call_id)
+        if isinstance(e, ProxyException):
+            raise with_litellm_call_id(e, litellm_call_id)
+        if isinstance(e, HTTPException):
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=e.detail,
+                headers={LITELLM_CALL_ID_HEADER: litellm_call_id, **(e.headers or {})},
+            )
         raise ProxyException(
             message=getattr(e, "message", f"{e}"),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
+            headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
         )
@@ -11705,6 +11723,7 @@ async def audio_transcriptions(
     """
     global proxy_logging_obj
     data: dict = {}
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         form_data: Final = await get_form_data(request)
@@ -11719,6 +11738,7 @@ async def audio_transcriptions(
             version=version,
             proxy_config=proxy_config,
         )
+        data["litellm_call_id"] = litellm_call_id
 
         if data.get("user", None) is None and user_api_key_dict.user_id is not None:
             data["user"] = user_api_key_dict.user_id
@@ -11775,9 +11795,7 @@ async def audio_transcriptions(
             file_object.close()  # close the file read in by io library
 
         ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(litellm_call_id=data.get("litellm_call_id", ""), status="success")
-        )
+        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
 
         ### RESPONSE HEADERS ###
         hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
@@ -11785,7 +11803,7 @@ async def audio_transcriptions(
         cache_key: Final = hidden_params.get("cache_key", None) or ""
         api_base: Final = hidden_params.get("api_base", None) or ""
         response_cost: Final = hidden_params.get("response_cost", None) or ""
-        litellm_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
+        response_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
         additional_headers: Final[dict] = hidden_params.get("additional_headers", {}) or {}
 
         fastapi_response.headers.update(
@@ -11797,7 +11815,7 @@ async def audio_transcriptions(
                 version=version,
                 response_cost=response_cost,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                call_id=litellm_call_id,
+                call_id=response_call_id,
                 request_data=data,
                 hidden_params=hidden_params,
                 **additional_headers,
@@ -11819,12 +11837,13 @@ async def audio_transcriptions(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.audio_transcription(): Exception occured - %s", e)
+        log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
+                headers=litellm_call_id_headers(litellm_call_id),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
@@ -11833,6 +11852,7 @@ async def audio_transcriptions(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
+                headers=litellm_call_id_headers(litellm_call_id),
                 openai_code=getattr(e, "code", None),
                 code=getattr(e, "status_code", 500),
             )
