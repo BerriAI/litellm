@@ -362,9 +362,7 @@ def video_content(
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
-        custom_llm_provider = _provider_for_video_id(
-            video_id, custom_llm_provider, kwargs.get("model")
-        )
+        custom_llm_provider = _provider_for_video_id(video_id, custom_llm_provider, kwargs.get("model"))
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -456,9 +454,7 @@ async def avideo_content(
         loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
-        custom_llm_provider = _provider_for_video_id(
-            video_id, custom_llm_provider, kwargs.get("model")
-        )
+        custom_llm_provider = _provider_for_video_id(video_id, custom_llm_provider, kwargs.get("model"))
 
         func: Final = partial(
             video_content,
@@ -1062,9 +1058,7 @@ def video_status(
             response: Final = VideoObject(**mock_response)
             return response
 
-        custom_llm_provider = _provider_for_video_id(
-            video_id, custom_llm_provider, kwargs.get("model")
-        )
+        custom_llm_provider = _provider_for_video_id(video_id, custom_llm_provider, kwargs.get("model"))
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)

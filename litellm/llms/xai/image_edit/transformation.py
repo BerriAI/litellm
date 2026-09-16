@@ -86,12 +86,7 @@ class XAIImageEditConfig(BaseImageEditConfig):
         resolved_base: Final = (
             XAIOAuthAuthenticator().get_api_base()
             if should_use_xai_oauth(litellm_params) and not XAIModelInfo.get_api_key(api_key)
-            else (
-                api_base
-                or get_secret_str("XAI_API_BASE")
-                or get_secret_str("XAI_OAUTH_API_BASE")
-                or XAI_API_BASE
-            )
+            else (api_base or get_secret_str("XAI_API_BASE") or get_secret_str("XAI_OAUTH_API_BASE") or XAI_API_BASE)
         )
         base: Final = (resolved_base or XAI_API_BASE).rstrip("/")
         if base.endswith("/v1"):
@@ -129,8 +124,7 @@ class XAIImageEditConfig(BaseImageEditConfig):
                     model=model,
                     llm_provider="xai",
                     message=(
-                        "Missing xAI credentials for image edit. "
-                        "Pass api_key / XAI_API_KEY, or set use_xai_oauth=True."
+                        "Missing xAI credentials for image edit. Pass api_key / XAI_API_KEY, or set use_xai_oauth=True."
                     ),
                 )
             headers["Authorization"] = f"Bearer {dynamic_api_key}"
@@ -159,11 +153,7 @@ class XAIImageEditConfig(BaseImageEditConfig):
         request: Final[dict[str, Any]] = {
             "model": XAIModelInfo.get_base_model(model) or model,
             **({"prompt": prompt} if prompt is not None else {}),
-            **(
-                {"image": image_payloads[0]}
-                if len(image_payloads) == 1
-                else {"images": list(image_payloads)}
-            ),
+            **({"image": image_payloads[0]} if len(image_payloads) == 1 else {"images": list(image_payloads)}),
             **{
                 key: image_edit_optional_request_params[key]
                 for key in ("aspect_ratio", "resolution")

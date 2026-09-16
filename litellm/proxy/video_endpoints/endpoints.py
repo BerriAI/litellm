@@ -269,9 +269,7 @@ async def video_status(
     if resolved_model:
         data["model"] = resolved_model
 
-    custom_llm_provider: Final = (
-        explicit_provider or infer_video_provider_from_model(resolved_model) or "openai"
-    )
+    custom_llm_provider: Final = explicit_provider or infer_video_provider_from_model(resolved_model) or "openai"
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 

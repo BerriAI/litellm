@@ -49,11 +49,7 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
     ) -> dict:
         supported_params: Final = frozenset(self.get_supported_openai_params(model))
         allowed: Final = supported_params | _XAI_NATIVE_PARAMS
-        unknown: Final = tuple(
-            key
-            for key in non_default_params
-            if key not in optional_params and key not in allowed
-        )
+        unknown: Final = tuple(key for key in non_default_params if key not in optional_params and key not in allowed)
         if unknown and not drop_params:
             raise ValueError(
                 f"Parameter {unknown[0]} is not supported for model {model}. "
@@ -86,12 +82,7 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
         resolved_base: Final = (
             XAIOAuthAuthenticator().get_api_base()
             if should_use_xai_oauth(litellm_params) and not XAIModelInfo.get_api_key(api_key)
-            else (
-                api_base
-                or get_secret_str("XAI_API_BASE")
-                or get_secret_str("XAI_OAUTH_API_BASE")
-                or XAI_API_BASE
-            )
+            else (api_base or get_secret_str("XAI_API_BASE") or get_secret_str("XAI_OAUTH_API_BASE") or XAI_API_BASE)
         )
         base: Final = (resolved_base or XAI_API_BASE).rstrip("/")
         if base.endswith("/v1"):
