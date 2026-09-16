@@ -317,13 +317,28 @@ _TWO_HEURISTIC_V2_ROUTERS_YAML = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("license_limit", [1, None])
-async def test_ProxyConfig_load_config_takes_the_heuristic_v2_limit_from_the_license_only(
-    tmp_path, monkeypatch, license_limit: int | None
+@pytest.mark.parametrize("classifier_type", ["heuristic_v2", "capability", "llm_v2"])
+async def test_ProxyConfig_load_config_takes_the_classifier_limit_from_the_license_only(
+    tmp_path, monkeypatch, license_limit: int | None, classifier_type: str
 ) -> None:
     """`router_settings.auto_router_capability_limit` is managed outside config.yaml: an operator
     cannot grant the entitlement by editing the config, and a licensed proxy boots both routers."""
     f = tmp_path / "c.yaml"
-    f.write_text(_TWO_HEURISTIC_V2_ROUTERS_YAML)
+    forecast_settings = {
+        "capability": (
+            "        classifier_llm_config: {model: gpt-4o-mini}\n"
+            "        capability_classifier_config: {efficient_tier: SIMPLE, capable_tier: REASONING, base_threshold: 0.7}\n"
+        ),
+        "llm_v2": (
+            "        classifier_llm_config: {model: gpt-4o-mini}\n"
+            "        adaptive: false\n"
+            "        llm_v2_config: {efficient_profile: Small solver, capable_profile: Large solver, harness: One attempt, max_quality_gap: 0.05}\n"
+        ),
+    }
+    config_yaml = _TWO_HEURISTIC_V2_ROUTERS_YAML.replace(
+        "classifier_type: heuristic_v2\n", f"classifier_type: {classifier_type}\n{forecast_settings.get(classifier_type, '')}"
+    ).replace("tiers: {SIMPLE: gpt-4o-mini}", "tiers: {SIMPLE: gpt-4o-mini, REASONING: gpt-4o}")
+    f.write_text(config_yaml)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
