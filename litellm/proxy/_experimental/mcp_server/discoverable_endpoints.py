@@ -29,12 +29,12 @@ from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
     _BridgeRefreshReady,
     _extract_user_id_from_request,
     _finish_bridge_mint,
-    _litellm_key_from_request,  # pyright: ignore[reportPrivateUsage]  # shared credential precedence for authorization issuance
     _prepare_bridge_mint,
     _prepare_bridge_refresh,
     _reload_active_user_by_id,
     authorize_oauth_credential_request,
     can_store_oauth_credential,
+    oauth_authorization_uses_gateway_credential,
 )
 from litellm.proxy._experimental.mcp_server.faults import (
     CallerRejected,
@@ -851,10 +851,11 @@ async def _resolve_oauth_authorization_user(
         _user_id_from_session_cookie,
     )
 
+    use_gateway_credential: Final = enforce_binding and await oauth_authorization_uses_gateway_credential(request)
     request_user_id: Final = (
-        await authorize_oauth_credential_request(request, mcp_server.server_id) if enforce_binding else None
+        await authorize_oauth_credential_request(request, mcp_server.server_id) if use_gateway_credential else None
     )
-    if enforce_binding and request_user_id is None and _litellm_key_from_request(request):
+    if use_gateway_credential and request_user_id is None:
         return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
     user_id: Final = request_user_id or _user_id_from_session_cookie(request)
     if user_id is None:

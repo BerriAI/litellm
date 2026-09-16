@@ -1,6 +1,8 @@
 """Bridge token flow: litellm identity resolution and the DCR-bridge oauth_delegate mint/refresh pipeline."""
 
 import math
+import os
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Literal
@@ -12,6 +14,9 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    _V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage]  # reuse the encrypted credential's format discriminator
+)
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
@@ -47,6 +52,64 @@ def _litellm_key_from_request(request: Request) -> str | None:
         if value:
             return value
     return None
+
+
+async def oauth_authorization_uses_gateway_credential(request: Request) -> bool:
+    """Classify credentials for browser authorize; candidates still require full authorization."""
+    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the active auth configuration
+        jwt_handler,
+        master_key,
+        user_custom_auth,
+    )
+
+    if "x-litellm-api-key" in request.headers:
+        return True
+    token: Final = _litellm_key_from_request(request)
+    if token is None:
+        return "authorization" in request.headers
+    if token.startswith("sk-") or (master_key and secrets.compare_digest(token.encode(), master_key.encode())):
+        return True
+    if user_custom_auth is not None or jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:
+        return True
+    if not JWTHandler.is_jwt(token):
+        return await _opaque_bearer_is_gateway_credential(token)
+    claims: Final = JWTHandler.get_unverified_claims(token)
+    issuer: Final = claims.get("iss") if claims is not None else None
+    global_issuer: Final = os.getenv("JWT_ISSUER")
+    # An unscoped global validator can accept issuers absent from the configured issuer list.
+    if not isinstance(issuer, str) or not issuer or not global_issuer:
+        return True
+    return issuer == global_issuer or any(
+        issuer == configured.issuer for configured in jwt_handler.litellm_jwtauth.issuers or ()
+    )
+
+
+async def _opaque_bearer_is_gateway_credential(token: str) -> bool:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        is_envelope,  # noqa: PLC0415  # envelope imports bridge types
+        is_refresh_envelope,
+    )
+    from litellm.proxy._types import hash_token  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.resolvers.store import IdentityStore  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the identity store dependencies
+        prisma_client,
+        user_api_key_cache,
+    )
+
+    if is_envelope(token) or is_refresh_envelope(token) or token.startswith(_V2_GCM_PREFIX):
+        return True
+    try:
+        if ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token) is not None:
+            return True
+        await IdentityStore(prisma_client, user_api_key_cache).resolve(hashed_token=hash_token(token))
+    except KeyNotFoundError:
+        return False
+    except Exception as exc:  # noqa: BLE001  # an identity lookup fault must not permit cookie fallback
+        verbose_logger.debug("OAuth bearer ownership could not be checked (%s)", type(exc).__name__)
+    return True
 
 
 def _key_is_active(key_obj: "UserAPIKeyAuth") -> bool:

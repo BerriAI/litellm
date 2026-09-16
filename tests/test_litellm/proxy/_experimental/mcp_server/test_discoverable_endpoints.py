@@ -11170,7 +11170,7 @@ async def test_identity_bound_authorization_carries_nonce_and_caller_through_cal
         ),
     )
     request = Request({"type": "http", "scheme": "https", "server": ("proxy.example.com", 443),
-                       "path": "/authorize", "query_string": b"", "headers": []})
+                       "path": "/authorize", "query_string": b"", "headers": [(b"authorization", b"Bearer sk-alice")]})
     with (
         patch(  # test-quality-ok: isolate authenticated request resolution from the real encrypted OAuth round trip
               "litellm.proxy._experimental.mcp_server.discoverable_endpoints.authorize_oauth_credential_request",
@@ -12059,18 +12059,52 @@ async def test_signed_oauth_callback_honors_credential_write_policy(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("allowed", [False, True])
+@pytest.mark.parametrize("credential", [
+    "jwt", "key", "expired_jwt", "wrong_audience", "bad_signature", "malformed_jwt", "missing_issuer",
+    "foreign_explicit", "blank_explicit", "unknown_key", "blocked_key", "expired_key", "opaque_record",
+    "opaque_outage", "opaque_oidc", "opaque_custom", "foreign_unscoped", "foreign_configured", "encrypted", "invalid_encrypted", "envelope", "master",
+])
 async def test_identity_bound_authorize_preserves_presented_jwt_permissions(
     jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
     monkeypatch: pytest.MonkeyPatch,
     allowed: bool,
+    credential: str,
 ) -> None:
+    import jwt
+    from datetime import datetime, timedelta, timezone
     from urllib.parse import parse_qs, urlparse
 
-    from litellm.proxy._experimental.mcp_server import byok_oauth_endpoints, discoverable_endpoints, mcp_server_manager
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import JWTIssuerConfig, UserAPIKeyAuth, hash_token
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints, mcp_server_manager
     from litellm.proxy._types import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
 
-    _, signing_key = jwt_oauth_identity
+    handler, signing_key = jwt_oauth_identity
+    master: Final = "browser-session-test-signing-key-123456789"
+    monkeypatch.setattr(proxy_server, "master_key", master)
+    monkeypatch.setattr(proxy_server, "user_custom_auth", (lambda: None) if credential == "opaque_custom" else None)
+    handler.litellm_jwtauth.oidc_userinfo_enabled = credential == "opaque_oidc"
+    if credential == "foreign_unscoped":
+        monkeypatch.delenv("JWT_ISSUER")
+    if credential == "foreign_configured":
+        handler.litellm_jwtauth.issuers = [JWTIssuerConfig(
+            issuer="https://unrelated.example.test", jwks_url="https://idp.example.test/jwks",
+            audience="litellm-proxy", user_id_jwt_field="identity.user_id",
+        )]
+    proxy_server.prisma_client.get_data = AsyncMock(
+        return_value=None, side_effect=RuntimeError("database unavailable") if credential == "opaque_outage" else None,
+    )
+    handler.user_api_key_cache.set_cache("cookie-owner", LiteLLM_UserTable(user_id="cookie-owner"))
+    key: Final = "opaque-record" if credential == "opaque_record" else "sk-browser-gateway-key"
+    if credential in ("key", "blocked_key", "expired_key", "opaque_record"):
+        handler.user_api_key_cache.set_cache(hash_token(key), UserAPIKeyAuth(
+            token=hash_token(key), user_id="jwt-owner", blocked=credential in ("blocked_key", "opaque_record"),
+            expires=datetime.now(timezone.utc) - timedelta(seconds=60) if credential == "expired_key" else None,
+        ))
     monkeypatch.setenv("LITELLM_SALT_KEY", "authorize-policy-test-salt")
     server: Final = MCPServer(
         server_id="bound-server", name="bound-server", transport=MCPTransport.http,
@@ -12086,21 +12120,120 @@ async def test_identity_bound_authorize_preserves_presented_jwt_permissions(
         side_effect=lambda auth: [server.server_id] if allowed or auth.mcp_admitted_user_subject else [],
     )
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
-    monkeypatch.setattr(  # test-quality-ok: session-cookie decoder is the separate authentication boundary; a valid cookie must not override a denied explicit credential
-        byok_oauth_endpoints, "_user_id_from_session_cookie", lambda request: "jwt-owner",
+    bearer: Final = (
+        key if credential in ("key", "blocked_key", "expired_key", "opaque_record", "unknown_key")
+        else "opaque-bearer" if credential in ("opaque_outage", "opaque_oidc", "opaque_custom")
+        else "not.a.jwt" if credential == "malformed_jwt"
+        else "llm_env_invalid" if credential == "envelope"
+        else "v2:gcm:invalid" if credential == "invalid_encrypted"
+        else master if credential == "master"
+        else ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+            LiteLLM_UserTable(user_id="jwt-owner", user_role="internal_user"),
+        ) if credential == "encrypted"
+        else jwt.encode({"iss": "https://idp.example.test"}, "wrong-signing-key-at-least-32-bytes", algorithm="HS256")
+        if credential == "bad_signature"
+        else jwt.encode({"sub": "jwt-owner"}, signing_key, algorithm="RS256") if credential == "missing_issuer"
+        else _oauth_identity_jwt(
+            signing_key,
+            expires_in=-60 if credential == "expired_jwt" else 300,
+            audience="another-service" if credential == "wrong_audience" else "litellm-proxy",
+            issuer="https://unrelated.example.test" if credential.startswith("foreign_") or credential == "blank_explicit" else "https://idp.example.test",
+        )
+    )
+    cookie: Final = jwt.encode(
+        {"user_id": "cookie-owner", "login_method": "sso", "exp": int(time.time()) + 300}, master, algorithm="HS256",
     )
     response: Final = await discoverable_endpoints.authorize_with_server(
-        request=_token_request({"Authorization": f"Bearer {_oauth_identity_jwt(signing_key)}"}),
+        request=_token_request({
+            "Authorization": f"Bearer {bearer}", "Cookie": f"token={cookie}",
+            **({"x-litellm-api-key": bearer} if credential == "foreign_explicit" else {}),
+            **({"x-litellm-api-key": ""} if credential == "blank_explicit" else {}),
+        }),
         mcp_server=server, client_id="client", redirect_uri="http://127.0.0.1:6274/callback",
         state="client-state", code_challenge="pkce-challenge", code_challenge_method="S256",
     )
     redirect: Final = urlparse(response.headers["location"])
     query: Final = parse_qs(redirect.query)
-    if allowed:
+    if allowed and credential in ("jwt", "key", "foreign_unscoped", "foreign_configured"):
         assert redirect.hostname == "upstream.example.test"
         assert query["nonce"] and response.headers.get("set-cookie")
+        assert all(call.args[0].user_id == "jwt-owner" for call in manager.get_allowed_mcp_servers.await_args_list)
     else:
         assert redirect.hostname == "127.0.0.1"
         assert query["error"] == ["access_denied"]
         assert query["state"] == ["client-state"]
         assert "set-cookie" not in response.headers
+
+    proxy_server.prisma_client.db.litellm_mcpusercredentials.upsert.assert_not_called()
+    proxy_server.prisma_client.db.litellm_usertable.create.assert_not_called()
+    proxy_server.prisma_client.db.litellm_teamtable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("credential", ["none", "opaque", "foreign_jwt"])
+@pytest.mark.parametrize("cookie_state", ["allowed", "server_denied", "expired", "missing"])
+async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    credential: str,
+    cookie_state: str,
+) -> None:
+    import jwt
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints, mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+
+    handler, signing_key = jwt_oauth_identity
+    master: Final = "browser-session-test-signing-key-123456789"
+    monkeypatch.setattr(proxy_server, "master_key", master)
+    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "authorize-policy-test-salt")
+    handler.user_api_key_cache.set_cache("cookie-owner", LiteLLM_UserTable(user_id="cookie-owner"))
+    proxy_server.prisma_client.get_data = AsyncMock(return_value=None)
+    server: Final = MCPServer(
+        server_id="bound-server", name="bound-server", transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code", client_id="client",
+        authorization_url="https://upstream.example.test/authorize", token_url="https://upstream.example.test/token",
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce", issuer="https://upstream.example.test", audiences=["client"],
+        ),
+    )
+    manager: Final = MagicMock()
+    manager.get_allowed_mcp_servers = AsyncMock(return_value=[] if cookie_state == "server_denied" else [server.server_id])
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    bearer: Final = (
+        _oauth_identity_jwt(signing_key, issuer="https://unrelated.example.test")
+        if credential == "foreign_jwt" else "unrelated-upstream-bearer"
+    )
+    cookie: Final = jwt.encode(
+        {"user_id": "cookie-owner", "login_method": "sso", "exp": int(time.time()) + (-60 if cookie_state == "expired" else 300)},
+        master, algorithm="HS256",
+    )
+    response: Final = await discoverable_endpoints.authorize_with_server(
+        request=_token_request({
+            **({"Authorization": f"Bearer {bearer}"} if credential != "none" else {}),
+            **({"Cookie": f"token={cookie}"} if cookie_state != "missing" else {}),
+        }),
+        mcp_server=server, client_id="client", redirect_uri="http://127.0.0.1:6274/callback",
+        state="client-state", code_challenge="pkce-challenge", code_challenge_method="S256",
+    )
+    redirect: Final = urlparse(response.headers["location"])
+    query: Final = parse_qs(redirect.query)
+    if cookie_state == "allowed":
+        assert redirect.hostname == "upstream.example.test"
+        assert query["nonce"] and response.headers.get("set-cookie")
+        manager.get_allowed_mcp_servers.assert_awaited_once()
+        assert manager.get_allowed_mcp_servers.call_args.args[0].user_id == "cookie-owner"
+    elif cookie_state == "server_denied":
+        assert query["error"] == ["access_denied"]
+        assert query["state"] == ["client-state"]
+    else:
+        assert redirect.path == "/sso/key/generate"
+        manager.get_allowed_mcp_servers.assert_not_awaited()
+    proxy_server.prisma_client.db.litellm_mcpusercredentials.upsert.assert_not_called()
+    proxy_server.prisma_client.db.litellm_usertable.create.assert_not_called()
+    proxy_server.prisma_client.db.litellm_teamtable.create.assert_not_called()
