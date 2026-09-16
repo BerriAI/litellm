@@ -4,7 +4,7 @@ from typing import Final, cast  # noqa: TID251  # native binding selects a sync 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr import legacy
 from litellm.ocr.legacy import convert_file_document_to_url_document, get_mime_type
-from litellm.rust_bridge.bindings import native_decline_types
+from litellm.rust_bridge.bindings import native_exception_types
 from litellm.rust_bridge.configuration import rust_ocr_enabled
 from litellm.rust_bridge.ocr import NATIVE_AOCR, NATIVE_OCR
 
@@ -19,7 +19,7 @@ def ocr(
     if native is not None:
         try:
             return native(*args, **kwargs)
-        except native_decline_types():
+        except _decline_types():
             pass
     fallback: Final = cast(  # cast-ok: forward the original call shape through the legacy @client decorator
         Callable[..., OCRResponse | Coroutine[object, object, OCRResponse]], legacy.ocr
@@ -32,9 +32,14 @@ async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: pr
     if native is not None:
         try:
             return await native(*args, **kwargs)
-        except native_decline_types():
+        except _decline_types():
             pass
     fallback: Final = cast(  # cast-ok: forward the original call shape through the legacy @client decorator
         Callable[..., Awaitable[OCRResponse]], legacy.aocr
     )
     return await fallback(*args, **kwargs)
+
+
+def _decline_types() -> tuple[type[BaseException], ...]:
+    exception_types: Final = native_exception_types()
+    return (exception_types[0],) if exception_types is not None else ()
