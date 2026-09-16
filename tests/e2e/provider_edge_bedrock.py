@@ -58,7 +58,7 @@ def pod_credentials() -> Credentials:
     """The run pod's own identity, resolved once per process through botocore's
     ordinary chain, which reaches Pod Identity at the ``container-role`` link."""
     resolved: Final = Session().get_credentials()
-    if resolved is None:
+    if resolved is None:  # pyright: ignore[reportUnnecessaryComparison]  # stubs miss the empty-chain None
         raise MissingAwsCredentials(
             "the provider edge is mounted for Bedrock but no AWS credentials resolve; "
             "the run pod gets them from the Pod Identity association on buildkite-e2e-run"
