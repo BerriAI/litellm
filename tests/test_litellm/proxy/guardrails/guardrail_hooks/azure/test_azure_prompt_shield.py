@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.azure import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import (
     AzureContentSafetyPromptShieldGuardrail,
 )
@@ -635,3 +636,116 @@ def test_update_in_memory_litellm_params_dead_env_credential_rejected_untouched(
 
     assert guardrail.api_key == "azure_prompt_shield_api_key"
     assert guardrail.price_per_1000_text_records == 0.38
+
+
+@pytest.mark.asyncio
+async def test_initialize_guardrail_without_api_key_authenticates_with_entra(api_base, capturing_handler):
+    """A keyless config entry yields a guardrail that authenticates with Entra."""
+    handler, sent = capturing_handler
+
+    guardrail = initialize_guardrail(
+        LitellmParams(guardrail="azure/prompt_shield", mode="pre_call", api_base=api_base),
+        {"guardrail_name": "azure-prompt-shield"},
+        entra_token_provider=lambda: "entra-token",
+    )
+
+    assert isinstance(guardrail, AzureContentSafetyPromptShieldGuardrail)
+    assert guardrail.api_key is None
+    assert guardrail.api_base == api_base
+
+    guardrail.async_handler = handler
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert sent[0].headers["Authorization"] == "Bearer entra-token"
+
+
+def test_initialize_guardrail_without_api_base_still_raises():
+    """api_base carries the resource's custom subdomain, which Entra auth cannot work without."""
+    with pytest.raises(ValueError, match="api_base is required"):
+        initialize_guardrail(
+            LitellmParams(guardrail="azure/prompt_shield", mode="pre_call"),
+            {"guardrail_name": "azure-prompt-shield"},
+            entra_token_provider=lambda: "entra-token",
+        )
+
+
+@pytest.mark.asyncio
+async def test_clearing_api_key_at_runtime_switches_to_entra(api_base, capturing_handler):
+    """A dashboard edit that removes the key must re-authenticate, not keep sending a stale header."""
+    handler, sent = capturing_handler
+
+    guardrail = AzureContentSafetyPromptShieldGuardrail(
+        guardrail_name="azure_prompt_shield",
+        api_base=api_base,
+        api_key="secret-key",
+        entra_token_provider=lambda: "entra-token",
+    )
+    guardrail.async_handler = handler
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+    guardrail.update_in_memory_litellm_params({"api_key": None})
+    await guardrail.apply_guardrail(inputs={"texts": ["hello again"]}, request_data={}, input_type="request")
+
+    assert sent[0].headers["Ocp-Apim-Subscription-Key"] == "secret-key"
+    assert "authorization" not in sent[0].headers
+    assert sent[1].headers["Authorization"] == "Bearer entra-token"
+    assert "ocp-apim-subscription-key" not in sent[1].headers
+
+
+@pytest.mark.asyncio
+async def test_config_without_api_version_uses_the_content_safety_default(api_base, capturing_handler):
+    """A config that omits api_version gets the Content Safety default, not another guardrail's."""
+    handler, sent = capturing_handler
+
+    guardrail = initialize_guardrail(
+        LitellmParams(guardrail="azure/prompt_shield", mode="pre_call", api_base=api_base),
+        {"guardrail_name": "azure-prompt-shield"},
+        entra_token_provider=lambda: "entra-token",
+    )
+    guardrail.async_handler = handler
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert sent[0].url.params["api-version"] == "2024-09-01"
+
+
+@pytest.mark.asyncio
+async def test_config_api_version_is_honoured(api_base, capturing_handler):
+    """Pinning an older Content Safety version stays possible."""
+    handler, sent = capturing_handler
+
+    guardrail = initialize_guardrail(
+        LitellmParams(guardrail="azure/prompt_shield", mode="pre_call", api_base=api_base, api_version="2023-10-01"),
+        {"guardrail_name": "azure-prompt-shield"},
+        entra_token_provider=lambda: "entra-token",
+    )
+    guardrail.async_handler = handler
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert sent[0].url.params["api-version"] == "2023-10-01"
+
+
+@pytest.mark.asyncio
+async def test_config_pricing_extras_survive_the_forwarded_params(api_base, capturing_handler):
+    """cost_tier and price_per_1000_text_records arrive as pydantic extras rather than declared
+    fields, so forwarding only the params the config set must still carry them through."""
+    handler, _ = capturing_handler
+
+    guardrail = initialize_guardrail(
+        LitellmParams(
+            guardrail="azure/prompt_shield",
+            mode="pre_call",
+            api_base=api_base,
+            cost_tier="paid",
+            price_per_1000_text_records=0.38,
+        ),
+        {"guardrail_name": "azure-prompt-shield"},
+        entra_token_provider=lambda: "entra-token",
+    )
+    guardrail.async_handler = handler
+    request_data = {"metadata": {}}
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data=request_data, input_type="request")
+
+    assert _recorded_guardrail_info(request_data)["guardrail_cost"] == pytest.approx(0.38 / 1000)

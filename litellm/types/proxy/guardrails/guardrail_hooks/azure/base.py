@@ -6,7 +6,11 @@ class AzureContentSafetyConfigModel(BaseModel):
 
     api_key: str | None = Field(
         default=None,
-        description="API key for the Azure Content Safety Prompt Shield guardrail",
+        description=(
+            "API key for the Azure Content Safety resource. Optional: omit it to authenticate with "
+            "Microsoft Entra ID, which needs the Cognitive Services User role on the resource and a "
+            "custom subdomain api_base"
+        ),
     )
 
     api_base: str | None = Field(

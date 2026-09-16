@@ -632,7 +632,11 @@ def test_get_provider_specific_params():
     # Check the structure of a simple field
     assert (
         fields["api_key"]["description"]
-        == "API key for the Azure Content Safety Prompt Shield guardrail"
+        == (
+            "API key for the Azure Content Safety resource. Optional: omit it to authenticate with "
+            "Microsoft Entra ID, which needs the Cognitive Services User role on the resource and a "
+            "custom subdomain api_base"
+        )
     )
     assert fields["api_key"]["required"] == False
     assert fields["api_key"]["type"] == "string"  # Should be string, not None
