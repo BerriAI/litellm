@@ -482,6 +482,15 @@ class ChunkProcessor:
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason: Final = ChunkProcessor._finish_reason_of_chunks(chunks)
 
+        choice_provider_specific_fields: Final[dict[str, object]] = {  # mutable-ok: response field requires a dict
+            key: value
+            for chunk in chunks
+            if chunk.get("choices")
+            for fields in (chunk["choices"][0].get("provider_specific_fields"),)
+            if isinstance(fields, dict)
+            for key, value in fields.items()
+        }
+
         # Initialize the response dictionary
         response = ModelResponse(
             **{
@@ -508,6 +517,7 @@ class ChunkProcessor:
                             "index": 0,
                             "message": {"role": role, "content": ""},
                             "finish_reason": finish_reason,
+                            "provider_specific_fields": choice_provider_specific_fields or None,
                             **_streamed_vllm_choice_fields(_first_choices(chunks)),
                         }
                     ]
