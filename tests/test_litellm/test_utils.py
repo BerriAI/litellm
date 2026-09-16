@@ -902,6 +902,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
+                "supports_fast_mode": {"type": "boolean"},
                 "supported_audio_formats": {
                     "type": "array",
                     "items": {

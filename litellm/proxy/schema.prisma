@@ -487,6 +487,10 @@ model LiteLLM_VerificationToken {
 
 model LiteLLM_JWTKeyMapping {
     id                String   @id @default(uuid())
+    jwt_issuer        String   @default("")  // Scopes the mapping to one configured issuer; "" matches any issuer.
+                                              // Not nullable: Postgres unique constraints treat every NULL as
+                                              // distinct, so a nullable column would let multiple unscoped
+                                              // mappings collide on the same claim without a constraint violation.
     jwt_claim_name    String   // e.g. "sub", "email"
     jwt_claim_value   String   // The claim value to match
     token             String   // Hashed virtual key (FK)
@@ -499,8 +503,8 @@ model LiteLLM_JWTKeyMapping {
 
     litellm_verification_token LiteLLM_VerificationToken @relation(fields: [token], references: [token], onDelete: Cascade)
 
-    @@unique([jwt_claim_name, jwt_claim_value])
-    @@index([jwt_claim_name, jwt_claim_value, is_active])
+    @@unique([jwt_issuer, jwt_claim_name, jwt_claim_value])
+    @@index([jwt_issuer, jwt_claim_name, jwt_claim_value, is_active])
 }
 
 // Deprecated keys during grace period - allows old key to work until revoke_at

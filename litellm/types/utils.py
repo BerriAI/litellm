@@ -4275,6 +4275,7 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     # rate_limits.updated), blocks the event loop, and discards the session usage.
     results: SkipValidation[OpenAIRealtimeStreamList]
     usage: Usage
+    service_tier: str | None = None
     _hidden_params: dict = {}
 
     @field_serializer("results")
