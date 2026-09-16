@@ -119,8 +119,24 @@ describe("TopKeyView", () => {
     expect(screen.getByText("$100.00")).toBeInTheDocument();
   });
 
-  it("should display user attribution when the key has no alias", () => {
-    render(
+  it("should render User column only when a row has user attribution", () => {
+    const { rerender } = render(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[
+          {
+            api_key: "key-123",
+            key_alias: "Key without user",
+            user_email: null,
+            spend: 100,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("User")).not.toBeInTheDocument();
+
+    rerender(
       <TopKeyView
         {...baseProps}
         topKeys={[
@@ -243,7 +259,7 @@ describe("TopKeyView", () => {
         ]}
       />,
     );
-    expect(screen.getAllByText("-")).toHaveLength(2);
+    expect(screen.getAllByText("-")).toHaveLength(1);
   });
 
   it("should format spend values with two decimal places", () => {
@@ -294,7 +310,7 @@ describe("TopKeyView", () => {
         ]}
       />,
     );
-    expect(screen.getAllByText("-")).toHaveLength(2);
+    expect(screen.getAllByText("-")).toHaveLength(1);
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 
@@ -697,13 +713,13 @@ describe("TopKeyView", () => {
         topKeys={[
           {
             api_key: "key-123",
-            key_alias: "",
+            key_alias: null,
             user_email: null,
             spend: 100,
           },
         ]}
       />,
     );
-    expect(screen.getAllByText("-")).toHaveLength(2);
+    expect(screen.getAllByText("-")).toHaveLength(1);
   });
 });
