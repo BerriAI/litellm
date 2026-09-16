@@ -1,6 +1,5 @@
 "use client";
 
-import moment from "moment";
 import { CalendarDays } from "lucide-react";
 import { useState } from "react";
 
@@ -9,61 +8,42 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 
-import { QUICK_SELECT_OPTIONS } from "./constants";
+import { QUICK_SELECT_OPTIONS, type QuickSelectPresetId } from "./constants";
 import { getTimeRangeDisplay } from "./logs_utils";
+import { CUSTOM_RANGE, type LogsTimeRange } from "./useLogsTimeRange";
 
 interface LogsTableToolbarProps {
-  startTime: string;
+  timeRange: LogsTimeRange;
+  onPresetSelect: (preset: QuickSelectPresetId) => void;
+  onCustomRangeToggle: () => void;
   onStartTimeChange: (value: string) => void;
-  endTime: string;
   onEndTimeChange: (value: string) => void;
-  isCustomDate: boolean;
-  onIsCustomDateChange: (value: boolean) => void;
-  selectedTimeInterval: { value: number; unit: string };
-  onSelectedTimeIntervalChange: (value: { value: number; unit: string }) => void;
   isLiveTail: boolean;
   onIsLiveTailChange: (value: boolean) => void;
   excludeInternalHealthChecks: boolean;
   onExcludeInternalHealthChecksChange: (value: boolean) => void;
-  onResetToFirstPage: () => void;
   onResetFilters: () => void;
 }
 
 export function LogsTableToolbar({
-  startTime,
+  timeRange,
+  onPresetSelect,
+  onCustomRangeToggle,
   onStartTimeChange,
-  endTime,
   onEndTimeChange,
-  isCustomDate,
-  onIsCustomDateChange,
-  selectedTimeInterval,
-  onSelectedTimeIntervalChange,
   isLiveTail,
   onIsLiveTailChange,
   excludeInternalHealthChecks,
   onExcludeInternalHealthChecksChange,
-  onResetToFirstPage,
   onResetFilters,
 }: LogsTableToolbarProps) {
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
+  const { range, startTime, endTime } = timeRange;
+  const isCustomDate = range === CUSTOM_RANGE;
 
-  const applyQuickSelect = (option: { label: string; value: number; unit: string }) => {
-    onResetToFirstPage();
-    onEndTimeChange(moment().format("YYYY-MM-DDTHH:mm"));
-    onStartTimeChange(
-      moment()
-        .subtract(option.value, option.unit as moment.unitOfTime.DurationConstructor)
-        .format("YYYY-MM-DDTHH:mm"),
-    );
-    onSelectedTimeIntervalChange({ value: option.value, unit: option.unit });
-    onIsCustomDateChange(false);
-    setQuickSelectOpen(false);
-  };
-
-  const selectedOption = QUICK_SELECT_OPTIONS.find(
-    (option) => option.value === selectedTimeInterval.value && option.unit === selectedTimeInterval.unit,
-  );
-  const displayLabel = isCustomDate ? getTimeRangeDisplay(isCustomDate, startTime, endTime) : selectedOption?.label;
+  const displayLabel = isCustomDate
+    ? getTimeRangeDisplay(true, startTime, endTime)
+    : QUICK_SELECT_OPTIONS.find((option) => option.id === range)?.label;
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -80,23 +60,19 @@ export function LogsTableToolbar({
           <div className="space-y-1">
             {QUICK_SELECT_OPTIONS.map((option) => (
               <Button
-                key={option.label}
+                key={option.id}
                 variant="ghost"
                 className="w-full justify-start font-normal"
-                onClick={() => applyQuickSelect(option)}
+                onClick={() => {
+                  onPresetSelect(option.id);
+                  setQuickSelectOpen(false);
+                }}
               >
                 {option.label}
               </Button>
             ))}
             <div className="my-2 border-t" />
-            <Button
-              variant="ghost"
-              className="w-full justify-start font-normal"
-              onClick={() => {
-                onIsCustomDateChange(!isCustomDate);
-                onResetToFirstPage();
-              }}
-            >
+            <Button variant="ghost" className="w-full justify-start font-normal" onClick={onCustomRangeToggle}>
               Custom Range
             </Button>
           </div>
@@ -108,21 +84,17 @@ export function LogsTableToolbar({
           <Input
             type="datetime-local"
             className="w-auto"
+            aria-label="Start time"
             value={startTime}
-            onChange={(event) => {
-              onStartTimeChange(event.target.value);
-              onResetToFirstPage();
-            }}
+            onChange={(event) => onStartTimeChange(event.target.value)}
           />
           <span className="text-sm text-muted-foreground">to</span>
           <Input
             type="datetime-local"
             className="w-auto"
+            aria-label="End time"
             value={endTime}
-            onChange={(event) => {
-              onEndTimeChange(event.target.value);
-              onResetToFirstPage();
-            }}
+            onChange={(event) => onEndTimeChange(event.target.value)}
           />
         </div>
       )}
