@@ -476,21 +476,30 @@ describe("parseSkillSource", () => {
       source: "url",
       url: "git@ghe.example.com:org/repo.git",
     });
-    expect(parseSkillSource("git@ghe.example.com:org/repo")?.parsed).toEqual({
-      source: "url",
-      url: "git@ghe.example.com:org/repo.git",
-    });
     expect(parseSkillSource("git@ghe.example.com:org/repo.git")?.suggestedName).toBe("repo");
   });
 
-  it("normalizes an ssh:// clone url and keeps a custom port", () => {
-    expect(parseSkillSource("ssh://git@ghe.example.com/org/repo")?.parsed).toEqual({
+  it("stores an ssh clone url exactly as typed, so a forced .git suffix cannot break azure devops or codecommit", () => {
+    for (const url of [
+      "git@ghe.example.com:org/repo",
+      "git@ssh.dev.azure.com:v3/org/project/repo",
+      "ssh://git@ghe.example.com/org/repo",
+      "ssh://apka1234@git-codecommit.us-east-1.amazonaws.com/v1/repos/my-repo",
+      "ssh://git@ghe.example.com:2222/org/nested/repo.git",
+    ]) {
+      expect(parseSkillSource(url)?.parsed).toEqual({ source: "url", url });
+    }
+    expect(parseSkillSource("git@ssh.dev.azure.com:v3/org/project/repo")?.suggestedName).toBe("repo");
+  });
+
+  it("accepts an internal host whose last label is not alphabetic, matching the https rule", () => {
+    expect(parseSkillSource("git@gitlab.internal.k8s2:org/repo.git")?.parsed).toEqual({
       source: "url",
-      url: "ssh://git@ghe.example.com/org/repo.git",
+      url: "git@gitlab.internal.k8s2:org/repo.git",
     });
-    expect(parseSkillSource("ssh://git@ghe.example.com:2222/org/nested/repo.git")?.parsed).toEqual({
+    expect(parseSkillSource("https://gitlab.internal.k8s2/org/repo")?.parsed).toEqual({
       source: "url",
-      url: "ssh://git@ghe.example.com:2222/org/nested/repo.git",
+      url: "https://gitlab.internal.k8s2/org/repo",
     });
   });
 
@@ -510,15 +519,20 @@ describe("parseSkillSource", () => {
     expect(parseSkillSource("ssh://ghe.example.com/org/repo.git")).toBeNull();
   });
 
-  it("rejects ssh remotes with ip hosts or dot-only path segments", () => {
+  it("rejects ssh remotes with ip hosts or traversal segments", () => {
     expect(parseSkillSource("git@10.0.0.5:org/repo.git")).toBeNull();
     expect(parseSkillSource("ssh://git@169.254.169.254/org/repo")).toBeNull();
     expect(parseSkillSource("git@ghe.example.com:../etc")).toBeNull();
     expect(parseSkillSource("ssh://git@ghe.example.com/org/../repo")).toBeNull();
+    expect(parseSkillSource("git@ghe.example.com:org/../../etc/passwd")).toBeNull();
     expect(parseSkillSource("git@ghe.example.com:org/.github")?.parsed).toEqual({
       source: "url",
-      url: "git@ghe.example.com:org/.github.git",
+      url: "git@ghe.example.com:org/.github",
     });
+  });
+
+  it("rejects an ssh remote carrying a password, which would publish a secret on the feed", () => {
+    expect(parseSkillSource("ssh://git:s3cret@ghe.example.com/org/repo.git")).toBeNull();
   });
 
   it("returns null for empty and garbage input", () => {

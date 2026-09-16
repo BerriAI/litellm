@@ -29,21 +29,32 @@ export const SHA256_REGEX = /^[0-9a-fA-F]{64}$/;
 
 export const isValidSha256 = (digest: string): boolean => digest.trim() === "" || SHA256_REGEX.test(digest.trim());
 
-// WHATWG normalizes obfuscated IPv4 (e.g. 2130706433, 0x7f.0.0.1) to dotted-decimal, so this
-// catches every IPv4 form; bracketed IPv6 is rejected separately.
+// WHATWG normalizes obfuscated IPv4 (e.g. 2130706433, 0x7f.0.0.1) to dotted-decimal on https, so
+// this catches every IPv4 form there; on a non-special scheme like ssh it catches the dotted form
+// only. Bracketed IPv6 is rejected separately.
 const IPV4_HOST_REGEX = /^\d{1,3}(\.\d{1,3}){3}$/;
 
 const GITHUB_ORG_REGEX = /^[A-Za-z0-9-]+$/;
 const GITHUB_REPO_REGEX = /^[A-Za-z0-9._-]+$/;
 
-const SSH_SCP_REGEX = /^([a-z0-9._-]+)@([a-z0-9.-]+\.[a-z]{2,}):([a-z0-9._-]+(?:\/[a-z0-9._-]+)+?)(?:\.git)?\/?$/i;
-const SSH_URL_REGEX =
-  /^ssh:\/\/([a-z0-9._-]+)@([a-z0-9.-]+\.[a-z]{2,})(:\d+)?\/([a-z0-9._-]+(?:\/[a-z0-9._-]+)+?)(?:\.git)?\/?$/i;
-const DOTS_ONLY_SEGMENT_REGEX = /^\.+$/;
+const SSH_SCHEME = "ssh://";
+const SSH_SCP_REGEX = /^([a-z0-9._-]+)@([^:/@]+):(?!\/)(.+)$/i;
 
 const buildRepoUrl = (url: URL): string => `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
 
 const pathSegments = (url: URL): string[] => url.pathname.split("/").filter((seg) => seg !== "");
+
+const toUrl = (candidate: string): URL | null => {
+  try {
+    return new URL(candidate);
+  } catch {
+    return null;
+  }
+};
+
+/** One host rule for every scheme, so an ssh remote is neither more nor less trusted than its https twin. */
+const isSafeHost = (url: URL): boolean =>
+  url.hostname.includes(".") && !url.hostname.startsWith("[") && !IPV4_HOST_REGEX.test(url.hostname);
 
 /**
  * Validate and normalize a repository URL into a parsed URL, or null. Enforces https (rejects
@@ -57,20 +68,8 @@ const parseRepoUrl = (raw: string): URL | null => {
     return null;
   }
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  let url: URL;
-  try {
-    url = new URL(withScheme);
-  } catch {
-    return null;
-  }
-  if (
-    url.protocol !== "https:" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    !url.hostname.includes(".") ||
-    url.hostname.startsWith("[") ||
-    IPV4_HOST_REGEX.test(url.hostname)
-  ) {
+  const url = toUrl(withScheme);
+  if (!url || url.protocol !== "https:" || url.username !== "" || url.password !== "" || !isSafeHost(url)) {
     return null;
   }
   return url;
@@ -178,32 +177,29 @@ const parseRawGitSource = (url: URL, subPath?: string): SkillSourcePreview | nul
   return buildGitSourcePreview("Git", buildRepoUrl(url), repoName, subPath);
 };
 
-interface SshRemote {
-  cloneUrl: string;
-  repoName: string;
-}
-
-const buildSshRemote = (rawPath: string, toCloneUrl: (repoPath: string) => string): SshRemote | null => {
-  if (rawPath.split("/").some((segment) => DOTS_ONLY_SEGMENT_REGEX.test(segment))) {
+/**
+ * Parse an scp-style `git@host:org/repo` or `ssh://git@host/org/repo` clone URL, registering it
+ * exactly as typed: git treats the `.git` suffix as optional, and forcing one on breaks hosts whose
+ * paths are not `org/repo`, like Azure DevOps `v3/...` and CodeCommit `v1/repos/...`. The scp form is
+ * rewritten to `ssh://` only to reuse the https host and credential rules, and only a URL that
+ * survives that round trip unchanged is accepted, which keeps traversal segments off the feed.
+ */
+const parseSshSource = (raw: string, subPath?: string): SkillSourcePreview | null => {
+  const trimmed = raw.trim();
+  const scp = SSH_SCP_REGEX.exec(trimmed);
+  const candidate = scp ? `${SSH_SCHEME}${scp[1]}@${scp[2]}/${scp[3]}` : trimmed;
+  if (!candidate.toLowerCase().startsWith(SSH_SCHEME)) {
     return null;
   }
-  const bare = rawPath.replace(/\.git$/i, "");
-  return { cloneUrl: toCloneUrl(`${bare}.git`), repoName: lastSegment(bare) };
-};
-
-const parseSshRemote = (raw: string): SshRemote | null => {
-  const trimmed = raw.trim();
-  const sshUrl = SSH_URL_REGEX.exec(trimmed);
-  if (sshUrl) {
-    const [, user, host, port, path] = sshUrl;
-    return buildSshRemote(path, (repoPath) => `ssh://${user}@${host}${port ?? ""}/${repoPath}`);
+  const url = toUrl(candidate);
+  if (!url || url.username === "" || url.password !== "" || !isSafeHost(url)) {
+    return null;
   }
-  const scp = SSH_SCP_REGEX.exec(trimmed);
-  if (scp) {
-    const [, user, host, path] = scp;
-    return buildSshRemote(path, (repoPath) => `${user}@${host}:${repoPath}`);
+  const pathStart = candidate.indexOf("/", SSH_SCHEME.length);
+  if (pathStart === -1 || url.pathname !== candidate.slice(pathStart) || pathSegments(url).length < 2) {
+    return null;
   }
-  return null;
+  return buildGitSourcePreview("SSH", trimmed, lastSegment(url.pathname).replace(/\.git$/i, ""), subPath);
 };
 
 const parseArchiveSource = (url: URL): SkillSourcePreview => ({
@@ -220,9 +216,9 @@ const parseArchiveSource = (url: URL): SkillSourcePreview => ({
  * with an optional subfolder turning it into git-subdir.
  */
 export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourcePreview | null => {
-  const ssh = parseSshRemote(rawUrl);
+  const ssh = parseSshSource(rawUrl, subPath);
   if (ssh) {
-    return buildGitSourcePreview("SSH", ssh.cloneUrl, ssh.repoName, subPath);
+    return ssh;
   }
   const url = parseRepoUrl(rawUrl);
   if (!url) {
