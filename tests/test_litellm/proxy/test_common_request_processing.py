@@ -13,7 +13,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import (
+    CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    MAX_LITELLM_CALL_ID_LENGTH,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
@@ -30,6 +34,7 @@ from litellm.proxy.common_request_processing import (
     _has_attribute_error_in_chain,
     _is_azure_model_router_request,
     open_sse_before_first_byte,
+    resolve_litellm_call_id,
     ttft_keepalive_interval,
     _override_openai_response_model,
     _parse_event_data_for_error,
@@ -1400,6 +1405,51 @@ class TestProxyBaseLLMRequestProcessing:
 
         assert "x-litellm-key-spend" in headers_7
         assert float(headers_7["x-litellm-key-spend"]) == 0.001  # Should use original spend on error
+
+    @pytest.mark.parametrize(
+        ("hidden_params", "request_data", "expected_call_id"),
+        [
+            (
+                {"litellm_call_id": "call-from-hidden-params"},
+                {"litellm_call_id": "call-from-request"},
+                "call-from-hidden-params",
+            ),
+            ({}, {"litellm_call_id": "call-from-request"}, "call-from-request"),
+            ({"model_id": "m-1"}, {"litellm_call_id": "call-from-request"}, "call-from-request"),
+        ],
+    )
+    def test_get_custom_headers_call_id_falls_back_to_hidden_params_then_request_data(
+        self, hidden_params, request_data, expected_call_id
+    ):
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            hidden_params=hidden_params,
+            request_data=request_data,
+        )
+
+        assert headers["x-litellm-call-id"] == expected_call_id
+
+    def test_get_custom_headers_explicit_call_id_wins_over_fallbacks(self):
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="explicit-call-id",
+            hidden_params={"litellm_call_id": "call-from-hidden-params"},
+            request_data={"litellm_call_id": "call-from-request"},
+        )
+
+        assert headers["x-litellm-call-id"] == "explicit-call-id"
 
     @pytest.mark.asyncio
     async def test_queue_time_seconds_is_set_in_metadata(self, monkeypatch):
@@ -3878,6 +3928,39 @@ class TestHandleLLMApiExceptionRetryAfter:
         assert proxy_exc.headers["retry-after"] == "43"
         assert proxy_exc.headers["x-custom"] == "1"
 
+    async def test_handle_llm_api_exception_names_cooldown_when_every_deployment_is_cooled_down(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=120,
+            enable_pre_call_checks=False,
+            cooldown_list=["dep-a", "dep-b"],
+            model_ids=["dep-a", "dep-b"],
+        )
+        proxy_exc = await self._invoke(exc)
+        body = proxy_exc.to_dict()
+        assert body["type"] == "all_deployments_in_cooldown"
+        assert body["code"] == "429"
+        assert "All deployments for selected model are in cooldown" in body["message"]
+        assert proxy_exc.headers["retry-after"] == "120"
+
+    async def test_handle_llm_api_exception_keeps_rate_limit_type_when_cooldown_is_partial(self):
+        from litellm.types.router import RouterRateLimitError
+
+        exc = RouterRateLimitError(
+            model="gpt-4",
+            cooldown_time=120,
+            enable_pre_call_checks=False,
+            cooldown_list=["dep-a"],
+            model_ids=["dep-a", "dep-b"],
+        )
+        proxy_exc = await self._invoke(exc)
+        body = proxy_exc.to_dict()
+        assert body["type"] == "rate_limit_error"
+        assert body["code"] == "429"
+        assert "All deployments for selected model are in cooldown" not in body["message"]
+
 
 class TestHandleLLMApiExceptionFramingHeaders:
     """HTTP-framing headers on the provider exception must be stripped before the
@@ -4314,6 +4397,53 @@ class TestDisconnectGatherCleanup:
                 route_type="acompletion",
                 version=None,
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_model, expected", [("AgentX-LLM", "AgentX-LLM"), (None, "gpt-mini")])
+async def test_response_model_echoes_the_name_the_client_sent_before_auth_rewrote_it(
+    monkeypatch, client_model, expected
+):
+    """LIT-3054: auth resolves router_settings.model_group_alias in the body, so the alias the
+    client sent only survives in the request scope. The response must still echo it."""
+    import litellm.proxy.common_request_processing as cpr
+
+    async def llm():
+        return litellm.ModelResponse(
+            model="gpt-4o-mini", choices=[{"message": {"role": "assistant", "content": "pong"}}]
+        )
+
+    async def fake_route_request(**_kwargs):
+        return llm()
+
+    logging_obj = MagicMock(litellm_call_id="call-id", _defer_async_logging=False)
+    proxy_logging = MagicMock(spec=ProxyLogging)
+    proxy_logging.during_call_hook = AsyncMock(return_value=None)
+    proxy_logging.post_call_success_hook = AsyncMock(side_effect=lambda data, user_api_key_dict, response: response)
+    proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+    proxy_logging._callback_capabilities_cache = {}
+    monkeypatch.setattr(cpr, "route_request", fake_route_request)
+
+    processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-mini", "messages": []})
+    monkeypatch.setattr(
+        processor, "common_processing_pre_call_logic", AsyncMock(return_value=({"model": "gpt-mini"}, logging_obj))
+    )
+    monkeypatch.setattr(processor, "_has_post_call_guardrails", MagicMock(return_value=False))
+    scope = {"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": [], "query_string": b""}
+    request = Request({**scope, CLIENT_REQUESTED_MODEL_SCOPE_KEY: client_model} if client_model else scope)
+
+    response = await processor.base_process_llm_request(
+        request=request,
+        fastapi_response=Response(),
+        user_api_key_dict=ProxyUserAPIKeyAuth(),
+        proxy_logging_obj=proxy_logging,
+        general_settings={},
+        proxy_config=MagicMock(spec=ProxyConfig),
+        route_type="acompletion",
+        version=None,
+    )
+
+    assert response.model == expected
 
 
 class TestStreamingClientDisconnectLogging:
@@ -6883,6 +7013,45 @@ class TestModelDeploymentsSupportStreamOptions:
         assert self._support(None, None) is False
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_settings, expected", [
+    (None, {"group": {"team": 100}}),
+    ({"weights": {"group": {"key": 100}}}, {"group": {"key": 100}}),
+    ({"timeout": 30}, None),
+    ({"weights": {"group": {"key": "legacy"}}}, None),
+])
+async def test_saved_weights_override_caller_input_and_preserve_key_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    key_settings: dict[str, int | dict[str, dict[str, int | str]]] | None,
+    expected: dict[str, dict[str, int]] | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "get_team_object", AsyncMock(
+        return_value=SimpleNamespace(router_settings={"weights": {"group": {"team": 100}}})
+    ))
+    forged = {"group": {"caller": 100}}
+    processor = ProxyBaseLLMRequestProcessing(data={
+        "model": "group", "weights": forged, "_router_weights": forged,
+        "router_settings_override": {"weights": forged},
+    })
+    logging = MagicMock(spec=ProxyLogging)
+    logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    data, _ = await processor.common_processing_pre_call_logic(
+        request=Request({"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []}),
+        general_settings={},
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", team_id="team-a", router_settings=key_settings),
+        proxy_logging_obj=logging,
+        proxy_config=proxy_server.ProxyConfig(),
+        route_type="acompletion",
+        llm_router=litellm.Router(model_list=[]),
+    )
+    assert "weights" not in data
+    assert data.get("_router_weights") == expected
+    assert logging.pre_call_hook.call_args.kwargs["data"].get("_router_weights") == expected
+
+
 class TestPerRequestModelGroupAlias:
     """``router_settings.model_group_alias`` on a key or team has to be resolved
     by the proxy: the Router resolves aliases from its own shared instance
@@ -8051,13 +8220,26 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
             try:
                 raise exc
             except Exception as raised:
-                _log_llm_api_exception(raised)
+                _log_llm_api_exception(raised, "call-id-for-traceback-test")
     finally:
         verbose_proxy_logger.propagate = False
 
     records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
     assert len(records) == 1
     assert (records[0].exc_info is not None) is expect_traceback
+
+
+class TestResolveLitellmCallId:
+    def test_client_call_id_within_the_bound_is_kept(self):
+        assert resolve_litellm_call_id("req-abc-123") == "req-abc-123"
+        at_bound: Final = "y" * MAX_LITELLM_CALL_ID_LENGTH
+        assert resolve_litellm_call_id(at_bound) == at_bound
+
+    @pytest.mark.parametrize("client_call_id", [None, "", "x" * (MAX_LITELLM_CALL_ID_LENGTH + 1), "z" * 3000])
+    def test_missing_empty_or_oversized_client_call_id_gets_a_generated_uuid(self, client_call_id):
+        resolved: Final = resolve_litellm_call_id(client_call_id)
+        assert resolved != client_call_id
+        assert uuid.UUID(resolved).version == 4
 
 
 class _FailureHookRecorder:
@@ -8259,6 +8441,83 @@ class TestStreamingResponseHeadersFollowFallback:
         assert result.headers["x-callback-header"] == "kept"
 
 
+class _MessagesFallbackStream:
+    def __init__(self) -> None:
+        self.fallback_headers_adopted = False
+        self._hidden_params: dict[str, object] = {
+            "additional_headers": {
+                "x-litellm-complexity-router-tier": "REASONING",
+                "x-litellm-complexity-router-reasoning-effort": "xhigh",
+            }
+        }
+        self._chunks = iter(
+            (
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"OK"}}\n\n',
+            )
+        )
+
+    def __aiter__(self) -> "_MessagesFallbackStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        self._hidden_params = {
+            "model_id": "fallback-deployment",
+            "additional_headers": {"x-fallback-only": "yes"},
+        }
+        self.fallback_headers_adopted = True
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_messages_http_headers_refresh_after_lazy_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.caching.caching import DualCache
+
+    stream = _MessagesFallbackStream()
+    logging_obj = MagicMock()
+    logging_obj.litellm_call_id = "messages-fallback-headers"
+    logging_obj._defer_async_logging = False
+    logging_obj._on_deferred_stream_complete = None
+    logging_obj.cost_breakdown = None
+    logging_obj.litellm_params = {}
+    processor = ProxyBaseLLMRequestProcessing(
+        data={"model": "auto-router", "stream": True, "litellm_logging_obj": logging_obj}
+    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    async def call() -> _MessagesFallbackStream:
+        return stream
+
+    async def fake_route_request(**_kwargs: object) -> object:
+        return call()
+
+    monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+    response = await processor.base_process_llm_request(
+        request=Request(scope={"type": "http", "headers": []}),
+        fastapi_response=Response(),
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+        route_type="anthropic_messages",
+        proxy_logging_obj=proxy_logging_obj,
+        general_settings={},
+        proxy_config=MagicMock(spec=ProxyConfig),
+        is_streaming_request=True,
+        skip_pre_call_logic=True,
+    )
+
+    assert isinstance(response, StreamingResponse)
+    assert stream.fallback_headers_adopted is True
+    assert response.headers["x-litellm-model-id"] == "fallback-deployment"
+    assert response.headers["x-fallback-only"] == "yes"
+    assert "x-litellm-complexity-router-tier" not in response.headers
+    assert "x-litellm-complexity-router-reasoning-effort" not in response.headers
+
+
 class TestPassthroughHeadersAcceptImmutableMappings:
     """LIT-6767: the streaming branch now hands the passthrough helpers an immutable mapping."""
 
@@ -8307,6 +8566,41 @@ async def test_handle_llm_api_exception_forwards_provider_headers_on_http_status
 
     assert exc_info.value.headers is not None
     assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-passthrough-500"
+
+
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_forwards_litellm_response_headers_when_response_is_synthetic():
+    """Exception mapping hands the proxy a mapped error whose ``response`` is a synthetic empty
+    ``httpx.Response`` and parks the provider's real headers on ``litellm_response_headers``.
+    The client must still get the provider request id, as it does on a 200.
+    """
+    import httpx
+
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    mapped = litellm.BadRequestError(
+        message="OpenAIException - max_tokens is too large: 999999999.",
+        model="gpt-4o-mini",
+        llm_provider="openai",
+    )
+    mapped.litellm_response_headers = httpx.Headers({"x-request-id": "req_openai_400"})
+    assert dict(mapped.response.headers) == {}
+
+    processor = ProxyBaseLLMRequestProcessing(data={})
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await processor._handle_llm_api_exception(
+            e=mapped,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert exc_info.value.code == "400"
+    assert "max_tokens is too large: 999999999." in exc_info.value.message
+    assert exc_info.value.headers["llm_provider-x-request-id"] == "req_openai_400"
 
 
 class TestBackgroundResponseRetrievalGovernance:
@@ -8420,3 +8714,84 @@ class TestBackgroundResponseRetrievalGovernance:
 
         assert "_guardrail_pipelines" not in data["litellm_metadata"]
         assert "applied_policies" not in data["litellm_metadata"]
+
+
+class TestErrorLogCarriesCallId:
+    """Regression for LIT-5856 / #37532: the ERROR line emitted for a failed LLM
+    request must carry the litellm_call_id the client got back in the
+    x-litellm-call-id response header, so a logged exception can be tied to a
+    specific request."""
+
+    async def _invoke(self, data: dict[str, object]) -> None:
+        from litellm._logging import verbose_proxy_logger
+
+        processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+        proxy_logging_obj: Final = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        verbose_proxy_logger.propagate = True
+        try:
+            with pytest.raises(ProxyException):
+                await processor._handle_llm_api_exception(
+                    e=ValueError("upstream blew up"),
+                    user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    @staticmethod
+    def _error_record(caplog: pytest.LogCaptureFixture):
+        return next(r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage())
+
+    async def test_call_id_from_logging_obj_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        call_id: Final = str(uuid.uuid4())
+        logging_obj: Final = MagicMock()
+        logging_obj.litellm_call_id = call_id
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            await self._invoke({"litellm_logging_obj": logging_obj, "litellm_call_id": "stale-id"})
+
+        record: Final = self._error_record(caplog)
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()
+
+    async def test_call_id_falls_back_to_request_data(self, caplog: pytest.LogCaptureFixture) -> None:
+        call_id: Final = str(uuid.uuid4())
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            await self._invoke({"litellm_call_id": call_id})
+
+        record: Final = self._error_record(caplog)
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()
+
+    async def test_call_id_falls_back_when_logging_obj_has_none(self, caplog: pytest.LogCaptureFixture) -> None:
+        call_id: Final = str(uuid.uuid4())
+        logging_obj: Final = MagicMock()
+        logging_obj.litellm_call_id = None
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            await self._invoke({"litellm_logging_obj": logging_obj, "litellm_call_id": call_id})
+
+        record: Final = self._error_record(caplog)
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()
+
+    def test_client_disconnect_log_carries_call_id(self, caplog: pytest.LogCaptureFixture) -> None:
+        from litellm._logging import verbose_proxy_logger
+        from litellm.proxy.common_request_processing import (
+            _CLIENT_DISCONNECT_DETAIL,
+            _log_llm_api_exception,
+        )
+
+        call_id: Final = str(uuid.uuid4())
+        verbose_proxy_logger.propagate = True
+        try:
+            with caplog.at_level("INFO", logger="LiteLLM Proxy"):
+                _log_llm_api_exception(
+                    HTTPException(status_code=499, detail=_CLIENT_DISCONNECT_DETAIL),
+                    call_id,
+                )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+        record: Final = caplog.records[-1]
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()

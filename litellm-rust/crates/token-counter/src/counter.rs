@@ -3,6 +3,7 @@ use serde::Serialize;
 use crate::Error;
 use crate::byte_level::ByteLevelCounter;
 use crate::python_json;
+use crate::scanner::{SplitPattern, TiktokenCounter};
 use crate::tools::format_function_definitions;
 use crate::types::{
     ContentBlock, ContentItem, CountableRequest, Message, MessageContent, TextValue, ToolChoice,
@@ -23,12 +24,19 @@ pub struct InputTokenCount {
     pub input_tokens: usize,
 }
 
-/// A loaded HuggingFace tokenizer plus the message accounting Python applies on
-/// top of it. Encoding is CPU-bound and synchronous; hosts run it off their
-/// event loop.
+enum Encoder {
+    HuggingFace {
+        tokenizer: Box<tokenizers::Tokenizer>,
+        byte_level: Option<ByteLevelCounter>,
+    },
+    Tiktoken(TiktokenCounter),
+}
+
+/// A loaded tokenizer plus the message accounting Python applies on top of
+/// it. Encoding is CPU-bound and synchronous; hosts run it off their event
+/// loop.
 pub struct TokenCounter {
-    tokenizer: tokenizers::Tokenizer,
-    byte_level: Option<ByteLevelCounter>,
+    encoder: Encoder,
 }
 
 impl TokenCounter {
@@ -39,23 +47,50 @@ impl TokenCounter {
             .map_err(Error::Load)?;
         let byte_level = ByteLevelCounter::detect(&tokenizer);
         Ok(Self {
-            tokenizer,
-            byte_level,
+            encoder: Encoder::HuggingFace {
+                tokenizer: Box::new(tokenizer),
+                byte_level,
+            },
+        })
+    }
+
+    /// Load tiktoken's `cl100k_base` rank file (`base64(token) rank` lines).
+    /// The host reads the file.
+    pub fn from_cl100k_ranks(rank_file: &str) -> Result<Self, Error> {
+        Self::from_tiktoken_ranks(SplitPattern::Cl100k, rank_file)
+    }
+
+    /// Load tiktoken's `o200k_base` rank file (`base64(token) rank` lines).
+    /// The host reads the file.
+    pub fn from_o200k_ranks(rank_file: &str) -> Result<Self, Error> {
+        Self::from_tiktoken_ranks(SplitPattern::O200k, rank_file)
+    }
+
+    fn from_tiktoken_ranks(split: SplitPattern, rank_file: &str) -> Result<Self, Error> {
+        Ok(Self {
+            encoder: Encoder::Tiktoken(TiktokenCounter::from_ranks(split, rank_file)?),
         })
     }
 
     pub fn count_text(&self, text: &str) -> Result<usize, Error> {
-        if let Some(count) = self
-            .byte_level
-            .as_ref()
-            .and_then(|counter| counter.count(&self.tokenizer, text))
-        {
-            return Ok(count);
+        match &self.encoder {
+            Encoder::Tiktoken(counter) => Ok(counter.count(text)),
+            Encoder::HuggingFace {
+                tokenizer,
+                byte_level,
+            } => {
+                if let Some(count) = byte_level
+                    .as_ref()
+                    .and_then(|counter| counter.count(tokenizer, text))
+                {
+                    return Ok(count);
+                }
+                tokenizer
+                    .encode_fast(text, true)
+                    .map(|encoding| encoding.len())
+                    .map_err(Error::Encode)
+            }
         }
-        self.tokenizer
-            .encode_fast(text, true)
-            .map(|encoding| encoding.len())
-            .map_err(Error::Encode)
     }
 
     /// Mirrors the host's key precedence: `messages`, then `prompt`, then

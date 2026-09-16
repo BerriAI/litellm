@@ -3,10 +3,17 @@ use serde_json::{Map, Value};
 
 use crate::ocr::types::OcrDocument;
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum MistralOcrPages {
+    Range(String),
+    Indices(Vec<i64>),
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct MistralOcrParams {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pages: Option<Vec<i64>>,
+    pub pages: Option<MistralOcrPages>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_image_base64: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

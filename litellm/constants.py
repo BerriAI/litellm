@@ -53,6 +53,7 @@ S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
 S3_PREFIX_DIGEST_CHARS: Final = 16
 # s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
 MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
+MAX_FILE_LIST_LIMIT: Final = 10000
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
 budget_reservation_disabled_info_emitted = False
@@ -143,6 +144,7 @@ DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD: Final = float(
     os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD", 0.3)
 )
 MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH: Final = int(os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150))
+MAX_LITELLM_CALL_ID_LENGTH: Final = 256
 MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH: Final = 2048
 
 DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS: Final = 2000
@@ -224,6 +226,9 @@ PRE_CALL_EXECUTED_GUARDRAILS_KEY: Final = "_pre_call_executed_guardrails"
 
 # Attribute stamped on log_guardrail_information wrappers so __init_subclass__ does not wrap them again
 LOGS_GUARDRAIL_INFORMATION_MARKER: Final = "_litellm_logs_guardrail_information"
+
+# llm_provider stamped on proxy-side rate limit errors when the model resolves to no deployment
+PROXY_LLM_PROVIDER_FALLBACK: Final = "litellm_proxy"
 
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = int(
@@ -308,6 +313,14 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = float(
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
+
+BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_session_update"
+BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: Final = "litellm.bedrock_realtime.session_committed"
+BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY: Final = "litellm.bedrock_realtime.committed_failure"
+CLIENT_REQUESTED_MODEL_SCOPE_KEY: Final = "litellm.client_requested_model"
+MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: Final = "litellm.model_group_alias_resolved"
+REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
+REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
 
 # SSL/TLS cipher configuration for faster handshakes
 # Strategy: Strongly prefer fast modern ciphers, but allow fallback to commonly supported ones
@@ -459,6 +472,7 @@ REDIS_CIRCUIT_BREAKER_ENABLED: Final = os.getenv("REDIS_CIRCUIT_BREAKER_ENABLED"
 # minimum seconds a timeout-only failure streak must span before it can open the breaker,
 # so one event-loop stall timing out many queued calls at once does not trip it
 REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION: Final = float(os.getenv("REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION", 5.0))
+REDIS_TIMEOUT_LOG_INTERVAL: Final = float(os.getenv("REDIS_TIMEOUT_LOG_INTERVAL", "5.0"))
 # Seconds of idle before a Redis cluster connection is validated with a PING and
 # reconnected if dead, so a connection silently dropped by a cluster restart
 # (e.g. ElastiCache Serverless maintenance) is not reused while broken
@@ -571,6 +585,7 @@ ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = int(
 LOGGING_WORKER_CONCURRENCY: Final = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100))  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
+LOGGING_WORKER_TIMEOUT_SUMMARY_WINDOW_SECONDS: Final = 5.0
 LOGGING_WORKER_CLEAR_PERCENTAGE: Final = int(
     os.getenv("LOGGING_WORKER_CLEAR_PERCENTAGE", 50)
 )  # Percentage of queue to clear (default: 50%)
@@ -1553,6 +1568,8 @@ BASE_MCP_ROUTE: Final = "/mcp"
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS: Final = int(os.getenv("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600))  # 1 hour
 BATCH_STATUS_POLL_MAX_ATTEMPTS: Final = int(os.getenv("BATCH_STATUS_POLL_MAX_ATTEMPTS", 24))  # for 24 hours
+BATCH_TPD_WINDOW_SECONDS: Final = 86400
+BATCH_TPD_DESCRIPTOR_SUFFIX: Final = "_tpd"
 
 HEALTH_CHECK_TIMEOUT_SECONDS: Final = int(os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60))  # 60 seconds
 _background_health_check_max_tokens_env: Final = os.getenv("BACKGROUND_HEALTH_CHECK_MAX_TOKENS")
@@ -1761,6 +1778,7 @@ DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(os.getenv("DEFAULT_PROMPT_
 LENGTH_OF_LITELLM_GENERATED_KEY: Final = int(os.getenv("LENGTH_OF_LITELLM_GENERATED_KEY", 16))
 MINIMUM_CUSTOM_KEY_LENGTH: Final = int(os.getenv("MINIMUM_CUSTOM_KEY_LENGTH", 16))
 SECRET_MANAGER_REFRESH_INTERVAL: Final = int(os.getenv("SECRET_MANAGER_REFRESH_INTERVAL", 86400))
+OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS: Final = frozenset({"openai", "azure"})
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "default_internal_user_params",
     "default_team_params",
@@ -1778,6 +1796,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     # test_general_settings_ui_fields_are_db_overridable enforces that pairing.
     "enable_anthropic_prompt_caching",
     "anthropic_prompt_caching_ttl",
+    "openai_system_messages_first",
     "max_ui_session_budget",
     "budget_rollover",
     "mcp_tool_search",
@@ -1963,6 +1982,8 @@ BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(
 
 UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS
 
+STRINGIFIED_NONE: Final[str] = "None"
+
 # A retrieved response replays the usage of the call that created it, so pricing these
 # read/management routes like inference bills the same tokens twice.
 NON_INFERENCE_CALL_TYPES: Final[frozenset[str]] = frozenset(
@@ -2002,6 +2023,7 @@ NON_INFERENCE_CALL_TYPES: Final[frozenset[str]] = frozenset(
 
 UNKNOWN_MODEL_SPEND_LOG_MODEL: Final[str] = "unknown-model"
 MAX_SPEND_LOG_MODEL_NAME_LENGTH: Final[int] = 256
+MCP_SPEND_LOG_MODEL_PREFIX: Final[str] = "MCP: "
 
 # PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
 # sentinel api_key so PTU flat cost stays distinguishable from real per-request

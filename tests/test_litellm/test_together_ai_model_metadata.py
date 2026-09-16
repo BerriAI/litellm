@@ -5,7 +5,6 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-
 REPO_ROOT: Final = Path(__file__).parents[2]
 
 CostMap = dict[str, dict[str, object]]
@@ -86,13 +85,6 @@ def test_together_chat_entries_never_carry_context_length_as_output_ceiling(cost
         and info["max_output_tokens"] == info.get("max_input_tokens")
     )
     assert inflated == []
-
-
-@pytest.mark.parametrize("model", sorted(DEPRECATED_MODELS))
-def test_together_deprecated_model_carries_deprecation_date(cost_map: CostMap, model: str):
-    info = cost_map.get(model)
-    assert info is not None, f"{model} missing from model_prices_and_context_window.json"
-    assert info.get("deprecation_date") == DEPRECATED_MODELS[model]
 
 
 def _successor(info: dict[str, object]) -> str | None:

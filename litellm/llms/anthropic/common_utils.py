@@ -540,6 +540,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return value if isinstance(value, bool) else None
 
     @staticmethod
+    def supports_fast_mode(model: str, custom_llm_provider: str) -> bool:
+        return (
+            custom_llm_provider == "anthropic"
+            and AnthropicModelInfo._get_exact_model_capability(model, "supports_fast_mode") is True
+        )
+
+    @staticmethod
     def _get_provider_resolved_capability(model: str, key: str, custom_llm_provider: str) -> bool | None:
         """Resolve boolean capability ``key`` for ``model`` under the caller's provider.
 

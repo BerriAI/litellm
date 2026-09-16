@@ -13,7 +13,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy.utils import get_custom_url, join_paths
 
@@ -579,6 +579,75 @@ class TestPostCallFailureHookLiftsStandardLoggingObject:
         request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
         await self._run(request_data)
         assert "standard_logging_object" not in request_data
+
+
+class TestPostCallFailureHookLiftsCallTypeAndStartTime:
+    """A guardrail-blocked MCP tool call fails before any LLM call. The failure
+    spend row is built from request_data after ``litellm_logging_obj`` is popped,
+    so ``call_type`` and the request ``start_time`` must be lifted off the logging
+    object first, or the Logs page shows the row as an LLM call with a blank call
+    type and a 0s duration (LIT-7453).
+    """
+
+    @pytest.mark.asyncio
+    async def test_failed_mcp_tool_call_spend_row_keeps_call_type_model_and_duration(self):
+        import traceback
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        request_start = real_datetime.datetime.now() - real_datetime.timedelta(seconds=2)
+        logging_obj = Logging(
+            model="MCP: deepwiki-ask_question",
+            messages=[],
+            stream=False,
+            call_type="call_mcp_tool",
+            start_time=request_start,
+            litellm_call_id="call-1",
+            function_id="fn-1",
+        )
+        logging_obj.update_environment_variables(
+            model="MCP: deepwiki-ask_question",
+            user="",
+            optional_params={},
+            litellm_params={"metadata": {"user_api_key_hash": "hashed"}},
+        )
+        blocked = Exception("Content blocked: keyword 'confidential' detected")
+        logging_obj.failure_handler(blocked, traceback.format_exc(), request_start, real_datetime.datetime.now())
+        request_data = {
+            "name": "deepwiki-ask_question",
+            "arguments": {"question": "confidential"},
+            "litellm_logging_obj": logging_obj,
+        }
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer = SimpleNamespace(update_database=AsyncMock())
+        original_callbacks = list(litellm.callbacks)
+        litellm.callbacks = [_ProxyDBLogger(spend_writer=lambda: spend_writer)]
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data=request_data,
+                    original_exception=blocked,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                )
+        finally:
+            litellm.callbacks = original_callbacks
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call = spend_writer.update_database.call_args.kwargs
+        payload = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == "call_mcp_tool"
+        assert payload["model"] == "MCP: deepwiki-ask_question"
+        assert payload["endTime"] - payload["startTime"] >= real_datetime.timedelta(seconds=2)
 
 
 class TestPostCallFailureHookEstimatesDispatchedInputTokens:
@@ -1234,12 +1303,10 @@ class TestPostCallFailureHookLLMExceptionAlerting:
     """The llm_exceptions alert is for infra / LLM-API failures, not user
     errors (https://github.com/BerriAI/litellm/issues/3395). Already-normalized
     client errors must be excluded so a guardrail content-policy block never
-    pages on-call. ProxyException is such an error; before LIT-3751 only
-    HTTPException was excluded, so AIM blocks paged as if the LLM API failed."""
+    pages on-call. 5xx proxy errors still alert."""
 
-    async def _alerted(self, exc) -> bool:
+    async def _alerted(self, exc: Exception) -> AsyncMock:
         import asyncio
-        from unittest.mock import AsyncMock
 
         from litellm.proxy._types import AlertType, UserAPIKeyAuth
 
@@ -1256,7 +1323,7 @@ class TestPostCallFailureHookLLMExceptionAlerting:
                 user_api_key_dict=UserAPIKeyAuth(),
             )
         await asyncio.sleep(0)  # let the fire-and-forget alert task run
-        return alerting_handler.called
+        return alerting_handler
 
     @pytest.mark.asyncio
     async def test_proxy_exception_does_not_alert(self):
@@ -1269,15 +1336,49 @@ class TestPostCallFailureHookLLMExceptionAlerting:
             code=400,
             openai_code="content_policy_violation",
         )
-        assert await self._alerted(exc) is False
+        assert (await self._alerted(exc)).called is False
 
     @pytest.mark.asyncio
     async def test_http_exception_does_not_alert(self):
-        assert await self._alerted(HTTPException(status_code=400, detail="blocked")) is False
+        assert (await self._alerted(HTTPException(status_code=400, detail="blocked"))).called is False
 
     @pytest.mark.asyncio
     async def test_genuine_llm_api_error_still_alerts(self):
-        assert await self._alerted(Exception("upstream 503")) is True
+        assert (await self._alerted(Exception("upstream 503"))).called is True
+
+    @pytest.mark.asyncio
+    async def test_http_exception_5xx_alerts(self):
+        alerting_handler = await self._alerted(
+            HTTPException(
+                status_code=502,
+                detail={
+                    "error": "Headroom compression service returned an error",
+                    "status_code": 503,
+                    "guardrail_name": "headroom-compression-global",
+                },
+            )
+        )
+        assert alerting_handler.called is True
+        assert "headroom-compression-global" in alerting_handler.call_args.kwargs["message"]
+
+    @pytest.mark.asyncio
+    async def test_proxy_exception_5xx_alerts(self):
+        from litellm.proxy._types import ProxyException
+
+        alerting_handler = await self._alerted(
+            ProxyException(
+                message="guardrail backend down",
+                type="internal_server_error",
+                param=None,
+                code=503,
+            )
+        )
+        assert alerting_handler.called is True
+
+    @pytest.mark.asyncio
+    async def test_http_exception_429_does_not_alert(self):
+        alerting_handler = await self._alerted(HTTPException(status_code=429, detail="rate limited"))
+        assert alerting_handler.called is False
 
 
 class TestPostCallFailureHookProxyExceptionLogging:
@@ -1848,13 +1949,14 @@ def test_a_failure_with_no_logging_object_lifts_nothing():
     assert dict(_failure_fields_to_lift({"litellm_logging_obj": _LoggingObj({})})) == {}
 
 
-def test_a_dispatched_failure_lifts_the_four_fields_the_spend_log_needs():
+def test_a_dispatched_failure_lifts_the_fields_the_spend_log_needs():
     from litellm.proxy.utils import _failure_fields_to_lift
 
     lifted = _failure_fields_to_lift(
         {
             "litellm_logging_obj": _LoggingObj(
                 {
+                    "start_time": 1699999999.0,
                     "first_api_call_start_time": 1700000000.0,
                     "call_type": "acompletion",
                     "model": FAILURE_USAGE_MODEL,
@@ -1866,12 +1968,16 @@ def test_a_dispatched_failure_lifts_the_four_fields_the_spend_log_needs():
     )
 
     assert set(lifted) == {
+        "start_time",
         "first_api_call_start_time",
+        "call_type",
         "combined_usage_object",
         "response_cost",
         "standard_logging_object",
     }
+    assert lifted["start_time"] == 1699999999.0
     assert lifted["first_api_call_start_time"] == 1700000000.0
+    assert lifted["call_type"] == "acompletion"
     assert lifted["response_cost"] == 0.0
     assert lifted["combined_usage_object"].prompt_tokens > 0
     assert lifted["standard_logging_object"] == {"id": "log-1"}
