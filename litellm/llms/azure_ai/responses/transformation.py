@@ -34,7 +34,11 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
             litellm_params=params.model_dump(),
             api_key_header=api_key_header_for_base(AzureFoundryModelInfo.get_api_base(params.api_base)),
         )
-        return {**headers, **auth_headers, "Content-Type": "application/json"}
+        return {  # mutable-ok: the handler updates the returned headers in place per the dict contract
+            **headers,
+            **auth_headers,
+            "Content-Type": "application/json",
+        }
 
     def supports_native_websocket(self) -> bool:
         return False
