@@ -26,7 +26,6 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
     LiteLLM_BudgetTableFull,
-    LiteLLM_EndUserTable,
     Litellm_EntityType,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -193,18 +192,26 @@ def _enduser_cache_keys(row: _EndUserRow) -> tuple[str, ...]:
     return (end_user_cache_key(row.user_id),)
 
 
-def _enduser_carried_spend(row: _EndUserRow, caps: Mapping[str, float]) -> float:
-    if not caps:
-        return 0.0
-    effective_budget_id: Final[str | None] = row.budget_id or litellm.max_end_user_budget_id
-    return _carried_spend(row.spend, caps.get(effective_budget_id) if effective_budget_id is not None else None)
-
-
 def _budget_link_where(
     budget_ids: Sequence[str],
     extra: Mapping[str, object] = MappingProxyType({}),
 ) -> dict[str, object]:
     return {"budget_id": {"in": list(budget_ids)}, **extra}
+
+
+def _enduser_invalidation_where(budget_ids: Sequence[str]) -> dict[str, object]:
+    """Customers whose cached spend a committed reset of these tiers invalidated.
+
+    Mirrors ``_queue_enduser_resets``: the link, plus the NULL-budget_id rows
+    that ride the default tier when that tier is one of the expiring ones. The
+    write's ``spend > 0`` filter has no twin here because the commit already
+    zeroed those rows, so post-commit it would match nobody.
+    """
+    linked: Final = _budget_link_where(budget_ids)
+    default_budget_id: Final = litellm.max_end_user_budget_id
+    if default_budget_id is None or default_budget_id not in budget_ids:
+        return linked
+    return {"OR": [linked, {"budget_id": None}]}  # mutable-ok: prisma where filter must be a dict
 
 
 def _queue_budget_linked_resets(
@@ -265,7 +272,6 @@ class _BudgetCascade:
     budgets: tuple[LiteLLM_BudgetTableFull, ...] = ()
     budget_ids: tuple[str, ...] = ()
     budget_resets: tuple[tuple[str, datetime], ...] = ()
-    endusers: tuple[_EndUserRow, ...] = ()
     counter_resets: tuple[tuple[str, float], ...] = ()
     cache_keys: tuple[str, ...] = ()
     rollover_caps: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
@@ -275,6 +281,7 @@ class _BudgetCascade:
 class _BudgetCascadeCommitted:
     cascade: _BudgetCascade
     advanced: int
+    endusers_invalidated: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,10 +423,10 @@ _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
 )
 
 
-def _budget_cascade_event_metadata(cascade: _BudgetCascade) -> dict[str, object]:
+def _budget_cascade_event_metadata(cascade: _BudgetCascade, endusers_invalidated: int = 0) -> dict[str, object]:
     return {
         "num_budgets_found": len(cascade.budgets),
-        "num_endusers_found": len(cascade.endusers),
+        "num_endusers_found": endusers_invalidated,
     }
 
 
@@ -593,6 +600,32 @@ class ResetBudgetJob:
                 e,
             )
 
+    @staticmethod
+    async def _invalidate_caches(counter_keys: Sequence[str], cache_keys: Sequence[str]) -> None:
+        """Batch twin of ``_invalidate_spend_counter`` and
+        ``_invalidate_user_api_key_cache_entry``, carrying the same
+        after-the-commit requirement as both.
+
+        One round trip per chunk rather than one per key: a tier's dependent
+        population is unbounded, and awaiting each key in turn makes the last
+        dependent wait out every dependent ahead of it.
+        """
+        if not counter_keys and not cache_keys:
+            return
+        try:
+            from litellm.proxy.proxy_server import spend_counter_cache, user_api_key_cache
+
+            await spend_counter_cache.async_delete_cache_keys(counter_keys)
+            await user_api_key_cache.async_delete_cache_keys(cache_keys)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to invalidate %d spend counters and %d user_api_key_cache entries: %s. "
+                "Budgets may be over-enforced until the counters expire.",
+                len(counter_keys),
+                len(cache_keys),
+                e,
+            )
+
     async def _fetch_linked_rows(
         self,
         table: SpendLinkedTable[_RowT],
@@ -612,18 +645,54 @@ class ResetBudgetJob:
             verbose_proxy_logger.warning("Failed to fetch %s for counter invalidation: %s", log_subject, e)
             return ()
 
-    async def _collect_endusers_to_reset(self, budget_ids: Sequence[str]) -> tuple[_EndUserRow, ...]:
-        linked: Final[Sequence[_EndUserRow] | None] = await self._with_db_retry(
-            lambda: self.prisma_client.get_data(
-                table_name="enduser",
-                query_type="find_all",
-                budget_id_list=list(budget_ids),
-            ),
-            reason="reset_budget_read_endusers_failure",
-        )
-        if litellm.max_end_user_budget_id is None or litellm.max_end_user_budget_id not in budget_ids:
-            return tuple(linked or ())
-        return (*(linked or ()), *await self._get_endusers_with_no_budget_id())
+    async def _invalidate_enduser_caches(self, budget_ids: Sequence[str]) -> int:
+        """Drop the cached spend of every customer the committed tier reset zeroed.
+
+        Walked a page at a time with a keyset cursor, for the same reason
+        ``_reset_windows_for_source`` is: the customers sharing one tier are
+        unbounded, so reading them into one result set puts a
+        customer-count-sized list in the proxy's heap on every tick, and a
+        deployment large enough turns that into an OOM rather than a slow tick.
+
+        No per-run page cap, also for that walk's reason: the position cannot
+        survive the run, so a cap would restart at the first customer every tick
+        and never reach the tail. The cursor strictly advances, so this
+        terminates on its own.
+        """
+        if not budget_ids:
+            return 0
+        where: Final = _enduser_invalidation_where(budget_ids)
+        cursor = ""
+        invalidated = 0
+        while True:
+            rows = await self._fetch_enduser_page(where=where, cursor=cursor)
+            if not rows:
+                return invalidated
+            await self._invalidate_caches(
+                counter_keys=tuple(_enduser_counter_key(row) for row in rows),
+                cache_keys=tuple(key for row in rows for key in _enduser_cache_keys(row)),
+            )
+            invalidated += len(rows)
+            if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
+                return invalidated
+            cursor = rows[-1].user_id
+
+    async def _fetch_enduser_page(self, where: Mapping[str, object], cursor: str) -> tuple[_EndUserRow, ...]:
+        """One keyset page of customers, ordered by primary key so the cursor never repeats a row."""
+        try:
+            return tuple(
+                await self._with_db_retry(
+                    lambda: EndUserRepository(self.prisma_client).table.find_many(
+                        where={**where, "user_id": {"gt": cursor}},  # mutable-ok: prisma where filter must be a dict
+                        order={"user_id": "asc"},  # mutable-ok: prisma order filter must be a dict
+                        take=RESET_BUDGET_JOB_BATCH_SIZE,
+                    ),
+                    reason="reset_budget_read_endusers_failure",
+                )
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning("Failed to fetch end users for cache invalidation: %s", e)
+            return ()
 
     async def _collect_budget_cascade(self, budgets_to_reset: Sequence[LiteLLM_BudgetTableFull]) -> _BudgetCascade:
         """Resolve every row the expiring budget tiers gate, before any write.
@@ -670,7 +739,6 @@ class ResetBudgetJob:
             if _rollover_enabled()
             else {}  # mutable-ok: empty sentinel immediately frozen by MappingProxyType
         )
-        endusers: Final[tuple[_EndUserRow, ...]] = await self._collect_endusers_to_reset(budget_ids)
         return _BudgetCascade(
             budgets=tuple(budgets_to_reset),
             budget_ids=budget_ids,
@@ -682,7 +750,6 @@ class ResetBudgetJob:
                 for b in budgets_to_reset
                 if b.budget_id is not None and b.budget_duration is not None
             ),
-            endusers=endusers,
             counter_resets=(
                 *(
                     (_team_membership_counter_key(row), _row_carried_spend(row, rollover_caps))
@@ -695,7 +762,6 @@ class ResetBudgetJob:
                     (_model_access_group_counter_key(row), _row_carried_spend(row, rollover_caps))
                     for row in model_access_groups
                 ),
-                *((_enduser_counter_key(row), _enduser_carried_spend(row, rollover_caps)) for row in endusers),
             ),
             rollover_caps=rollover_caps,
             cache_keys=(
@@ -704,7 +770,6 @@ class ResetBudgetJob:
                 *(key for row in orgs for key in _org_cache_keys(row)),
                 *(key for row in tags for key in _tag_cache_keys(row)),
                 *(key for row in model_access_groups for key in _model_access_group_cache_keys(row)),
-                *(key for row in endusers for key in _enduser_cache_keys(row)),
             ),
         )
 
@@ -736,10 +801,10 @@ class ResetBudgetJob:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
     async def _invalidate_budget_cascade_caches(self, cascade: _BudgetCascade) -> None:
-        for counter_key, _ in cascade.counter_resets:
-            await self._invalidate_spend_counter(counter_key)
-        for cache_key in cascade.cache_keys:
-            await self._invalidate_user_api_key_cache_entry(cache_key)
+        await self._invalidate_caches(
+            counter_keys=tuple(counter_key for counter_key, _ in cascade.counter_resets),
+            cache_keys=cascade.cache_keys,
+        )
 
     async def _reset_expired_budget_cascade(self) -> _BudgetCascadeCommitted | _BudgetCascadeFailed:
         now: Final = datetime.now(timezone.utc)
@@ -769,6 +834,7 @@ class ResetBudgetJob:
                 (reset_at for _, reset_at in cascade.budget_resets),
                 cutoff=datetime.now(timezone.utc),
             ),
+            endusers_invalidated=await self._invalidate_enduser_caches(cascade.budget_ids),
         )
 
     async def reset_budget_for_litellm_budget_table(self) -> None:
@@ -788,7 +854,7 @@ class ResetBudgetJob:
         end_time: Final = time.time()
 
         match outcome:
-            case _BudgetCascadeCommitted(cascade=cascade, advanced=advanced):
+            case _BudgetCascadeCommitted(cascade=cascade, advanced=advanced, endusers_invalidated=endusers_invalidated):
                 asyncio.create_task(
                     self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
                         service=ServiceTypes.RESET_BUDGET_JOB,
@@ -797,8 +863,8 @@ class ResetBudgetJob:
                         start_time=start_time,
                         end_time=end_time,
                         event_metadata={
-                            **_budget_cascade_event_metadata(cascade),
-                            "num_endusers_updated": len(cascade.endusers),
+                            **_budget_cascade_event_metadata(cascade, endusers_invalidated),
+                            "num_endusers_updated": endusers_invalidated,
                             "num_endusers_failed": 0,
                         },
                     )
@@ -826,27 +892,6 @@ class ResetBudgetJob:
                 return _NO_PROGRESS
             case _:
                 assert_never(outcome)
-
-    async def _get_endusers_with_no_budget_id(
-        self,
-    ) -> list[LiteLLM_EndUserTable]:
-        """
-        Fetch end users that have no explicit budget_id set (NULL) and have
-        accumulated spend > 0.  These are implicitly-created end users that
-        rely on the default budget (litellm.max_end_user_budget_id) applied
-        in-memory during auth checks.
-        """
-        table: Final = EndUserRepository(self.prisma_client).table
-        rows: Final = await self._with_db_retry(
-            lambda: table.find_many(
-                where={
-                    "budget_id": None,
-                    "spend": {"gt": 0},
-                },
-            ),
-            reason="reset_budget_read_endusers_without_budget_id_failure",
-        )
-        return [LiteLLM_EndUserTable.model_validate(row.model_dump()) for row in rows]
 
     async def _write_key_reset_updates(self, updated_keys: Sequence[_RowReset[LiteLLM_VerificationToken]]) -> None:
         """
