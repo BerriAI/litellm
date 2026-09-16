@@ -41,6 +41,10 @@ class PluginSpec(BaseModel):
     category: str | None = Field(None, description="Plugin category")
     domain: str | None = Field(None, description="Skill domain (e.g., 'Productivity')")
     namespace: str | None = Field(None, description="Skill namespace within domain (e.g., 'workflows')")
+    installation_preference: str | None = Field(
+        None,
+        description="Claude Code marketplace installationPreference for this plugin (e.g. 'auto_install')",
+    )
 
 
 class RegisterPluginRequest(PluginSpec):
@@ -104,6 +108,7 @@ class PluginListItem(BaseModel):
     category: str | None = None
     domain: str | None = None
     namespace: str | None = None
+    installation_preference: str | None = None
     enabled: bool
     created_at: str | None
     updated_at: str | None
@@ -127,6 +132,7 @@ class MarketplacePluginEntry(BaseModel):
     homepage: str | None = None
     keywords: list[str] | None = None
     category: str | None = None
+    installation_preference: str | None = None
 
 
 class MarketplaceResponse(BaseModel):
