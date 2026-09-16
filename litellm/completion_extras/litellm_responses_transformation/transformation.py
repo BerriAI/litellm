@@ -1553,7 +1553,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             response_data: Final = parsed_chunk.get("response", {})
             output_items: Final = response_data.get("output", []) if response_data else []
 
-            has_function_calls: Final = any(
+            has_function_calls: Final = bool(tool_call_index_map) or any(
                 item.get("type") in ("function_call", "custom_tool_call")
                 for item in output_items
                 if isinstance(item, dict)
