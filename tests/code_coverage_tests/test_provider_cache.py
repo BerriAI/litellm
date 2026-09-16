@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import os
 import shutil
 import socket
 import subprocess
+import struct
 import threading
 import time
 import uuid
@@ -17,9 +21,11 @@ from typing import Final
 from urllib.parse import urlsplit
 
 import pytest
+from pydantic import JsonValue
 from e2e_http import NetworkError, PreparedForward, RawResponse, StreamChunk, StreamHead, forward, prepare_forward
 from models import LiteLLMParamsBody, ModelMode
 from botocore.credentials import Credentials
+from botocore.eventstream import EventStreamBuffer
 from provider_cache import (
     SIGNATURE_HEADERS,
     CacheEdge,
@@ -638,6 +644,53 @@ class TestNonChatOpenAiEndpoints:
         assert cacheable_endpoint("openai", "POST", f"https://api.openai.com{path}", MARKED) is cacheable
 
 
+BEDROCK_STREAM_MODEL: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+CONVERSE_STREAM_URL: Final = f"https://bedrock.invalid/model/{BEDROCK_STREAM_MODEL}/converse-stream"
+INVOKE_STREAM_URL: Final = f"https://bedrock.invalid/model/{BEDROCK_STREAM_MODEL}/invoke-with-response-stream"
+
+
+def eventstream_frame(headers: Mapping[str, str], payload: bytes) -> bytes:
+    """AWS eventstream wire framing, the shape `vnd.amazon.eventstream` bodies
+    arrive in. Built here rather than pasted from a capture so a test can express
+    the stream it means; `test_the_frames_these_tests_build_are_real_aws_framing`
+    holds it to botocore's own parser."""
+    encoded: Final = b"".join(
+        bytes([len(name)]) + name.encode() + b"\x07" + struct.pack(">H", len(value)) + value.encode()
+        for name, value in headers.items()
+    )
+    prelude: Final = struct.pack(">II", 16 + len(encoded) + len(payload), len(encoded))
+    framed: Final = prelude + struct.pack(">I", binascii.crc32(prelude)) + encoded + payload
+    return framed + struct.pack(">I", binascii.crc32(framed))
+
+
+def eventstream_event(event_type: str, payload: JsonValue, message_type: str = "event") -> bytes:
+    return eventstream_frame(
+        {":event-type": event_type, ":message-type": message_type, ":content-type": "application/json"},
+        json.dumps(payload).encode(),
+    )
+
+
+def invoke_chunk(inner: JsonValue) -> bytes:
+    return eventstream_event("chunk", {"bytes": base64.b64encode(json.dumps(inner).encode()).decode("ascii")})
+
+
+CONVERSE_STREAM_OK: Final = (
+    eventstream_event("messageStart", {"role": "assistant"})
+    + eventstream_event("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "hi"}})
+    + eventstream_event("contentBlockStop", {"contentBlockIndex": 0})
+    + eventstream_event("messageStop", {"stopReason": "end_turn"})
+    + eventstream_event("metadata", {"usage": {"inputTokens": 12, "outputTokens": 6, "totalTokens": 18}})
+)
+INVOKE_STREAM_OK: Final = (
+    invoke_chunk({"type": "message_start", "message": {"id": "msg_bdrk_x", "role": "assistant"}})
+    + invoke_chunk({"type": "content_block_start", "index": 0})
+    + invoke_chunk({"type": "content_block_delta", "index": 0, "delta": {"text": "hi"}})
+    + invoke_chunk({"type": "content_block_stop", "index": 0})
+    + invoke_chunk({"type": "message_delta", "delta": {"stop_reason": "end_turn"}})
+    + invoke_chunk({"type": "message_stop"})
+)
+
+
 class TestBedrockSigning:
     """Bedrock is the reason the edge could not mount it before: SigV4 covers the
     Host header, so forwarding through a rewritten api_base invalidates the
@@ -738,32 +791,55 @@ class TestBedrockSigning:
                 assert call(url, BEDROCK_BODY).body == response
         assert len(provider.hits) == 2
 
-    @pytest.mark.parametrize("action", ["converse-stream", "invoke-with-response-stream"])
-    def test_streaming_endpoints_go_live_every_time(
-        self, store: RedisResponseStore, provider: Provider, action: str,
+    @pytest.mark.parametrize("action,response", [
+        ("converse-stream", CONVERSE_STREAM_OK),
+        ("invoke-with-response-stream", INVOKE_STREAM_OK),
+    ], ids=["converse-stream", "invoke-stream"])
+    def test_a_finished_stream_is_served_from_the_cache_the_second_time(
+        self, store: RedisResponseStore, provider: Provider, action: str, response: bytes,
     ) -> None:
-        """An eventstream's completeness cannot be proven without parsing its
-        frames, so these bypass rather than risk recording a truncated answer.
-        They are still signed: a bypass is a forward, not a passthrough."""
-        provider.response = CONVERSE_SUCCESS
-        cache: Final = bedrock_cache_edge(store)
-        for _ in range(2):
-            with bedrock_edge(cache, provider, action) as url:
-                assert call(url, BEDROCK_BODY).body == CONVERSE_SUCCESS
-        assert len(provider.hits) == 2
-        assert dict(cache.counters.counts)[f"mount:{BEDROCK_MOUNT}:bypass"] == 2
+        provider.response = response
+        with bedrock_edge(bedrock_cache_edge(store), provider, action) as url:
+            assert call(url, BEDROCK_BODY).body == response
+        assert len(provider.hits) == 1
+        replay: Final = bedrock_cache_edge(store)
+        with bedrock_edge(replay, provider, action) as url:
+            assert call(url, BEDROCK_BODY).body == response
+        assert len(provider.hits) == 1
+        assert dict(replay.counters.counts)[f"mount:{BEDROCK_MOUNT}:hits"] == 1
         assert all(
             sent.startswith("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/")
             for sent in provider.authorizations
         ), provider.authorizations
 
-    @pytest.mark.parametrize("action,cacheable", [
-        ("converse", True), ("invoke", True),
-        ("converse-stream", False), ("invoke-with-response-stream", False),
-    ])
-    def test_only_the_unary_bedrock_actions_are_cacheable(self, action: str, cacheable: bool) -> None:
+    @pytest.mark.parametrize("action,response", [
+        ("converse-stream", CONVERSE_STREAM_OK[:-1]),
+        ("invoke-with-response-stream", INVOKE_STREAM_OK[:-1]),
+    ], ids=["converse-stream", "invoke-stream"])
+    def test_a_stream_the_connection_cut_short_calls_the_provider_every_time(
+        self, store: RedisResponseStore, provider: Provider, action: str, response: bytes,
+    ) -> None:
+        """The whole risk of caching an eventstream is recording a half-finished
+        one, so a truncated body has to be rejected rather than stored."""
+        provider.response = response
+        with bedrock_edge(bedrock_cache_edge(store), provider, action) as url:
+            assert call(url, BEDROCK_BODY).body == response
+        replay: Final = bedrock_cache_edge(store)
+        with bedrock_edge(replay, provider, action) as url:
+            assert call(url, BEDROCK_BODY).body == response
+        assert len(provider.hits) == 2
+        assert dict(replay.counters.counts)[f"mount:{BEDROCK_MOUNT}:rejected"] == 1
+        assert f"mount:{BEDROCK_MOUNT}:hits" not in dict(replay.counters.counts)
+
+    @pytest.mark.parametrize("action", ["converse", "invoke", "converse-stream", "invoke-with-response-stream"])
+    def test_every_anthropic_bedrock_action_is_cacheable(self, action: str) -> None:
         url: Final = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{BEDROCK_MODEL}/{action}"
-        assert cacheable_endpoint(BEDROCK_MOUNT, "POST", url, BEDROCK_BODY) is cacheable
+        assert cacheable_endpoint(BEDROCK_MOUNT, "POST", url, BEDROCK_BODY)
+
+    @pytest.mark.parametrize("action", ["count-tokens", "invoke-async", "converse-stream-x"])
+    def test_an_unknown_bedrock_action_is_not_cacheable(self, action: str) -> None:
+        url: Final = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{BEDROCK_MODEL}/{action}"
+        assert not cacheable_endpoint(BEDROCK_MOUNT, "POST", url, BEDROCK_BODY)
 
     def test_a_region_mount_resolves_whole(self) -> None:
         resolved: Final = resolve_mount(f"/{BEDROCK_MOUNT}/model/{BEDROCK_MODEL}/converse", EDGE_MOUNTS)
@@ -1021,3 +1097,147 @@ def test_duplicate_headers_bypass_cache_and_count_live_calls(
     assert len(provider.hits) == (2 if known_mount else 0)
     assert dict(cache.counters.counts)["duplicate_header_bypass"] == 2
     assert dict(cache.counters.counts).get("upstream_attempts", 0) == (2 if known_mount else 0)
+
+
+class TestBedrockStreams:
+    def test_the_frames_these_tests_build_are_real_aws_framing(self) -> None:
+        buffer: Final = EventStreamBuffer()
+        buffer.add_data(CONVERSE_STREAM_OK)
+        assert [event.headers[":event-type"] for event in buffer] == [
+            "messageStart", "contentBlockDelta", "contentBlockStop", "messageStop", "metadata",
+        ]
+
+    @pytest.mark.parametrize("url,body", [
+        (CONVERSE_STREAM_URL, CONVERSE_STREAM_OK),
+        (INVOKE_STREAM_URL, INVOKE_STREAM_OK),
+    ])
+    def test_a_finished_stream_is_recordable(self, url: str, body: bytes) -> None:
+        assert cacheable_endpoint(BEDROCK_MOUNT, "POST", url, b"{}")
+        assert successful_response(BEDROCK_MOUNT, url, 200, {}, body)
+
+    @pytest.mark.parametrize("url,body", [
+        (CONVERSE_STREAM_URL, CONVERSE_STREAM_OK),
+        (INVOKE_STREAM_URL, INVOKE_STREAM_OK),
+    ])
+    @pytest.mark.parametrize("keep", [1, -1, -4])
+    def test_a_stream_the_connection_cut_short_is_not_recordable(
+        self, url: str, body: bytes, keep: int,
+    ) -> None:
+        """botocore yields the frames it did receive and silently drops a trailing
+        partial one, so a stream cut a single byte short parses clean and only the
+        byte accounting and the terminator rule catch it."""
+        assert not successful_response(BEDROCK_MOUNT, url, 200, {}, body[:keep])
+
+    @pytest.mark.parametrize("url,body", [
+        (CONVERSE_STREAM_URL, CONVERSE_STREAM_OK),
+        (INVOKE_STREAM_URL, INVOKE_STREAM_OK),
+    ])
+    def test_a_corrupted_frame_is_not_recordable(self, url: str, body: bytes) -> None:
+        flipped: Final = bytearray(body)
+        flipped[len(body) // 2] ^= 0xFF
+        assert not successful_response(BEDROCK_MOUNT, url, 200, {}, bytes(flipped))
+
+    def test_a_converse_stream_that_lost_its_usage_is_not_recordable(self) -> None:
+        """ConverseStream names its stop reason a frame before it reports usage,
+        and litellm prices the call from that usage, so a stream cut between the
+        two would replay as a free call."""
+        without_metadata: Final = (
+            eventstream_event("messageStart", {"role": "assistant"})
+            + eventstream_event("messageStop", {"stopReason": "end_turn"})
+        )
+        assert not successful_response(BEDROCK_MOUNT, CONVERSE_STREAM_URL, 200, {}, without_metadata)
+
+    def test_a_converse_stream_that_never_stopped_is_not_recordable(self) -> None:
+        assert not successful_response(
+            BEDROCK_MOUNT, CONVERSE_STREAM_URL, 200, {},
+            eventstream_event("messageStart", {"role": "assistant"})
+            + eventstream_event("metadata", {"usage": {"totalTokens": 18}}),
+        )
+
+    def test_a_stream_that_failed_after_answering_200_is_not_recordable(self) -> None:
+        """Bedrock reports a fault that began after the headers went out as an
+        exception frame in place of the terminator it never got to send."""
+        assert not successful_response(
+            BEDROCK_MOUNT, CONVERSE_STREAM_URL, 200, {},
+            eventstream_event("messageStart", {"role": "assistant"})
+            + eventstream_event("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "hi"}})
+            + eventstream_event("modelStreamErrorException", {"message": "boom"}, message_type="exception"),
+        )
+
+    @pytest.mark.parametrize("url,body", [
+        (CONVERSE_STREAM_URL, CONVERSE_STREAM_OK),
+        (INVOKE_STREAM_URL, INVOKE_STREAM_OK),
+    ], ids=["converse-stream", "invoke-stream"])
+    def test_a_stream_cut_after_its_terminator_is_not_recordable(self, url: str, body: bytes) -> None:
+        """The terminator rules cannot see this one. Every frame the stream owes
+        has arrived and the partial frame after them is the one botocore drops
+        without a word, so only counting the bytes against the frame lengths
+        tells this from a stream that ended where it meant to."""
+        assert successful_response(BEDROCK_MOUNT, url, 200, {}, body)
+        assert not successful_response(BEDROCK_MOUNT, url, 200, {}, body + b"\x00\x00\x02")
+
+    def test_a_converse_stream_whose_stop_frame_names_no_reason_is_not_recordable(self) -> None:
+        assert not successful_response(
+            BEDROCK_MOUNT, CONVERSE_STREAM_URL, 200, {},
+            eventstream_event("messageStart", {"role": "assistant"})
+            + eventstream_event("messageStop", {})
+            + eventstream_event("metadata", {"usage": {"totalTokens": 18}}),
+        )
+
+    def test_an_invoke_stream_carrying_a_frame_that_is_not_a_chunk_is_not_recordable(self) -> None:
+        """Every frame of an invoke stream is a `chunk` holding one base64 event.
+        A frame that is not one carries an event this rule cannot read, so the
+        stream can no longer be judged complete."""
+        assert not successful_response(
+            BEDROCK_MOUNT, INVOKE_STREAM_URL, 200, {},
+            invoke_chunk({"type": "message_start", "message": {"id": "msg_bdrk_x"}})
+            + eventstream_event("metadata", {"usage": {"totalTokens": 18}})
+            + invoke_chunk({"type": "message_delta", "delta": {"stop_reason": "end_turn"}})
+            + invoke_chunk({"type": "message_stop"}),
+        )
+
+    def test_a_frame_claiming_no_length_is_rejected_rather_than_walked_forever(self) -> None:
+        """A frame length of zero never advances the cursor. Rejecting it is what
+        keeps a corrupt body from spinning the edge instead of answering."""
+        assert not successful_response(BEDROCK_MOUNT, CONVERSE_STREAM_URL, 200, {}, b"\x00\x00\x00\x00" * 4)
+
+    @pytest.mark.parametrize("url,terminator", [
+        (INVOKE_STREAM_URL, invoke_chunk({"type": "message_stop"})),
+        (CONVERSE_STREAM_URL, eventstream_event("metadata", {"usage": {"totalTokens": 18}})),
+    ], ids=["invoke-stream", "converse-stream"])
+    def test_a_delta_that_names_no_stop_reason_does_not_finish_a_stream(
+        self, url: str, terminator: bytes,
+    ) -> None:
+        """A `message_delta` arriving without its stop reason is the shape of a
+        turn the connection cut short partway through the delta itself."""
+        head: Final = (
+            invoke_chunk({"type": "message_start", "message": {"id": "msg_bdrk_x"}})
+            + invoke_chunk({"type": "message_delta", "delta": {}})
+        )
+        assert not successful_response(BEDROCK_MOUNT, url, 200, {}, head + terminator)
+
+    def test_an_invoke_chunk_that_is_not_base64_is_not_recordable(self) -> None:
+        assert not successful_response(
+            BEDROCK_MOUNT, INVOKE_STREAM_URL, 200, {},
+            invoke_chunk({"type": "message_start", "message": {"id": "msg_bdrk_x"}})
+            + eventstream_event("chunk", {"bytes": "not base64 at all !!"})
+            + invoke_chunk({"type": "message_stop"}),
+        )
+
+    def test_an_invoke_stream_missing_its_stop_reason_is_not_recordable(self) -> None:
+        assert not successful_response(
+            BEDROCK_MOUNT, INVOKE_STREAM_URL, 200, {},
+            invoke_chunk({"type": "message_start", "message": {"id": "msg_bdrk_x"}})
+            + invoke_chunk({"type": "message_stop"}),
+        )
+
+    def test_an_empty_stream_is_not_recordable(self) -> None:
+        for url in (CONVERSE_STREAM_URL, INVOKE_STREAM_URL):
+            assert not successful_response(BEDROCK_MOUNT, url, 200, {}, b"")
+
+    def test_each_streaming_endpoint_is_held_to_its_own_grammar(self) -> None:
+        assert not successful_response(BEDROCK_MOUNT, CONVERSE_STREAM_URL, 200, {}, INVOKE_STREAM_OK)
+        assert not successful_response(BEDROCK_MOUNT, INVOKE_STREAM_URL, 200, {}, CONVERSE_STREAM_OK)
+
+    def test_a_stream_that_errored_before_it_started_is_not_recordable(self) -> None:
+        assert not successful_response(BEDROCK_MOUNT, CONVERSE_STREAM_URL, 503, {}, CONVERSE_STREAM_OK)

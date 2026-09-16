@@ -4,7 +4,9 @@
 
 The edge caches complete successful POST responses for `/v1/chat/completions`, `/v1/messages`, `/v1/embeddings` and `/v1/responses` on the OpenAI and Anthropic mounts, SSE streams included, and for `/model/{id}/converse` and `/model/{id}/invoke` on a Bedrock mount. Unsupported endpoints pass through. Each endpoint family has its own completeness rule, so a truncated embedding or a Responses run that never reached `response.completed` is not stored
 
-Bedrock's streaming endpoints, `converse-stream` and `invoke-with-response-stream`, are not cacheable. They still cross the edge and are still re-signed, so they need the same IAM, but they always call the provider. AWS frames them as binary `vnd.amazon.eventstream` rather than SSE, and reading a terminal event out of that is what a completeness rule for them would need. That matters more than the endpoint count suggests: the Claude Code compat cells drive the real CLI, which always streams, so most Bedrock traffic in the suite is not cached today
+Bedrock's streaming endpoints, `converse-stream` and `invoke-with-response-stream`, cache too. AWS frames those as binary `vnd.amazon.eventstream` rather than SSE, so botocore's own parser reads the frames and validates both CRCs, and each endpoint is then held to its terminal grammar. That matters more than the endpoint count suggests: the Claude Code compat cells drive the real CLI, which always streams, so streaming is most of the suite's Bedrock traffic
+
+Two details of that rule are worth knowing before changing it. A ConverseStream ends with `metadata`, not with `messageStop`, and the `metadata` frame is what carries the token usage litellm prices the call from, so the rule requires it: a stream cut between the two still names a stop reason but would replay as a free call. And a dropped connection is invisible to the parser, which yields the frames it did receive and silently discards a trailing partial one, so the body is also checked against the frame lengths it declares. A stream cut one byte short parses clean and has to be caught that way
 
 ## Request identity
 
