@@ -7408,6 +7408,88 @@ async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins(
         assert ps.general_settings["apply_user_budget_to_team_keys"] is True
 
 
+@pytest.mark.asyncio
+async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to_db_ones():
+    """user_api_key_auth honours ``auth: false`` only for entries it finds in
+    general_settings["pass_through_endpoints"]. The DB overlay used to replace that
+    list wholesale, so once one endpoint existed in the DB the YAML-declared
+    auth-disabled route started answering 401 while staying registered."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    yaml_endpoint: Final = {"path": "/v1/cuopt/request", "target": "https://example.com/post", "auth": False}
+    db_endpoint: Final = {"id": "db-1", "path": "/v1/db-echo", "target": "https://example.com/post", "auth": True}
+
+    def request_without_key(path: str) -> MagicMock:
+        request: Final = MagicMock()
+        request.url.path = path
+        request.headers = {}
+        request.query_params = {}
+        return request
+
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    with settings, yaml_endpoints, initialize, master_key:
+        await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+
+        anonymous: Final = await user_api_key_auth(request=request_without_key("/v1/cuopt/request"), api_key=None)
+        assert anonymous.api_key is None
+
+        with pytest.raises(ProxyException) as still_protected:
+            await user_api_key_auth(request=request_without_key("/v1/db-echo"), api_key=None)
+        assert still_protected.value.code == "401"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("db_methods", "yaml_methods"),
+    [(None, None), (["POST"], ["GET"])],
+    ids=["all-methods", "disjoint-methods"],
+)
+async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_entry_on_the_same_path(
+    db_methods: list[str] | None, yaml_methods: list[str] | None
+):
+    """The auth check matches pass-through entries by path only and lets any
+    matching ``auth: false`` entry through, so a DB ``auth: true`` entry can only
+    lock down a YAML-declared path if the YAML entry is dropped from the merged
+    list, whatever ``methods`` either entry declares."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    yaml_endpoint: Final = {
+        "path": "/v1/cuopt/request",
+        "target": "https://example.com/post",
+        "auth": False,
+        "methods": yaml_methods,
+    }
+    db_endpoint: Final = {
+        "id": "db-1",
+        "path": "/v1/cuopt/request",
+        "target": "https://example.com/post",
+        "auth": True,
+        "methods": db_methods,
+    }
+
+    request: Final = MagicMock()
+    request.url.path = "/v1/cuopt/request"
+    request.method = "POST"
+    request.headers = {}
+    request.query_params = {}
+
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    with settings, yaml_endpoints, initialize, master_key:
+        await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+
+        with pytest.raises(ProxyException) as locked_down:
+            await user_api_key_auth(request=request, api_key=None)
+        assert locked_down.value.code == "401"
+
+
 def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
     for index in range(count):
         cache.set_cache(key=f"key-{index}", value={"token": f"key-{index}"}, local_only=True)
