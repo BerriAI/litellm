@@ -1069,7 +1069,8 @@ class ModelResponseIterator:
                 """
                 message_start_block: Final = MessageStartBlock(**chunk)
                 start_message: Final = message_start_block["message"]
-                self.served_model = start_message["model"] if "model" in start_message else None
+                if "model" in start_message:
+                    self.served_model = start_message["model"]
                 if "usage" in message_start_block["message"]:
                     usage = self._handle_usage(anthropic_usage_chunk=message_start_block["message"]["usage"])
             elif type_chunk == "error":
