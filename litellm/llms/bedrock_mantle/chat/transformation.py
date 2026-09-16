@@ -22,6 +22,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
 )
+from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -108,6 +109,8 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
 
     def get_supported_openai_params(self, model: str) -> list:
         base_params: Final = super().get_supported_openai_params(model)
+        if is_gpt_reasoning_series_name(model) and "verbosity" not in base_params:
+            base_params.append("verbosity")
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 if "reasoning_effort" not in base_params:
