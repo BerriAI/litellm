@@ -12,8 +12,9 @@ from litellm.types.utils import (
     Choices,
     Message,
     ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
 )
-from litellm.utils import _get_model_info_helper
 
 
 @pytest.fixture
