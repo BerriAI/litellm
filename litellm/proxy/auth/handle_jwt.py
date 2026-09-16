@@ -14,7 +14,7 @@ import hashlib
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
@@ -61,6 +61,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.agents import AgentResponse
 
 from .auth_checks import (
     _allowed_routes_check,
@@ -125,6 +126,26 @@ class _UserInfoResponse(Protocol):
     """The OIDC UserInfo endpoint's HTTP response, read for the identity document it carries."""
 
     def json(self) -> dict[str, object]: ...
+
+
+class AgentLookup(Protocol):
+    """The registered-agent lookups a JWT agent claim is matched against."""
+
+    def get_agent_by_id(self, agent_id: str) -> AgentResponse | None:
+        """The agent registered under ``agent_id``, if any."""
+
+    def get_agent_by_name(self, agent_name: str) -> AgentResponse | None:
+        """The agent registered under ``agent_name``, if any."""
+
+
+class _NoRegisteredAgents:
+    """The lookup in force until the proxy binds its agent registry: no agent is registered, so no claim matches."""
+
+    def get_agent_by_id(self, agent_id: str) -> None:
+        return None
+
+    def get_agent_by_name(self, agent_name: str) -> None:
+        return None
 
 
 def _discovery_document(response: _OIDCDiscoveryResponse) -> _OIDCDiscoveryBody:
@@ -198,6 +219,10 @@ class JWTHandler:
         self.leeway = 0
         # Per-cache-key locks so a TTL lapse triggers one refresh instead of one per in-flight request.
         self._refresh_locks: dict[str, asyncio.Lock] = {}  # mutable-ok: lock registry, keyed by JWKS url
+        self.agent_lookup: AgentLookup = _NoRegisteredAgents()
+
+    def bind_agent_lookup(self, agent_lookup: AgentLookup) -> None:
+        self.agent_lookup = agent_lookup
 
     def update_environment(
         self,
@@ -622,6 +647,12 @@ class JWTHandler:
         except KeyError:
             object_id = default_value
         return object_id
+
+    def get_agent_claim(self, token: Mapping[str, object]) -> str | None:
+        if self.litellm_jwtauth.agent_id_jwt_field is None:
+            return None
+        claim: Final[object] = get_nested_value(data=token, key_path=self.litellm_jwtauth.agent_id_jwt_field)
+        return claim if isinstance(claim, str) and claim else None
 
     def get_org_id(self, token: dict, default_value: str | None) -> str | None:
         if self._has_trusted_issuer_normalized_claim(token=token, claim=self.LITELLM_ORG_ID_CLAIM):
@@ -1380,6 +1411,7 @@ class JWTAuthManager:
         api_key: str,
         jwt_valid_token: dict | None = None,
         user_email: str | None = None,
+        agent_id: str | None = None,
     ) -> JWTAuthBuilderResult | None:
         """Check admin status and route access permissions"""
         if not jwt_handler.is_admin(scopes=scopes):
@@ -1409,7 +1441,27 @@ class JWTAuthManager:
             org_id=org_id,
             team_membership=None,
             jwt_claims=jwt_valid_token or {},
+            agent_id=agent_id,
         )
+
+    @staticmethod
+    def resolve_agent_id(
+        jwt_handler: JWTHandler,
+        jwt_valid_token: Mapping[str, object],
+        agent_registry: AgentLookup,
+    ) -> str | None:
+        agent_claim: Final = jwt_handler.get_agent_claim(token=jwt_valid_token)
+        if agent_claim is None:
+            return None
+        agent: Final = agent_registry.get_agent_by_id(agent_id=agent_claim) or agent_registry.get_agent_by_name(
+            agent_name=agent_claim
+        )
+        if agent is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"No registered agent matches JWT claim {jwt_handler.litellm_jwtauth.agent_id_jwt_field}={agent_claim}",
+            )
+        return agent.agent_id
 
     @staticmethod
     async def find_and_validate_specific_team_id(
@@ -2284,6 +2336,12 @@ class JWTAuthManager:
             elif rbac_role == LitellmUserRoles.INTERNAL_USER:
                 user_id = object_id
 
+        agent_id: Final = JWTAuthManager.resolve_agent_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_valid_token,
+            agent_registry=jwt_handler.agent_lookup,
+        )
+
         if identity_only:
             identity_user, _, _, _, identity_user_id = await JWTAuthManager.get_objects(
                 user_id=user_id,
@@ -2315,11 +2373,20 @@ class JWTAuthManager:
                 team_membership=None,
                 token=api_key,
                 jwt_claims=jwt_valid_token,
+                agent_id=agent_id,
             )
 
         # Check admin access
         admin_result: Final = await JWTAuthManager.check_admin_access(
-            jwt_handler, scopes, route, user_id, org_id, api_key, jwt_valid_token, user_email=user_email
+            jwt_handler,
+            scopes,
+            route,
+            user_id,
+            org_id,
+            api_key,
+            jwt_valid_token,
+            user_email=user_email,
+            agent_id=agent_id,
         )
         if admin_result:
             await JWTAuthManager._attach_team_from_header_for_admin(
@@ -2563,4 +2630,5 @@ class JWTAuthManager:
             token=api_key,
             team_membership=team_membership_object,
             jwt_claims=jwt_valid_token,
+            agent_id=agent_id,
         )
