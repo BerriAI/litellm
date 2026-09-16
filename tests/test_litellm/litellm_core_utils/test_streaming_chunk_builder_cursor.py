@@ -22,9 +22,10 @@ text-based fallback to estimate from the real completion text.
 
 import pytest
 
-
+import litellm
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
     Delta,
     ModelResponseStream,
     StreamingChoices,
@@ -35,6 +36,7 @@ from litellm.types.utils import (
 def _make_chunk(
     *,
     content: str = "",
+    reasoning_content: str | None = None,
     usage: Usage = None,
     finish_reason: str = None,
     custom_llm_provider: str = "anthropic",
@@ -48,7 +50,7 @@ def _make_chunk(
             StreamingChoices(
                 finish_reason=finish_reason,
                 index=0,
-                delta=Delta(content=content, role="assistant"),
+                delta=Delta(content=content, role="assistant", reasoning_content=reasoning_content),
             )
         ],
         usage=usage,
@@ -253,6 +255,79 @@ class TestAnthropicCursorBug:
             "Reset to 0 forces token_counter fallback."
         )
 
+    @pytest.mark.parametrize("placeholder", [1, 3, 8])
+    def test_interrupted_reasoning_only_stream_estimates_from_reasoning(self, placeholder: int):
+        """
+        message_start placeholders are not always 1 (live Anthropic streams
+        have been observed sending 1 and 8 for the same prompt), and a thinking
+        model cut off before message_delta has streamed only reasoning_content.
+        The recovered usage, including the completion_tokens_details the cost
+        calculator bills from, must come from that reasoning rather than from
+        the placeholder.
+        """
+        message_start = _make_chunk(
+            usage=Usage(
+                prompt_tokens=100,
+                completion_tokens=placeholder,
+                total_tokens=100 + placeholder,
+                completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=0, text_tokens=placeholder),
+            )
+        )
+        reasoning_text = "Let me work through the scheduling constraints step by step. " * 40
+        reasoning_chunks = [
+            _make_chunk(reasoning_content=reasoning_text[i : i + 50]) for i in range(0, len(reasoning_text), 50)
+        ]
+
+        response = litellm.stream_chunk_builder(
+            chunks=[message_start, *reasoning_chunks],
+            messages=[{"role": "user", "content": "Plan the schedule."}],
+        )
+
+        assert response.choices[0].message.reasoning_content == reasoning_text
+        reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
+        assert reasoning_tokens > placeholder
+        assert response.usage.completion_tokens == reasoning_tokens, (
+            f"Expected completion_tokens to be the reasoning estimate, got "
+            f"completion_tokens={response.usage.completion_tokens} reasoning_tokens={reasoning_tokens}"
+        )
+        assert response.usage.total_tokens == response.usage.prompt_tokens + reasoning_tokens
+        details = response.usage.completion_tokens_details
+        assert (details.text_tokens or 0) + details.reasoning_tokens == response.usage.completion_tokens
+
+    def test_fallback_counts_reasoning_and_text_together(self):
+        """
+        With no usable provider count, the estimate covers everything the
+        provider generated: reasoning_content plus visible text, not text alone.
+        """
+        reasoning = "First I should check whether the input is sorted. " * 10
+        text = "The list is already sorted, so no work is needed."
+        chunks = [_make_chunk(reasoning_content=reasoning), _make_chunk(content=text)]
+
+        response = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "Sort it."}])
+
+        text_only = litellm.token_counter(model="claude-sonnet-4-6", text=text, count_response_tokens=True)
+        reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
+        assert reasoning_tokens > 0
+        assert response.usage.completion_tokens == text_only + reasoning_tokens
+
+    def test_lone_usage_event_with_finish_reason_is_trusted(self):
+        """
+        Guardrails rebuild responses from the chunks yielded to the client,
+        which excludes the un-yielded message_start. A finished stream then has
+        exactly one usage event (message_delta) and it must be kept as-is.
+        """
+        chunks = [
+            _make_chunk(content="Yes, "),
+            _make_chunk(content="that works."),
+            _make_chunk(
+                usage=Usage(prompt_tokens=20, completion_tokens=5, total_tokens=25),
+                finish_reason="stop",
+            ),
+        ]
+        processor = ChunkProcessor(chunks=chunks, messages=[])
+        result = processor._calculate_usage_per_chunk(chunks=chunks)
+        assert result["completion_tokens"] == 5
+
 
 class TestProviderGuard:
     """Class A: the cursor-reset heuristic must NOT silently affect non-Anthropic
@@ -297,11 +372,12 @@ class TestNonAnthropicStreamingIntact:
     """Make sure providers without cursor pattern still work."""
 
     def test_completion_tokens_above_one_never_resets(self):
-        """Any chunk reporting completion_tokens > 1 sets saw_non_cursor
-        and prevents the reset."""
+        """A non-Anthropic provider reporting completion_tokens > 1 from a
+        single usage event keeps that value."""
         chunks = [
             _make_chunk(
-                usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+                usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+                custom_llm_provider="openai",
             ),
         ]
         processor = ChunkProcessor(chunks=chunks, messages=[])
