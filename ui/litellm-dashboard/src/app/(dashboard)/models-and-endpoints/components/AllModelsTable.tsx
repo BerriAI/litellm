@@ -1,6 +1,6 @@
 "use client";
 
-import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
+import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState, VisibilityState } from "@tanstack/react-table";
 import { Search, Settings } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -10,6 +10,7 @@ import {
   DataTableFilterDrawer,
   DataTableFilterField,
   DataTableToolbar,
+  usePersistedColumnVisibility,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
@@ -24,13 +25,16 @@ import {
   STATUS_COLUMN_ID,
 } from "./ModelsTableColumns";
 
-export type ModelViewMode = "all" | "current_team";
+export const MODEL_VIEW_MODES = ["current_team", "all"] as const;
+export type ModelViewMode = (typeof MODEL_VIEW_MODES)[number];
 
 export const PERSONAL_TEAM_VALUE = "personal";
 export const ALL_MODEL_GROUPS_VALUE = "all";
 export const WILDCARD_MODEL_GROUP_VALUE = "wildcard";
 
 const MODEL_TABLE_BODY_HEIGHT = 600;
+const COLUMN_VISIBILITY_TABLE_ID = "all-models";
+const DEFAULT_COLUMN_VISIBILITY: VisibilityState = { [STATUS_COLUMN_ID]: false };
 
 const FILTER_LABELS: Record<string, string> = {
   [MODEL_NAME_COLUMN_ID]: "Public Model Name",
@@ -51,6 +55,7 @@ interface AllModelsTableProps {
   data: ModelData[];
   rowCount: number;
   isLoading: boolean;
+  isError?: boolean;
   isRefreshing: boolean;
   onRefresh: () => void;
   sorting: SortingState;
@@ -99,6 +104,7 @@ export function AllModelsTable({
   data,
   rowCount,
   isLoading,
+  isError,
   isRefreshing,
   onRefresh,
   sorting,
@@ -129,6 +135,10 @@ export function AllModelsTable({
   pausingModelId,
 }: AllModelsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility(
+    COLUMN_VISIBILITY_TABLE_ID,
+    DEFAULT_COLUMN_VISIBILITY,
+  );
 
   const columns = useMemo(() => {
     const columnDeps = {
@@ -189,10 +199,12 @@ export function AllModelsTable({
       filterMode="server"
       columnFilters={columnFilters}
       onColumnFiltersChange={onColumnFiltersChange}
-      defaultColumnVisibility={{ [STATUS_COLUMN_ID]: false }}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
       enableColumnResizing
       maxBodyHeight={MODEL_TABLE_BODY_HEIGHT}
       isLoading={isLoading}
+      isError={isError}
       loadingMessage="Loading models…"
       noDataMessage={<EmptyState />}
       size="compact"

@@ -32,11 +32,6 @@ export const MODEL_TABLE_SORT_COLUMN_IDS = [
   STATUS_COLUMN_ID,
 ] as const;
 
-export type ModelTableSortColumnId = (typeof MODEL_TABLE_SORT_COLUMN_IDS)[number];
-
-export const isModelTableSortColumnId = (columnId: string): columnId is ModelTableSortColumnId =>
-  (MODEL_TABLE_SORT_COLUMN_IDS as readonly string[]).includes(columnId);
-
 const COLUMN_ID_TO_SERVER_SORT_FIELD: Record<string, string> = {
   [COSTS_COLUMN_ID]: "costs",
   [STATUS_COLUMN_ID]: "status",

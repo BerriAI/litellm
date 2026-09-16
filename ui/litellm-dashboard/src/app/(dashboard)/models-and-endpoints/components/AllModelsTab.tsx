@@ -6,6 +6,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
 import { ModelData } from "@/components/model_dashboard/types";
+import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { toast } from "@/lib/toast";
 import { uiHref } from "@/utils/uiHref";
 import { modelDeleteCall, modelPatchUpdateCall } from "@/components/networking";
@@ -13,7 +14,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnFiltersState, functionalUpdate, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { Info } from "lucide-react";
-import { createParser, parseAsInteger, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
+import { parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useCallback, useMemo, useState } from "react";
 
 import { useModelsInfo } from "../../hooks/models/useModels";
@@ -21,13 +22,13 @@ import { transformModelData } from "../utils/modelDataTransformer";
 import {
   ALL_MODEL_GROUPS_VALUE,
   AllModelsTable,
+  MODEL_VIEW_MODES,
   ModelViewMode,
   PERSONAL_TEAM_VALUE,
   WILDCARD_MODEL_GROUP_VALUE,
 } from "./AllModelsTable";
 import {
   ACCESS_GROUPS_COLUMN_ID,
-  isModelTableSortColumnId,
   MODEL_NAME_COLUMN_ID,
   MODEL_TABLE_SORT_COLUMN_IDS,
   toServerSortField,
@@ -35,30 +36,40 @@ import {
 
 const SEARCH_DEBOUNCE_WAIT_MS = 200;
 const DEFAULT_PAGE_SIZE = 50;
-const MAX_PAGE_SIZE = 100;
-const MAX_PAGE = 100_000;
+const MAX_PAGE_SIZE = 50;
+const DEFAULT_PAGINATION: PaginationState = { pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE };
+const UNSORTED_COLUMN_ID = "";
+const FILTER_COLUMNS = [ACCESS_GROUPS_COLUMN_ID] as const;
+type FilterColumn = (typeof FILTER_COLUMNS)[number];
 
-const MODEL_VIEW_MODES = ["current_team", "all"] as const satisfies readonly ModelViewMode[];
-
-const boundedInteger = (min: number, max: number, fallback: number) =>
-  createParser({
-    parse: (value: string) => {
-      const parsed = parseAsInteger.parse(value);
-      return parsed === null ? null : Math.min(Math.max(parsed, min), max);
-    },
-    serialize: String,
-  }).withDefault(fallback);
-
-const TABLE_STATE = {
-  model_search: parseAsString.withDefault(""),
-  view_mode: parseAsStringLiteral(MODEL_VIEW_MODES).withDefault("current_team"),
-  filter_team: parseAsString.withDefault(PERSONAL_TEAM_VALUE),
-  access_group: parseAsString.withDefault(""),
-  sort_by: parseAsStringLiteral(MODEL_TABLE_SORT_COLUMN_IDS),
-  sort_order: parseAsStringLiteral(["asc", "desc"] as const).withDefault("asc"),
-  page: boundedInteger(1, MAX_PAGE, 1),
-  page_size: boundedInteger(1, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE),
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<FilterColumn> = {
+  sortFields: MODEL_TABLE_SORT_COLUMN_IDS,
+  defaultSort: { id: UNSORTED_COLUMN_ID, desc: false },
+  defaultPageSize: DEFAULT_PAGE_SIZE,
+  maxPageSize: MAX_PAGE_SIZE,
+  filterColumns: FILTER_COLUMNS,
+  urlKeys: { search: "model_search", filter_model_info_access_groups: "access_group" },
 };
+
+const SCOPE_PARSERS = {
+  filter_team: parseAsString.withDefault(PERSONAL_TEAM_VALUE),
+  view_mode: parseAsStringLiteral(MODEL_VIEW_MODES).withDefault("current_team"),
+};
+
+const appliedAccessGroup = (filters: ColumnFiltersState): string | null => {
+  const value = filters.find((filter) => filter.id === ACCESS_GROUPS_COLUMN_ID)?.value;
+  return typeof value === "string" ? value : null;
+};
+
+interface ServerSort {
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
+}
+
+const toServerSortOrder = (sort: SortingState[number]): "asc" | "desc" => (sort.desc ? "desc" : "asc");
+
+const toServerSort = (sort: SortingState[number] | undefined): ServerSort =>
+  sort ? { sortBy: toServerSortField(sort.id), sortOrder: toServerSortOrder(sort) } : {};
 
 interface AllModelsTabProps {
   selectedModelGroup: string | null;
@@ -82,24 +93,27 @@ const AllModelsTab = ({
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
   const queryClient = useQueryClient();
 
-  const [tableState, setTableState] = useQueryStates(TABLE_STATE);
-  const modelNameSearch = tableState.model_search;
+  const {
+    search: modelNameSearch,
+    setSearch,
+    sorting: urlSorting,
+    onSortingChange,
+    pagination,
+    onPaginationChange,
+    columnFilters: urlColumnFilters,
+    onColumnFiltersChange,
+  } = useUrlTableState(TABLE_STATE_OPTIONS);
+  const [{ filter_team: selectedTeamValue, view_mode: modelViewMode }, setScope] = useQueryStates(SCOPE_PARSERS);
   const [debouncedSearch] = useDebouncedValue(modelNameSearch, { wait: SEARCH_DEBOUNCE_WAIT_MS });
-  const modelViewMode = tableState.view_mode;
-  const selectedTeamValue = tableState.filter_team;
-  const selectedModelAccessGroupFilter = tableState.access_group || null;
-  const pagination = useMemo<PaginationState>(
-    () => ({ pageIndex: tableState.page - 1, pageSize: tableState.page_size }),
-    [tableState.page, tableState.page_size],
-  );
-  const sorting = useMemo<SortingState>(
-    () => (tableState.sort_by ? [{ id: tableState.sort_by, desc: tableState.sort_order === "desc" }] : []),
-    [tableState.sort_by, tableState.sort_order],
-  );
   const [isModelSettingsModalVisible, setIsModelSettingsModalVisible] = useState(false);
   const [deleteModalModelId, setDeleteModalModelId] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [pausingModelId, setPausingModelId] = useState<string | null>(null);
+
+  const activeSort = urlSorting.find((entry) => entry.id !== UNSORTED_COLUMN_ID);
+  const sorting = useMemo<SortingState>(() => (activeSort ? [activeSort] : []), [activeSort]);
+  const { sortBy, sortOrder } = toServerSort(activeSort);
+  const selectedModelAccessGroupFilter = appliedAccessGroup(urlColumnFilters);
 
   const teamIdForQuery = selectedTeamValue === PERSONAL_TEAM_VALUE ? undefined : selectedTeamValue;
   const isConcreteModelGroup =
@@ -113,20 +127,11 @@ const AllModelsTab = ({
       : undefined;
   const wildcardOnlyForQuery = selectedModelGroup === WILDCARD_MODEL_GROUP_VALUE;
 
-  const sortBy = useMemo(() => {
-    if (sorting.length === 0) return undefined;
-    return toServerSortField(sorting[0].id);
-  }, [sorting]);
-
-  const sortOrder = useMemo(() => {
-    if (sorting.length === 0) return undefined;
-    return sorting[0].desc ? "desc" : "asc";
-  }, [sorting]);
-
   const {
     data: rawModelData,
     isLoading: isLoadingModelsInfo,
     isFetching: isFetchingModelsInfo,
+    isError: isErrorModelsInfo,
     refetch: refetchModels,
   } = useModelsInfo(
     pagination.pageIndex + 1,
@@ -163,59 +168,42 @@ const AllModelsTab = ({
   }, [rawModelData, getProviderFromModel]);
 
   const columnFilters = useMemo<ColumnFiltersState>(
-    () =>
-      [
-        selectedModelGroup && selectedModelGroup !== ALL_MODEL_GROUPS_VALUE
-          ? { id: MODEL_NAME_COLUMN_ID, value: selectedModelGroup }
-          : null,
-        selectedModelAccessGroupFilter ? { id: ACCESS_GROUPS_COLUMN_ID, value: selectedModelAccessGroupFilter } : null,
-      ].filter((entry) => entry !== null),
-    [selectedModelGroup, selectedModelAccessGroupFilter],
-  );
-
-  const handleSearchChange = useCallback(
-    (value: string) => {
-      void setTableState({ model_search: value || null, page: null });
-    },
-    [setTableState],
+    () => [
+      ...(selectedModelGroup && selectedModelGroup !== ALL_MODEL_GROUPS_VALUE
+        ? [{ id: MODEL_NAME_COLUMN_ID, value: selectedModelGroup }]
+        : []),
+      ...urlColumnFilters,
+    ],
+    [selectedModelGroup, urlColumnFilters],
   );
 
   const handleColumnFiltersChange: OnChangeFn<ColumnFiltersState> = (updater) => {
     const next = functionalUpdate(updater, columnFilters);
     const modelGroup = next.find((entry) => entry.id === MODEL_NAME_COLUMN_ID)?.value;
-    const accessGroup = next.find((entry) => entry.id === ACCESS_GROUPS_COLUMN_ID)?.value;
     setSelectedModelGroup(typeof modelGroup === "string" ? modelGroup : ALL_MODEL_GROUPS_VALUE);
-    void setTableState({ access_group: typeof accessGroup === "string" ? accessGroup : null, page: null });
+    onColumnFiltersChange(next);
   };
 
   const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
-    const active = functionalUpdate(updater, sorting)[0];
-    void setTableState({
-      sort_by: active && isModelTableSortColumnId(active.id) ? active.id : null,
-      sort_order: active?.desc ? "desc" : null,
-      page: null,
-    });
+    onSortingChange(functionalUpdate(updater, sorting));
   };
-
-  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>(
-    (updater) => {
-      const next = functionalUpdate(updater, pagination);
-      void setTableState({ page: next.pageIndex + 1, page_size: next.pageSize });
-    },
-    [pagination, setTableState],
-  );
 
   const handleTeamChange = (value: string) => {
-    void setTableState({ filter_team: value, page: null });
+    void setScope({ filter_team: value });
+    onPaginationChange({ pageIndex: 0, pageSize: pagination.pageSize });
   };
 
-  const handleViewModeChange = (value: ModelViewMode) => {
-    void setTableState({ view_mode: value });
+  const handleViewModeChange = (viewMode: ModelViewMode) => {
+    void setScope({ view_mode: viewMode });
   };
 
   const resetFilters = () => {
+    setSearch("");
     setSelectedModelGroup(ALL_MODEL_GROUPS_VALUE);
-    void setTableState(null);
+    onColumnFiltersChange([]);
+    onSortingChange([]);
+    onPaginationChange(DEFAULT_PAGINATION);
+    void setScope(null);
   };
 
   const teamOptions = useMemo(
@@ -296,17 +284,18 @@ const AllModelsTab = ({
           data={modelData.data}
           rowCount={rawModelData?.total_count ?? 0}
           isLoading={isLoading}
+          isError={isErrorModelsInfo}
           isRefreshing={isFetchingModelsInfo}
           onRefresh={handleRefresh}
           sorting={sorting}
           onSortingChange={handleSortingChange}
           pagination={pagination}
-          onPaginationChange={handlePaginationChange}
+          onPaginationChange={onPaginationChange}
           columnFilters={columnFilters}
           onColumnFiltersChange={handleColumnFiltersChange}
           onResetFilters={resetFilters}
           searchValue={modelNameSearch}
-          onSearchChange={handleSearchChange}
+          onSearchChange={setSearch}
           teamOptions={teamOptions}
           selectedTeamValue={selectedTeamValue}
           onTeamChange={handleTeamChange}

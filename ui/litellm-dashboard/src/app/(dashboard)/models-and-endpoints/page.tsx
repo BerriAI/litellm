@@ -26,6 +26,7 @@ import AccessGroupBudgetsPanel from "@/app/(dashboard)/models-and-endpoints/pane
 import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceDataPanel";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useUrlTab } from "@/hooks/useUrlTab";
 
 type ModelTabSlug =
   | "add"
@@ -39,6 +40,9 @@ type ModelTabSlug =
   | "price-data";
 
 const BASE_TAB_KEY = "all-models";
+type ModelTabKey = typeof BASE_TAB_KEY | ModelTabSlug;
+
+const TEAM_SCOPED_TAB_KEYS: readonly ModelTabKey[] = ["add", "auto-routers"];
 
 const TAB_LABELS: Record<ModelTabSlug, string> = {
   add: "Add Model",
@@ -87,7 +91,6 @@ export default function ModelsAndEndpointsPage() {
   const { modelId, teamId, close } = useModelDetailRouting();
   const { availableModelAccessGroups, allModelsOnProxy } = useModelDashboardData();
 
-  const [activeKey, setActiveKey] = useState<string>(BASE_TAB_KEY);
   const [lastRefreshed, setLastRefreshed] = useState("");
 
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
@@ -122,6 +125,12 @@ export default function ModelsAndEndpointsPage() {
     ],
     [canCreate, canViewAutoRouters, isAdmin, isViewOnly],
   );
+  const visibleTabKeys = useMemo<ModelTabKey[]>(() => visibleSlugs.map((slug) => slug || BASE_TAB_KEY), [visibleSlugs]);
+  const allowedTabKeys = useMemo<ModelTabKey[]>(
+    () => (teams === undefined ? Array.from(new Set([...visibleTabKeys, ...TEAM_SCOPED_TAB_KEYS])) : visibleTabKeys),
+    [teams, visibleTabKeys],
+  );
+  const [activeKey, setActiveKey] = useUrlTab(allowedTabKeys, BASE_TAB_KEY);
 
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
