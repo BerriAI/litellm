@@ -23,6 +23,9 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
     create_tool_name_mapping,
     truncate_tool_name,
 )
+from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_system import (
+    CONVERTED_SYSTEM_NOTE,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
@@ -563,10 +566,19 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
 @pytest.mark.parametrize(
     ("system_content", "expected_content"),
     [
-        ("Use the corrected result.", "Use the corrected result."),
+        (
+            "Use the corrected result.",
+            [
+                {"type": "text", "text": CONVERTED_SYSTEM_NOTE},
+                {"type": "text", "text": "Use the corrected result."},
+            ],
+        ),
         (
             [{"type": "text", "text": "Use the corrected result."}],
-            [{"type": "text", "text": "Use the corrected result."}],
+            [
+                {"type": "text", "text": CONVERTED_SYSTEM_NOTE},
+                {"type": "text", "text": "Use the corrected result."},
+            ],
         ),
         (
             [
@@ -576,7 +588,11 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
                 },
                 {"type": "text", "text": "Use the corrected result."},
             ],
-            [{"type": "text", "text": "Use the corrected result."}],
+            [
+                {"type": "text", "text": CONVERTED_SYSTEM_NOTE},
+                {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                {"type": "text", "text": "Use the corrected result."},
+            ],
         ),
         (
             [
@@ -584,13 +600,14 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
                 {"type": "text", "text": "Second correction."},
             ],
             [
+                {"type": "text", "text": CONVERTED_SYSTEM_NOTE},
                 {"type": "text", "text": "First correction."},
                 {"type": "text", "text": "Second correction."},
             ],
         ),
     ],
 )
-def test_translate_anthropic_messages_to_openai_preserves_midturn_system_correction(
+def test_translate_anthropic_messages_to_openai_converts_midturn_system_correction(
     system_content: object,
     expected_content: object,
 ):
@@ -646,7 +663,7 @@ def test_translate_anthropic_messages_to_openai_preserves_midturn_system_correct
             "tool_call_id": "toolu_01234",
             "content": "Rainy, 55°F",
         },
-        {"role": "system", "content": expected_content},
+        {"role": "user", "content": expected_content},
         {"role": "user", "content": "Continue."},
     ]
 
@@ -752,8 +769,8 @@ def test_translate_anthropic_messages_to_openai_drops_empty_midturn_system(
 def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
     """
     Request level: the trusted top-level prompt is hoisted to index 0 exactly once and the
-    in-sequence correction keeps its own position and `role: "system"` -- no duplication of
-    either, and no reordering of the surrounding turns.
+    in-sequence correction keeps its own position as a user turn prefixed with the operator
+    note -- no duplication of either, and no reordering of the surrounding turns.
     """
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
         anthropic_message_request={
@@ -773,8 +790,104 @@ def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
         {"role": "system", "content": "Trusted top-level prompt."},
         {"role": "user", "content": "First question."},
         {"role": "assistant", "content": "First answer.", "thinking_blocks": None},
-        {"role": "system", "content": "Use the corrected result."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": CONVERTED_SYSTEM_NOTE},
+                {"type": "text", "text": "Use the corrected result."},
+            ],
+        },
         {"role": "user", "content": "Continue."},
+    ]
+
+
+def test_translate_anthropic_to_openai_converts_claude_code_midturn_system_turn():
+    """
+    Claude Code appends a system-role harness reminder after the user turn. On a
+    chat-completions target the outbound request must have exactly one system message,
+    at index 0, and the converted turn must carry the operator note first.
+    """
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={
+            "model": "qwen3.8-27B",
+            "max_tokens": 128,
+            "system": [{"type": "text", "text": "You are Claude Code."}],
+            "messages": [
+                {"role": "user", "content": "say hi"},
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "<system-reminder>Keep answers to one sentence.</system-reminder>"}
+                    ],
+                },
+                {"role": "assistant", "content": "Hi."},
+                {"role": "user", "content": "say bye"},
+            ],
+        }
+    )
+
+    roles = [m["role"] for m in openai_request["messages"]]
+    assert roles == ["system", "user", "user", "assistant", "user"]
+    converted = openai_request["messages"][2]
+    assert converted["content"][0]["text"] == CONVERTED_SYSTEM_NOTE
+    assert converted["content"][1]["text"] == "<system-reminder>Keep answers to one sentence.</system-reminder>"
+
+
+def test_translate_anthropic_to_openai_moves_midturn_system_after_tool_result():
+    """
+    A system entry wedged between an assistant tool_use turn and its tool_result turn is
+    emitted after the role: "tool" message, so the tool call stays paired with its result.
+    """
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=[
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01234",
+                        "name": "get_weather",
+                        "input": {"location": "Boston"},
+                    }
+                ],
+            },
+            {"role": "system", "content": "Use the corrected result."},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01234",
+                        "content": "Rainy, 55°F",
+                    }
+                ],
+            },
+        ],
+        model="claude-3-5-sonnet-20240620",
+    )
+
+    assert [m["role"] for m in result] == ["assistant", "tool", "user"]
+    assert result[2]["content"][0]["text"] == CONVERTED_SYSTEM_NOTE
+
+
+def test_translate_anthropic_messages_to_openai_converts_string_midturn_system():
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=[
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "Keep it short."},
+        ],
+        model="claude-3-5-sonnet-20240620",
+    )
+
+    assert result == [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": CONVERTED_SYSTEM_NOTE},
+                {"type": "text", "text": "Keep it short."},
+            ],
+        },
     ]
 
 

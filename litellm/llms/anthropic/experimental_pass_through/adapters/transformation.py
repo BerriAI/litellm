@@ -118,6 +118,10 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
 )
+from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_system import (
+    convert_mid_conversation_system_turns,
+    is_system_role_message,
+)
 from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
     openai_chat_refusal_text,
     refusal_stop_details,
@@ -421,7 +425,15 @@ class LiteLLMAnthropicMessagesAdapter:
     ) -> list:
         new_messages: Final[list[AllMessageValues]] = []
         replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
-        for m in replayable_messages:
+        leading_count: Final = next(
+            (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
+            len(replayable_messages),
+        )
+        ordered_messages: Final = (
+            *replayable_messages[:leading_count],
+            *convert_mid_conversation_system_turns(replayable_messages[leading_count:]),
+        )
+        for m in ordered_messages:
             user_message: ChatCompletionUserMessage | None = None
             tool_message_list: list[ChatCompletionToolMessage] = []
             new_user_content_list: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
@@ -494,7 +506,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 if isinstance(m.get("content"), str):
                     assistant_message_str = str(m.get("content", ""))
                 elif isinstance(m.get("content"), list):
-                    for content in m.get("content", []):
+                    for content in cast(list, m.get("content", [])):
                         if isinstance(content, str):
                             assistant_message_str = str(content)
                         elif isinstance(content, dict):
