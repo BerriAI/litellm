@@ -94,6 +94,40 @@ _WIRE_USAGE: Final[Mapping[str, tuple[str, ScriptedUsage]]] = MappingProxyType({
         "fireworks_ai/kimi-k3",
         ScriptedUsage(fresh_input_tokens=80, cache_read_tokens=40, output_tokens=25),
     ),
+    "azure_chat": (
+        "azure/gpt-5.6",
+        ScriptedUsage(
+            fresh_input_tokens=80,
+            cache_read_tokens=40,
+            cache_write_5m_tokens=20,
+            cache_write_1h_tokens=10,
+            output_tokens=25,
+            reasoning_tokens=15,
+            audio_input_tokens=5,
+            audio_output_tokens=3,
+        ),
+    ),
+    "bedrock_converse": (
+        "anthropic.claude-sonnet-5-v1:0",
+        ScriptedUsage(
+            fresh_input_tokens=80,
+            cache_read_tokens=40,
+            cache_write_5m_tokens=20,
+            cache_write_1h_tokens=10,
+            output_tokens=25,
+        ),
+    ),
+    "vertex_generate": (
+        "gemini-3.8-flash",
+        ScriptedUsage(
+            fresh_input_tokens=80,
+            cache_read_tokens=40,
+            output_tokens=25,
+            reasoning_tokens=15,
+            audio_input_tokens=5,
+            audio_output_tokens=3,
+        ),
+    ),
 })
 
 _SHAPE_USAGE: Final = ScriptedUsage(fresh_input_tokens=80, output_tokens=25)
@@ -138,6 +172,36 @@ _SHAPES: Final[tuple[tuple[str, str, Case], ...]] = (
             usage=ScriptedUsage(fresh_input_tokens=1000, output_tokens=0),
             stream=True,
             terminal="prompt_blocked",
+            response_model_override=True,
+        ),
+    ),
+    (
+        "vertex_prompt_blocked",
+        "vertex_generate",
+        Case(
+            name="prompt_blocked",
+            usage=ScriptedUsage(fresh_input_tokens=1000, output_tokens=0),
+            terminal="prompt_blocked",
+            response_model_override=True,
+        ),
+    ),
+    (
+        "vertex_prompt_blocked_stream",
+        "vertex_generate",
+        Case(
+            name="stream_prompt_blocked",
+            usage=ScriptedUsage(fresh_input_tokens=1000, output_tokens=0),
+            stream=True,
+            terminal="prompt_blocked",
+            response_model_override=True,
+        ),
+    ),
+    (
+        "azure_served_model_override",
+        "azure_chat",
+        Case(
+            name="response_model_override",
+            usage=_SHAPE_USAGE,
             response_model_override=True,
         ),
     ),

@@ -12,6 +12,7 @@ Deselected unless E2E_COST_MAP_STACK is set (marker `cost_map_stack`).
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ from typing import Final, Protocol, cast
 import pytest
 
 from cost_matrix import Case, FrontierModel
-from e2e_config import COST_MAP_PROXY_URL
+from e2e_config import COST_MAP_PROXY_URL, SCRIPTED_PROVIDER_PROXY_BASE
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, ModelInfoBody, ModelNewBody
 from proxy_client import ProxyClient, build_proxy_client
@@ -111,6 +112,41 @@ def client() -> CostCalcClient:
     return CostCalcClient(proxy=proxy)
 
 
+_vertex_key_pem: str | None = None
+
+
+def _vertex_service_account_json() -> str:
+    """A service-account credential JSON whose token_uri is the sidecar's
+    /_oauth/token route: the proxy's google-auth refresh then gets a scripted
+    access token without touching Google. One generated RSA key per process."""
+    global _vertex_key_pem  # mutable-ok: session-scoped key generation cached for reuse
+    if _vertex_key_pem is None:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        _vertex_key_pem = (
+            rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            .private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+            .decode()
+        )
+    return json.dumps(
+        {
+            "type": "service_account",
+            "project_id": "cc-scripted-project",
+            "private_key_id": "scripted",
+            "private_key": _vertex_key_pem,
+            "client_email": "scripted@cc-scripted-project.iam.gserviceaccount.com",
+            "client_id": "0",
+            "auth_uri": f"{SCRIPTED_PROVIDER_PROXY_BASE}/_oauth/authorize",
+            "token_uri": f"{SCRIPTED_PROVIDER_PROXY_BASE}/_oauth/token",
+        }
+    )
+
+
 def register_scenario_deployment(
     client: CostCalcClient,
     resources: ResourceManager,
@@ -126,15 +162,21 @@ def register_scenario_deployment(
     handle: Final = register_scenario(scenario)
     resources.defer(lambda: delete_scenario(handle))
     model_name: Final = f"{model.model_name}-{marker}"
+    extra_params: Final[dict[str, str]] = dict(model.litellm_params)
+    if model.wire == "vertex_generate":
+        extra_params["vertex_credentials"] = _vertex_service_account_json()
     model_id: Final = client.proxy.register_model(
         ModelNewBody(
             model_name=model_name,
-            litellm_params=LiteLLMParamsBody(
-                model=model.litellm_model,
-                api_key=model.api_key,
-                api_base=handle.api_base(),
+            litellm_params=LiteLLMParamsBody.model_validate(
+                {
+                    "model": model.litellm_model,
+                    "api_key": model.api_key,
+                    "api_base": handle.api_base(),
+                    **extra_params,
+                }
             ),
-            model_info=ModelInfoBody(),
+            model_info=ModelInfoBody(base_model=model.base_model),
         )
     )
     resources.defer(lambda: client.proxy.delete_model(model_id))
