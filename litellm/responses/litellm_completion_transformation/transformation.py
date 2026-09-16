@@ -2405,13 +2405,25 @@ class LiteLLMCompletionResponsesConfig:
         if choices and len(choices) > 0:
             finish_reason = choices[0].finish_reason
 
+        status: Final[ResponsesAPIStatus] = (
+            LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(finish_reason)
+        )
+        incomplete_details = getattr(chat_completion_response, "incomplete_details", None)
+        if incomplete_details is None and status == "incomplete":
+            from openai.types.responses.response import IncompleteDetails
+
+            if finish_reason == "length":
+                incomplete_details = IncompleteDetails(reason="max_output_tokens")
+            elif finish_reason in ["content_filter", "refusal"]:
+                incomplete_details = IncompleteDetails(reason="content_filter")
+
         responses_api_response: Final[ResponsesAPIResponse] = ResponsesAPIResponse(
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
             model=chat_completion_response.model,
             object="response",
             error=getattr(chat_completion_response, "error", None),
-            incomplete_details=getattr(chat_completion_response, "incomplete_details", None),
+            incomplete_details=incomplete_details,
             instructions=getattr(chat_completion_response, "instructions", None),
             metadata=getattr(chat_completion_response, "metadata", {}),
             output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
@@ -2429,9 +2441,7 @@ class LiteLLMCompletionResponsesConfig:
             max_output_tokens=getattr(chat_completion_response, "max_output_tokens", None),
             previous_response_id=getattr(chat_completion_response, "previous_response_id", None),
             reasoning=None,
-            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                finish_reason
-            ),
+            status=status,
             text={},
             truncation=getattr(chat_completion_response, "truncation", None),
             usage=LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
