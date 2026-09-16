@@ -8284,10 +8284,15 @@ class Router:
             for key, increment_value in ((tpm_key, total_tokens), (rpm_key, rpm_increment))
             if increment_value > 0
         ]
-        await self.cache.async_increment_cache_pipeline(
+        post_increment_values: Final = await self.cache.async_increment_cache_pipeline(
             increment_list=pipeline_operations,
             parent_otel_span=parent_otel_span,
         )
+        if post_increment_values is not None and self.cache.redis_cache is not None:
+            for operation, value in zip(pipeline_operations, post_increment_values):
+                await self.cache.async_set_cache(
+                    operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
+                )
         return tpm_key
 
     def sync_deployment_callback_on_success(

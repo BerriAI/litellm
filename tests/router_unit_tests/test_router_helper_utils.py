@@ -1160,6 +1160,46 @@ async def test_increment_deployment_usage_writes_only_positive_deltas_for_limite
     assert await unlimited.get_model_group_usage("gpt-5-mini") == (None, None)
 
 
+def _shared_redis_stub(store: dict) -> MagicMock:
+    from litellm.caching.redis_cache import RedisCache
+
+    async def increment_pipeline(increment_list, **kwargs):
+        for op in increment_list:
+            store[op["key"]] = store.get(op["key"], 0.0) + op["increment_value"]
+        return [store[op["key"]] for op in increment_list]
+
+    async def batch_get(keys, **kwargs):
+        return {key: store.get(key) for key in keys}
+
+    redis_stub = MagicMock(spec=RedisCache)
+    redis_stub.async_increment_pipeline = increment_pipeline
+    redis_stub.async_batch_get_cache = batch_get
+    return redis_stub
+
+
+@pytest.mark.asyncio
+async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.caching.in_memory_cache import InMemoryCache
+
+    store: dict = {}
+    worker_a = _rpm_tpm_router("lit-3058-workers")
+    worker_b = _rpm_tpm_router("lit-3058-workers")
+    worker_a.cache = DualCache(redis_cache=_shared_redis_stub(store), in_memory_cache=InMemoryCache())
+    worker_b.cache = DualCache(redis_cache=_shared_redis_stub(store), in_memory_cache=InMemoryCache())
+
+    messages = [{"role": "user", "content": "hi"}]
+    tokens_on_a = 0
+    for _ in range(3):
+        response = await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
+        tokens_on_a += response.usage.total_tokens
+
+    response = await worker_b.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
+    headers = _ratelimit_headers(response)
+    assert headers["x-ratelimit-remaining-requests"] == 96
+    assert headers["x-ratelimit-remaining-tokens"] == 1000 - tokens_on_a - response.usage.total_tokens
+
+
 @pytest.mark.asyncio
 async def test_get_model_group_io_token_usage_sums_across_deployments():
     """
