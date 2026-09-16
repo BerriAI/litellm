@@ -65,3 +65,15 @@ def test_consent_page_promises_only_what_logout_can_deliver():
     assert f"expires within {CLI_JWT_EXPIRATION_HOURS} hours" in page
     assert "<code>lite logout</code> stops it from being renewed" in page
     assert "revoked" not in page
+
+
+def test_consent_page_marks_the_requested_team_selected_in_the_chooser():
+    page = _render(teams=(("team-a", "Team A"), ("team-b", "team-b")), selected_team_id="team-b")
+    assert '<option value="team-b" selected>team-b</option>' in page
+    assert '<option value="team-a">Team A</option>' in page
+
+
+def test_consent_page_marks_nothing_selected_without_a_matching_team():
+    for selected in (None, "team-elsewhere"):
+        page = _render(teams=(("team-a", "Team A"), ("team-b", "team-b")), selected_team_id=selected)
+        assert "selected" not in page

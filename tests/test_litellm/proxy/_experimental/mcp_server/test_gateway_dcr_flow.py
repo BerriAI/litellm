@@ -2109,6 +2109,26 @@ async def test_introspect_fails_closed_on_dead_user_and_503s_on_outage():
 
 
 @pytest.mark.asyncio
+async def test_native_authorize_preselects_the_requested_team_alias_on_the_consent_page():
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    response = await _native_authorize(client_id, requested_team="Team A")
+    assert response.status_code == 200
+    body = response.body.decode()
+    assert '<option value="team-a" selected>Team A</option>' in body
+    assert '<option value="team-b">team-b</option>' in body
+
+
+@pytest.mark.asyncio
+async def test_native_authorize_with_an_unknown_requested_team_renders_a_plain_chooser():
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    response = await _native_authorize(client_id, requested_team="no-such-team")
+    assert response.status_code == 200
+    body = response.body.decode()
+    assert "<select" in body
+    assert " selected" not in body
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "auth_type", [None, "none", "api_key", "bearer_token", "basic", "authorization", "token", "aws_sigv4"]
 )
