@@ -213,15 +213,7 @@ _TokenDetails = TypeVar("_TokenDetails", CompletionTokensDetails, PromptTokensDe
 
 
 def _as_token_details(value: object, wrapper: type[_TokenDetails]) -> _TokenDetails | None:
-    """Coerce a token-details object of any shape into litellm's own model.
-
-    A streamed usage block does not always arrive as a litellm ``Usage``. When the
-    upstream is OpenAI-compatible, the OpenAI SDK's ``CompletionUsage`` reaches the
-    aggregator with ``openai.types.completion_usage.PromptTokensDetails`` and
-    ``CompletionTokensDetails`` inside it, which are neither a ``dict`` nor
-    litellm's wrapper, so the previous isinstance chain dropped them and
-    ``cached_tokens`` was reported as absent on every streamed request.
-    """
+    """Coerce token details from a dict or any pydantic model, including the OpenAI SDK's."""
     if value is None:
         return None
     if isinstance(value, wrapper):
