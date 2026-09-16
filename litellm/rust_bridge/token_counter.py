@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final, Literal, Protocol, cast  # noqa: TID251  # native extension exposes untyped callables
 
+import orjson
 from pydantic import TypeAdapter
 
 import litellm
@@ -112,3 +113,27 @@ async def count_input_tokens(body: bytes, tokenizer: RustTokenizer) -> InputToke
         return None
     verbose_logger.debug("Rust token counter (%s) counted %d input tokens", tokenizer, attempt.value.input_tokens)
     return attempt.value
+
+
+async def count_chat_input_tokens(
+    model: str,
+    messages: Sequence[object],
+    tools: object = None,
+    tool_choice: object = None,
+) -> int | None:
+    """Rust count of an already-parsed chat body, `None` when Python must count.
+
+    Callers holding Python messages instead of the raw request bytes pay one `orjson.dumps` of the counted fields.
+    Pydantic messages and other non-JSON objects are left to Python, as are the blocks Rust declines."""
+    if not rust_enabled() or TOKEN_COUNTER.load() is None:
+        return None
+    tokenizer: Final = rust_tokenizer(model)
+    if tokenizer is None:
+        return None
+    try:
+        body: Final = orjson.dumps({"model": model, "messages": messages, "tools": tools, "tool_choice": tool_choice})
+    except orjson.JSONEncodeError as error:
+        verbose_logger.debug("Rust token counter (%s) skipped an unserializable body: %s", tokenizer, error)
+        return None
+    count: Final = await count_input_tokens(body, tokenizer)
+    return None if count is None else count.input_tokens

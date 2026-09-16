@@ -3,6 +3,8 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 """
 
 import asyncio
+import base64
+import json
 import logging
 import os
 import sys
@@ -6284,3 +6286,197 @@ async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_
     assert isinstance(values, list)
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+class _FakeRustDeclined(Exception):
+    pass
+
+
+class _FakeRustUpstream(Exception):
+    pass
+
+
+class _FakeRustNative:
+    RustBridgeDeclined = _FakeRustDeclined
+    RustUpstreamError = _FakeRustUpstream
+
+
+RUST_CHAT_INPUT_TOKENS = 777
+
+
+class _RustChatCounter:
+    def __init__(self, bodies: list[bytes], declined: bool) -> None:
+        self.bodies = bodies
+        self.declined = declined
+
+    async def acount_request(self, body: bytes) -> object:
+        self.bodies.append(body)
+        if self.declined:
+            raise _FakeRustDeclined("unsupported content block")
+        return {"model": "", "input_tokens": RUST_CHAT_INPUT_TOKENS}
+
+
+class _RustChatFactory:
+    """Stands in for the native `TokenCounter` class and records every body handed to any tokenizer."""
+
+    def __init__(self, declined: bool = False) -> None:
+        self.bodies: list[bytes] = []
+        self.declined = declined
+
+    def __call__(self, tokenizer_json: str) -> _RustChatCounter:
+        return _RustChatCounter(self.bodies, self.declined)
+
+    def from_cl100k_ranks(self, rank_file: str) -> _RustChatCounter:
+        return _RustChatCounter(self.bodies, self.declined)
+
+    def from_o200k_ranks(self, rank_file: str) -> _RustChatCounter:
+        return _RustChatCounter(self.bodies, self.declined)
+
+
+@pytest.fixture
+def rust_chat_factory(monkeypatch: pytest.MonkeyPatch):
+    from litellm.rust_bridge import bindings, configuration
+    from litellm.rust_bridge import token_counter as rust_token_counter
+
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: _FakeRustNative())
+    rust_token_counter._counter.cache_clear()
+    configuration.reset_rust_configuration()
+    factory = _RustChatFactory()
+    litellm.rust(True)
+    rust_token_counter.TOKEN_COUNTER.override(factory)
+    yield factory
+    rust_token_counter.TOKEN_COUNTER.reset()
+    rust_token_counter._counter.cache_clear()
+    configuration.reset_rust_configuration()
+
+
+CHAT_BODY_FOR_RUST = {
+    "model": "gpt-4o",
+    "messages": [{"role": "system", "content": "be terse"}, {"role": "user", "content": "hello"}],
+    "tools": [{"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}],
+    "tool_choice": "auto",
+    "max_tokens": 50,
+    "metadata": {"user_api_key": "sk-hidden"},
+}
+
+
+@pytest.mark.asyncio
+async def test_project_itpm_reservation_counts_plain_chat_bodies_in_rust(rust_chat_factory: _RustChatFactory):
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-rust-itpm"),
+        project_id="proj-rust",
+        project_metadata={"model_itpm_limit": {"gpt-4o": 10_000}},
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data={**CHAT_BODY_FOR_RUST, "litellm_call_id": "rust-project-call"},
+        call_type="completion",
+    )
+
+    stash = get_request_stash()
+    assert stash is not None and stash.itpm_reserved_tokens == RUST_CHAT_INPUT_TOKENS
+    assert [json.loads(body) for body in rust_chat_factory.bodies] == [
+        {
+            "model": "gpt-4o",
+            "messages": CHAT_BODY_FOR_RUST["messages"],
+            "tools": CHAT_BODY_FOR_RUST["tools"],
+            "tool_choice": "auto",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_admission_input_tokens_fall_back_to_python_when_rust_declines(rust_chat_factory: _RustChatFactory):
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    rust_chat_factory.declined = True
+    audio_body = {
+        "model": "gpt-4o",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "transcribe"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": base64.b64encode(b"a" * 4_000).decode(), "format": "wav"},
+                    },
+                ],
+            }
+        ],
+    }
+    python_estimate = handler._estimate_precise_input_tokens(audio_body, model="gpt-4o", call_type="acompletion")
+
+    estimate = await handler._estimate_admission_input_tokens(audio_body, model="gpt-4o", call_type="acompletion")
+
+    assert len(rust_chat_factory.bodies) == 1
+    assert estimate == python_estimate
+    assert estimate > handler._estimate_precise_input_tokens(
+        {"model": "gpt-4o", "messages": [{"role": "user", "content": "transcribe"}]},
+        model="gpt-4o",
+        call_type="acompletion",
+    )
+
+
+@pytest.mark.asyncio
+async def test_admission_input_tokens_stay_in_python_when_rust_is_disabled(rust_chat_factory: _RustChatFactory):
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    litellm.rust(False)
+
+    estimate = await handler._estimate_admission_input_tokens(
+        CHAT_BODY_FOR_RUST, model="gpt-4o", call_type="acompletion"
+    )
+
+    assert rust_chat_factory.bodies == []
+    assert estimate == handler._estimate_precise_input_tokens(
+        CHAT_BODY_FOR_RUST, model="gpt-4o", call_type="acompletion"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("data", "call_type"),
+    (
+        ({"model": "gpt-4o", "input": "hello", "messages": [{"role": "user", "content": "ignored"}]}, "aresponses"),
+        ({"model": "gpt-4o", "input": ["hello"], "messages": [{"role": "user", "content": "ignored"}]}, "aembedding"),
+        (
+            {"model": "gpt-4o", "prompt": "hello", "messages": [{"role": "user", "content": "ignored"}]},
+            "atext_completion",
+        ),
+        (
+            {"model": "gpt-4o", "query": "q", "documents": ["d"], "messages": [{"role": "user", "content": "x"}]},
+            "arerank",
+        ),
+        ({"model": "gpt-4o", "contents": [{"role": "user", "parts": [{"text": "hello"}]}]}, "agenerate_content"),
+        ({"model": "gpt-4o", "input": "hello", "messages": [{"role": "user", "content": "ignored"}]}, None),
+        ({"model": "gpt-4o", "prompt": "hello", "messages": [{"role": "user", "content": "both"}]}, "acompletion"),
+        ({"model": "gpt-4o", "messages": "not a list"}, "acompletion"),
+    ),
+)
+async def test_admission_input_tokens_keep_non_chat_shapes_in_python(
+    rust_chat_factory: _RustChatFactory, data: dict, call_type: str | None
+):
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+
+    estimate = await handler._estimate_admission_input_tokens(data, model="gpt-4o", call_type=call_type)
+
+    assert rust_chat_factory.bodies == []
+    assert estimate == handler._estimate_precise_input_tokens(data, model="gpt-4o", call_type=call_type)
+
+
+@pytest.mark.asyncio
+async def test_admission_input_tokens_keep_models_without_a_rust_tokenizer_in_python(
+    rust_chat_factory: _RustChatFactory, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        litellm, "open_ai_chat_completion_models", litellm.open_ai_chat_completion_models | {"text-davinci-003"}
+    )
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    data = {**CHAT_BODY_FOR_RUST, "model": "text-davinci-003"}
+
+    estimate = await handler._estimate_admission_input_tokens(data, model="text-davinci-003", call_type="acompletion")
+
+    assert rust_chat_factory.bodies == []
+    assert estimate == handler._estimate_precise_input_tokens(data, model="text-davinci-003", call_type="acompletion")
