@@ -80,6 +80,21 @@ MOCK_PATCH_REQUEST = PatchGuardrailRequest(
 )
 
 
+def test_patch_guardrail_request_rejects_create_body_shape():
+    """Do not silently accept the nested POST /guardrails request body."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        PatchGuardrailRequest.model_validate(
+            {
+                "guardrail": {
+                    "guardrail_name": "nested-name",
+                    "litellm_params": {},
+                }
+            }
+        )
+
+
 @pytest.fixture
 def mock_prisma_client(mocker):
     """Mock Prisma client for testing"""
