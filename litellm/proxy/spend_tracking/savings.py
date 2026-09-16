@@ -212,11 +212,16 @@ def _baseline_cache_rate_keys(baseline_info: ModelInfo | None) -> tuple[bool, bo
     Gemini entry for cache writes, would carry the whole prompt for nothing and turn a
     profitable route into a reported loss. Such a model pays its plain input rate for
     those tokens, so the buckets it cannot price become ordinary input below.
+
+    An explicit ``0.0`` is a published rate, not a missing one, and only the read leg can
+    take it literally: free reads are real and are the largest discount on offer, while no
+    provider gives writes away, so a zero there is still pricing nobody published.
     """
     if baseline_info is None:
         return True, True
-    return bool(baseline_info.get("cache_read_input_token_cost")), bool(
-        baseline_info.get("cache_creation_input_token_cost")
+    return (
+        baseline_info.get("cache_read_input_token_cost") is not None,
+        bool(baseline_info.get("cache_creation_input_token_cost")),
     )
 
 
