@@ -3,6 +3,7 @@ import type { StoredComplexityRouterConfig } from "../add_model/build_complexity
 export type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
 import {
   getForecastConfigError,
+  isForecastClassifier,
   capabilitySettingsSchema,
   fuseSettingsSchema,
 } from "../add_model/forecast_classifier_config";
@@ -71,6 +72,7 @@ import {
 } from "../add_model/heuristic_scoring_knobs";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
+  effectiveClassifierType,
   heuristicScoringRole,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
@@ -305,6 +307,7 @@ export const buildUpdatedComplexityRouterConfig = (
 ): Record<string, unknown> => {
   const isManaged = (key: string): boolean => {
     if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
+    if (key === "escalation_keywords" && isForecastClassifier(effectiveClassifierType(value))) return true;
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
     return customTechnicalKeywords !== undefined && key === "custom_technical_keywords";
   };
@@ -365,7 +368,7 @@ export const buildUpdatedComplexityRouterConfig = (
 
   // Keys this call does not own stay as the stored config left them.
   const unowned: readonly string[] = [
-    ...(keywordMatching === undefined ? KEYWORD_MATCHING_KEYS : []),
+    ...(keywordMatching === undefined ? [...KEYWORD_MATCHING_KEYS].filter((key) => !isManaged(key)) : []),
     ...(customTechnicalKeywords === undefined ? ["custom_technical_keywords"] : []),
   ];
   return {

@@ -46,6 +46,43 @@ const hydratedState: KeywordMatchingState = {
 };
 
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
+  it.each(["capability", "llm_v2", "heuristic"] as const)(
+    "handles enabled stored overrides when editing %s with or without keyword form state",
+    (classifier_type) => {
+      const stored = {
+        ...STORED,
+        classifier_type,
+        adaptive: classifier_type !== "llm_v2",
+        adaptive_weights: { quality: 0.6, cost: 0.4 },
+        adaptive_eligible: "all",
+        tier_distance_penalty: 0.8,
+        enable_context_window_escalation: true,
+        context_window_escalation_buffer: 0.9,
+      };
+      const value = hydrateComplexityRouterConfig(stored, undefined);
+      for (const keywordState of [undefined, hydratedState]) {
+        const saved = buildUpdatedComplexityRouterConfig(stored, value, undefined, keywordState);
+        const forecast = classifier_type !== "heuristic";
+        expect(saved.adaptive).toBe(!forecast);
+        expect(saved.enable_context_window_escalation).toBe(!forecast);
+        expect(saved.escalation_keywords).toEqual(forecast ? [] : stored.escalation_keywords);
+        for (const key of [
+          "adaptive_weights",
+          "adaptive_eligible",
+          "tier_distance_penalty",
+          "context_window_escalation_buffer",
+        ]) {
+          expect(Object.hasOwn(saved, key)).toBe(!forecast);
+        }
+        expect(saved.keyword_tier_rules).toEqual(STORED.keyword_tier_rules);
+        expect(saved.semantic_keyword_matching).toBe(true);
+        expect(saved.some_future_backend_key).toEqual(STORED.some_future_backend_key);
+      }
+      expect(value.enable_context_window_escalation).toBe(true);
+      expect(stored.escalation_keywords).toEqual(["urgent", "outage"]);
+    },
+  );
+
   it("round-trips an untouched edit without changing any keyword-matching value", () => {
     // Opening the modal hydrates state from STORED; saving with nothing changed must be a
     // no-op. These keys are now MANAGED, so a hydration bug silently wipes them.
