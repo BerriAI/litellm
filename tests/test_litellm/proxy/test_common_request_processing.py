@@ -8536,3 +8536,109 @@ class TestBackgroundResponseRetrievalGovernance:
 
         assert "_guardrail_pipelines" not in data["litellm_metadata"]
         assert "applied_policies" not in data["litellm_metadata"]
+
+
+class TestShouldInjectCostForRequest:
+    """Issue #38348: cost injection honours the caller's stream_options.include_usage."""
+
+    def test_global_flag_off_never_injects(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+        assert (
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
+                {"stream_options": {"include_usage": True}}
+            )
+            is False
+        )
+
+    def test_openai_protocol_requires_caller_opt_in(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        assert (
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
+                {"model": "gpt-4o-mini", "stream": True},
+                protocol_supports_stream_options=True,
+            )
+            is False
+        )
+
+    def test_openai_protocol_opted_in_injects(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        assert (
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
+                {"stream_options": {"include_usage": True}},
+                protocol_supports_stream_options=True,
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize("protocol_supports_stream_options", [True, False])
+    def test_explicit_opt_out_is_honoured_on_every_protocol(self, monkeypatch, protocol_supports_stream_options):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        assert (
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
+                {"stream_options": {"include_usage": False}},
+                protocol_supports_stream_options=protocol_supports_stream_options,
+            )
+            is False
+        )
+
+    def test_protocol_without_stream_options_stays_always_on(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        assert (
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
+                {"model": "claude-haiku-4-5", "stream": True},
+                protocol_supports_stream_options=False,
+            )
+            is True
+        )
+
+    def test_missing_request_data_falls_back_to_protocol_default(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        assert ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(None) is False
+        assert (
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
+                None, protocol_supports_stream_options=False
+            )
+            is True
+        )
+
+    def test_malformed_stream_options_falls_back_to_protocol_default(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        assert (
+            ProxyBaseLLMRequestProcessing.should_inject_cost_for_request(
+                {"stream_options": "include_usage"},
+                protocol_supports_stream_options=False,
+            )
+            is True
+        )
+
+
+class TestProcessChunkCostInjectionGate:
+    @staticmethod
+    def _usage_chunk():
+        return {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15},
+        }
+
+    def test_enabled_false_leaves_chunk_untouched(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        chunk = self._usage_chunk()
+        assert ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+            chunk, "gpt-4o-mini", None, enabled=False
+        ) is chunk
+
+    def test_enabled_true_injects_even_with_global_flag_off(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+        result = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+            self._usage_chunk(), "gpt-4o-mini", None, enabled=True
+        )
+        assert result["usage"]["cost"] > 0
+
+    def test_omitted_enabled_falls_back_to_global_flag(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        result = ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+            self._usage_chunk(), "gpt-4o-mini"
+        )
+        assert result["usage"]["cost"] > 0

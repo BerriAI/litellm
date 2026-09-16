@@ -392,12 +392,16 @@ def _openai_passthrough_stream_chunks():
     ]
 
 
-async def _collect_openai_passthrough_chunks(chunks, endpoint_type):
+def _openai_opted_in_body():
+    return {"model": "gpt-4o-mini", "stream": True, "stream_options": {"include_usage": True}}
+
+
+async def _collect_openai_passthrough_chunks(chunks, endpoint_type, request_body=None):
     response = _make_streaming_response(chunks)
     received = []
     async for chunk in PassThroughStreamingHandler.chunk_processor(
         response=response,
-        request_body={"model": "gpt-4o-mini", "stream": True},
+        request_body=_openai_opted_in_body() if request_body is None else request_body,
         litellm_logging_obj=_unarmed_logging_obj(),
         endpoint_type=endpoint_type,
         start_time=datetime.now(),
@@ -473,6 +477,95 @@ async def test_chunk_processor_streams_crlf_delimited_frames_live_and_injects_co
     assert len(usage_lines) == 1
     final_payload = json.loads(usage_lines[0].split("data:", 1)[1].strip())
     assert final_payload["usage"]["cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_skips_injection_when_openai_caller_did_not_opt_in(monkeypatch):
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+    chunks = _openai_passthrough_stream_chunks()
+
+    received = await _collect_openai_passthrough_chunks(
+        chunks,
+        EndpointType.OPENAI,
+        request_body={"model": "gpt-4o-mini", "stream": True},
+    )
+
+    assert received == chunks
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_respects_explicit_include_usage_false(monkeypatch):
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+    chunks = _openai_passthrough_stream_chunks()
+
+    received = await _collect_openai_passthrough_chunks(
+        chunks,
+        EndpointType.OPENAI,
+        request_body={
+            "model": "gpt-4o-mini",
+            "stream": True,
+            "stream_options": {"include_usage": False},
+        },
+    )
+
+    assert received == chunks
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_anthropic_injects_without_stream_options(monkeypatch):
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+    frame = (
+        b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+        b'"usage":{"input_tokens":11,"output_tokens":4}}\n\n'
+    )
+    response = _make_streaming_response([frame])
+
+    received = []
+    async for chunk in PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-haiku-4-5", "stream": True},
+        litellm_logging_obj=MagicMock(),
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        route_streaming_logging=AsyncMock(),
+    ):
+        received.append(chunk)
+    await asyncio.sleep(0)
+
+    payload = json.loads(b"".join(received).decode("utf-8").split("data:", 1)[1].strip())
+    assert payload["usage"]["cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_anthropic_respects_explicit_opt_out(monkeypatch):
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+    frame = (
+        b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+        b'"usage":{"input_tokens":11,"output_tokens":4}}\n\n'
+    )
+    response = _make_streaming_response([frame])
+
+    received = []
+    async for chunk in PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={
+            "model": "claude-haiku-4-5",
+            "stream": True,
+            "stream_options": {"include_usage": False},
+        },
+        litellm_logging_obj=MagicMock(),
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        route_streaming_logging=AsyncMock(),
+    ):
+        received.append(chunk)
+    await asyncio.sleep(0)
+
+    assert received == [frame]
 
 
 @pytest.mark.asyncio
