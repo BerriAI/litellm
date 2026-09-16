@@ -68,22 +68,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  rust-fmt:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: litellm-rust
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          persist-credentials: false
-
-      - run: rustup toolchain install --no-self-update
-
-      - run: cargo fmt --all --check
-
-  rust-clippy:
+  rust-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -95,6 +80,8 @@ jobs:
           persist-credentials: false
 
       - run: rustup toolchain install --no-self-update
+
+      - run: cargo fmt --all --check
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
