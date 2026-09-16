@@ -28,7 +28,9 @@ def test_route_without_rules_forwards_before_request_projection() -> None:
     def reject_request(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Request:
         pytest.fail("Python-only routes must not project the request")
 
-    dispatch: Final = PublicDispatch(route=Route.CHAT_COMPLETIONS, request=reject_request, context=lambda _: Context(Route.CHAT_COMPLETIONS))
+    dispatch: Final = PublicDispatch(
+        route=Route.CHAT_COMPLETIONS, request=reject_request, context=lambda _: Context(Route.CHAT_COMPLETIONS)
+    )
     result: Final = dispatch.run(
         ("model",),
         {"stream": True},
@@ -132,7 +134,9 @@ async def test_async_route_without_rules_preserves_async_iterator_result() -> No
     async def python(*args: object, **kwargs: object) -> AsyncGenerator[int, None]:  # kwargs-ok: pass-through shape
         return stream
 
-    dispatch: Final = PublicDispatch(route=Route.RESPONSES, request=reject_request, context=lambda _: Context(Route.RESPONSES))
+    dispatch: Final = PublicDispatch(
+        route=Route.RESPONSES, request=reject_request, context=lambda _: Context(Route.RESPONSES)
+    )
     result: Final = await dispatch.arun(
         ("model",),
         {"stream": True},
@@ -148,9 +152,7 @@ async def test_async_route_without_rules_preserves_async_iterator_result() -> No
 @pytest.mark.asyncio
 async def test_async_dispatch_accepts_websocket_style_none_result() -> None:
     request: Final = Request(model="realtime-model")
-    rules: Final[Rules] = (
-        Rule(Route.RESPONSES, Rollout.RUST_REQUIRED, deliveries=frozenset({Delivery.WEBSOCKET})),
-    )
+    rules: Final[Rules] = (Rule(Route.RESPONSES, Rollout.RUST_REQUIRED, deliveries=frozenset({Delivery.WEBSOCKET})),)
     dispatch: Final = PublicDispatch(
         route=Route.RESPONSES,
         request=lambda args, kwargs: request,
@@ -163,9 +165,9 @@ async def test_async_dispatch_accepts_websocket_style_none_result() -> None:
     async def native(request: Request, args: tuple[object, ...], kwargs: Mapping[str, object]) -> None:
         return None
 
-    native_binding: Final[NativeBinding[Callable[[Request, tuple[object, ...], Mapping[str, object]], Awaitable[None]]]] = NativeBinding(
-        "websocket", validate=lambda _: None
-    )
+    native_binding: Final[
+        NativeBinding[Callable[[Request, tuple[object, ...], Mapping[str, object]], Awaitable[None]]]
+    ] = NativeBinding("websocket", validate=lambda _: None)
     native_binding.override(native)
 
     result: Final = await dispatch.arun(
@@ -177,3 +179,51 @@ async def test_async_dispatch_accepts_websocket_style_none_result() -> None:
         rules=rules,
     )
     assert result is None
+
+
+def test_rules_for_other_routes_and_constrained_python_rules_skip_projection() -> None:
+    rules: Final[Rules] = (
+        Rule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+        Rule(Route.OCR, Rollout.PYTHON_ONLY, providers=frozenset({"mistral"})),
+    )
+
+    def reject_request(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Request:
+        pytest.fail("Rules that cannot select Rust must not project the request")
+
+    dispatch: Final = PublicDispatch(route=Route.OCR, request=reject_request, context=lambda _: Context(Route.OCR))
+    expected: Final = object()
+    result: Final = dispatch.run(
+        ("model",),
+        {},
+        python=lambda *args, **kwargs: expected,
+        binding=binding(),
+        native=lambda hook, request, args, kwargs: pytest.fail("Rules that cannot select Rust must not call native"),
+        rules=rules,
+    )
+    assert result is expected
+
+
+@pytest.mark.asyncio
+async def test_async_bypass_forwards_to_python_without_native() -> None:
+    request: Final = Request(model="bypassed-model")
+    rules: Final[Rules] = (Rule(Route.RESPONSES, Rollout.RUST_REQUIRED),)
+    dispatch: Final = PublicDispatch(
+        route=Route.RESPONSES,
+        request=lambda args, kwargs: request,
+        context=lambda value: Context(Route.RESPONSES, model=value.model),
+        bypass=lambda value: value.model == "bypassed-model",
+    )
+    expected: Final = object()
+
+    async def python(*args: object, **kwargs: object) -> object:  # kwargs-ok: public pass-through shape
+        return expected
+
+    result: Final = await dispatch.arun(
+        ("bypassed-model",),
+        {},
+        python=python,
+        binding=binding(),
+        native=lambda hook, value, args, kwargs: pytest.fail("Bypassed requests must not call native"),
+        rules=rules,
+    )
+    assert result is expected
