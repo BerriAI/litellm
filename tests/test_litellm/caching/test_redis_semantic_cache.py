@@ -829,11 +829,11 @@ def test_redis_get_embedding_routes_through_router(monkeypatch):
     cache.embedding_model = "sem-embed"
 
     router = MagicMock()
+    router.get_model_list = MagicMock(return_value=[{"model_name": "sem-embed"}])
     router.get_configured_token_limits.return_value = (None, None)
     router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
     fake_proxy.llm_router = router
-    fake_proxy.llm_model_list = [{"model_name": "sem-embed"}]
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
 
     with patch("litellm.embedding") as direct_embed:
@@ -1072,11 +1072,11 @@ async def test_redis_async_embedding_forwards_full_metadata(monkeypatch):
     cache.embedding_model = "sem-embed"
 
     router = MagicMock()
+    router.get_model_list = MagicMock(return_value=[{"model_name": "sem-embed"}])
     router.get_configured_token_limits.return_value = (None, None)
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
     fake_proxy.llm_router = router
-    fake_proxy.llm_model_list = [{"model_name": "sem-embed"}]
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
 
     await cache._get_async_embedding(
@@ -1096,9 +1096,9 @@ LONG_PROMPT = " ".join(f"token{i}" for i in range(300))
 def _proxy_with_router(monkeypatch: pytest.MonkeyPatch, router: MagicMock, model_name: str) -> None:
     import types
 
+    router.get_model_list = MagicMock(return_value=[{"model_name": model_name}])
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
     fake_proxy.llm_router = router
-    fake_proxy.llm_model_list = [{"model_name": model_name}]
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
 
 
@@ -1242,9 +1242,9 @@ def test_redis_llmcache_setter_supported():
 def _router_proxy_module(router, model_name):
     import types
 
+    router.get_model_list = MagicMock(return_value=[{"model_name": model_name}])
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
     fake_proxy.llm_router = router
-    fake_proxy.llm_model_list = [{"model_name": model_name}]
     return fake_proxy
 
 
