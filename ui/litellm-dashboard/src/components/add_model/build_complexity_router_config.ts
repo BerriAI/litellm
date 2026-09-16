@@ -628,13 +628,11 @@ export const buildComplexityRouterConfig = ({
   // An edited tier set forces the LLM classifier, so llm-only inputs must survive a classifier_type
   // the form never rewrote. The UI gates the same controls on this, not on the raw value.
   const effectiveType: ClassifierType = customTierSet ? "llm" : classifierType;
+  const forecast = isForecastClassifier(effectiveType);
 
-  const supportsOpeningPrompt =
-    !customTierSet && !isForecastClassifier(effectiveType) && usesLlmClassifier(effectiveType);
+  const supportsOpeningPrompt = !customTierSet && !forecast && usesLlmClassifier(effectiveType);
   const payload: ComplexityRouterConfigPayload = {
-    tiers: isForecastClassifier(effectiveType)
-      ? Object.fromEntries(Object.entries(tiers).filter(([, models]) => models.length > 0))
-      : tiers,
+    tiers: forecast ? Object.fromEntries(Object.entries(tiers).filter(([, models]) => models.length > 0)) : tiers,
     // The backend rejects the flag beside a custom tier set.
     ...(!customTierSet && enableNonReasoningTier && { enable_non_reasoning_tier: true }),
     ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
@@ -645,7 +643,8 @@ export const buildComplexityRouterConfig = ({
     ...classifierWireFields(effectiveType, classifierInputs),
     ...(effectiveType === "capability" &&
       capabilityClassifierConfig && { capability_classifier_config: capabilityClassifierConfig }),
-    ...(effectiveType === "llm_v2" && { llm_v2_config: llmV2Config, adaptive: false }),
+    ...(effectiveType === "llm_v2" && { llm_v2_config: llmV2Config }),
+    ...(forecast && { adaptive: false }),
     // A built-in router's opening instructions. Suppressed beside a legacy whole-prompt override,
     // which the backend rejects as a second override of the same prompt.
     ...(supportsOpeningPrompt &&
@@ -660,7 +659,7 @@ export const buildComplexityRouterConfig = ({
     modality_pin_override: modalityPinOverride ?? false,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
-    escalation_keywords: cleanedEscalationKeywords,
+    escalation_keywords: forecast ? [] : cleanedEscalationKeywords,
     // Only written when on: the backend rejects it alongside session_affinity, user_turn mode and
     // a custom tier set, so an off router must not carry the key into any of those saves.
     ...(stallEscalationEnabled && {
@@ -676,19 +675,21 @@ export const buildComplexityRouterConfig = ({
       match_threshold: matchThreshold,
     }),
     ...(adaptive &&
-      effectiveType !== "llm_v2" && {
+      !forecast && {
         adaptive: true,
         adaptive_weights: adaptiveWeights,
         ...(adaptiveEligible === "all" && { tier_distance_penalty: tierDistancePenalty }),
         adaptive_eligible: adaptiveEligible,
       }),
     ...(returnRawModelName && { return_raw_model_name: true }),
-    ...(enableContextWindowEscalation !== undefined && {
-      enable_context_window_escalation: enableContextWindowEscalation,
+    // Omission enables the backend default, so hidden forecast controls need an explicit opt-out.
+    ...((forecast || enableContextWindowEscalation !== undefined) && {
+      enable_context_window_escalation: forecast ? false : enableContextWindowEscalation,
     }),
-    ...(contextWindowEscalationBuffer !== undefined && {
-      context_window_escalation_buffer: contextWindowEscalationBuffer,
-    }),
+    ...(!forecast &&
+      contextWindowEscalationBuffer !== undefined && {
+        context_window_escalation_buffer: contextWindowEscalationBuffer,
+      }),
     ...(sessionAffinityTtlSeconds !== undefined && {
       session_affinity_ttl_seconds: sessionAffinityTtlSeconds,
     }),
