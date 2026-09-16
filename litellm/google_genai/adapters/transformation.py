@@ -75,6 +75,7 @@ class _GenAIContentPart(TypedDict, total=False):
 class _GenAIFunctionDeclaration(TypedDict, total=False):
     name: ReadOnly[str]
     description: ReadOnly[str]
+    parameters: ReadOnly[object]
     parametersJsonSchema: ReadOnly[object]
 
 
@@ -392,6 +393,8 @@ class GoogleGenAIAdapter:
                         function_chunk["description"] = func_decl["description"]
                     if "parametersJsonSchema" in func_decl:
                         function_chunk["parameters"] = func_decl["parametersJsonSchema"]
+                    elif "parameters" in func_decl:
+                        function_chunk["parameters"] = func_decl["parameters"]
 
                     openai_tool: _JsonDict = {"type": "function", "function": function_chunk}
                     openai_tools.append(openai_tool)

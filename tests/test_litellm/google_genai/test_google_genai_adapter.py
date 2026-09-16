@@ -1267,3 +1267,78 @@ def test_inline_data_backward_compatibility_text_only():
         content, str
     ), "Content should be a string for text-only messages (backward compatibility)"
     assert content == "Hello, how are you?"
+
+
+def test_tools_transformation_parameters_field():
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+
+    schema = {
+        "type": "OBJECT",
+        "properties": {"city": {"type": "STRING", "description": "City name"}},
+        "required": ["city"],
+    }
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "get_weather",
+                    "description": "Get the weather for a city",
+                    "parameters": schema,
+                }
+            ]
+        }
+    ]
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="gpt-3.5-turbo",
+        contents={"role": "user", "parts": [{"text": "Weather in Hanoi?"}]},
+        tools=tools,
+    )
+
+    function = completion_request["tools"][0]["function"]
+    assert function["name"] == "get_weather"
+    assert function["parameters"] == {
+        "type": "object",
+        "properties": {"city": {"type": "string", "description": "City name"}},
+        "required": ["city"],
+    }
+
+
+def test_tools_transformation_prefers_parameters_json_schema():
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "get_weather",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {"ignored": {"type": "STRING"}},
+                    },
+                    "parametersJsonSchema": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                }
+            ]
+        }
+    ]
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="gpt-3.5-turbo",
+        contents={"role": "user", "parts": [{"text": "Weather in Hanoi?"}]},
+        tools=tools,
+    )
+
+    function = completion_request["tools"][0]["function"]
+    assert function["parameters"] == {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    }
