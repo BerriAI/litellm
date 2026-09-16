@@ -20,7 +20,9 @@ from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 @pytest.mark.parametrize("params", [{}, {"forward_reasoning_content": False}, {"forward_reasoning_content": True}])
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
-async def test_forward_reasoning_content_preserves_only_explicit_history(params, is_async):
+async def test_forward_reasoning_content_preserves_only_explicit_history(
+    params: dict[str, bool], is_async: bool
+) -> None:
     config = HostedVLLMChatConfig()
     messages = [
         {"role": "user", "content": "Check the counter"},
@@ -672,8 +674,14 @@ async def test_reasoning_field_does_not_apply_to_inherited_provider(provider: st
 @pytest.mark.parametrize("field", ["reasonig", ""])
 @pytest.mark.parametrize("forward", [False, True])
 async def test_invalid_reasoning_field_fails_before_http(
-    provider, is_async, via_router, bridge, field, forward, monkeypatch
-):
+    provider: str,
+    is_async: bool,
+    via_router: bool,
+    bridge: bool,
+    field: str,
+    forward: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     messages = [{"role": "user", "content": "Hello"}]
     original = deepcopy(messages)
