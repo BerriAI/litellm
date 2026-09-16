@@ -3606,6 +3606,23 @@ async def test_add_litellm_data_to_request_otel_span_does_not_override_caller_tr
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("empty_trace_id", [None, ""])
+async def test_add_litellm_data_to_request_otel_span_fills_empty_body_trace_id(empty_trace_id):
+    """A serialized-but-empty litellm_trace_id in the body (null or "") carries
+    no identity, so it must not block the OTel server span fallback."""
+    otel_trace_id = 0x4BF92F3577B34DA6A3CE929D0E0E4736
+    data = await add_litellm_data_to_request(
+        data={"model": "gpt-5.6", "litellm_trace_id": empty_trace_id},
+        request=_request_mock_without_trace_headers(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", parent_otel_span=_otel_span_with_trace_id(otel_trace_id)),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+    assert data["litellm_trace_id"] == format(otel_trace_id, "032x")
+    assert data["metadata"]["trace_id"] == format(otel_trace_id, "032x")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("parent_otel_span", [None, "invalid_span", "not_a_span"])
 async def test_add_litellm_data_to_request_no_trace_id_without_valid_otel_span(parent_otel_span):
     """No OTel span (OTel off), a span with an invalid context, or an object
