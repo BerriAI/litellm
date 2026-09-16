@@ -22,7 +22,9 @@ Bedrock could not be mounted before because SigV4 signs the `Host` header, so a 
 
 Almost every Bedrock deployment in the suite declares its region as `os.environ/AWS_REGION`, which only the proxy can resolve, and the run pod does not share that environment. A `us.` inference profile fans out across the US regions and is reachable from any of them, so those route to the default mount whatever the proxy resolved. A model that is not cross-region and declares its region that way keeps its direct path rather than being sent to a region it may not exist in.
 
-Only deployments that carry no AWS identity of their own route to the edge. A deployment with `aws_role_name`, `aws_access_key_id`, an `api_base` or an `aws_bedrock_runtime_endpoint` keeps its direct path, because re-signing it would quietly replace the very credential chain that test exists to prove. Only Anthropic models route, matching what the runner role is allowed to invoke and what the edge knows how to validate
+Only deployments that carry no AWS identity of their own route to the edge. A deployment with `aws_role_name`, `aws_access_key_id`, an `api_base` or an `aws_bedrock_runtime_endpoint` keeps its direct path, because re-signing it would quietly replace the very credential chain that test exists to prove
+
+Which models route is an explicit allowlist in `provider_cache_routing.py`, mirroring the runner role's IAM policy, which names its models one by one. That coupling is deliberate: the edge re-signs with the run pod's identity, so a model the role cannot invoke comes back 403 from Bedrock rather than falling back. An unlisted model keeps its direct path and loses only caching, so adding a Bedrock model to the suite can never turn it red. Adding one to the edge is a policy edit in litellm-ops plus a line here
 
 Vertex and Gemini are not mounted. litellm's `_check_custom_proxy` rewrites a path-prefixed Vertex `api_base` into `{api_base}:{endpoint}`, dropping project, location and model, so a mount under a path prefix cannot work without either a root-mounted edge on its own port or a change in litellm
 
