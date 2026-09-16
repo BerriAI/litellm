@@ -1693,7 +1693,62 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
                 new_texts.append(modified_text)
         inputs["texts"] = new_texts
+
+        # The unified guardrail-translation handlers extract tool-call arguments
+        # into inputs["tool_calls"] (see litellm/llms/{openai,anthropic}/chat/
+        # guardrail_translation/handler.py). apply_guardrail is the path the live
+        # proxy takes for /v1/chat/completions and /v1/messages, so PII in
+        # tool-call arguments must be masked here too - not only in
+        # async_pre_call_hook - otherwise it is forwarded in clear. Skip on the
+        # response unmasking branch above.
+        if not (input_type == "response" and pii_tokens):
+            await self._apply_guardrail_to_tool_calls(inputs=inputs, request_data=request_data or {})
         return inputs
+
+    @staticmethod
+    def _get_tool_call_arguments(tool_call: object) -> str | None:
+        function: Final[object] = (
+            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+        )
+        arguments: Final[object] = (
+            function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+        )
+        return arguments if isinstance(arguments, str) and arguments.strip() else None
+
+    @staticmethod
+    def _set_tool_call_arguments(tool_call: object, arguments: str) -> None:
+        function: Final[object] = (
+            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+        )
+        if isinstance(function, dict):
+            function["arguments"] = arguments
+        elif function is not None and hasattr(function, "arguments"):
+            function.arguments = arguments  # type: ignore[attr-defined]
+
+    async def _apply_guardrail_to_tool_calls(
+        self,
+        inputs: "GenericGuardrailAPIInputs",
+        request_data: dict,
+    ) -> None:
+        """Mask PII in the argument string of each extracted tool call in place.
+
+        Handles both the OpenAI wire shape (tool_calls[].function.arguments) and
+        the Anthropic wire shape - the handlers normalise tool_use.input into the
+        same tool_calls[].function.arguments structure before calling here.
+        """
+        for tool_call in inputs.get("tool_calls") or ():
+            arguments = self._get_tool_call_arguments(tool_call)
+            if arguments is None:
+                continue
+            masked_arguments = await self.check_pii(
+                text=arguments,
+                output_parse_pii=self.output_parse_pii,
+                presidio_config=None,
+                request_data=request_data,
+            )
+            if masked_arguments != arguments:
+                self._set_tool_call_arguments(tool_call, masked_arguments)
+        return
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """

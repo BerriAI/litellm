@@ -3453,9 +3453,7 @@ async def test_pre_call_masks_openai_tool_call_arguments(presidio_guardrail, moc
 
 
 @pytest.mark.asyncio
-async def test_pre_call_masks_openai_legacy_function_call_arguments(
-    presidio_guardrail, mock_user_api_key, mock_cache
-):
+async def test_pre_call_masks_openai_legacy_function_call_arguments(presidio_guardrail, mock_user_api_key, mock_cache):
     """PII inside the legacy assistant function_call.arguments must be masked."""
     test_data = {
         "messages": [
@@ -3528,3 +3526,120 @@ async def test_pre_call_masks_anthropic_tool_use_input(presidio_guardrail, mock_
     assert "[EMAIL]" in str(tool_use_input)
     assert "4111-1111-1111-1111" not in str(tool_use_input)
     assert "test@example.com" not in str(tool_use_input)
+
+
+# ---------------------------------------------------------------------------
+# apply_guardrail must mask PII in tool-call arguments (the live-proxy path).
+#
+# The unified guardrail-translation handlers put tool-call arguments into
+# inputs["tool_calls"] and invoke apply_guardrail (not async_pre_call_hook) for
+# /v1/chat/completions and /v1/messages. Masking only inputs["texts"] there let
+# card/email PII in tool_calls[].function.arguments (OpenAI) and in
+# tool_use.input (Anthropic, serialized to arguments by the handler) reach the
+# upstream in clear. These tests exercise apply_guardrail with handler-shaped
+# inputs so the gap is covered where the proxy actually runs.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_openai_tool_call_arguments(presidio_guardrail):
+    """O2: PII in inputs['tool_calls'][].function.arguments must be masked by apply_guardrail."""
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        redacted = text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+        return redacted.replace("test@example.com", "[EMAIL]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    tool_call = {
+        "id": "call_1",
+        "type": "function",
+        "function": {
+            "name": "store_card",
+            "arguments": '{"card": "4111-1111-1111-1111", "email": "test@example.com"}',
+        },
+        "index": 0,
+    }
+    inputs = {"texts": [], "tool_calls": [tool_call]}
+
+    result = await presidio_guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data={"model": "gpt-4", "metadata": {}},
+        input_type="request",
+    )
+
+    args = result["tool_calls"][0]["function"]["arguments"]
+    assert "[CREDIT_CARD]" in args
+    assert "[EMAIL]" in args
+    assert "4111-1111-1111-1111" not in args
+    assert "test@example.com" not in args
+    # The caller's object is mutated in place (the handler writes it back).
+    assert tool_call["function"]["arguments"] == args
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_anthropic_tool_use_arguments(presidio_guardrail):
+    """A2: an Anthropic tool_use block, shaped by the handler into a tool_calls
+    entry with a JSON-string arguments field, must be masked by apply_guardrail."""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        redacted = text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+        return redacted.replace("test@example.com", "[EMAIL]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    # Build the tool_calls entry exactly as the Anthropic handler does: it maps
+    # tool_use.input (a dict) into function.arguments = json.dumps(input).
+    tool_use_block = {
+        "type": "tool_use",
+        "id": "toolu_1",
+        "name": "store_card",
+        "input": {"card": "4111-1111-1111-1111", "email": "test@example.com"},
+    }
+    tool_call = AnthropicConfig.convert_tool_use_to_openai_format(tool_use_block, 0)
+    inputs = {"texts": [], "tool_calls": [tool_call]}
+
+    result = await presidio_guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data={"model": "claude-3-5-sonnet", "metadata": {}},
+        input_type="request",
+    )
+
+    args = result["tool_calls"][0]["function"]["arguments"]
+    assert "[CREDIT_CARD]" in args
+    assert "[EMAIL]" in args
+    assert "4111-1111-1111-1111" not in args
+    assert "test@example.com" not in args
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_does_not_mask_tool_calls_on_response_unmask(presidio_guardrail):
+    """On the response-unmask branch (input_type='response' + pii_tokens),
+    tool-call arguments are left untouched (unmasking runs on texts only)."""
+    calls = {"n": 0}
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        calls["n"] += 1
+        return text
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    tool_call = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "store_card", "arguments": '{"card": "4111-1111-1111-1111"}'},
+        "index": 0,
+    }
+    inputs = {"texts": ["<PERSON_1>"], "tool_calls": [tool_call]}
+
+    await presidio_guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data={"model": "gpt-4", "metadata": {"pii_tokens": {"<PERSON_1>": "John"}}},
+        input_type="response",
+    )
+
+    # check_pii is the masking path; it must not run on the unmask branch.
+    assert calls["n"] == 0
+    # Tool-call arguments are unchanged on the response-unmask path.
+    assert tool_call["function"]["arguments"] == '{"card": "4111-1111-1111-1111"}'
