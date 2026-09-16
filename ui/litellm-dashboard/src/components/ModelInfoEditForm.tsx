@@ -24,6 +24,7 @@ import CacheControlInjectionPoints, {
   CACHE_CONTROL_TOOLTIP,
   type CacheControlInjectionPoint,
 } from "./add_model/cache_control_settings";
+import type { Team } from "./key_team_helpers/key_list";
 import type { CredentialItem } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import type { Tag } from "./tag_management/types";
@@ -103,6 +104,7 @@ export interface ModelEditFormValues {
   litellm_credential_name?: string;
   litellm_extra_params?: string;
   model_info?: string;
+  team_id?: string;
 }
 
 type ModelEditFieldName = keyof ModelEditFormValues;
@@ -139,6 +141,7 @@ const modelEditShape = {
   litellm_credential_name: textish,
   litellm_extra_params: textish,
   model_info: textish,
+  team_id: textish,
 };
 
 const isJson = (value: string): boolean => {
@@ -260,6 +263,7 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
     null,
     2,
   ),
+  team_id: localModelData.model_info?.team_id ?? undefined,
 });
 
 const displayCost = (localModelData: any, field: TouchedPricingField): string => {
@@ -285,6 +289,7 @@ interface ModelInfoEditFormProps {
   tagsList: Record<string, Tag>;
   credentialsList: CredentialItem[];
   healthCheckModelOptions: { value: string; label: string }[];
+  teams: Team[] | null;
 }
 
 const Display: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -355,6 +360,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
   tagsList,
   credentialsList,
   healthCheckModelOptions,
+  teams,
 }) => {
   // Neither RHF's blur-based touchedFields nor its resettable dirtyFields matches antd's touched-on-change.
   const touchedRef = React.useRef<ReadonlySet<string>>(new Set<string>());
@@ -800,7 +806,36 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
 
             <div>
               <FieldLabel>Team ID</FieldLabel>
-              <Display>{modelData.model_info.team_id || "Not Set"}</Display>
+              {isEditing ? (
+                <FormField control={form.control} name="team_id">
+                  {({ id, value, onChange, onBlur }) => {
+                    const items = (teams ?? []).map((team) => ({
+                      value: team.team_id,
+                      label: team.team_alias ? `${team.team_alias} (${team.team_id})` : team.team_id,
+                    }));
+                    return (
+                      <Select
+                        items={items}
+                        value={(value as string | undefined) || null}
+                        onValueChange={(selected: string | null) => onChange(selected ?? "")}
+                      >
+                        <SelectTrigger id={id} className="w-full" onBlur={onBlur}>
+                          <SelectValue placeholder="Select a team" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {items.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    );
+                  }}
+                </FormField>
+              ) : (
+                <Display>{modelData.model_info.team_id || "Not Set"}</Display>
+              )}
             </div>
           </div>
 

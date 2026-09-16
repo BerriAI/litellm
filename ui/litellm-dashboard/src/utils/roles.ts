@@ -46,6 +46,17 @@ export const isUserTeamAdminForSingleTeam = (teamMemberWithRoles: Member[] | nul
   return teamMemberWithRoles.some((member) => member.user_id === userID && member.role === "admin");
 };
 
+export const teamsUserCanAssign = (
+  teams: Team[] | null,
+  userRole: string | null,
+  userID: string | null,
+): Team[] | null => {
+  if (teams == null || isProxyAdminRole(userRole ?? "")) {
+    return teams;
+  }
+  return teams.filter((team) => isUserTeamAdminForSingleTeam(team.members_with_roles, userID ?? ""));
+};
+
 export const isOrgAdminForAnyOrg = (
   organizations: Organization[] | null | undefined,
   userID: string | null | undefined,

@@ -42,6 +42,11 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
   useModelCostMap: (...args: any[]) => mockUseModelCostMap(...args),
 }));
 
+const mockUseTeams = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => mockUseTeams(),
+}));
+
 const mockUsePtuCostAttributionEnabled = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () => ({
   usePtuCostAttributionEnabled: () => mockUsePtuCostAttributionEnabled(),
@@ -102,6 +107,7 @@ describe("ModelInfoView", () => {
     });
     vi.clearAllMocks();
     mockUsePtuCostAttributionEnabled.mockReturnValue(false);
+    mockUseTeams.mockReturnValue({ data: undefined, isLoading: false, error: null });
 
     mockUseModelsInfo.mockReturnValue({
       data: {
@@ -1562,6 +1568,70 @@ describe("ModelInfoView", () => {
       const payload = await save(user);
 
       expect(payload.model_info).toMatchObject({ team_id: "team-7" });
+    });
+
+    it("sends the team picked in the Team ID selector", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha" },
+          { team_id: "team-2", team_alias: "beta" },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await user.click(screen.getByText("alpha (team-1)"));
+      await user.click(await screen.findByText("beta (team-2)"));
+
+      const payload = await save(user);
+
+      expect(payload.model_info.team_id).toBe("team-2");
+    });
+
+    it("shows the Team ID placeholder for a model with no team", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [{ team_id: "team-1", team_alias: "alpha" }],
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      expect(screen.getByText("Select a team")).toBeInTheDocument();
+    });
+
+    it.each(["Internal User", "Org Admin"])("only offers a %s the teams they administer", async (userRole) => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha", members_with_roles: [{ user_id: "123", role: "admin" }] },
+          { team_id: "team-2", team_alias: "beta", members_with_roles: [{ user_id: "123", role: "user" }] },
+          { team_id: "team-3", team_alias: "gamma", members_with_roles: [{ user_id: "123", role: "admin" }] },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole={userRole} />, { wrapper });
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      await user.click(await screen.findByText("alpha (team-1)"));
+
+      expect(await screen.findByRole("option", { name: "gamma (team-3)" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "beta (team-2)" })).not.toBeInTheDocument();
     });
 
     it("sends the edited LiteLLM extra params", async () => {
