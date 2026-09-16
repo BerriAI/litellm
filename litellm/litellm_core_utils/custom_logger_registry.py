@@ -10,7 +10,9 @@ Example:
 
 from typing import Union
 
-from litellm import _custom_logger_compatible_callbacks_literal
+from litellm import (
+    _custom_logger_compatible_callbacks_literal,  # pyright: ignore[reportPrivateUsage]  # internal type alias
+)
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.argilla import ArgillaLogger
@@ -51,8 +53,12 @@ from litellm.integrations.sqs import SQSLogger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     VectorStorePreCallHook,
 )
-from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import _PROXY_DynamicRateLimitHandlerV3
+from litellm.proxy.hooks.dynamic_rate_limiter import (
+    _PROXY_DynamicRateLimitHandler,  # pyright: ignore[reportPrivateUsage]  # internal handler type
+)
+from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
+    _PROXY_DynamicRateLimitHandlerV3,  # pyright: ignore[reportPrivateUsage]  # internal handler type
+)
 
 
 class CustomLoggerRegistry:
@@ -111,24 +117,24 @@ class CustomLoggerRegistry:
     }
 
     try:
-        from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
-            PagerDutyAlerting,
+        from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (  # pyright: ignore[reportMissingImports]  # optional enterprise dependency
+            PagerDutyAlerting,  # pyright: ignore[reportUnknownVariableType]  # optional enterprise dependency
         )
-        from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
-            ResendEmailLogger,
+        from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (  # pyright: ignore[reportMissingImports]  # optional enterprise dependency
+            ResendEmailLogger,  # pyright: ignore[reportUnknownVariableType]  # optional enterprise dependency
         )
-        from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
-            SendGridEmailLogger,
+        from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (  # pyright: ignore[reportMissingImports]  # optional enterprise dependency
+            SendGridEmailLogger,  # pyright: ignore[reportUnknownVariableType]  # optional enterprise dependency
         )
-        from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
-            SMTPEmailLogger,
+        from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (  # pyright: ignore[reportMissingImports]  # optional enterprise dependency
+            SMTPEmailLogger,  # pyright: ignore[reportUnknownVariableType]  # optional enterprise dependency
         )
 
         from litellm.integrations.generic_api.generic_api_callback import (
             GenericAPILogger,
         )
 
-        enterprise_loggers = {
+        enterprise_loggers: dict[str, type[object]] = {  # mutable-ok: enterprise callback mapping
             "pagerduty": PagerDutyAlerting,
             "generic_api": GenericAPILogger,
             "resend_email": ResendEmailLogger,

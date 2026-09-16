@@ -30,8 +30,8 @@ async def clear_client_cache():
 
     try:
         await GLOBAL_LOGGING_WORKER.clear_queue()
-    except Exception:
-        pass
+    except Exception as exc:
+        _ = exc
 
 
 @pytest.mark.asyncio
