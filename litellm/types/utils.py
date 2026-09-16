@@ -3724,6 +3724,7 @@ all_litellm_params = (
     + [
         "metadata",
         "litellm_metadata",
+        "litellm_params",
         "keepalive_seconds",
         "allow_client_keepalive_override",
         "litellm_trace_id",
