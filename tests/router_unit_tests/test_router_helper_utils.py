@@ -1041,7 +1041,7 @@ async def test_acompletion_stream_counts_request_before_headers_and_tokens_once_
     headers = _ratelimit_headers(stream)
     assert headers["x-ratelimit-remaining-tokens"] == 1000
     assert headers["x-ratelimit-remaining-requests"] == 99
-    assert await router.get_model_group_usage("gpt-5-mini") == (None, 1)
+    assert await router.get_model_group_usage("gpt-5-mini") == (0, 1)
 
     chunks = [chunk async for chunk in stream]
     total_tokens = chunks[-1].usage.total_tokens
@@ -1078,7 +1078,7 @@ async def test_deployment_callback_on_success_adds_only_uncounted_tokens():
     )
 
     assert tpm_key is not None
-    assert await router.get_model_group_usage("gpt-5-mini") == (40, None)
+    assert await router.get_model_group_usage("gpt-5-mini") == (40, 0)
 
 
 class _GatedIncrementCache(DualCache):
@@ -1227,6 +1227,17 @@ async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
     headers = _ratelimit_headers(response)
     assert headers["x-ratelimit-remaining-requests"] == 96
     assert headers["x-ratelimit-remaining-tokens"] == 1000 - tokens_on_a - response.usage.total_tokens
+
+    counted_tokens = tokens_on_a + response.usage.total_tokens
+    for _ in range(2):
+        response = await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
+        counted_tokens += response.usage.total_tokens
+
+    stream = await worker_b.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong", stream=True)
+    stream_headers = _ratelimit_headers(stream)
+    assert stream_headers["x-ratelimit-remaining-requests"] == 93
+    assert stream_headers["x-ratelimit-remaining-tokens"] == 1000 - counted_tokens
+    assert [chunk async for chunk in stream]
 
 
 @pytest.mark.asyncio
