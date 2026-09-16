@@ -2213,6 +2213,28 @@ class TestStreamingScanKey:
         assert ended_key.tool_calls_in_flight is False
         assert ended_key != open_key
 
+    def test_legacy_function_call_delta_is_held_like_a_tool_call(self):
+        from litellm.types.utils import Delta, FunctionCall, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+        function_chunk = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=None, function_call=FunctionCall(name="run_shell", arguments='{"cmd": "rm"}')),
+                    finish_reason=None,
+                )
+            ]
+        )
+        open_key = handler.get_streaming_scan_key([self._chunk("hi"), function_chunk])
+        ended_key = handler.get_streaming_scan_key(
+            [self._chunk("hi"), function_chunk, self._chunk(None, finish_reason="function_call")]
+        )
+        assert open_key.tool_calls_in_flight is True
+        assert open_key.tool_calls == ()
+        assert len(ended_key.tool_calls) == 1 and "run_shell" in ended_key.tool_calls[0]
+        assert ended_key.tool_calls_in_flight is False
+
     def test_text_after_the_first_choice_finishes_still_changes_the_key(self):
         handler = OpenAIChatCompletionsHandler()
         first_done = [self._chunk("a", index=0), self._chunk("b", finish_reason="stop", index=0)]

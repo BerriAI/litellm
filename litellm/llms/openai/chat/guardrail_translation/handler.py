@@ -806,7 +806,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             stream_item_fingerprint(tool_call)
             for chunk in responses_so_far
             for choice in _stream_chunk_choices(chunk)
-            for tool_call in stream_item_items(stream_item_field(choice, "delta"), "tool_calls")
+            for tool_call in _streamed_delta_tool_calls(stream_item_field(choice, "delta"))
         )
 
     @staticmethod
@@ -1342,6 +1342,12 @@ def _stream_chunk_choices(item: object) -> Sequence[object]:
     if isinstance(choices, Sequence) and not isinstance(choices, (str, bytes)):
         return choices
     return ()
+
+
+def _streamed_delta_tool_calls(delta: object) -> tuple[object, ...]:
+    function_call: Final = stream_item_field(delta, "function_call")
+    legacy: Final = () if function_call is None else (function_call,)
+    return stream_item_items(delta, "tool_calls") + legacy
 
 
 def _blocked_stream_identity(
