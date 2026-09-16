@@ -197,7 +197,7 @@ describe("TopKeyView", () => {
       ];
 
       renderWithProviders(<TopKeyView {...mockProps} topKeys={keysWithoutTags} showTags={true} />);
-      expect(screen.getAllByText("-")).toHaveLength(2);
+      expect(screen.getAllByText("-")).toHaveLength(1);
     });
 
     it("should handle keys with undefined tags", () => {
@@ -212,7 +212,7 @@ describe("TopKeyView", () => {
       ];
 
       renderWithProviders(<TopKeyView {...mockProps} topKeys={keysWithUndefinedTags} showTags={true} />);
-      expect(screen.getAllByText("-")).toHaveLength(2);
+      expect(screen.getAllByText("-")).toHaveLength(1);
     });
 
     it("should handle keys with null tags", () => {
@@ -227,7 +227,7 @@ describe("TopKeyView", () => {
       ];
 
       renderWithProviders(<TopKeyView {...mockProps} topKeys={keysWithNullTags} showTags={true} />);
-      expect(screen.getAllByText("-")).toHaveLength(2);
+      expect(screen.getAllByText("-")).toHaveLength(1);
     });
   });
 

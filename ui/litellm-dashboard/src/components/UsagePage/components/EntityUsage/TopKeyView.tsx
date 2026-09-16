@@ -17,8 +17,8 @@ const TOP_KEYS_LIMITS = [5, 10, 25, 50] as const;
 
 export interface TopKeyItem {
   api_key: string;
-  key_alias: string;
-  user_email: string | null;
+  key_alias: string | null;
+  user_email?: string | null;
   tags?: TagUsage[] | null;
   spend: number;
 }
@@ -103,11 +103,15 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
       accessorKey: "key_alias",
       cell: (info: any) => info.getValue() || "-",
     },
-    {
-      header: "User",
-      accessorKey: "user_email",
-      cell: (info: any) => info.getValue() || "-",
-    },
+    ...(topKeys.some((k) => k.user_email)
+      ? [
+          {
+            header: "User",
+            accessorKey: "user_email",
+            cell: (info: any) => info.getValue() || "-",
+          },
+        ]
+      : []),
   ];
 
   const tagsColumn = {
