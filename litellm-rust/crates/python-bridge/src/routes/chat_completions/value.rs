@@ -9,7 +9,19 @@ use pyo3::prelude::*;
 use serde_json::Value;
 
 use crate::errors::chat_completions_error_to_pyerr;
+use crate::execution::{run_async, run_sync};
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty, required_array};
+
+struct ChatCompletionsInputs {
+    model: String,
+    messages: Value,
+    optional_params: Option<Value>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Value>,
+    timeout_seconds: Option<f64>,
+}
 
 fn prepare_chat_completions(
     inputs: ChatCompletionsInputs,
@@ -66,26 +78,147 @@ fn chat_completions_decline(
     .map(str::to_string))
 }
 
-bridge_route! {
-    sync = chat_completions,
-    asynchronous = achat_completions,
-    inputs = ChatCompletionsInputs,
-    required = {
+#[pyfunction]
+#[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn chat_completions(
+    py: Python<'_>,
+    model: String,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Py<PyAny>> {
+    run_sync(
+        py,
+        prepare_chat_completions(ChatCompletionsInputs {
+            model,
+            messages,
+            optional_params,
+            api_key,
+            api_base,
+            custom_llm_provider,
+            extra_headers,
+            timeout_seconds,
+        })?,
+        chat_completions_error_to_pyerr,
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn achat_completions(
+    py: Python<'_>,
+    model: String,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Bound<'_, PyAny>> {
+    run_async(
+        py,
+        prepare_chat_completions(ChatCompletionsInputs {
+            model,
+            messages,
+            optional_params,
+            api_key,
+            api_base,
+            custom_llm_provider,
+            extra_headers,
+            timeout_seconds,
+        })?,
+        chat_completions_error_to_pyerr,
+    )
+}
+
+pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    super::super::add_function(module, wrap_pyfunction!(chat_completions_decline, module)?)?;
+    super::super::add_function(module, wrap_pyfunction!(chat_completions, module)?)?;
+    super::super::add_function(module, wrap_pyfunction!(achat_completions, module)?)
+}
+
+#[cfg(feature = "trace-parity")]
+mod trace {
+    use super::{
+        ChatCompletionsInputs, Value, chat_completions_error_to_pyerr, prepare_chat_completions,
+        run_async, run_sync,
+    };
+    use pyo3::prelude::*;
+
+    #[pyfunction]
+    #[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn chat_completions(
+        py: Python<'_>,
         model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        messages: serde_json::Value,
-    },
-    optional = {
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        optional_params: Option<serde_json::Value>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
         api_key: Option<String>,
         api_base: Option<String>,
         custom_llm_provider: Option<String>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        extra_headers: Option<serde_json::Value>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
         timeout_seconds: Option<f64>,
-    },
-    prepare = prepare_chat_completions,
-    errors = chat_completions_error_to_pyerr,
-    extra = [chat_completions_decline],
+    ) -> PyResult<Py<PyAny>> {
+        run_sync(
+            py,
+            crate::function_trace::capture(prepare_chat_completions(ChatCompletionsInputs {
+                model,
+                messages,
+                optional_params,
+                api_key,
+                api_base,
+                custom_llm_provider,
+                extra_headers,
+                timeout_seconds,
+            })?),
+            chat_completions_error_to_pyerr,
+        )
+    }
+
+    #[pyfunction]
+    #[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn achat_completions(
+        py: Python<'_>,
+        model: String,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
+        api_key: Option<String>,
+        api_base: Option<String>,
+        custom_llm_provider: Option<String>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
+        timeout_seconds: Option<f64>,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        run_async(
+            py,
+            crate::function_trace::capture(prepare_chat_completions(ChatCompletionsInputs {
+                model,
+                messages,
+                optional_params,
+                api_key,
+                api_base,
+                custom_llm_provider,
+                extra_headers,
+                timeout_seconds,
+            })?),
+            chat_completions_error_to_pyerr,
+        )
+    }
+
+    pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        super::super::super::add_function(module, wrap_pyfunction!(chat_completions, module)?)?;
+        super::super::super::add_function(module, wrap_pyfunction!(achat_completions, module)?)
+    }
+}
+
+#[cfg(feature = "trace-parity")]
+pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    trace::register(module)
 }
