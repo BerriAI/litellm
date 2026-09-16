@@ -221,6 +221,7 @@ from .llms.nvidia_riva.audio_transcription.transformation import (
     NvidiaRivaAudioTranscriptionConfig,
 )
 from .llms.oci.chat.transformation import OCIChatConfig
+from .llms.ollama.chat.handler import ollama_chat_completion
 from .llms.ollama.completion import handler as ollama
 from .llms.oobabooga.chat import oobabooga
 from .llms.openai.completion.handler import OpenAITextCompletion
@@ -4350,45 +4351,7 @@ def _complete_ollama(ctx: _CompletionDispatchContext) -> _CompletionDispatchResu
 
 
 def _complete_ollama_chat(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
-    acompletion: Final = ctx.acompletion
-    api_base = ctx.api_base
-    api_key = ctx.api_key
-    client: Final = _dispatch_client_http(ctx)
-    headers: Final = ctx.headers
-    litellm_params: Final = ctx.litellm_params
-    logging: Final = ctx.logging
-    messages: Final = ctx.messages
-    model: Final = ctx.model
-    model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
-    shared_session: Final = ctx.shared_session
-    stream: Final = ctx.stream
-    timeout: Final = ctx.timeout
-
-    api_base = litellm.api_base or api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
-
-    api_key = api_key or litellm.ollama_key or os.environ.get("OLLAMA_API_KEY") or litellm.api_key
-    if api_key is not None and "Authorization" not in headers:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    return base_llm_http_handler.completion(
-        model=model,
-        stream=stream,
-        messages=messages,
-        acompletion=acompletion,
-        api_base=api_base,
-        model_response=model_response,
-        optional_params=optional_params,
-        litellm_params=litellm_params,
-        shared_session=shared_session,
-        custom_llm_provider="ollama_chat",
-        timeout=timeout,
-        headers=headers,
-        encoding=_get_encoding(),
-        api_key=api_key,
-        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
-        client=client,
-    )
+    return ollama_chat_completion(ctx)
 
 
 def _complete_triton(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:

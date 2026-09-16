@@ -288,13 +288,14 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
                     // Anthropic. A caller calling `.strip()` on it would break
                     // on this path alone.
                     content: Some(text),
+                    reasoning_content: None,
                 },
                 finish_reason: finish_reason_for(
                     body.get("stopReason").and_then(Value::as_str).unwrap_or(""),
                 )
                 .to_string(),
             }],
-            usage,
+            usage: Some(usage),
         })
     }
 }

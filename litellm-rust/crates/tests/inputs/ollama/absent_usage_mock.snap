@@ -1,0 +1,41 @@
+Request 0:
+Parity: True
+ {
+   "messages": [
+     {
+       "content": "Acknowledge with one word.",
+       "images": [],
+       "role": "user"
+     }
+   ],
+   "model": "qwen3.8:27b",
+   "options": {
+     "seed": 42,
+     "temperature": 0.0
+   },
+   "stream": false
+ }
+
+Response 0:
+Parity: True
+ {
+   "choices": [
+     {
+       "finish_reason": "stop",
+       "index": 0,
+       "message": {
+         "content": "Done",
+         "role": "assistant"
+       }
+     }
+   ],
+   "created": "<redacted>",
+   "id": "<redacted>",
+   "model": "ollama-chat",
+   "object": "chat.completion",
+   "usage": {
+     "completion_tokens": 1,
+     "prompt_tokens": 13,
+     "total_tokens": 14
+   }
+ }

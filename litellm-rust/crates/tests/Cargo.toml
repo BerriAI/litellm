@@ -1,0 +1,21 @@
+[package]
+name = "litellm-rust-tests"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+libtest-mimic = "0.8"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+similar = "3"
+toml = "0.8"
+tempfile = "3"
+
+[[test]]
+name = "provider_parity"
+harness = false
+path = "tests/provider_parity.rs"

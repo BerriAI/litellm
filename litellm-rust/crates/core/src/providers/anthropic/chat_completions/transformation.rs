@@ -197,6 +197,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
                 message: ChatCompletionsChoiceMessage {
                     role: "assistant".to_string(),
                     content: (!text.is_empty()).then_some(text),
+                    reasoning_content: None,
                 },
                 finish_reason: finish_reason_for(
                     body.get("stop_reason")
@@ -205,12 +206,12 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
                 )
                 .to_string(),
             }],
-            usage: usage_from_parts(
+            usage: Some(usage_from_parts(
                 field("input_tokens"),
                 field("output_tokens"),
                 field("cache_read_input_tokens"),
                 field("cache_creation_input_tokens"),
-            ),
+            )),
         })
     }
 }

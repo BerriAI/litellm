@@ -106,6 +106,8 @@ fn validate_environment(
         }
         // SigV4 signs the serialized body, so the handler adds its headers.
         ChatCompletionsAuth::AwsSigV4 { .. } => {}
+        // Provider accepts unauthenticated calls, so nothing is added or stripped.
+        ChatCompletionsAuth::None => {}
     }
 
     for (name, value) in config.default_headers() {
