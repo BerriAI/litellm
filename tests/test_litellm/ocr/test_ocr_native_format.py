@@ -7,7 +7,7 @@ from litellm.rust_bridge import ocr as rust_ocr_bridge
 
 def test_rust_ocr_response_retains_provider_native_response():
     provider_response = {"status": "succeeded", "analyzeResult": {"content": "native"}}
-    response = rust_ocr_bridge._response(
+    response = rust_ocr_bridge.build_response(
         {
             "pages": [],
             "model": "prebuilt-layout",

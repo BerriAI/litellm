@@ -29,7 +29,7 @@ enum OcrHostData {
 struct ProjectedOcrHost {
     fields: ProjectedOcrFields,
     pre_call: Option<callbacks::OcrLoggingFields>,
-    retained_fields: Option<Py<PyDict>>,
+    callback_inputs: Option<Py<PyDict>>,
     body: Option<Py<PyDict>>,
     headers: Option<Py<PyDict>>,
 }
@@ -55,20 +55,10 @@ impl PythonOcrHost {
         request: OcrPreCallRequest,
     ) -> PyResult<OcrPreCallRequest> {
         let kwargs = self.state.kwargs.bind(py);
-        let retained_fields = PyDict::new(py);
-        for name in request
-            .optional_params
-            .as_object()
-            .ok_or_else(missing_state)?
-            .keys()
-        {
-            if let Some(value) = kwargs.get_item(name)? {
-                retained_fields.set_item(name, value)?;
-            }
-        }
-        retained_fields.set_item("document", &self.projected()?.fields.document)?;
+        let callback_inputs = kwargs.copy()?;
+        callback_inputs.set_item("document", &self.projected()?.fields.document)?;
         let projected = self.projected_mut()?;
-        projected.retained_fields = Some(retained_fields.unbind());
+        projected.callback_inputs = Some(callback_inputs.unbind());
         projected.pre_call = Some((&request).into());
         Ok(request)
     }
@@ -112,7 +102,7 @@ impl PythonOcrHost {
         let body = to_py(py, &request.body)?
             .into_bound(py)
             .cast_into::<PyDict>()?;
-        if let Some(retained) = &self.projected()?.retained_fields {
+        if let Some(retained) = &self.projected()?.callback_inputs {
             for name in &request.retained_fields {
                 if let Some(value) = retained.bind(py).get_item(name)? {
                     body.set_item(name, value)?;
@@ -202,7 +192,7 @@ impl PythonRoute for PythonOcrHost {
                 self.data = OcrHostData::Projected(Box::new(ProjectedOcrHost {
                     fields: projected.fields,
                     pre_call: None,
-                    retained_fields: None,
+                    callback_inputs: None,
                     body: None,
                     headers: None,
                 }));
@@ -265,7 +255,7 @@ impl PythonRoute for PythonOcrHost {
                 if let Some(provider) = &projected.fields.azure_ad_token_provider {
                     provider.traverse(visit)?;
                 }
-                visit.call(&projected.retained_fields)?;
+                visit.call(&projected.callback_inputs)?;
                 visit.call(&projected.body)?;
                 visit.call(&projected.headers)
             }
@@ -282,14 +272,18 @@ impl litellm_core::ocr::hooks::OcrHooks for BridgeOcrHooks {
     }
 }
 
-#[pyfunction]
-fn _ocr_lifecycle(
+fn call(
     py: Python<'_>,
-    request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
+    kwargs: Option<Bound<'_, PyDict>>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
+    let kwargs = kwargs.unwrap_or_else(|| PyDict::new(py));
+    let name = if asynchronous { "aocr" } else { "ocr" };
+    let request = py
+        .import("litellm.rust_bridge.ocr")?
+        .getattr("bind_request")?
+        .call1((name, &args, &kwargs))?;
     let client = OcrClient::shared().map_err(ocr_error_to_pyerr)?;
     let call = admitted_call(OcrCall::admit(
         client,
@@ -304,7 +298,7 @@ fn _ocr_lifecycle(
             args.unbind(),
             kwargs.copy()?.unbind(),
             asynchronous,
-            if asynchronous { "aocr" } else { "ocr" },
+            name,
         )?,
         data: OcrHostData::Unprojected {
             request: request.unbind(),
@@ -313,6 +307,27 @@ fn _ocr_lifecycle(
     run_call(py, call, host)
 }
 
+#[pyfunction]
+#[pyo3(signature = (*args, **kwargs))]
+fn ocr(
+    py: Python<'_>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Option<Bound<'_, PyDict>>,
+) -> PyResult<Py<PyAny>> {
+    call(py, args, kwargs, false)
+}
+
+#[pyfunction]
+#[pyo3(signature = (*args, **kwargs))]
+fn aocr(
+    py: Python<'_>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Option<Bound<'_, PyDict>>,
+) -> PyResult<Py<PyAny>> {
+    call(py, args, kwargs, true)
+}
+
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(_ocr_lifecycle, module)?)
+    super::super::add_function(module, wrap_pyfunction!(ocr, module)?)?;
+    super::super::add_function(module, wrap_pyfunction!(aocr, module)?)
 }

@@ -16,6 +16,9 @@ from pathlib import Path
 from socket import socket as Socket
 from typing import Final
 
+import litellm
+from litellm.llms.base_llm.ocr.transformation import OCRResponse
+
 REQUEST_STARTED: Final = threading.Event()
 REQUEST_CANCELLED: Final = threading.Event()
 
@@ -145,12 +148,13 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
         "timeout_seconds": 3.0,
     }
     if route == "ocr":
-        return common | {
+        return {key: value for key, value in common.items() if key != "timeout_seconds"} | {
             "model": "mistral-ocr-latest",
             "document": {"type": "document_url", "document_url": "https://example.com/document.pdf"},
             "api_key": "sk-native",
             "custom_llm_provider": "mistral",
-            "optional_params": {"include_image_base64": True},
+            "include_image_base64": True,
+            "timeout": 3.0,
         }
     if route == "transcription":
         return common | {
@@ -186,6 +190,10 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
 
 
 def assert_success(route: str, response: object) -> None:
+    if route == "ocr":
+        assert isinstance(response, OCRResponse)
+        assert response.pages[0].markdown == "native-ocr"
+        return
     if not isinstance(response, dict):
         raise TypeError(f"{route} returned {type(response).__name__}, expected dict")
     actual: Final = success_value(route, response)
@@ -206,7 +214,7 @@ def azure_ocr_kwargs(api_base: str) -> dict[str, object]:
             "x-test-outcome": "success",
             "x-test-route": "azure_ocr",
         },
-        "optional_params": {"azure_ad_token": "prepared-azure-token"},
+        "azure_ad_token": "prepared-azure-token",
     }
 
 
@@ -218,7 +226,8 @@ def azure_di_kwargs(api_base: str) -> dict[str, object]:
         "api_base": api_base,
         "custom_llm_provider": "azure_ai",
         "extra_headers": {"x-test-outcome": "success", "x-test-route": "azure_di"},
-        "optional_params": {"req_format": "native", "pages": [0, 2]},
+        "req_format": "native",
+        "pages": [0, 2],
     }
 
 
@@ -233,7 +242,11 @@ def success_value(route: str, response: dict[object, object]) -> object:
 
 
 def assert_rate_limit(native: object, route: str, error: BaseException) -> None:
-    if route in {"ocr", "chat_completions"}:
+    if route == "ocr":
+        assert isinstance(error, litellm.RateLimitError)
+        assert error.status_code == 429
+        return
+    if route == "chat_completions":
         upstream_error: Final = native.RustUpstreamError
         if not isinstance(error, upstream_error) or error.args[0] != 429:
             raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
@@ -248,13 +261,13 @@ def exercise_sync(native: object, api_base: str) -> None:
         assert_success(route, function(**route_kwargs(route, api_base, "success")))
         try:
             function(**route_kwargs(route, api_base, "429"))
-        except (RuntimeError, native.RustUpstreamError) as error:
+        except (RuntimeError, native.RustUpstreamError, litellm.RateLimitError) as error:
             assert_rate_limit(native, route, error)
         else:
             raise AssertionError(f"{route} accepted a 429 response")
     assert_success("ocr", native.ocr(**azure_ocr_kwargs(api_base)))
     di_response: Final = native.ocr(**azure_di_kwargs(api_base))
-    assert di_response["provider_native_response"]["status"] == "succeeded"
+    assert di_response.get_provider_native_response()["status"] == "succeeded"
 
 
 async def exercise_async(native: object, api_base: str) -> None:
@@ -263,13 +276,13 @@ async def exercise_async(native: object, api_base: str) -> None:
         assert_success(route, await function(**route_kwargs(route, api_base, "success")))
         try:
             await function(**route_kwargs(route, api_base, "429"))
-        except (RuntimeError, native.RustUpstreamError) as error:
+        except (RuntimeError, native.RustUpstreamError, litellm.RateLimitError) as error:
             assert_rate_limit(native, route, error)
         else:
             raise AssertionError(f"a{route} accepted a 429 response")
     assert_success("ocr", await native.aocr(**azure_ocr_kwargs(api_base)))
     di_response: Final = await native.aocr(**azure_di_kwargs(api_base))
-    assert di_response["provider_native_response"]["status"] == "succeeded"
+    assert di_response.get_provider_native_response()["status"] == "succeeded"
 
 
 async def exercise_async_concurrency(native: object, api_base: str) -> None:

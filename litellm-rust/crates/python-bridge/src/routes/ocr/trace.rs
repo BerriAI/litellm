@@ -85,7 +85,7 @@ fn ocr(
 ) -> PyResult<Py<PyAny>> {
     run_sync(
         py,
-        prepare_ocr(OcrInputs {
+        crate::function_trace::capture(prepare_ocr(OcrInputs {
             model,
             document,
             api_key,
@@ -95,7 +95,7 @@ fn ocr(
             optional_params,
             input_sources,
             timeout_seconds,
-        })?,
+        })?),
         ocr_error_to_pyerr,
     )
 }
@@ -117,7 +117,7 @@ fn aocr(
 ) -> PyResult<Bound<'_, PyAny>> {
     run_async(
         py,
-        prepare_ocr(OcrInputs {
+        crate::function_trace::capture(prepare_ocr(OcrInputs {
             model,
             document,
             api_key,
@@ -127,7 +127,7 @@ fn aocr(
             optional_params,
             input_sources,
             timeout_seconds,
-        })?,
+        })?),
         ocr_error_to_pyerr,
     )
 }
@@ -135,84 +135,4 @@ fn aocr(
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     super::super::add_function(module, wrap_pyfunction!(ocr, module)?)?;
     super::super::add_function(module, wrap_pyfunction!(aocr, module)?)
-}
-
-#[cfg(feature = "trace-parity")]
-mod trace {
-    use super::{OcrInputs, Value, ocr_error_to_pyerr, prepare_ocr, run_async, run_sync};
-    use pyo3::prelude::*;
-
-    #[pyfunction]
-    #[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, input_sources=None, timeout_seconds=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn ocr(
-        py: Python<'_>,
-        model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] document: Value,
-        api_key: Option<String>,
-        api_base: Option<String>,
-        custom_llm_provider: Option<String>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] input_sources: Option<Value>,
-        timeout_seconds: Option<f64>,
-    ) -> PyResult<Py<PyAny>> {
-        run_sync(
-            py,
-            crate::function_trace::capture(prepare_ocr(OcrInputs {
-                model,
-                document,
-                api_key,
-                api_base,
-                custom_llm_provider,
-                extra_headers,
-                optional_params,
-                input_sources,
-                timeout_seconds,
-            })?),
-            ocr_error_to_pyerr,
-        )
-    }
-
-    #[pyfunction]
-    #[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, input_sources=None, timeout_seconds=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn aocr(
-        py: Python<'_>,
-        model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] document: Value,
-        api_key: Option<String>,
-        api_base: Option<String>,
-        custom_llm_provider: Option<String>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] input_sources: Option<Value>,
-        timeout_seconds: Option<f64>,
-    ) -> PyResult<Bound<'_, PyAny>> {
-        run_async(
-            py,
-            crate::function_trace::capture(prepare_ocr(OcrInputs {
-                model,
-                document,
-                api_key,
-                api_base,
-                custom_llm_provider,
-                extra_headers,
-                optional_params,
-                input_sources,
-                timeout_seconds,
-            })?),
-            ocr_error_to_pyerr,
-        )
-    }
-
-    pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-        super::super::super::add_function(module, wrap_pyfunction!(ocr, module)?)?;
-        super::super::super::add_function(module, wrap_pyfunction!(aocr, module)?)
-    }
-}
-
-#[cfg(feature = "trace-parity")]
-pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    trace::register(module)
 }
