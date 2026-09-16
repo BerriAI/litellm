@@ -968,15 +968,18 @@ class ChunkProcessor:
 
         See the ``completion_usage_updates`` comment in
         ``_calculate_usage_per_chunk``. With >= 2 completion-bearing usage events
-        ``message_delta`` arrived and the value is real. Otherwise the only
-        completion update we ever saw was the Anthropic ``message_start``
-        placeholder, whose value is not always 1, so reset to 0 and let
-        ``calculate_usage()`` estimate from the received text and reasoning.
-        Gated on ``custom_llm_provider == "anthropic"`` so other providers that
-        legitimately report completion tokens from a single usage event are
-        left alone.
+        ``message_delta`` arrived and the value is real. The same holds when any
+        chunk carries a ``finish_reason``: the stream completed, and the wrapper
+        drops the empty ``message_start`` chunk before the caller sees it, so a
+        caller-side rebuild of a completed stream only has the final usage
+        event. Otherwise the only completion update we ever saw was the
+        Anthropic ``message_start`` placeholder, whose value is not always 1, so
+        reset to 0 and let ``calculate_usage()`` estimate from the received text
+        and reasoning. Gated on ``custom_llm_provider == "anthropic"`` so other
+        providers that legitimately report completion tokens from a single usage
+        event are left alone.
         """
-        if completion_usage_updates >= 2:
+        if completion_usage_updates >= 2 or ChunkProcessor._any_chunk_finished(chunks):
             return completion_tokens
 
         custom_llm_provider: str | None = None
@@ -992,6 +995,16 @@ class ChunkProcessor:
         if custom_llm_provider == "anthropic":
             return 0
         return completion_tokens
+
+    @staticmethod
+    def _any_chunk_finished(chunks: Sequence["_UsageBearingChunk | ModelResponse"]) -> bool:
+        return any(
+            isinstance(chunk, ModelResponseStream)
+            and any(
+                isinstance(choice, StreamingChoices) and choice.finish_reason is not None for choice in chunk.choices
+            )
+            for chunk in chunks
+        )
 
     def calculate_usage(
         self,

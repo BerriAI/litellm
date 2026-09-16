@@ -19,10 +19,11 @@ to 0 when the only update we saw was the cursor, allowing the
 text-based fallback to estimate from the real completion text.
 """
 
+from typing import Final
 
 import pytest
 
-
+import litellm
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (
     Delta,
@@ -70,9 +71,7 @@ class TestAnthropicCursorBug:
         token_counter fallback can estimate from completion text.
         """
         # Anthropic message_start: input_tokens accurate, output_tokens=1 cursor
-        message_start = _make_chunk(
-            usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
-        )
+        message_start = _make_chunk(usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025))
         # Several content_block_delta chunks (no usage attached)
         text_chunks = [
             _make_chunk(content="Hello"),
@@ -98,9 +97,7 @@ class TestAnthropicCursorBug:
         Normal complete stream: message_start cursor=1, then message_delta=3847.
         Last-wins must give 3847 (the real value).
         """
-        message_start = _make_chunk(
-            usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
-        )
+        message_start = _make_chunk(usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025))
         text_chunks = [_make_chunk(content=t) for t in ["Hello", " world", "!"]]
         # message_delta with the real cumulative output_tokens
         message_delta = _make_chunk(
@@ -120,19 +117,14 @@ class TestAnthropicCursorBug:
         End-to-end via calculate_usage(): cursor-only stream + real completion
         text should produce a token-counter estimate, NOT 1.
         """
-        message_start = _make_chunk(
-            usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
-        )
+        message_start = _make_chunk(usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025))
         # ~50 visible chars ≈ ~12 tokens (anthropic-style tokenizer ballpark)
         text_chunks = [
             _make_chunk(content="Based on your question, I think the answer is "),
             _make_chunk(content="forty-two. Here is my reasoning: "),
         ]
         chunks = [message_start, *text_chunks]
-        completion_output = (
-            "Based on your question, I think the answer is forty-two. "
-            "Here is my reasoning: "
-        )
+        completion_output = "Based on your question, I think the answer is forty-two. Here is my reasoning: "
 
         processor = ChunkProcessor(chunks=chunks, messages=[])
         usage = processor.calculate_usage(
@@ -150,9 +142,7 @@ class TestAnthropicCursorBug:
 
     def test_cache_fields_preserved_from_message_start(self):
         """cache_read / cache_creation come from message_start and must survive."""
-        message_start_usage = Usage(
-            prompt_tokens=1024, completion_tokens=1, total_tokens=1025
-        )
+        message_start_usage = Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
         # Anthropic puts these in message_start
         message_start_usage.cache_read_input_tokens = 512
         message_start_usage.cache_creation_input_tokens = 128
@@ -194,9 +184,7 @@ class TestAnthropicCursorBug:
         on a 1-token string also gives ~1, so billing is still approximately
         correct. This test pins that the result is sane (1 or 0).
         """
-        message_start = _make_chunk(
-            usage=Usage(prompt_tokens=20, completion_tokens=1, total_tokens=21)
-        )
+        message_start = _make_chunk(usage=Usage(prompt_tokens=20, completion_tokens=1, total_tokens=21))
         text_chunk = _make_chunk(content="Yes.")
         # Anthropic's message_delta also gives output_tokens=1 in this case
         message_delta = _make_chunk(
@@ -231,15 +219,36 @@ class TestAnthropicCursorBug:
         like 8. A single completion-bearing usage event on an Anthropic stream
         is always message_start, so it must reset no matter its value.
         """
-        message_start = _make_chunk(
+        message_start: Final = _make_chunk(
             usage=Usage(prompt_tokens=100, completion_tokens=placeholder, total_tokens=100 + placeholder)
         )
-        chunks = [message_start, _make_chunk(content="partial")]
+        chunks: Final = [message_start, _make_chunk(content="partial")]
 
-        processor = ChunkProcessor(chunks=chunks, messages=[])
-        result = processor._calculate_usage_per_chunk(chunks=chunks)
+        processor: Final = ChunkProcessor(chunks=chunks, messages=[])
+        result: Final = processor._calculate_usage_per_chunk(chunks=chunks)
 
         assert result["completion_tokens"] == 0
+
+    def test_caller_side_rebuild_of_completed_stream_keeps_final_usage(self):
+        """
+        CustomStreamWrapper drops the empty message_start chunk, so a caller
+        rebuilding a completed stream from the chunks it received only has the
+        message_delta usage, which arrives with finish_reason. That single
+        usage event is authoritative and must not be reset.
+        """
+        chunks: Final = [
+            _make_chunk(content="Hello"),
+            _make_chunk(content=" world"),
+            _make_chunk(
+                finish_reason="stop",
+                usage=Usage(prompt_tokens=100, completion_tokens=8, total_tokens=108),
+            ),
+        ]
+
+        response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+        assert response is not None
+        assert response.usage.completion_tokens == 8
 
     @pytest.mark.parametrize("placeholder", [1, 8])
     def test_reasoning_only_interrupted_stream_estimates_from_reasoning(self, placeholder: int):
@@ -249,30 +258,46 @@ class TestAnthropicCursorBug:
         The recovered usage must reflect the reasoning the provider billed,
         not the placeholder and not 0.
         """
-        reasoning = "Let me think carefully about this problem. " * 200
-        message_start = _make_chunk(
+        reasoning: Final = "Let me think carefully about this problem. " * 200
+        message_start: Final = _make_chunk(
             usage=Usage(prompt_tokens=100, completion_tokens=placeholder, total_tokens=100 + placeholder)
         )
-        reasoning_chunks = [_make_chunk(reasoning_content=reasoning[i : i + 50]) for i in range(0, len(reasoning), 50)]
-        chunks = [message_start, *reasoning_chunks]
+        reasoning_chunks: Final = [
+            _make_chunk(reasoning_content=reasoning[i : i + 50]) for i in range(0, len(reasoning), 50)
+        ]
+        chunks: Final = [message_start, *reasoning_chunks]
 
-        processor = ChunkProcessor(chunks=chunks, messages=[])
-        response = processor.build_base_response(chunks=chunks)
-        response.choices[0].message.reasoning_content = reasoning
-        reasoning_tokens = processor.count_reasoning_tokens(response)
+        response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+        assert response is not None
+        assert response.choices[0].message.reasoning_content == reasoning
+        reasoning_tokens: Final = response.usage.completion_tokens_details.reasoning_tokens
         assert reasoning_tokens is not None and reasoning_tokens > 100
+        assert response.usage.completion_tokens == reasoning_tokens
 
-        usage = processor.calculate_usage(
-            chunks=chunks,
-            model="claude-sonnet-4-6",
-            completion_output="",
-            messages=[],
-            reasoning_tokens=reasoning_tokens,
-        )
+    def test_interrupted_stream_with_text_and_reasoning_counts_both(self):
+        """
+        Stream cancelled after the model finished thinking and started
+        answering: the estimate must cover both the reasoning and the text,
+        so it has to exceed what the text alone would count.
+        """
+        reasoning: Final = "Let me think carefully about this problem. " * 200
+        text: Final = "The answer is forty two, and here is why. " * 20
+        message_start: Final = _make_chunk(usage=Usage(prompt_tokens=100, completion_tokens=8, total_tokens=108))
+        chunks: Final = [
+            message_start,
+            *[_make_chunk(reasoning_content=reasoning[i : i + 50]) for i in range(0, len(reasoning), 50)],
+            *[_make_chunk(content=text[i : i + 50]) for i in range(0, len(text), 50)],
+        ]
 
-        assert usage.completion_tokens == reasoning_tokens
-        assert usage.completion_tokens_details is not None
-        assert usage.completion_tokens_details.reasoning_tokens == reasoning_tokens
+        response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+        assert response is not None
+        assert response.choices[0].message.content == text
+        text_only: Final = litellm.token_counter(model="claude-sonnet-4-6", text=text, count_response_tokens=True)
+        reasoning_tokens: Final = response.usage.completion_tokens_details.reasoning_tokens
+        assert reasoning_tokens is not None and reasoning_tokens > 100
+        assert response.usage.completion_tokens == text_only + reasoning_tokens
 
     def test_anthropic_cache_only_chunks_after_message_start_still_resets(self):
         """
@@ -282,9 +307,7 @@ class TestAnthropicCursorBug:
         must fire so token_counter estimates from completion text instead of
         billing the placeholder.
         """
-        message_start_usage = Usage(
-            prompt_tokens=1024, completion_tokens=1, total_tokens=1025
-        )
+        message_start_usage = Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025)
         message_start_usage.cache_read_input_tokens = 4096
         message_start = _make_chunk(usage=message_start_usage)
         # Subsequent chunks with cache fields but no completion_tokens
