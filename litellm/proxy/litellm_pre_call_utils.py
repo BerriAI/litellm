@@ -1582,7 +1582,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_org_alias=user_api_key_dict.organization_alias,
             user_api_key_team_alias=user_api_key_dict.team_alias,
-            user_api_key_end_user_id=user_api_key_dict.end_user_id,
+            user_api_key_end_user_id=user_api_key_dict.billing_end_user_id or user_api_key_dict.end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
             user_api_key_budget_reset_at=(

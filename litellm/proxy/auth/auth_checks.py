@@ -1504,9 +1504,43 @@ async def _check_end_user_budget(
         )
 
 
+async def resolve_end_user_budget_fallback(
+    end_user_obj: LiteLLM_EndUserTable | None,
+    route: str,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    skip_budget_checks: bool = False,
+) -> LiteLLM_EndUserTable | None:
+    if end_user_obj is None or end_user_obj.fallback_end_user_id is None or skip_budget_checks:
+        return end_user_obj
+    try:
+        await _check_end_user_budget(end_user_obj, route)
+    except litellm.BudgetExceededError:
+        fallback: Final = await get_end_user_object(
+            end_user_id=end_user_obj.fallback_end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            route=route,
+            require_exists=True,
+        )
+        if fallback is not None and fallback.fallback_end_user_id is None:
+            try:
+                await _check_end_user_budget(fallback, route)
+            except litellm.BudgetExceededError:
+                return end_user_obj
+            return fallback
+    return end_user_obj
+
+
 #: Columns whose non-null value makes an end-user row restrict something auth enforces. ``blocked``
 #: is separate: it restricts when true rather than when merely set.
-_RESTRICTED_COLUMNS: Final = ("budget_id", "allowed_model_region", "default_model", "object_permission_id")
+_RESTRICTED_COLUMNS: Final = (
+    "budget_id",
+    "allowed_model_region",
+    "default_model",
+    "object_permission_id",
+    "fallback_end_user_id",
+)
 
 
 def _column_is_set(column: str) -> Mapping[str, object]:
@@ -1699,6 +1733,7 @@ async def get_end_user_object(
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     token_end_user_max_budget: float | None = None,
+    require_exists: bool = False,
 ) -> LiteLLM_EndUserTable | None:
     """
     Returns end user object from database or cache.
@@ -1745,7 +1780,7 @@ async def get_end_user_object(
 
         return return_obj
 
-    if await _end_user_is_known_unrestricted(
+    if not require_exists and await _end_user_is_known_unrestricted(
         end_user_id=end_user_id,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,

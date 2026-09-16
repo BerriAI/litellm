@@ -3904,6 +3904,42 @@ async def test_auth_flow_fallback_team_object_permission_none_when_unreadable():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fallback_state", ["exhausted", "missing", "nested", "available", "unlimited", "at_limit"]
+)
+async def test_end_user_fallback_admission(fallback_state, monkeypatch):
+    from litellm.proxy.auth.auth_checks import resolve_end_user_budget_fallback
+    import litellm.proxy.proxy_server as ps
+
+    own = LiteLLM_EndUserTable(
+        user_id="person", blocked=False, fallback_end_user_id="pool",
+        spend=10 if fallback_state == "at_limit" else 11,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=10),
+    )
+    pool = LiteLLM_EndUserTable(
+        user_id="pool", blocked=False,
+        spend=101 if fallback_state == "exhausted" else 1,
+        fallback_end_user_id="third" if fallback_state == "nested" else None,
+        litellm_budget_table=None if fallback_state == "unlimited" else LiteLLM_BudgetTable(max_budget=100),
+    )
+    cache = DualCache()
+    db = MagicMock()
+    db.db.litellm_endusertable.find_unique = AsyncMock(return_value=None if fallback_state == "missing" else pool)
+    monkeypatch.setattr(ps, "spend_counter_cache", DualCache())
+    if fallback_state == "at_limit":
+        assert await resolve_end_user_budget_fallback(own, "/chat/completions", db, cache) is own
+        db.db.litellm_endusertable.find_unique.assert_not_awaited()
+        return
+    if fallback_state in ("available", "unlimited"):
+        result = await resolve_end_user_budget_fallback(own, "/chat/completions", db, cache)
+        assert result.user_id == "pool"
+        assert await resolve_end_user_budget_fallback(own, "/chat/completions", db, cache) is not None
+    else:
+        assert await resolve_end_user_budget_fallback(own, "/chat/completions", db, cache) is own
+    assert db.db.litellm_endusertable.find_unique.await_count == 1
+
+
 def _proxy_attrs_for_centralized_checks(
     user_custom_auth=None, flag=False, master_key="sk-test-master"
 ):

@@ -260,7 +260,7 @@ class _ProxyDBLogger(CustomLogger):
             token=user_api_key_dict.api_key,
             response_cost=recovered_response_cost,
             user_id=user_api_key_dict.user_id,
-            end_user_id=user_api_key_dict.end_user_id,
+            end_user_id=user_api_key_dict.billing_end_user_id or user_api_key_dict.end_user_id,
             team_id=user_api_key_dict.team_id,
             kwargs=request_data,
             completion_response=original_exception,

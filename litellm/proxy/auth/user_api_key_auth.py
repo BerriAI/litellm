@@ -62,6 +62,7 @@ from litellm.proxy.auth.auth_checks import (
     is_valid_fallback_model,
     jwt_key_mapping_cache_key,
     resolve_and_validate_end_user_id,
+    resolve_end_user_budget_fallback,
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_method import AuthMethod
@@ -609,7 +610,28 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
         raise HTTPException(status_code=403, detail=str(e))
 
 
-def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_user_params: dict) -> UserAPIKeyAuth:
+async def update_valid_token_with_end_user_params(
+    valid_token: UserAPIKeyAuth,
+    end_user_params: dict,
+    end_user_obj: LiteLLM_EndUserTable | None = None,
+    route: str = "",
+    skip_budget_checks: bool = False,
+) -> UserAPIKeyAuth:
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    billing_end_user: Final = await resolve_end_user_budget_fallback(
+        end_user_obj, route, prisma_client, user_api_key_cache, skip_budget_checks
+    )
+    if billing_end_user is not None and billing_end_user is not end_user_obj:
+        budget: Final = billing_end_user.litellm_budget_table
+        end_user_params.update(
+            billing_end_user_id=billing_end_user.user_id,
+            end_user_max_budget=budget.max_budget if budget is not None else None,
+            end_user_model_max_budget=budget.model_max_budget if budget is not None else None,
+        )
+    valid_token.billing_end_user_id = end_user_params.get("billing_end_user_id")
+    if valid_token.billing_end_user_id is not None:
+        valid_token.end_user_max_budget = end_user_params.get("end_user_max_budget")
     valid_token.end_user_id = end_user_params.get("end_user_id")
     # Only overwrite token fields when the DB-derived value is not None.
     # This prevents DB lookups (where the budget table has no value set)
@@ -621,8 +643,8 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.end_user_rpm_limit = end_user_params["end_user_rpm_limit"]
     if end_user_params.get("allowed_model_region") is not None:
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
-    if end_user_params.get("end_user_model_max_budget") is not None:
-        valid_token.end_user_model_max_budget = end_user_params["end_user_model_max_budget"]
+    if end_user_params.get("end_user_model_max_budget") is not None or valid_token.billing_end_user_id is not None:
+        valid_token.end_user_model_max_budget = end_user_params.get("end_user_model_max_budget")
     return valid_token
 
 
@@ -1863,8 +1885,12 @@ async def _user_api_key_auth_builder(
                         code=status.HTTP_401_UNAUTHORIZED,
                         param=abbreviate_api_key(api_key=api_key),
                     )
-            valid_token = update_valid_token_with_end_user_params(
-                valid_token=valid_token, end_user_params=end_user_params
+            valid_token = await update_valid_token_with_end_user_params(
+                valid_token=valid_token,
+                end_user_params=end_user_params,
+                end_user_obj=_end_user_object,
+                route=route,
+                skip_budget_checks=_should_skip_budget_checks(request_data, route, request, llm_router),
             )
             valid_token.parent_otel_span = parent_otel_span
             if _end_user_object is not None:
@@ -1941,8 +1967,12 @@ async def _user_api_key_auth_builder(
                 )
             )
 
-            _user_api_key_obj = update_valid_token_with_end_user_params(
-                valid_token=_user_api_key_obj, end_user_params=end_user_params
+            _user_api_key_obj = await update_valid_token_with_end_user_params(
+                valid_token=_user_api_key_obj,
+                end_user_params=end_user_params,
+                end_user_obj=_end_user_object,
+                route=route,
+                skip_budget_checks=_should_skip_budget_checks(request_data, route, request, llm_router),
             )
             _user_api_key_obj.via_virtual_key = True
 
@@ -2014,6 +2044,13 @@ async def _user_api_key_auth_builder(
 
         if valid_token is not None:
             valid_token = _update_key_budget_with_temp_budget_increase(valid_token)
+            valid_token = await update_valid_token_with_end_user_params(
+                valid_token,
+                end_user_params,
+                _end_user_object,
+                route,
+                _should_skip_budget_checks(request_data, route, request, llm_router),
+            )
 
         user_obj: LiteLLM_UserTable | None = None
         valid_token_dict: dict = {}
@@ -2256,7 +2293,7 @@ async def _user_api_key_auth_builder(
                     ):
                         for model_name in current_models:
                             await model_max_budget_limiter.is_end_user_within_model_budget(
-                                end_user_id=valid_token.end_user_id,
+                                end_user_id=valid_token.billing_end_user_id or valid_token.end_user_id,
                                 end_user_model_max_budget=end_user_mmb,
                                 model=model_name,
                             )
@@ -2547,7 +2584,7 @@ async def _run_centralized_common_checks(
     # resolved the end-user id and attached it here. Reuse that to avoid a
     # second extraction pass; fall back to extracting locally when the
     # function is invoked in isolation (e.g. in direct unit tests).
-    end_user_id = user_api_key_auth_obj.end_user_id
+    end_user_id = user_api_key_auth_obj.billing_end_user_id or user_api_key_auth_obj.end_user_id
     if end_user_id is None:
         raw_end_user_id: Final = get_end_user_id_from_request_body(request_data, _safe_get_request_headers(request))
         end_user_id = await resolve_and_validate_end_user_id(
@@ -3240,7 +3277,7 @@ async def _lookup_end_user_and_apply_budget(
                     budget_info=end_user_object.litellm_budget_table,
                     end_user_id=valid_token.end_user_id or "",
                 )
-            valid_token = update_valid_token_with_end_user_params(
+            valid_token = await update_valid_token_with_end_user_params(
                 valid_token=valid_token, end_user_params=end_user_params
             )
         elif litellm.max_end_user_budget_id is not None:
@@ -3258,7 +3295,7 @@ async def _lookup_end_user_and_apply_budget(
                     budget_info=default_budget,
                     end_user_id=valid_token.end_user_id or "",
                 )
-                valid_token = update_valid_token_with_end_user_params(
+                valid_token = await update_valid_token_with_end_user_params(
                     valid_token=valid_token, end_user_params=end_user_params
                 )
     except Exception as e:

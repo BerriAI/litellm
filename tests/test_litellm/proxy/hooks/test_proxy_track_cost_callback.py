@@ -27,7 +27,8 @@ from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, Usage
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_failure_hook():
+@pytest.mark.parametrize("billing_id", [None, "pool"])
+async def test_async_post_call_failure_hook(billing_id):
     # Setup
     logger = _ProxyDBLogger()
 
@@ -41,6 +42,7 @@ async def test_async_post_call_failure_hook():
         org_id="test_org_id",
         team_alias="test_team_alias",
         end_user_id="test_end_user_id",
+        billing_end_user_id=billing_id,
     )
 
     # Mock request data
@@ -74,7 +76,7 @@ async def test_async_post_call_failure_hook():
         assert call_args["token"] == "test_api_key"
         assert call_args["response_cost"] == 0.0
         assert call_args["user_id"] == "test_user_id"
-        assert call_args["end_user_id"] == "test_end_user_id"
+        assert call_args["end_user_id"] == (billing_id or "test_end_user_id")
         assert call_args["team_id"] == "test_team_id"
         assert call_args["org_id"] == "test_org_id"
         assert call_args["completion_response"] == original_exception
