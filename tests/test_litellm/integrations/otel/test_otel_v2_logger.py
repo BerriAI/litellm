@@ -1624,8 +1624,9 @@ def test_pre_call_hook_seeds_baggage_onto_server_and_child_spans():
     """The pre-call hook seeds identity Baggage in the request context so the
     server span (stamped directly) AND later child spans (service here, via the
     Baggage processor) carry identity — not just the LLM-call span. Only the
-    caller's ``requester_metadata`` is read from the request dict: the proxy's
-    own ``requester_ip_address`` stays unpromoted under the default allowlist."""
+    caller's ``requester_metadata`` is read from the request dict, so a proxy-owned
+    sibling such as ``requester_ip_address`` is not stamped from here even though
+    the default allowlist names it, and an unlisted caller key is not promoted."""
     logger, exporter = _logger()
     server = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
