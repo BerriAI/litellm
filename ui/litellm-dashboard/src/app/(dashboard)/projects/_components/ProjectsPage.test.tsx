@@ -209,6 +209,7 @@ describe("ProjectsPage", () => {
       expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 1");
     });
     await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].queryString).toBe("?project_search=Project+01"));
+    expect(onUrlUpdate).toHaveBeenCalledTimes(2);
   });
 
   it("should restore the search box and filtered list from a ?project_search= deep link", () => {
@@ -280,7 +281,8 @@ describe("ProjectsPage", () => {
     const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
     mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
     renderWithProviders(<ProjectsPage />, {
-      searchParams: "?page=2&project_search=Project&project=proj-1&keys_page=3&keys_page_size=10&keys_search=prod",
+      searchParams:
+        "?page=2&project_search=Project&project=proj-1&keys_page=3&keys_page_size=10&keys_search=prod&keys_sort_by=spend&keys_sort_order=asc",
       onUrlUpdate,
     });
 

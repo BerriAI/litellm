@@ -100,6 +100,34 @@ describe("ProjectKeysSection URL state (keys_ prefix)", () => {
     expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 5");
   });
 
+  it("should cap an oversized ?keys_page_size= at the largest offered page size", () => {
+    mockUseKeys.mockReturnValue(fortyTwoKeys);
+    renderWithProviders(<ProjectKeysSection projectId="proj-1" />, { searchParams: "?keys_page_size=500" });
+
+    expect(mockUseKeys).toHaveBeenLastCalledWith(1, 25, expect.anything());
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
+  });
+
+  it("should fall back to the default page size for a ?keys_page_size= outside the offered options", () => {
+    mockUseKeys.mockReturnValue(fortyTwoKeys);
+    renderWithProviders(<ProjectKeysSection projectId="proj-1" />, { searchParams: "?keys_page_size=7" });
+
+    expect(mockUseKeys).toHaveBeenLastCalledWith(1, 5, expect.anything());
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 9");
+  });
+
+  it("should drop an unsupported ?keys_page_size= when the user pages forward", async () => {
+    const user = userEvent.setup();
+    mockUseKeys.mockReturnValue(fortyTwoKeys);
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<ProjectKeysSection projectId="proj-1" />, { searchParams: "?keys_page_size=7", onUrlUpdate });
+
+    await user.click(screen.getByTestId("pagination-next"));
+
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].queryString).toBe("?keys_page=2"));
+    expect(mockUseKeys).toHaveBeenLastCalledWith(2, 5, expect.anything());
+  });
+
   it("should write the key name filter to ?keys_search= and return the keys to their first page", async () => {
     mockUseKeys.mockReturnValue(fortyTwoKeys);
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
