@@ -1,23 +1,28 @@
 import inspect
-from collections.abc import Generator, Mapping
-from typing import Final
-from unittest.mock import AsyncMock, Mock
+from collections.abc import Callable, Mapping
+from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import pytest
 
 import litellm
 from litellm.responses import main as python_responses
-from litellm.rust_bridge import configuration, runtime
-from litellm.rust_bridge.catalog import Route, Rule, decision
+from litellm.responses.dispatch import (
+    _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
+    _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
+)
+from litellm.rust_bridge.bindings import NativeBinding
+from litellm.rust_bridge.catalog import Route, Rule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.responses.entrypoints import (
-    NATIVE_ARESPONSES,
-    NATIVE_RESPONSES,
     LiteLLMResponsesRequest,
+    NativeAresponses,
+    NativeResponses,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 
-RUST_RULES: Final = (Rule(Route.RESPONSES, Rollout.RUST_OPT_OUT),)
+INPUT: Final = [{"role": "user", "content": "hi"}]
+PYTHON_RULES: Final = ()
+RUST_RULES: Final = (Rule(Route.RESPONSES, Rollout.RUST_REQUIRED),)
 
 
 def _response(model: str = "gpt-4o") -> ResponsesAPIResponse:
@@ -26,71 +31,121 @@ def _response(model: str = "gpt-4o") -> ResponsesAPIResponse:
     )
 
 
-@pytest.fixture(autouse=True)
-def isolated_configuration(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    monkeypatch.delenv("LITELLM_RUST", raising=False)
-    configuration.reset_rust_configuration()
-    yield
-    NATIVE_RESPONSES.reset()
-    NATIVE_ARESPONSES.reset()
-    configuration.reset_rust_configuration()
+def responses_binding(native: NativeResponses | None) -> NativeBinding[NativeResponses]:
+    binding: Final[NativeBinding[NativeResponses]] = NativeBinding("responses", validate=lambda _: None)
+    binding.override(native)
+    return binding
 
 
-@pytest.fixture
-def rust_route(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(runtime, "decision", lambda context, rules=RUST_RULES: decision(context, RUST_RULES))
+def aresponses_binding(native: NativeAresponses | None) -> NativeBinding[NativeAresponses]:
+    binding: Final[NativeBinding[NativeAresponses]] = NativeBinding("aresponses", validate=lambda _: None)
+    binding.override(native)
+    return binding
 
 
 def test_public_signature_is_the_legacy_signature() -> None:
-    assert inspect.signature(litellm.responses) == inspect.signature(python_responses.responses)
-    assert inspect.signature(litellm.aresponses) == inspect.signature(python_responses.aresponses)
+    public_responses: Final = cast(Callable[..., object], litellm.responses)
+    legacy_responses: Final = cast(Callable[..., object], python_responses.responses)
+    public_aresponses: Final = cast(Callable[..., object], litellm.aresponses)
+    legacy_aresponses: Final = cast(Callable[..., object], python_responses.aresponses)
+    assert inspect.signature(public_responses) == inspect.signature(legacy_responses)
+    assert inspect.signature(public_aresponses) == inspect.signature(legacy_aresponses)
+
+
+def test_python_route_forwards_original_call_shape() -> None:
+    metadata: Final = {"user_id": "u"}
+    args: Final[tuple[object, ...]] = (INPUT, "gpt-4o")
+    kwargs: Final[Mapping[str, object]] = {"temperature": 0.1, "litellm_metadata": metadata}
+    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
+    response: Final = _response()
+
+    def python(*call_args: object, **call_kwargs: object) -> ResponsesAPIResponse:  # kwargs-ok: records call shape
+        captured.append((call_args, call_kwargs))
+        return response
+
+    def native(
+        request: LiteLLMResponsesRequest,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> ResponsesAPIResponse:
+        pytest.fail("Python-only dispatch must not call native")
+
+    assert (
+        _DISPATCH.run(
+            args,
+            kwargs,
+            python=python,
+            binding=responses_binding(native),
+            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            rules=PYTHON_RULES,
+        )
+        is response
+    )
+    call_args, call_kwargs = captured[0]
+    assert call_args == args
+    assert call_args[0] is INPUT
+    assert call_kwargs == kwargs
+    assert call_kwargs["litellm_metadata"] is metadata
+    assert kwargs == {"temperature": 0.1, "litellm_metadata": metadata}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
-async def test_python_only_route_never_loads_native(monkeypatch: pytest.MonkeyPatch, asynchronous: bool) -> None:
+async def test_async_python_route_forwards_original_call_shape() -> None:
+    metadata: Final = {"user_id": "u"}
+    args: Final[tuple[object, ...]] = (INPUT, "gpt-4o")
+    kwargs: Final[Mapping[str, object]] = {"temperature": 0.1, "litellm_metadata": metadata}
+    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
     response: Final = _response()
-    fallback: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
-    monkeypatch.setattr(python_responses, "aresponses" if asynchronous else "responses", fallback)
-    monkeypatch.setattr(
-        NATIVE_ARESPONSES if asynchronous else NATIVE_RESPONSES,
-        "load",
-        Mock(side_effect=AssertionError("native must not be loaded")),
-    )
-    litellm.rust(True)
 
-    result: Final = (
-        await litellm.aresponses("hi", "gpt-4o", temperature=0.1)
-        if asynchronous
-        else litellm.responses("hi", "gpt-4o", temperature=0.1)
-    )
+    async def python(
+        *call_args: object, **call_kwargs: object  # kwargs-ok: records call shape
+    ) -> ResponsesAPIResponse:
+        captured.append((call_args, call_kwargs))
+        return response
 
+    async def native(
+        request: LiteLLMResponsesRequest,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> ResponsesAPIResponse:
+        pytest.fail("Python-only dispatch must not call native")
+
+    result: Final = await _ADISPATCH.arun(
+        args,
+        kwargs,
+        python=python,
+        binding=aresponses_binding(native),
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        rules=PYTHON_RULES,
+    )
     assert result is response
-    fallback.assert_called_once_with("hi", "gpt-4o", temperature=0.1)
+    call_args, call_kwargs = captured[0]
+    assert call_args == args
+    assert call_args[0] is INPUT
+    assert call_kwargs == kwargs
+    assert call_kwargs["litellm_metadata"] is metadata
+    assert kwargs == {"temperature": 0.1, "litellm_metadata": metadata}
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
-async def test_unavailable_native_uses_python(
-    monkeypatch: pytest.MonkeyPatch, rust_route: None, asynchronous: bool
-) -> None:
-    response: Final = _response()
-    fallback: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
-    monkeypatch.setattr(python_responses, "aresponses" if asynchronous else "responses", fallback)
-    (NATIVE_ARESPONSES if asynchronous else NATIVE_RESPONSES).override(None)
+def test_native_receives_normalized_request_and_original_call_shape() -> None:
+    metadata: Final = {"user_id": "u"}
+    extra_headers: Final = {"x-test": "1"}
+    args: Final[tuple[object, ...]] = (INPUT, "anthropic/claude-sonnet-4-5")
+    kwargs: Final[Mapping[str, object]] = {
+        "stream": True,
+        "api_key": "sk-test",
+        "base_url": "https://example.invalid",
+        "extra_headers": extra_headers,
+        "custom_llm_provider": "anthropic",
+        "litellm_metadata": metadata,
+    }
+    captured: Final[
+        list[tuple[LiteLLMResponsesRequest, tuple[object, ...], Mapping[str, object]]]
+    ] = []
+    response: Final = _response("anthropic/claude-sonnet-4-5")
 
-    result: Final = (
-        await litellm.aresponses("hi", "gpt-4o", temperature=0.1)
-        if asynchronous
-        else litellm.responses("hi", "gpt-4o", temperature=0.1)
-    )
-
-    assert result is response
-    fallback.assert_called_once_with("hi", "gpt-4o", temperature=0.1)
-
-
-def test_native_receives_the_bound_request_and_original_call_shape(rust_route: None) -> None:
-    captured: Final[list[tuple[LiteLLMResponsesRequest, tuple[object, ...], Mapping[str, object]]]] = []
+    def python(*call_args: object, **call_kwargs: object) -> ResponsesAPIResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("Required Rust dispatch must not call Python")
 
     def native(
         request: LiteLLMResponsesRequest,
@@ -98,98 +153,103 @@ def test_native_receives_the_bound_request_and_original_call_shape(rust_route: N
         kwargs: Mapping[str, object],
     ) -> ResponsesAPIResponse:
         captured.append((request, args, kwargs))
-        return _response(request.model)
+        return response
 
-    NATIVE_RESPONSES.override(native)
-
-    response: Final = litellm.responses(
-        "hi",
-        "anthropic/claude-sonnet-4-5",
-        stream=True,
-        api_key="sk-test",
-        api_base="https://example.invalid",
-        extra_headers={"x-test": "1"},
-        custom_llm_provider="anthropic",
-        litellm_metadata={"user_id": "u"},
+    result: Final = _DISPATCH.run(
+        args,
+        kwargs,
+        python=python,
+        binding=responses_binding(native),
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        rules=RUST_RULES,
     )
 
-    request, call_args, hook_kwargs = captured[0]
-    assert isinstance(response, ResponsesAPIResponse)
-    assert response.model == "anthropic/claude-sonnet-4-5"
+    request, call_args, call_kwargs = captured[0]
+    assert result is response
     assert request.model == "anthropic/claude-sonnet-4-5"
-    assert request.input == "hi"
+    assert request.input is INPUT
     assert request.stream is True
     assert request.api_key == "sk-test"
     assert request.api_base == "https://example.invalid"
     assert request.custom_llm_provider == "anthropic"
-    assert request.extra_headers == {"x-test": "1"}
+    assert request.extra_headers is extra_headers
     assert request.kwargs == {
         "api_key": "sk-test",
-        "api_base": "https://example.invalid",
-        "litellm_metadata": {"user_id": "u"},
+        "base_url": "https://example.invalid",
+        "litellm_metadata": metadata,
     }
-    assert call_args == ("hi", "anthropic/claude-sonnet-4-5")
-    assert hook_kwargs["litellm_metadata"] == {"user_id": "u"}
-    assert "temperature" not in hook_kwargs
+    assert request.kwargs["litellm_metadata"] is metadata
+    assert call_args == args
+    assert call_args[0] is INPUT
+    assert call_kwargs == kwargs
+    assert call_kwargs["extra_headers"] is extra_headers
+    assert call_kwargs["litellm_metadata"] is metadata
 
 
-def test_internal_async_dispatch_marker_stays_on_python(monkeypatch: pytest.MonkeyPatch, rust_route: None) -> None:
-    native: Final = Mock(side_effect=AssertionError("aresponses's inner responses() call must stay on Python"))
-    NATIVE_RESPONSES.override(native)
+def test_internal_async_marker_bypasses_native() -> None:
+    args: Final[tuple[object, ...]] = (INPUT, "gpt-4o")
+    kwargs: Final[Mapping[str, object]] = {"aresponses": True}
+    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
     response: Final = _response()
-    fallback: Final = Mock(return_value=response)
-    monkeypatch.setattr(python_responses, "responses", fallback)
 
-    assert litellm.responses("hi", "gpt-4o", aresponses=True) is response
-    native.assert_not_called()
+    def python(*call_args: object, **call_kwargs: object) -> ResponsesAPIResponse:  # kwargs-ok: records call shape
+        captured.append((call_args, call_kwargs))
+        return response
 
+    def native(
+        request: LiteLLMResponsesRequest,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> ResponsesAPIResponse:
+        pytest.fail("aresponses' inner responses call must stay on Python")
 
-@pytest.mark.parametrize("enabled", [False, True], ids=["flag-disabled", "flag-enabled"])
-def test_public_binding_errors_do_not_depend_on_native_selection(rust_route: None, enabled: bool) -> None:
-    native: Final = Mock(side_effect=AssertionError("binding errors precede admission"))
-    litellm.rust(enabled)
-    NATIVE_RESPONSES.override(native)
-
-    with pytest.raises(TypeError, match=r"responses\(\) got multiple values for argument 'model'"):
-        litellm.responses("hi", "gpt-4o", model="duplicate")
-    with pytest.raises(TypeError, match=r"responses\(\) missing 2 required positional arguments: 'input' and 'model'"):
-        litellm.responses()
-    native.assert_not_called()
-
-
-class Declined(Exception):
-    pass
-
-
-class Upstream(Exception):
-    pass
+    assert (
+        _DISPATCH.run(
+            args,
+            kwargs,
+            python=python,
+            binding=responses_binding(native),
+            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            rules=RUST_RULES,
+        )
+        is response
+    )
+    assert captured == [(args, kwargs)]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("declined", [False, True])
-async def test_only_native_declines_replay_on_python(
-    monkeypatch: pytest.MonkeyPatch, rust_route: None, asynchronous: bool, declined: bool
+@pytest.mark.parametrize(
+    ("args", "kwargs"),
+    (
+        ((INPUT, "gpt-4o"), {"model": "duplicate"}),
+        ((), {}),
+    ),
+)
+def test_binding_errors_delegate_unchanged_to_python(
+    args: tuple[object, ...], kwargs: Mapping[str, object]
 ) -> None:
-    failure: Final = Declined("unsupported") if declined else RuntimeError("provider already called")
-    native: Final = AsyncMock(side_effect=failure) if asynchronous else Mock(side_effect=failure)
-    (NATIVE_ARESPONSES if asynchronous else NATIVE_RESPONSES).override(native)
-    monkeypatch.setattr(runtime, "native_exception_types", lambda: (Declined, Upstream))
+    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
     response: Final = _response()
-    fallback: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
-    monkeypatch.setattr(python_responses, "aresponses" if asynchronous else "responses", fallback)
 
-    async def call() -> object:
-        if asynchronous:
-            return await litellm.aresponses("hi", "gpt-4o")
-        return litellm.responses("hi", "gpt-4o")
+    def python(*call_args: object, **call_kwargs: object) -> ResponsesAPIResponse:  # kwargs-ok: records invalid call
+        captured.append((call_args, call_kwargs))
+        return response
 
-    if declined:
-        assert await call() is response
-        fallback.assert_called_once_with("hi", "gpt-4o")
-    else:
-        with pytest.raises(RuntimeError) as caught:
-            await call()
-        assert caught.value is failure
-        fallback.assert_not_called()
-    assert native.call_count == 1
+    def native(
+        request: LiteLLMResponsesRequest,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> ResponsesAPIResponse:
+        pytest.fail("Binding failures must be delegated to Python")
+
+    assert (
+        _DISPATCH.run(
+            args,
+            kwargs,
+            python=python,
+            binding=responses_binding(native),
+            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            rules=RUST_RULES,
+        )
+        is response
+    )
+    assert captured == [(args, kwargs)]

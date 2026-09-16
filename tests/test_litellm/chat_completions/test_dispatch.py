@@ -1,116 +1,154 @@
 import inspect
-from collections.abc import Generator, Mapping
-from typing import Final
-from unittest.mock import AsyncMock, Mock
+from collections.abc import Callable, Mapping
+from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import pytest
 
 import litellm
 from litellm import main as python_chat
-from litellm.rust_bridge import configuration, runtime
-from litellm.rust_bridge.catalog import Route, Rule, decision
+from litellm.chat_completions.dispatch import (
+    _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
+    _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
+)
+from litellm.rust_bridge.bindings import NativeBinding
+from litellm.rust_bridge.catalog import Route, Rule
 from litellm.rust_bridge.chat_completions.entrypoints import (
-    NATIVE_ACOMPLETION,
-    NATIVE_COMPLETION,
     LiteLLMChatCompletionsRequest,
+    NativeAcompletion,
+    NativeCompletion,
 )
 from litellm.rust_bridge.configuration import Rollout
 from litellm.types.utils import ModelResponse
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
-RUST_RULES: Final = (Rule(Route.CHAT_COMPLETIONS, Rollout.RUST_OPT_OUT),)
+PYTHON_RULES: Final = ()
+RUST_RULES: Final = (Rule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),)
 
 
-@pytest.fixture(autouse=True)
-def isolated_configuration(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    monkeypatch.delenv("LITELLM_RUST", raising=False)
-    configuration.reset_rust_configuration()
-    yield
-    NATIVE_COMPLETION.reset()
-    NATIVE_ACOMPLETION.reset()
-    configuration.reset_rust_configuration()
+def completion_binding(native: NativeCompletion | None) -> NativeBinding[NativeCompletion]:
+    binding: Final[NativeBinding[NativeCompletion]] = NativeBinding("completion", validate=lambda _: None)
+    binding.override(native)
+    return binding
 
 
-@pytest.fixture
-def rust_route(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(runtime, "decision", lambda context, rules=RUST_RULES: decision(context, RUST_RULES))
+def acompletion_binding(native: NativeAcompletion | None) -> NativeBinding[NativeAcompletion]:
+    binding: Final[NativeBinding[NativeAcompletion]] = NativeBinding("acompletion", validate=lambda _: None)
+    binding.override(native)
+    return binding
 
 
 def test_public_signature_is_the_legacy_signature() -> None:
-    assert inspect.signature(litellm.completion) == inspect.signature(python_chat.completion)
-    assert inspect.signature(litellm.acompletion) == inspect.signature(python_chat.acompletion)
+    public_completion: Final = cast(Callable[..., object], litellm.completion)
+    legacy_completion: Final = cast(Callable[..., object], python_chat.completion)
+    public_acompletion: Final = cast(Callable[..., object], litellm.acompletion)
+    legacy_acompletion: Final = cast(Callable[..., object], python_chat.acompletion)
+    assert inspect.signature(public_completion) == inspect.signature(legacy_completion)
+    assert inspect.signature(public_acompletion) == inspect.signature(legacy_acompletion)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
-async def test_python_only_route_never_loads_native(monkeypatch: pytest.MonkeyPatch, asynchronous: bool) -> None:
+def test_python_route_forwards_original_call_shape() -> None:
+    metadata: Final = {"user_id": "u"}
+    args: Final[tuple[object, ...]] = ("gpt-4o", MESSAGES)
+    kwargs: Final[Mapping[str, object]] = {"temperature": 0.1, "metadata": metadata}
+    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
     response: Final = ModelResponse()
-    fallback: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
-    monkeypatch.setattr(python_chat, "acompletion" if asynchronous else "completion", fallback)
-    monkeypatch.setattr(
-        NATIVE_ACOMPLETION if asynchronous else NATIVE_COMPLETION,
-        "load",
-        Mock(side_effect=AssertionError("native must not be loaded")),
-    )
-    litellm.rust(True)
 
-    result: Final = (
-        await litellm.acompletion("gpt-4o", MESSAGES, temperature=0.1)
-        if asynchronous
-        else litellm.completion("gpt-4o", MESSAGES, temperature=0.1)
-    )
-
-    assert result is response
-    fallback.assert_called_once_with("gpt-4o", MESSAGES, temperature=0.1)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
-async def test_unavailable_native_uses_python(
-    monkeypatch: pytest.MonkeyPatch, rust_route: None, asynchronous: bool
-) -> None:
-    response: Final = ModelResponse()
-    fallback: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
-    monkeypatch.setattr(python_chat, "acompletion" if asynchronous else "completion", fallback)
-    (NATIVE_ACOMPLETION if asynchronous else NATIVE_COMPLETION).override(None)
-
-    result: Final = (
-        await litellm.acompletion("gpt-4o", MESSAGES, temperature=0.1)
-        if asynchronous
-        else litellm.completion("gpt-4o", MESSAGES, temperature=0.1)
-    )
-
-    assert result is response
-    fallback.assert_called_once_with("gpt-4o", MESSAGES, temperature=0.1)
-
-
-def test_native_receives_the_bound_request_and_original_call_shape(rust_route: None) -> None:
-    captured: Final[list[tuple[LiteLLMChatCompletionsRequest, tuple[object, ...], Mapping[str, object]]]] = []
+    def python(*call_args: object, **call_kwargs: object) -> ModelResponse:  # kwargs-ok: records public call shape
+        captured.append((call_args, call_kwargs))
+        return response
 
     def native(
-        request: LiteLLMChatCompletionsRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
+    ) -> ModelResponse:
+        pytest.fail("Python-only dispatch must not call native")
+
+    assert (
+        _DISPATCH.run(
+            args,
+            kwargs,
+            python=python,
+            binding=completion_binding(native),
+            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            rules=PYTHON_RULES,
+        )
+        is response
+    )
+    call_args, call_kwargs = captured[0]
+    assert call_args == args
+    assert call_args[1] is MESSAGES
+    assert call_kwargs == kwargs
+    assert call_kwargs["metadata"] is metadata
+    assert kwargs == {"temperature": 0.1, "metadata": metadata}
+
+
+@pytest.mark.asyncio
+async def test_async_python_route_forwards_original_call_shape() -> None:
+    metadata: Final = {"user_id": "u"}
+    args: Final[tuple[object, ...]] = ("gpt-4o", MESSAGES)
+    kwargs: Final[Mapping[str, object]] = {"temperature": 0.1, "metadata": metadata}
+    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
+    response: Final = ModelResponse()
+
+    async def python(*call_args: object, **call_kwargs: object) -> ModelResponse:  # kwargs-ok: records call shape
+        captured.append((call_args, call_kwargs))
+        return response
+
+    async def native(
+        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
+    ) -> ModelResponse:
+        pytest.fail("Python-only dispatch must not call native")
+
+    result: Final = await _ADISPATCH.arun(
+        args,
+        kwargs,
+        python=python,
+        binding=acompletion_binding(native),
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        rules=PYTHON_RULES,
+    )
+    assert result is response
+    call_args, call_kwargs = captured[0]
+    assert call_args == args
+    assert call_args[1] is MESSAGES
+    assert call_kwargs == kwargs
+    assert call_kwargs["metadata"] is metadata
+    assert kwargs == {"temperature": 0.1, "metadata": metadata}
+
+
+def test_native_receives_bound_request_and_original_call_shape() -> None:
+    metadata: Final = {"user_id": "u"}
+    kwargs: Final[Mapping[str, object]] = {
+        "stream": True,
+        "api_key": "sk-test",
+        "base_url": "https://example.invalid",
+        "extra_headers": {"x-test": "1"},
+        "custom_llm_provider": "anthropic",
+        "metadata": metadata,
+    }
+    captured: Final[
+        list[tuple[LiteLLMChatCompletionsRequest, tuple[object, ...], Mapping[str, object]]]
+    ] = []
+
+    def python(*call_args: object, **call_kwargs: object) -> ModelResponse:  # kwargs-ok: rejected Rust fallback
+        pytest.fail("Required Rust dispatch must not call Python")
+
+    def native(
+        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
     ) -> ModelResponse:
         captured.append((request, args, kwargs))
-        return ModelResponse(model=request.model)
+        return ModelResponse()
 
-    NATIVE_COMPLETION.override(native)
-
-    response: Final = litellm.completion(
-        "anthropic/claude-sonnet-4-5",
-        MESSAGES,
-        stream=True,
-        api_key="sk-test",
-        base_url="https://example.invalid",
-        extra_headers={"x-test": "1"},
-        custom_llm_provider="anthropic",
-        metadata={"user_id": "u"},
+    args: Final[tuple[object, ...]] = ("anthropic/claude-sonnet-4-5", MESSAGES)
+    _DISPATCH.run(
+        args,
+        kwargs,
+        python=python,
+        binding=completion_binding(native),
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        rules=RUST_RULES,
     )
 
-    request, call_args, hook_kwargs = captured[0]
-    assert isinstance(response, ModelResponse)
-    assert response.model == "anthropic/claude-sonnet-4-5"
+    request, call_args, call_kwargs = captured[0]
     assert request.model == "anthropic/claude-sonnet-4-5"
     assert request.messages is MESSAGES
     assert request.stream is True
@@ -118,69 +156,66 @@ def test_native_receives_the_bound_request_and_original_call_shape(rust_route: N
     assert request.api_base == "https://example.invalid"
     assert request.custom_llm_provider == "anthropic"
     assert request.extra_headers == {"x-test": "1"}
-    assert request.kwargs == {"custom_llm_provider": "anthropic", "metadata": {"user_id": "u"}}
-    assert call_args == ("anthropic/claude-sonnet-4-5", MESSAGES)
-    assert hook_kwargs["metadata"] == {"user_id": "u"}
-    assert "temperature" not in hook_kwargs
+    assert request.kwargs == {"custom_llm_provider": "anthropic", "metadata": metadata}
+    assert call_args == args
+    assert call_kwargs == kwargs
+    assert call_kwargs["metadata"] is metadata
 
 
-def test_internal_async_dispatch_marker_stays_on_python(monkeypatch: pytest.MonkeyPatch, rust_route: None) -> None:
-    native: Final = Mock(side_effect=AssertionError("acompletion's inner completion() call must stay on Python"))
-    NATIVE_COMPLETION.override(native)
+def test_internal_async_marker_bypasses_native() -> None:
     response: Final = ModelResponse()
-    fallback: Final = Mock(return_value=response)
-    monkeypatch.setattr(python_chat, "completion", fallback)
+    called: Final[list[bool]] = []
 
-    assert litellm.completion("gpt-4o", MESSAGES, acompletion=True) is response
-    native.assert_not_called()
+    def python(*call_args: object, **call_kwargs: object) -> ModelResponse:  # kwargs-ok: records public call shape
+        called.append(True)
+        return response
 
+    def native(
+        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
+    ) -> ModelResponse:
+        pytest.fail("acompletion's inner completion call must stay on Python")
 
-@pytest.mark.parametrize("enabled", [False, True], ids=["flag-disabled", "flag-enabled"])
-def test_public_binding_errors_do_not_depend_on_native_selection(rust_route: None, enabled: bool) -> None:
-    native: Final = Mock(side_effect=AssertionError("binding errors precede admission"))
-    litellm.rust(enabled)
-    NATIVE_COMPLETION.override(native)
-
-    with pytest.raises(TypeError, match=r"completion\(\) got multiple values for argument 'model'"):
-        litellm.completion("gpt-4o", MESSAGES, model="duplicate")
-    with pytest.raises(TypeError, match=r"completion\(\) missing 1 required positional argument: 'model'"):
-        litellm.completion()
-    native.assert_not_called()
-
-
-class Declined(Exception):
-    pass
-
-
-class Upstream(Exception):
-    pass
+    result: Final = _DISPATCH.run(
+        ("gpt-4o", MESSAGES),
+        {"acompletion": True},
+        python=python,
+        binding=completion_binding(native),
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        rules=RUST_RULES,
+    )
+    assert result is response
+    assert called == [True]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("declined", [False, True])
-async def test_only_native_declines_replay_on_python(
-    monkeypatch: pytest.MonkeyPatch, rust_route: None, asynchronous: bool, declined: bool
-) -> None:
-    failure: Final = Declined("unsupported") if declined else RuntimeError("provider already called")
-    native: Final = AsyncMock(side_effect=failure) if asynchronous else Mock(side_effect=failure)
-    (NATIVE_ACOMPLETION if asynchronous else NATIVE_COMPLETION).override(native)
-    monkeypatch.setattr(runtime, "native_exception_types", lambda: (Declined, Upstream))
+@pytest.mark.parametrize(
+    ("args", "kwargs"),
+    (
+        (("gpt-4o", MESSAGES), {"model": "duplicate"}),
+        ((), {}),
+    ),
+)
+def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Mapping[str, object]) -> None:
+    captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
     response: Final = ModelResponse()
-    fallback: Final = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
-    monkeypatch.setattr(python_chat, "acompletion" if asynchronous else "completion", fallback)
 
-    async def call() -> object:
-        if asynchronous:
-            return await litellm.acompletion("gpt-4o", MESSAGES)
-        return litellm.completion("gpt-4o", MESSAGES)
+    def python(*call_args: object, **call_kwargs: object) -> ModelResponse:  # kwargs-ok: records invalid call shape
+        captured.append((call_args, call_kwargs))
+        return response
 
-    if declined:
-        assert await call() is response
-        fallback.assert_called_once_with("gpt-4o", MESSAGES)
-    else:
-        with pytest.raises(RuntimeError) as caught:
-            await call()
-        assert caught.value is failure
-        fallback.assert_not_called()
-    assert native.call_count == 1
+    def native(
+        request: LiteLLMChatCompletionsRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
+    ) -> ModelResponse:
+        pytest.fail("Binding failures must be delegated to Python")
+
+    assert (
+        _DISPATCH.run(
+            args,
+            kwargs,
+            python=python,
+            binding=completion_binding(native),
+            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            rules=RUST_RULES,
+        )
+        is response
+    )
+    assert captured == [(args, kwargs)]

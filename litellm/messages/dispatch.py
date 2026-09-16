@@ -5,11 +5,11 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 
 from litellm.llms.anthropic.experimental_pass_through.messages import handler as main
 from litellm.rust_bridge.catalog import Context, Delivery, Route
+from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
     LiteLLMMessagesRequest,
-    NativeAmessages,
 )
 from litellm.rust_bridge.public_call import (
     bind,
@@ -19,7 +19,6 @@ from litellm.rust_bridge.public_call import (
     optional_str,
     signature,
 )
-from litellm.rust_bridge.runtime import arun, run
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
@@ -68,33 +67,42 @@ def _public_request(
     )
 
 
+_DISPATCH: Final = PublicDispatch(
+    route=Route.MESSAGES,
+    request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
+    context=lambda request: _context(request),
+    bypass=lambda request: request.kwargs.get("is_async") is True,
+)
+
+_ADISPATCH: Final = PublicDispatch(
+    route=Route.MESSAGES,
+    request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
+    context=lambda request: _context(request),
+)
+
+
 def anthropic_messages_handler(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
     python: Final = _python_messages()
-    request: Final = _public_request(_MESSAGES, args, kwargs)
-    if request is None or request.kwargs.get("is_async") is True:
-        return python(*args, **kwargs)
-    return run(
-        _context(request),
+    return _DISPATCH.run(
+        args,
+        kwargs,
+        python=python,
         binding=NATIVE_MESSAGES,
-        native=lambda hook: hook(request, args, kwargs),
-        python=lambda: python(*args, **kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
     )
 
 
 async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:  # kwargs-ok: public call shape
     python: Final = _python_amessages()
-    request: Final = _public_request(_AMESSAGES, args, kwargs)
-    if request is None:
-        return await python(*args, **kwargs)
-
-    async def native(hook: NativeAmessages) -> MessagesResult:
-        return await hook(request, args, kwargs)
-
-    return await arun(
-        _context(request), binding=NATIVE_AMESSAGES, native=native, python=lambda: python(*args, **kwargs)
+    return await _ADISPATCH.arun(
+        args,
+        kwargs,
+        python=python,
+        binding=NATIVE_AMESSAGES,
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
     )
 
 

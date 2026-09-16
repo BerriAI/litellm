@@ -9,8 +9,8 @@ from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NATIVE_COMPLETION,
     LiteLLMChatCompletionsRequest,
-    NativeAcompletion,
 )
+from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.public_call import (
     bind,
     optional_bool,
@@ -19,7 +19,6 @@ from litellm.rust_bridge.public_call import (
     optional_str,
     signature,
 )
-from litellm.rust_bridge.runtime import arun, run
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
@@ -69,33 +68,42 @@ def _public_request(
     )
 
 
+_DISPATCH: Final = PublicDispatch(
+    route=Route.CHAT_COMPLETIONS,
+    request=lambda args, kwargs: _public_request(_COMPLETION, args, kwargs),
+    context=lambda request: _context(request),
+    bypass=lambda request: request.kwargs.get("acompletion") is True,
+)
+
+_ADISPATCH: Final = PublicDispatch(
+    route=Route.CHAT_COMPLETIONS,
+    request=lambda args, kwargs: _public_request(_ACOMPLETION, args, kwargs),
+    context=lambda request: _context(request),
+)
+
+
 def completion(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public chat completions call shape
 ) -> ChatResult | Coroutine[object, object, ChatResult]:
     python: Final = _python_completion()
-    request: Final = _public_request(_COMPLETION, args, kwargs)
-    if request is None or request.kwargs.get("acompletion") is True:
-        return python(*args, **kwargs)
-    return run(
-        _context(request),
+    return _DISPATCH.run(
+        args,
+        kwargs,
+        python=python,
         binding=NATIVE_COMPLETION,
-        native=lambda hook: hook(request, args, kwargs),
-        python=lambda: python(*args, **kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
     )
 
 
 async def acompletion(*args: object, **kwargs: object) -> ChatResult:  # kwargs-ok: preserve the public call shape
     python: Final = _python_acompletion()
-    request: Final = _public_request(_ACOMPLETION, args, kwargs)
-    if request is None:
-        return await python(*args, **kwargs)
-
-    async def native(hook: NativeAcompletion) -> ChatResult:
-        return await hook(request, args, kwargs)
-
-    return await arun(
-        _context(request), binding=NATIVE_ACOMPLETION, native=native, python=lambda: python(*args, **kwargs)
+    return await _ADISPATCH.arun(
+        args,
+        kwargs,
+        python=python,
+        binding=NATIVE_ACOMPLETION,
+        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
     )
 
 
