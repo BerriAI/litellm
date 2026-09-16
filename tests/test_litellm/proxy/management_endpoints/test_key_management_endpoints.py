@@ -9904,6 +9904,7 @@ class TestValidateKeyAliasFormat:
             "foo\n- !grant\n  role: !!admin\n  member: attacker",
             "foo\rbar",
             "foo\x00bar",
+            "my-test-key\t",
         ],
     )
     def test_validate_key_alias_format_rejects_traversal_and_control_chars_even_when_flag_disabled(
@@ -9922,6 +9923,8 @@ class TestValidateKeyAliasFormat:
             _validate_key_alias_format(unsafe_alias)
         assert str(exc.value.code) == "400"
         assert "Invalid key_alias" in str(exc.value.message)
+        assert "control characters" in str(exc.value.message)
+        assert '".." path segment' in str(exc.value.message)
 
     def test_validate_key_alias_format_valid(self, monkeypatch):
         from litellm.proxy.management_endpoints.key_management_endpoints import (
