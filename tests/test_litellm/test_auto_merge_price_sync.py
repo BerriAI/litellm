@@ -300,6 +300,13 @@ def test_superseded_changes_requested_merges() -> None:
     assert verdict.merge
 
 
+def test_merge_request_pins_evaluated_head_sha() -> None:
+    body: Final = merger.merge_request_body(_pr(number=7, title="sync prices"))
+    assert body["sha"] == HEAD_SHA
+    assert body["merge_method"] == "merge"
+    assert body["commit_title"] == "sync prices (#7)"
+
+
 def test_classifier_cost_map_set_runs() -> None:
     assert merger._classify(["model_prices_and_context_window.json", "tests/test_litellm/test_x.py"]) == "run"
 
