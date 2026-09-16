@@ -9,7 +9,6 @@ import { AvailableSearchProvider, SearchTool } from "./types";
 interface SearchToolViewProps {
   searchTool: SearchTool;
   onBack: () => void;
-  isEditing: boolean;
   accessToken: string | null;
   availableProviders: AvailableSearchProvider[];
 }
@@ -17,7 +16,6 @@ interface SearchToolViewProps {
 export const SearchToolView: React.FC<SearchToolViewProps> = ({
   searchTool,
   onBack,
-  isEditing,
   accessToken,
   availableProviders,
 }) => {

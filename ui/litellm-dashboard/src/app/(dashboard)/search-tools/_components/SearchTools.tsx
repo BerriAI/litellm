@@ -248,7 +248,6 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
         <SearchToolView
           searchTool={selectedTool}
           onBack={closeToolView}
-          isEditing={false}
           accessToken={accessToken}
           availableProviders={availableProviders}
         />
