@@ -186,15 +186,12 @@ _WIRE_CAPS: Final[Mapping[str, frozenset[str]]] = MappingProxyType({
         }
     ),
     "openai_responses": frozenset({"cache_read", "reasoning", "web_search", "response_model", "absent_usage"}),
-    # Product gap: litellm hard-indexes message_delta["usage"] in
-    # anthropic/chat/handler.py, so a usage-absent anthropic stream raises
-    # KeyError; the real wire always carries it, so the case cannot be
-    # represented.
-    "anthropic_messages": frozenset({"cache_read", "cache_write_5m", "cache_write_1h", "web_search", "response_model"}),
-    # Product gap: the gemini transform sets ModelResponse.model from the
-    # request and drops the provider's modelVersion, so a response-model
-    # override can never be priced on this wire.
-    "gemini_generate": frozenset({"cache_read", "reasoning", "audio", "web_search", "absent_usage"}),
+    "anthropic_messages": frozenset(
+        {"cache_read", "cache_write_5m", "cache_write_1h", "web_search", "response_model", "absent_usage"}
+    ),
+    "gemini_generate": frozenset(
+        {"cache_read", "reasoning", "audio", "web_search", "response_model", "absent_usage"}
+    ),
     "together_chat": frozenset(
         {
             "cache_read", "cache_write_5m", "cache_write_1h", "reasoning", "audio",
@@ -240,9 +237,6 @@ class Case:
     billed_web_search_calls: int = 0
     response_model_override: bool = False
     exact_spend: bool = True
-    # stream_usage=absent on a wire with no proxy-side token recount means the
-    # bill is exactly zero; asserted as such rather than skipped.
-    expect_zero_bill: bool = False
 
     def scenario(self, scenario_id: str, model: FrontierModel, text: str) -> Scenario:
         return Scenario(
@@ -359,10 +353,6 @@ def cases_for(model: FrontierModel) -> tuple[Case, ...]:
                 stream=True,
                 stream_usage="absent",
                 exact_spend=False,
-                # The responses surface bills only provider-reported usage;
-                # with no usage in the stream the spend row is zero. Other
-                # wires recount tokens proxy-side and bill a nonzero amount.
-                expect_zero_bill=model.wire == "openai_responses",
             )
             if "absent_usage" in caps
             else None
