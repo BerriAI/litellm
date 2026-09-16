@@ -18,12 +18,14 @@ if TYPE_CHECKING:
     import tiktoken
 
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
 
 from ..credentials import get_token_creator
+from ..direct_connect import resource_group_from_params, without_resource_group
 from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
@@ -136,10 +138,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         self.token_creator = None
         self._base_url = None
         self._resource_group = None
+        self._http_client: HTTPHandler | None = None
 
-    def run_env_setup(self, service_key: str | None = None) -> None:
+    def run_env_setup(self, service_key: str | None = None, resource_group: str | None = None) -> None:
         try:
-            self.token_creator, self._base_url, self._resource_group = get_token_creator(service_key)
+            self.token_creator, self._base_url, self._resource_group = get_token_creator(
+                service_key, resource_group=resource_group
+            )
         except ValueError as err:
             raise GenAIHubOrchestrationError(status_code=400, message=err.args[0])
 
@@ -169,9 +174,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     @cached_property
     def deployment_url(self) -> str:
-        # Keep a short, tight client lifecycle here to avoid fd leaks
-        client: Final = litellm.module_level_client
-        # with httpx.Client(timeout=30) as client:
+        client: Final = self._http_client if self._http_client is not None else litellm.module_level_client
         deployments: Final = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
         valid: Final[list[tuple[str, str]]] = []
         for dep in deployments.get("resources", []):
@@ -183,6 +186,15 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 if cfg.get("executableId") == "orchestration":
                     valid.append((dep["deploymentUrl"], dep["createdAt"]))
             # newest first
+        if not valid:
+            raise GenAIHubOrchestrationError(
+                status_code=404,
+                message=(
+                    "No orchestration deployment found in SAP AI Core resource group "
+                    f"'{self.resource_group}'. Create/start an orchestration deployment "
+                    "in SAP AI Launchpad, then retry."
+                ),
+            )
         return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
 
     @classmethod
@@ -238,7 +250,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         api_base: str | None = None,
     ) -> dict:
         if api_key:
-            self.run_env_setup(api_key)
+            self.run_env_setup(api_key, resource_group_from_params(litellm_params))
         return self.headers
 
     def get_complete_url(
@@ -316,7 +328,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        optional_params = dict(optional_params)
+        optional_params = without_resource_group(optional_params)
         optional_params.pop("deployment_url", None)
 
         template: Final = _messages_to_sap_template(messages)

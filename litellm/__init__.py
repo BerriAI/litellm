@@ -45,11 +45,9 @@ from typing import (
     TYPE_CHECKING,
     Union,
 )
-from collections.abc import Mapping
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm.litellm_core_utils.core_helpers import drop_params_env_flag
-from litellm.types.integrations.pointfive import PointFiveInitParams
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -156,7 +154,6 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "smtp_email",
     "deepeval",
     "s3_v2",
-    "pointfive",
     "aws_sqs",
     "vector_store_pre_call_hook",
     "dotprompt",
@@ -343,7 +340,6 @@ _anthropic_prompt_caching_ttl_env: Optional[str] = os.getenv("LITELLM_ANTHROPIC_
 anthropic_prompt_caching_ttl: Optional[Literal["5m", "1h"]] = (
     "1h" if _anthropic_prompt_caching_ttl_env == "1h" else "5m" if _anthropic_prompt_caching_ttl_env == "5m" else None
 )
-openai_system_messages_first: bool = False
 disable_vertex_batch_output_transformation: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
@@ -443,7 +439,6 @@ s3_audit_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 newrelic_params: Optional[Union[NewRelicInitParams, Dict]] = None
-pointfive_params: Optional[Union[PointFiveInitParams, Mapping[str, object]]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
@@ -502,7 +497,6 @@ disable_copilot_system_to_assistant: bool = False  # If false (default), convert
 public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
-public_skills_index: bool = False
 public_agent_groups: Optional[List[str]] = None
 agent_search_embedding_model: Optional[str] = None
 mcp_tool_search: Optional[Mapping[str, object]] = None
@@ -1372,7 +1366,6 @@ from .exceptions import (
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
-    VectorStoreSearchError,
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
@@ -1474,11 +1467,9 @@ from .vector_stores.vector_store_registry import (
     VectorStoreRegistry,
     VectorStoreIndexRegistry,
 )
-from .types.vector_stores import VectorStoreSearchFailureMode
 
 vector_store_registry: Optional[VectorStoreRegistry] = None
 vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
-vector_store_search_failure_mode: VectorStoreSearchFailureMode = "annotate"
 
 ### RAG ###
 from . import rag
@@ -1901,6 +1892,12 @@ if TYPE_CHECKING:
     from .llms.sap.embed.transformation import (
         GenAIHubEmbeddingConfig as _GenAIHubEmbeddingConfig,
     )
+    from .llms.sap.messages.transformation import (
+        SapDeploymentAnthropicMessagesConfig as _SapDeploymentAnthropicMessagesConfig,
+    )
+    from .llms.sap.chat.direct_transformation import (
+        SapDeploymentAnthropicChatConfig as _SapDeploymentAnthropicChatConfig,
+    )
     from .llms.azure.chat.o_series_transformation import (
         AzureOpenAIO1Config as _AzureOpenAIO1Config,
     )
@@ -1940,6 +1937,8 @@ if TYPE_CHECKING:
     TencentChatConfig: Type[_TencentChatConfig]
     GenAIHubOrchestrationConfig: Type[_GenAIHubOrchestrationConfig]
     GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
+    SapDeploymentAnthropicMessagesConfig: Type[_SapDeploymentAnthropicMessagesConfig]
+    SapDeploymentAnthropicChatConfig: Type[_SapDeploymentAnthropicChatConfig]
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
     PerplexityChatConfig: Type[_PerplexityChatConfig]
     NscaleConfig: Type[_NscaleConfig]

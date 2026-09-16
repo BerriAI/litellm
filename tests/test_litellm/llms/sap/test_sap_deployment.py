@@ -1,0 +1,155 @@
+import pytest
+
+from litellm.llms.sap.chat.handler import GenAIHubOrchestrationError
+from litellm.llms.sap.deployment import (
+    DeploymentQueryResponse,
+    DeploymentResource,
+    resolve_deployment_url,
+    select_deployment_url,
+)
+
+
+def _resource(model_name, created_at, *, status="RUNNING", deployment_id="d1", url=None, with_details=True):
+    details = (
+        {"resources": {"backendDetails": {"model": {"name": model_name, "version": "1"}}}}
+        if with_details
+        else {"scaling": {}}
+    )
+    return DeploymentResource.model_validate(
+        {
+            "id": deployment_id,
+            "deploymentUrl": url or f"https://ai.example.com/v2/inference/deployments/{deployment_id}",
+            "createdAt": created_at,
+            "scenarioId": "foundation-models",
+            "status": status,
+            "details": details,
+        }
+    )
+
+
+def test_selects_deployment_matching_model_name():
+    resources = [
+        _resource("gpt-4o", "2026-09-10T07:31:33Z", deployment_id="gpt"),
+        _resource("anthropic--claude-4.8-opus", "2026-07-14T02:44:50Z", deployment_id="claude"),
+    ]
+    url = select_deployment_url(resources, "anthropic--claude-4.8-opus")
+    assert url.endswith("/deployments/claude")
+
+
+def test_picks_newest_when_multiple_match():
+    resources = [
+        _resource("anthropic--claude-4.8-opus", "2026-01-01T00:00:00Z", deployment_id="old"),
+        _resource("anthropic--claude-4.8-opus", "2026-09-01T00:00:00Z", deployment_id="new"),
+        _resource("anthropic--claude-4.8-opus", "2026-05-01T00:00:00Z", deployment_id="mid"),
+    ]
+    url = select_deployment_url(resources, "anthropic--claude-4.8-opus")
+    assert url.endswith("/deployments/new")
+
+
+def test_ignores_non_running_deployments():
+    resources = [
+        _resource("anthropic--claude-4.8-opus", "2026-09-01T00:00:00Z", status="STOPPED", deployment_id="stopped"),
+        _resource("anthropic--claude-4.8-opus", "2026-07-14T02:44:50Z", status="RUNNING", deployment_id="running"),
+    ]
+    url = select_deployment_url(resources, "anthropic--claude-4.8-opus")
+    assert url.endswith("/deployments/running")
+
+
+def test_raises_404_with_available_models_when_no_match():
+    resources = [
+        _resource("gpt-4o", "2026-09-10T07:31:33Z"),
+        _resource("text-embedding-3-large", "2026-09-08T08:56:14Z"),
+    ]
+    with pytest.raises(GenAIHubOrchestrationError) as exc:
+        select_deployment_url(resources, "anthropic--claude-4.8-opus")
+    assert exc.value.status_code == 404
+    assert "anthropic--claude-4.8-opus" in exc.value.message
+    assert "gpt-4o" in exc.value.message
+    assert "text-embedding-3-large" in exc.value.message
+
+
+def test_deployment_without_details_is_not_matched():
+    resources = [_resource("anthropic--claude-4.8-opus", "2026-07-14T02:44:50Z", with_details=False)]
+    assert resources[0].model_name is None
+    with pytest.raises(GenAIHubOrchestrationError):
+        select_deployment_url(resources, "anthropic--claude-4.8-opus")
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class _FakeHTTPClient:
+    def __init__(self, payload):
+        self._payload = payload
+        self.calls = []
+
+    def get(self, url, params=None, headers=None):
+        self.calls.append({"url": url, "params": params, "headers": headers})
+        return _FakeResponse(self._payload)
+
+
+_LIVE_SHAPE_PAYLOAD = {
+    "count": 2,
+    "resources": [
+        {
+            "id": "dd09d6a6a1ac6b0c",
+            "createdAt": "2026-09-10T07:31:33Z",
+            "modifiedAt": "2026-09-10T07:31:33Z",
+            "status": "RUNNING",
+            "details": {
+                "scaling": {"backendDetails": None, "backend_details": None},
+                "resources": {
+                    "backendDetails": {"model": {"name": "gpt-4o", "version": "latest"}},
+                    "backend_details": {"model": {"name": "gpt-4o", "version": "latest"}},
+                },
+            },
+            "scenarioId": "foundation-models",
+            "targetStatus": "RUNNING",
+            "configurationName": "ai-assistant",
+            "deploymentUrl": "https://api.example.com/v2/inference/deployments/dd09d6a6a1ac6b0c",
+        },
+        {
+            "id": "d38af17dc133a768",
+            "createdAt": "2026-07-14T02:44:50Z",
+            "modifiedAt": "2026-07-14T02:44:50Z",
+            "status": "RUNNING",
+            "details": {
+                "scaling": {"backendDetails": None, "backend_details": None},
+                "resources": {
+                    "backendDetails": {"model": {"name": "anthropic--claude-4.8-opus", "version": "1"}},
+                    "backend_details": {"model": {"name": "anthropic--claude-4.8-opus", "version": "1"}},
+                },
+            },
+            "scenarioId": "foundation-models",
+            "targetStatus": "RUNNING",
+            "configurationName": "anthropic--claude-4.8-opus_autogenerated",
+            "deploymentUrl": "https://api.example.com/v2/inference/deployments/d38af17dc133a768",
+        },
+    ],
+}
+
+
+def test_resolve_deployment_url_parses_live_rest_shape_and_queries_correctly():
+    client = _FakeHTTPClient(_LIVE_SHAPE_PAYLOAD)
+    headers = {"Authorization": "Bearer x", "AI-Resource-Group": "default"}
+    url = resolve_deployment_url(
+        base_url="https://api.example.com/v2",
+        headers=headers,
+        model="anthropic--claude-4.8-opus",
+        http_client=client,
+    )
+    assert url == "https://api.example.com/v2/inference/deployments/d38af17dc133a768"
+
+    call = client.calls[0]
+    assert call["url"] == "https://api.example.com/v2/lm/deployments"
+    assert call["params"] == {"scenarioId": "foundation-models", "status": "RUNNING"}
+    assert call["headers"] is headers
+
+
+def test_query_response_defaults_to_empty_resources():
+    assert DeploymentQueryResponse.model_validate({}).resources == []

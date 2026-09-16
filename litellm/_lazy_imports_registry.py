@@ -224,6 +224,8 @@ LLM_CONFIG_NAMES: Final = (
     "BedrockMantleChatConfig",
     "A2AConfig",
     "GenAIHubOrchestrationConfig",
+    "SapDeploymentAnthropicMessagesConfig",
+    "SapDeploymentAnthropicChatConfig",
     "VoyageEmbeddingConfig",
     "VoyageContextualEmbeddingConfig",
     "VoyageMultimodalEmbeddingConfig",
@@ -908,6 +910,14 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "GenAIHubOrchestrationConfig": (
         ".llms.sap.chat.transformation",
         "GenAIHubOrchestrationConfig",
+    ),
+    "SapDeploymentAnthropicMessagesConfig": (
+        ".llms.sap.messages.transformation",
+        "SapDeploymentAnthropicMessagesConfig",
+    ),
+    "SapDeploymentAnthropicChatConfig": (
+        ".llms.sap.chat.direct_transformation",
+        "SapDeploymentAnthropicChatConfig",
     ),
     "VoyageEmbeddingConfig": (
         ".llms.voyage.embedding.transformation",

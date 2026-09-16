@@ -67,7 +67,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
@@ -827,35 +827,6 @@ async def _sleep_for_timeout_async(timeout: float | str | httpx.Timeout):
         await asyncio.sleep(timeout.connect)
 
 
-class _AdmissionReservation(BaseModel):
-    input_tokens: int | None = None
-
-
-class _AdmissionMetadata(BaseModel):
-    user_api_key_budget_reservation: _AdmissionReservation | None = None
-
-
-def admission_input_tokens(kwargs: Mapping[str, object]) -> int | None:
-    reservations: Final = (
-        _AdmissionMetadata.model_validate(kwargs.get(key) or {}).user_api_key_budget_reservation
-        for key in ("litellm_metadata", "metadata")
-    )
-    return next(
-        (
-            reservation.input_tokens
-            for reservation in reservations
-            if reservation and reservation.input_tokens is not None
-        ),
-        None,
-    )
-
-
-def admitted_prompt_token_counter(prompt_tokens: int | None) -> Callable[[], int] | None:
-    if prompt_tokens is None:
-        return None
-    return lambda: prompt_tokens
-
-
 def mock_completion(
     model: str,
     messages: list,
@@ -867,7 +838,6 @@ def mock_completion(
     logging=None,
     custom_llm_provider=None,
     timeout: float | str | httpx.Timeout | None = None,
-    prompt_tokens: int | None = None,
     **kwargs,
 ):
     """
@@ -941,26 +911,23 @@ def mock_completion(
 
         if stream is True:
             model_response = ModelResponseStream()
-            count_prompt_tokens: Final = admitted_prompt_token_counter(prompt_tokens)
             # don't try to access stream object,
             if kwargs.get("acompletion", False) is True:
                 return CustomStreamWrapper(
                     completion_stream=async_mock_completion_streaming_obj(
-                        model_response, mock_response=mock_response, model=model, n=n, prompt_tokens=prompt_tokens
+                        model_response, mock_response=mock_response, model=model, n=n
                     ),
                     model=model,
                     custom_llm_provider="openai",
                     logging_obj=logging,
-                    count_prompt_tokens=count_prompt_tokens,
                 )
             return CustomStreamWrapper(
                 completion_stream=mock_completion_streaming_obj(
-                    model_response, mock_response=mock_response, model=model, n=n, prompt_tokens=prompt_tokens
+                    model_response, mock_response=mock_response, model=model, n=n
                 ),
                 model=model,
                 custom_llm_provider="openai",
                 logging_obj=logging,
-                count_prompt_tokens=count_prompt_tokens,
             )
         if isinstance(mock_response, litellm.MockException):
             raise mock_response
@@ -986,16 +953,13 @@ def mock_completion(
                 ChatCompletionMessageToolCall(**tool_call) for tool_call in mock_tool_calls
             ]
 
-        usage_prompt_tokens: Final = (
-            prompt_tokens if prompt_tokens is not None else DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT
-        )
         setattr(
             model_response,
             "usage",
             Usage(
-                prompt_tokens=usage_prompt_tokens,
+                prompt_tokens=DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
                 completion_tokens=DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
-                total_tokens=usage_prompt_tokens + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+                total_tokens=DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
             ),
         )
 
@@ -1072,6 +1036,10 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
+        if web_search_options is not None and custom_llm_provider == "xai":
+            model_info["mode"] = "responses"
+            model = model.replace("responses/", "")
+
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
 
@@ -1079,10 +1047,6 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
-
-    if web_search_options is not None and custom_llm_provider == "xai":
-        model_info["mode"] = "responses"
-        model = model.replace("responses/", "")
 
     # OpenAI/Azure GPT-5 chat-completions that need Responses-only fields (e.g.
     # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
@@ -1120,10 +1084,12 @@ def responses_api_bridge_check(
     # the default too.
     resolved_api_base: Final = _resolve_openai_api_base(api_base).strip()
     on_constraint_enforcing_endpoint: Final = (
-        custom_llm_provider == "azure" or resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
+        custom_llm_provider in ("azure", "sap")
+        or resolved_api_base == ""
+        or _is_openai_backed_api_base(resolved_api_base)
     )
     if (
-        custom_llm_provider in ("openai", "azure")
+        custom_llm_provider in ("openai", "azure", "sap")
         and model_info.get("mode") != "responses"
         and OpenAIGPT5Config.is_model_gpt_5_model(model)
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
@@ -2310,13 +2276,18 @@ def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     timeout: Final = ctx.timeout
 
     headers = headers or litellm.headers
-    ## LOAD CONFIG - if set
-    config: Final = litellm.GenAIHubOrchestrationConfig.get_config()
-    for k, v in _provider_config_items(config):
-        if (
-            k not in optional_params
-        ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
-            optional_params[k] = v
+    ## LOAD CONFIG - orchestration defaults only apply to the orchestration backend; the
+    ## deployment direct-connect path reuses the Bedrock invoke body and must not inherit
+    ## orchestration-only params like model_version or the deployment_url cached_property
+    from litellm.llms.sap.submode import SapBackendForm, split_sap_submode
+
+    if split_sap_submode(model)[0] is SapBackendForm.ORCHESTRATION:
+        config: Final = litellm.GenAIHubOrchestrationConfig.get_config()
+        for k, v in _provider_config_items(config):
+            if (
+                k not in optional_params
+            ):  # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
+                optional_params[k] = v
 
     return sap_gen_ai_hub_chat_completions.completion(
         model=model,
@@ -2592,9 +2563,7 @@ def _complete_custom_openai(
             copilot_headers.update(extra_headers)
         extra_headers = copilot_headers
 
-    use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
-
-    if extra_headers is not None and not use_base_llm_http_handler:
+    if extra_headers is not None:
         optional_params["extra_headers"] = extra_headers
 
     if litellm.enable_preview_features and metadata is not None:  # [PREVIEW] allow metadata to be passed to OPENAI
@@ -2611,6 +2580,8 @@ def _complete_custom_openai(
             optional_params[k] = v
 
     ## COMPLETION CALL
+    use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
+
     try:
         if use_base_llm_http_handler:
             response = base_llm_http_handler.completion(
@@ -5586,9 +5557,6 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 mock_timeout=mock_timeout,
                 timeout=timeout,
-                prompt_tokens=admission_input_tokens(
-                    cast(Mapping[str, object], kwargs)  # cast-ok: completion's **kwargs is untyped
-                ),
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
@@ -9127,7 +9095,7 @@ async def acount_tokens(
     fallback_messages = messages or []
     if system and fallback_messages:
         fallback_messages = [{"role": "system", "content": system}] + fallback_messages
-    local_count: Final = await asyncify(litellm.token_counter)(
+    local_count: Final = litellm.token_counter(
         model=model,
         messages=fallback_messages,
         tools=tools,

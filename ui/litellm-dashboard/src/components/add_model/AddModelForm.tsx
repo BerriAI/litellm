@@ -25,6 +25,7 @@ import {
 } from "../common_components/MountedFormField";
 import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem, type ProviderCreateInfo, modelAvailableCall } from "../networking";
+import { Providers } from "../provider_info_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import AdvancedSettings from "./advanced_settings";
@@ -41,11 +42,11 @@ interface AddModelFormProps {
   registry: MountRegistry;
   mountedValues: () => MountedFormValues;
   handleOk: () => Promise<boolean>;
-  selectedProvider: string | null;
-  setSelectedProvider: (provider: string | null) => void;
+  selectedProvider: Providers;
+  setSelectedProvider: (provider: Providers) => void;
   providerModels: string[];
-  setProviderModelsFn: (provider: string | null) => void;
-  getPlaceholder: (provider: string) => string;
+  setProviderModelsFn: (provider: Providers) => void;
+  getPlaceholder: (provider: Providers) => string;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (show: boolean) => void;
   teams: Team[] | null;
@@ -139,7 +140,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     [credentials],
   );
 
-  const applyProviderSelection = (provider: string | null) => {
+  const applyProviderSelection = (provider: Providers) => {
     setSelectedProvider(provider);
     setProviderModelsFn(provider);
     form.setValue("model", []);
@@ -226,10 +227,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                             options={providerOptions}
                             emptyText={providerMetadataErrorText ?? "No providers found"}
                             placeholder={isProviderMetadataLoading ? "Loading providers..." : "Select a provider"}
-                            value={typeof control.value === "string" ? control.value : null}
+                            value={(control.value as string | undefined) ?? ""}
                             onValueChange={(value) => {
                               control.onChange(value);
-                              applyProviderSelection(value);
+                              applyProviderSelection(value as Providers);
                             }}
                           />
                         )}
@@ -316,7 +317,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                             <span className="px-4 text-muted-foreground text-sm">OR</span>
                             <div className="grow border-t border-border"></div>
                           </div>
-                          <ProviderSpecificFields selectedProvider={selectedProvider} />
+                          <ProviderSpecificFields selectedProvider={selectedProvider} accessToken={accessToken ?? ""} />
                         </>
                       )}
                       <div className="flex items-center my-4">

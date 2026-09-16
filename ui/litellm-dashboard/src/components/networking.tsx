@@ -410,6 +410,29 @@ export const getProviderCreateMetadata = async (): Promise<ProviderCreateInfo[]>
   return jsonData;
 };
 
+export interface SapDeploymentInfo {
+  model_name: string;
+  deployment_url: string;
+  id: string;
+  status: string;
+  created_at: string;
+}
+
+export const listSapDeploymentsCall = async (
+  accessToken: string,
+  serviceKey: string,
+  resourceGroup?: string,
+): Promise<SapDeploymentInfo[]> => {
+  /**
+   * Discover the running SAP AI Core foundation-model deployments a service key can see, so the
+   * Add Model form can offer them as a pick list. The service key is sent only for this one request
+   * and is never persisted by the proxy.
+   */
+  const body = resourceGroup ? { service_key: serviceKey, resource_group: resourceGroup } : { service_key: serviceKey };
+  const data = await apiClient.post<{ deployments: SapDeploymentInfo[] }>(`/sap/deployments`, { accessToken, body });
+  return data.deployments;
+};
+
 export interface ComplexityScorerDefaults {
   tier_boundaries: Record<string, number>;
   token_thresholds: Record<string, number>;
@@ -2946,7 +2969,6 @@ export interface Member {
   role: string;
   user_id: string | null;
   user_email?: string | null;
-  user_alias?: string | null;
   max_budget_in_team?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
