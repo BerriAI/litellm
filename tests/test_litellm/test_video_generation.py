@@ -264,8 +264,7 @@ class TestVideoGeneration:
             model="openai/sora-2", duration_seconds=10.0, custom_llm_provider="openai"
         )
 
-        # Should calculate cost based on duration (10 seconds * $0.10 per second = $1.00)
-        assert cost == 1.0
+        assert cost == pytest.approx(10.0 * litellm.model_cost["openai/sora-2"]["output_cost_per_video_per_second"])
 
     def test_video_generation_cost_calculation_unknown_model(self):
         """Test video generation cost calculation for unknown model."""

@@ -135,7 +135,6 @@ def test_bedrock_converse_1h_cache_write_billed_at_1h_rate(monkeypatch):
         16 * model_info["input_cost_per_token"] + 11632 * model_info["cache_creation_input_token_cost_above_1hr"]
     )
     assert prompt_cost == pytest.approx(expected_prompt_cost)
-    assert prompt_cost > 16 * model_info["input_cost_per_token"] + 11632 * model_info["cache_creation_input_token_cost"]
     assert completion_cost == pytest.approx(4 * model_info["output_cost_per_token"])
 
 

@@ -5,7 +5,7 @@ import litellm.cost_calculator
 
 import asyncio
 import time
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 import base64
 import pytest
@@ -685,7 +685,10 @@ def test_vertex_ai_claude_completion_cost():
         completion_response=response,
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
-    predicted_cost = input_tokens * 0.000003 + 0.000015 * output_tokens
+    model_info: Final = litellm.model_cost["vertex_ai/claude-3-sonnet@20240229"]
+    predicted_cost = (
+        input_tokens * model_info["input_cost_per_token"] + model_info["output_cost_per_token"] * output_tokens
+    )
     assert cost == predicted_cost
 
 

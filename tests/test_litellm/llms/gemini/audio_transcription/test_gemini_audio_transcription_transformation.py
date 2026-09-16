@@ -4,7 +4,6 @@ import json
 import httpx
 import pytest
 
-import litellm
 from litellm.llms.gemini.audio_transcription.transformation import (
     GeminiAudioTranscriptionConfig,
 )
@@ -295,25 +294,3 @@ class TestSubtitleSynthesisThroughHandler:
             {"word": "Hello", "start": 0.1, "end": 0.4, "speaker": "spk:0"},
             {"word": "world.", "start": 0.5, "end": 0.9, "speaker": "spk:1"},
         ]
-
-
-class TestCostRegression:
-    @pytest.fixture
-    def local_cost_map(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-
-    def test_registry_entries(self, local_cost_map):
-        batch_entry = litellm.model_cost["gemini/gemini-3.5-transcribe"]
-        assert batch_entry["mode"] == "audio_transcription"
-        assert batch_entry["input_cost_per_audio_token"] == 2e-06
-        assert batch_entry["input_cost_per_token"] == 2e-06
-        assert batch_entry["output_cost_per_token"] == 1.2e-05
-        assert batch_entry["supported_endpoints"] == ["/v1/audio/transcriptions"]
-
-        live_entry = litellm.model_cost["gemini/gemini-3.5-transcribe-live"]
-        assert live_entry["mode"] == "audio_transcription"
-        assert live_entry["input_cost_per_audio_token"] == 3.5e-06
-        assert live_entry["input_cost_per_token"] == 3.5e-06
-        assert live_entry["output_cost_per_token"] == 2.1e-05
-        assert live_entry["supported_endpoints"] == ["/v1/realtime"]

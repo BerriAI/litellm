@@ -316,6 +316,9 @@ class TestProcessEmbedContentResponseUsage:
 
     MODEL = "gemini-embedding-2"
 
+    def _rate(self, model: str, field: str) -> float:
+        return float(litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")[field])
+
     def test_multimodal_image_preserves_usage_metadata(self):
         response_json = {
             "embedding": {"values": [0.1, 0.2, 0.3]},
@@ -436,7 +439,7 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(258 * 4.5e-7)
+        assert prompt_cost == pytest.approx(258 * self._rate(self.MODEL, "input_cost_per_image_token"))
 
     def test_file_reference_non_image_not_counted_as_image(self):
         """A files/... ref resolving to a non-image mime keeps audio token billing."""
@@ -468,7 +471,7 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(64 * 6.5e-6)
+        assert prompt_cost == pytest.approx(64 * self._rate(self.MODEL, "input_cost_per_audio_token"))
 
     def test_video_plus_audio_does_not_double_bill_text(self):
         """Video and audio responses are billed from their respective token counts."""
@@ -498,7 +501,10 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(516 * 1.2e-5 + 64 * 6.5e-6)
+        assert prompt_cost == pytest.approx(
+            516 * self._rate(self.MODEL, "input_cost_per_video_token")
+            + 64 * self._rate(self.MODEL, "input_cost_per_audio_token")
+        )
 
     def test_preview_alias_bills_audio_per_token(self):
         response_json = {
@@ -520,7 +526,7 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(64 * 6.5e-6)
+        assert prompt_cost == pytest.approx(64 * self._rate("gemini-embedding-2-preview", "input_cost_per_audio_token"))
 
     def test_image_without_modality_details_uses_image_rate(self):
         response_json = {
@@ -544,7 +550,7 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(258 * 4.5e-7)
+        assert prompt_cost == pytest.approx(258 * self._rate(self.MODEL, "input_cost_per_image_token"))
 
     @pytest.mark.parametrize(
         "input_value,resolved_files,expected_image_tokens",
@@ -582,8 +588,8 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        expected_rate = 4.5e-7 if expected_image_tokens else 2e-7
-        assert prompt_cost == pytest.approx(258 * expected_rate)
+        expected_field = "input_cost_per_image_token" if expected_image_tokens else "input_cost_per_token"
+        assert prompt_cost == pytest.approx(258 * self._rate(self.MODEL, expected_field))
 
     def test_mixed_text_and_image_without_modality_details_not_billed_as_image(self):
         response_json = {
@@ -606,7 +612,7 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(270 * 2e-7)
+        assert prompt_cost == pytest.approx(270 * self._rate(self.MODEL, "input_cost_per_token"))
 
     def test_text_without_modality_details_uses_text_rate(self):
         response_json = {
@@ -630,4 +636,4 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(12 * 2e-7)
+        assert prompt_cost == pytest.approx(12 * self._rate(self.MODEL, "input_cost_per_token"))

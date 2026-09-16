@@ -1,6 +1,6 @@
 import json
 from collections.abc import Mapping
-from typing import cast
+from typing import Final, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -1903,7 +1903,14 @@ def test_gemini_response_done_bills_audio_output_tokens_at_audio_rate(monkeypatc
         custom_llm_provider="gemini",
         litellm_model_name="gemini-2.5-flash-native-audio-preview-12-2025",
     )
-    assert cost == pytest.approx(377 * 5e-07 + 51 * 1.2e-05 + 37 * 2e-06)
+    model_info: Final = litellm.get_model_info(
+        model="gemini-2.5-flash-native-audio-preview-12-2025", custom_llm_provider="gemini"
+    )
+    assert cost == pytest.approx(
+        377 * model_info["input_cost_per_token"]
+        + 51 * model_info["output_cost_per_audio_token"]
+        + 37 * model_info["output_cost_per_token"]
+    )
 @pytest.fixture(autouse=False)
 def patch_gemini_transcribe_live_cost_map_entry(monkeypatch):
     """Inject the gemini-3.5-transcribe-live registry entry locally.

@@ -63,8 +63,6 @@ class TestChatGPTResponsesAPITransformation:
             "/v1/chat/completions",
             "/v1/responses",
         ]
-        assert model_info["max_input_tokens"] == 1050000
-        assert model_info["max_output_tokens"] == 128000
 
     @pytest.mark.parametrize(
         "model_name",

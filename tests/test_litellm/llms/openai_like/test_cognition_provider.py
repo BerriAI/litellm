@@ -8,6 +8,7 @@ its traffic.
 
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -112,15 +113,13 @@ class TestCognitionProviderIdentity:
 class TestCognitionCostTracking:
 
     @pytest.mark.parametrize(
-        "model, expected_prompt_cost, expected_completion_cost",
+        "model",
         [
-            ("cognition/swe-1.7", 0.5, 2.5),
-            ("cognition/swe-1.7-lightning", 2.5, 12.5),
+            "cognition/swe-1.7",
+            "cognition/swe-1.7-lightning",
         ],
     )
-    def test_cost_differs_from_openai_pricing(
-        self, model: str, expected_prompt_cost: float, expected_completion_cost: float
-    ):
+    def test_cost_differs_from_openai_pricing(self, model: str):
         """A cognition-prefixed model must never be priced off an OpenAI cost entry."""
         from litellm.cost_calculator import cost_per_token
 
@@ -131,8 +130,9 @@ class TestCognitionCostTracking:
             custom_llm_provider="cognition",
         )
 
-        assert prompt_cost == pytest.approx(expected_prompt_cost)
-        assert completion_cost == pytest.approx(expected_completion_cost)
+        model_info: Final = litellm.model_cost[model]
+        assert prompt_cost == pytest.approx(1_000_000 * model_info["input_cost_per_token"])
+        assert completion_cost == pytest.approx(1_000_000 * model_info["output_cost_per_token"])
 
     def test_lightning_is_five_times_the_standard_tier(self):
         standard = litellm.get_model_info(model="cognition/swe-1.7")

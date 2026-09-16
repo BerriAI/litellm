@@ -2,6 +2,8 @@
 Tests for the Meta Model API (Muse Spark) provider configuration and integration.
 """
 
+from typing import Final
+
 import litellm
 
 
@@ -207,5 +209,6 @@ class TestMuseSparkModelInfo:
             model="meta/muse-spark-1.1",
             custom_llm_provider="meta",
         )
-        expected = 1000 * 1.25e-06 + 500 * 4.25e-06
+        model_info: Final = litellm.model_cost["meta/muse-spark-1.1"]
+        expected = 1000 * model_info["input_cost_per_token"] + 500 * model_info["output_cost_per_token"]
         assert abs(cost - expected) < 1e-12
