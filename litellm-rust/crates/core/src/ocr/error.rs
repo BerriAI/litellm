@@ -50,6 +50,12 @@ pub enum Error {
     Connect(String),
     #[error("routing error: {0}")]
     Routing(String),
+    #[error("Failed to read OCR file {}: {message}", path.display())]
+    FileRead {
+        path: std::path::PathBuf,
+        kind: std::io::ErrorKind,
+        message: String,
+    },
     /// The request is outside the surface this route covers in Rust. Hosts that
     /// keep a reference implementation treat this as "fall back", not "fail".
     #[error("unsupported by the rust path: {0}")]
