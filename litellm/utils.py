@@ -853,6 +853,40 @@ def _is_converted_stream_result(result: object) -> bool:
     return isinstance(result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator))
 
 
+async def _run_success_deployment_hook_on_converted_chat_stream(
+    result: object, request_data: dict[str, object], call_type: str
+) -> object:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+
+    if not isinstance(result, CustomStreamWrapper):
+        return result
+    completion_stream: Final = result.completion_stream
+    if not isinstance(completion_stream, MockResponseIterator):
+        return result
+    call_type_enum: Final = _CALL_TYPE_ENUM_MAP.get(call_type)
+    if call_type_enum is None:
+        return result
+    hooked: Final = await async_post_call_success_deployment_hook(
+        request_data=request_data,
+        response=completion_stream.model_response,
+        call_type=call_type_enum,
+    )
+    if not isinstance(hooked, ModelResponse) or hooked is completion_stream.model_response:
+        return result
+    rewrapped: Final = CustomStreamWrapper(
+        completion_stream=MockResponseIterator(model_response=hooked, json_mode=completion_stream.json_mode),
+        model=result.model,
+        custom_llm_provider=result.custom_llm_provider,
+        logging_obj=result.logging_obj,
+        stream_options=result.stream_options,
+        make_call=result.make_call,
+        count_prompt_tokens=result.count_prompt_tokens,
+    )
+    rewrapped.set_logging_event_loop(loop=result.logging_loop)
+    return rewrapped
+
+
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 def function_setup(
     original_function: str,
@@ -1956,17 +1990,25 @@ def client(original_function):
                 raise
             end_time = datetime.datetime.now()
 
-            if _is_streaming_request(kwargs=kwargs, call_type=call_type) or _is_converted_stream_result(result):
+            streaming_requested: Final = _is_streaming_request(kwargs=kwargs, call_type=call_type)
+            if streaming_requested or _is_converted_stream_result(result):
                 logging_obj.stream = True
                 logging_obj.model_call_details["stream"] = True
+                stream_result: Final = (
+                    result
+                    if streaming_requested
+                    else await _run_success_deployment_hook_on_converted_chat_stream(
+                        result=result, request_data=kwargs, call_type=call_type
+                    )
+                )
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
                     chunks: Final = []
-                    for idx, chunk in enumerate(result):
+                    for idx, chunk in enumerate(stream_result):
                         chunks.append(chunk)
                     return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else:
                     _update_response_metadata(
-                        result=result,
+                        result=stream_result,
                         logging_obj=logging_obj,
                         model=model,
                         kwargs=kwargs,
@@ -1974,7 +2016,7 @@ def client(original_function):
                         end_time=end_time,
                     )
                     return _llm_caching_handler.wrap_streaming_result_for_cache(
-                        result=result,
+                        result=stream_result,
                         call_type=call_type,
                     )
             elif call_type == CallTypes.arealtime.value:
