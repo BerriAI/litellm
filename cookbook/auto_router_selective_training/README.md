@@ -2,7 +2,7 @@
 
 These optional profiles learn when GPT-5.6 Sol adds a successful solve over GPT-5.6 Luna. They use one existing classifier response and a deterministic local prediction, with no second classifier call. They replace the earlier ROI cookbook, whose benchmark results were invalidated and are not the source of these fits
 
-Training uses 160 fresh paired tasks and selection uses 64 separate validation tasks across SWE-bench, Terminal-Bench, MBPP+ and LiveCodeBench. The fitted policies were frozen before the 125-task held-out evaluation. Held-out results are still in progress
+Training uses 160 fresh paired tasks and selection uses 64 separate validation tasks across SWE-bench, Terminal-Bench, MBPP+ and LiveCodeBench. The fitted policies were frozen before the 125-task held-out evaluation. The complete 125-task Luna/Sol comparison is available in PRIMARY_FINDINGS.md and PRIMARY_REPORT.md. Additional Sonnet/Opus controls are still running
 
 `strong-success-retention` minimizes validation cost while preserving every Sol-only success and meeting Sol quality within each benchmark. `quality-first-under-sol-budget` maximizes validation solves under Sol's total inference cost and permits task swaps. These names describe validation objectives, not guarantees on new requests
 
@@ -15,3 +15,21 @@ The example config describes the SWE-bench agent harness. Match its execution co
 `selective_policy` replaces the existing threshold decision and cannot be combined with the older probability calibration. Its `target` identifies the score: `scalar_calibration` and `per_model` estimate a success-probability difference, `paired` estimates Sol-only probability minus Luna-only probability, `rescue` estimates Sol-only probability, and `benefit_per_dollar` divides the paired difference by predicted incremental inference cost. Threshold units depend on this target. Raw classifier probabilities remain available in diagnostics
 
 Defaults are unchanged when `selective_policy` is omitted. The local implementation validates coefficient dimensions and rejects another classifier's feature schema. Runtime parity checks compare scores and routing choices with the training implementation
+
+The twelve prespecified upfront family controls are also available in `diagnostic_profiles.json` and `diagnostic_proxy.yaml`. Start the latter config to benchmark aliases such as `selective-v3-diagnostic-original-upfront-per-model`. These controls were frozen before final inference and are included for reproduction and fresh benchmarking. A family with no eligible validation candidate uses a direct Sol deployment that bypasses the classifier. Review cascades still require a separate agent workflow
+## Held-out results
+
+These profiles were selected before these results. They are not refitted or selected again on the held-out tasks
+
+| Policy | Solved | Inference cost | Savings vs Sol | Gained / lost Sol solves |
+|---|---:|---:|---:|---:|
+| Luna only | 84/125 | ≥$2.6531 | ≤87.3% | +8 / -11 |
+| Sol only | 87/125 | $20.8964 | 0.0% | +0 / -0 |
+| Capability baseline | 85/125 | $6.7642 | 67.6% | +8 / -10 |
+| Capability upfront, retention objective | 86/125 | $13.8156 | 33.9% | +1 / -2 |
+| Capability upfront, quality objective | 88/125 | $18.5237 | 11.4% | +5 / -4 |
+| ablation_cap_original_upfront_per_model | 88/125 | $20.3797 | 2.5% | +1 / -0 |
+
+Costs use recorded gateway bills. A ≥ cost and ≤ savings mark unmetered transport requests: cost is a lower bound and savings versus fully metered Sol is an upper bound. The JSON counts these requests per policy and task. They are not assumed free.
+
+The per-model family control is an exploratory comparison among forty prespecified variants, not a newly selected winner. No validation-selected profile combines preservation of all Sol successes and lower cost across all 125 tasks. Task-level replay does not measure per-turn routing or Sol continuation from a Luna patch

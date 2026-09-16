@@ -4,11 +4,14 @@
   "training_tasks": 160,
   "validation_tasks": 64,
   "held_out_tasks": 125,
-  "held_out_status": "in progress",
+  "held_out_status": "primary_pair_complete_anthropic_controls_in_progress",
   "current_model_pair": [
     "openai/gpt-5.6-luna",
     "openai/gpt-5.6-sol"
   ],
   "judge_effort": "low",
-  "solver_effort": "high"
+  "solver_effort": "high",
+  "diagnostic_upfront_profiles": 12,
+  "diagnostic_profiles_sha256": "468de3b22e309ca3ef800ef90bd9b03a8aca3eebef32bcc2155377b4cf7e1f88",
+  "primary_results_sha256": "e91ec5578d496ad37c1e8cf5760882042f4b7768bd3c2ff5d65d92f19df7a12c"
 }
