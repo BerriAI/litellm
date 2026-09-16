@@ -88,6 +88,14 @@ pub enum Error {
     Headers(#[from] crate::http_utils::HeaderError),
 }
 
+impl From<crate::call_arguments::ArgumentError> for Error {
+    fn from(error: crate::call_arguments::ArgumentError) -> Self {
+        Self::RequestField {
+            path: format!("optional_params.{}", error.path),
+        }
+    }
+}
+
 impl Error {
     pub fn is_request(&self) -> bool {
         matches!(

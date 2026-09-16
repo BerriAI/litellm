@@ -1,7 +1,6 @@
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::llms::cohere::ocr::transformation::{CohereParseConfig, CohereRequest};
-use crate::llms::cohere::ocr::{CohereParams, CohereResponse, validate_document};
-use crate::ocr::OcrArguments;
+use crate::llms::cohere::ocr::{CohereOptions, CohereResponse, validate_document};
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::prepare::{credential_env, transform_request_body};
@@ -15,7 +14,7 @@ const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
 pub(crate) struct AzureAICohereParseConfig;
 
 impl BaseOcrConfig for AzureAICohereParseConfig {
-    type OcrParams = CohereParams;
+    type OcrParams = CohereOptions;
     type ProviderRequest = CohereRequest;
     type ProviderResponse = CohereResponse;
 
@@ -23,20 +22,11 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         CohereParseConfig.get_supported_ocr_params(model)
     }
 
-    fn map_ocr_params(
-        &self,
-        non_default_params: &OcrArguments,
-        optional_params: &OcrArguments,
-        model: &str,
-    ) -> Result<OcrArguments, crate::ocr::Error> {
-        CohereParseConfig.map_ocr_params(non_default_params, optional_params, model)
-    }
-
     async fn async_transform_ocr_request(
         &self,
         model: &str,
         document: OcrDocument,
-        optional_params: &CohereParams,
+        optional_params: &CohereOptions,
         headers: &[(String, String)],
         context: OcrRequestContext<'_>,
     ) -> Result<CohereRequest, crate::ocr::Error> {
@@ -65,7 +55,7 @@ impl AzureAICohereParseConfig {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.parse_options(&request.optional_params, &request.model)?;
+        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
         let config = AzureAuthInputs {
             azure_ad_token_provider: request.azure_ad_token_provider.clone(),
             ..AzureAuthInputs::from_sourced_optional_params(
@@ -110,8 +100,9 @@ impl AzureAICohereParseConfig {
             !remote,
             body,
             |body| {
-                validate_document(&body.document.as_document())?;
-                validate_inline_document(&body.document.as_document())
+                let document = crate::ocr::prepare::body_document(body)?;
+                validate_document(&document)?;
+                validate_inline_document(&document)
             },
         )
         .await

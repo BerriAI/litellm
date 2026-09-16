@@ -1,4 +1,4 @@
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
 use serde_json::Value;
 
 use super::OcrClient;
@@ -12,21 +12,19 @@ pub(crate) async fn transform_request_body<B>(
     headers: &[(String, String)],
     retains_document: bool,
     body: B,
-    validate: impl Fn(&B) -> Result<(), super::Error>,
+    validate: impl Fn(&Value) -> Result<(), super::Error>,
 ) -> Result<reqwest::Request, super::Error>
 where
-    B: Serialize + DeserializeOwned,
+    B: Serialize,
 {
-    let composed = request.optional_params.compose_body(
+    let composed = crate::call_arguments::compose_body(
+        &request.optional_params,
         &body,
         request.config.get_supported_ocr_params(&request.model),
     )?;
-    let composed = OcrWireBody::<B>::decode(composed, "body")?;
-    validate(&composed.body)?;
+    validate(&composed)?;
     let (body, headers) = if request.hooks.intercepts_requests() {
-        let body = serde_json::to_value(composed).map_err(|_| super::Error::RequestField {
-            path: "body".into(),
-        })?;
+        let body = composed;
         let retained_fields = request
             .optional_params
             .keys()
@@ -52,9 +50,13 @@ where
                 retained_fields,
             })
             .await?;
-        let body = OcrWireBody::<B>::decode(changed.body, "guardrail.body")?;
-        validate(&body.body)?;
-        (body, changed.headers)
+        if !changed.body.is_object() {
+            return Err(super::Error::RequestField {
+                path: "guardrail.body".into(),
+            });
+        }
+        validate(&changed.body)?;
+        (changed.body, changed.headers)
     } else {
         (composed, headers.to_vec())
     };
@@ -106,24 +108,19 @@ pub(crate) async fn guardrail_document(
     Ok((document, changed.headers))
 }
 
-#[derive(Serialize)]
-struct OcrWireBody<B> {
-    #[serde(skip)]
-    body: B,
-    #[serde(flatten)]
-    fields: serde_json::Map<String, Value>,
-}
-
-impl<B: Serialize + DeserializeOwned> OcrWireBody<B> {
-    fn decode(value: Value, prefix: &str) -> Result<Self, super::Error> {
-        let body: B = super::wire::decode_request_value(value.clone(), prefix)?;
-        let Value::Object(fields) = value else {
-            return Err(super::Error::RequestField {
-                path: prefix.into(),
-            });
-        };
-        Ok(Self { body, fields })
-    }
+pub(crate) fn body_document(body: &Value) -> Result<OcrDocument, super::Error> {
+    let document = body
+        .get("document")
+        .and_then(Value::as_object)
+        .ok_or_else(|| super::Error::RequestField {
+            path: "body.document".into(),
+        })?;
+    let source = document
+        .iter()
+        .filter(|(name, _)| matches!(name.as_str(), "type" | "image_url" | "document_url"))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    super::wire::decode_request_value(Value::Object(source), "body.document")
 }
 
 pub(crate) fn credential_env(name: &str) -> Option<String> {

@@ -5,7 +5,6 @@ use serde_with::serde_as;
 
 use crate::constants::{COHERE_API_KEY_ENV, COHERE_PARSE_API_BASE};
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
-use crate::ocr::OcrArguments;
 use crate::ocr::OcrClient;
 use crate::ocr::document::InlineDocument;
 use crate::ocr::prepare::{credential_env, transform_request_body};
@@ -24,7 +23,7 @@ pub(crate) enum OutputFormat {
 }
 
 #[derive(Default, Deserialize, Serialize)]
-pub(crate) struct CohereParams {
+pub(crate) struct CohereOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_format: Option<OutputFormat>,
 }
@@ -41,16 +40,6 @@ pub(crate) struct CohereRequest {
 pub(crate) enum CohereParseDocument {
     #[serde(rename = "image_url")]
     ImageUrl { image_url: String },
-}
-
-impl CohereParseDocument {
-    pub(crate) fn as_document(&self) -> OcrDocument {
-        let Self::ImageUrl { image_url } = self;
-        OcrDocument::ImageUrl {
-            image_url: image_url.clone(),
-            extra_fields: Default::default(),
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -96,7 +85,7 @@ impl CohereParseConfig {
         &self,
         model: &str,
         document: OcrDocument,
-        optional_params: &CohereParams,
+        optional_params: &CohereOptions,
         _headers: &[(String, String)],
     ) -> Result<CohereRequest, crate::ocr::Error> {
         let image_url = image_url(document)?;
@@ -105,7 +94,7 @@ impl CohereParseConfig {
 }
 
 impl BaseOcrConfig for CohereParseConfig {
-    type OcrParams = CohereParams;
+    type OcrParams = CohereOptions;
     type ProviderRequest = CohereRequest;
     type ProviderResponse = CohereResponse;
 
@@ -113,34 +102,11 @@ impl BaseOcrConfig for CohereParseConfig {
         &["output_format", "req_format"]
     }
 
-    fn map_ocr_params(
-        &self,
-        non_default_params: &OcrArguments,
-        optional_params: &OcrArguments,
-        _model: &str,
-    ) -> Result<OcrArguments, crate::ocr::Error> {
-        let overrides: OcrArguments = non_default_params
-            .select(&["output_format", "req_format"])
-            .into_iter()
-            .filter(|(_, value)| !value.is_null())
-            .collect();
-        overrides.parse::<CohereParams>()?;
-        if let Some(value) = overrides.get("req_format") {
-            serde_json::from_value::<crate::ocr::types::OcrResponseFormat>(value.clone())
-                .map_err(|_| crate::ocr::Error::RequestFormat)?;
-        }
-        Ok(optional_params
-            .iter()
-            .chain(overrides.iter())
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect())
-    }
-
     async fn async_transform_ocr_request(
         &self,
         model: &str,
         document: OcrDocument,
-        optional_params: &CohereParams,
+        optional_params: &CohereOptions,
         headers: &[(String, String)],
         _context: OcrRequestContext<'_>,
     ) -> Result<CohereRequest, crate::ocr::Error> {
@@ -162,7 +128,7 @@ impl CohereParseConfig {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.parse_options(&request.optional_params, &request.model)?;
+        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
         let headers = self.validate_environment(&request.connection, &credential_env)?;
         let url = self.get_complete_url(
             request
@@ -184,7 +150,7 @@ impl CohereParseConfig {
             )
             .await?;
         transform_request_body(client, request, &url, &headers, true, body, |body| {
-            validate_document(&body.document.as_document())
+            validate_document(&crate::ocr::prepare::body_document(body)?)
         })
         .await
     }
@@ -236,7 +202,7 @@ fn image_url(document: OcrDocument) -> Result<String, crate::ocr::Error> {
     Ok(image_url)
 }
 
-fn build_request(model: &str, image_url: String, params: &CohereParams) -> CohereRequest {
+fn build_request(model: &str, image_url: String, params: &CohereOptions) -> CohereRequest {
     CohereRequest {
         model: model.into(),
         document: CohereParseDocument::ImageUrl { image_url },
@@ -358,43 +324,62 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn mapping_merges_non_null_supported_overrides_and_preserves_supplied_options() {
-        let supplied = serde_json::from_value(json!({
-            "output_format":"blocks", "req_format":"native", "extension":false
+    #[tokio::test]
+    async fn composed_body_preserves_native_document_fields_and_untyped_overrides() {
+        let mut request = crate::ocr::test_support::wire_request(
+            "cohere/parse",
+            "https://example.com",
+            json!({
+                "output_format":"markdown", "metadata":{"host":true},
+                "extra_body":{
+                    "output_format": {"future":true},
+                    "document":{"type":"image_url","image_url":"https://example.com/a.png",
+                        "provider_options":{"nested":[false,0,null]}}
+                }
+            }),
+        );
+        request.document = serde_json::from_value(json!({
+            "type":"image_url","image_url":"https://example.com/original.png"
         }))
         .unwrap();
-        let overrides = serde_json::from_value(json!({
-            "output_format":null, "req_format":null, "ignored":true
+        let http = CohereParseConfig
+            .prepare_request(&request, &crate::ocr::test_support::ocr_client())
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(http.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(
+            body,
+            json!({
+                "model":"parse", "output_format":{"future":true},
+                "document":{"type":"image_url","image_url":"https://example.com/a.png",
+                    "provider_options":{"nested":[false,0,null]}}
+            })
+        );
+    }
+
+    #[test]
+    fn options_read_known_fields_without_changing_arguments() {
+        let arguments = serde_json::from_value(json!({
+            "output_format":"blocks", "req_format":"native", "extension":false
         }))
         .unwrap();
         for config in [false, true] {
             let mapped = if config {
                 crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig
-                    .map_ocr_params(&overrides, &supplied, "parse")
+                    .map_ocr_params(&arguments, "parse")
             } else {
-                CohereParseConfig.map_ocr_params(&overrides, &supplied, "parse")
+                CohereParseConfig.map_ocr_params(&arguments, "parse")
             }
             .unwrap();
-            assert_eq!(mapped, supplied);
-        }
-        for overrides in [
-            json!({"output_format":"html"}),
-            json!({"req_format":"invalid"}),
-        ] {
-            let overrides = serde_json::from_value(overrides).unwrap();
-            assert!(
-                CohereParseConfig
-                    .map_ocr_params(&overrides, &supplied, "parse")
-                    .is_err()
+            assert_eq!(
+                serde_json::to_value(mapped).unwrap(),
+                json!({"output_format":"blocks"})
             );
         }
-        let overrides = serde_json::from_value(json!({"output_format":"markdown"})).unwrap();
-        let mapped = CohereParseConfig
-            .map_ocr_params(&overrides, &supplied, "parse")
-            .unwrap();
-        assert_eq!(mapped["output_format"], "markdown");
-        assert_eq!(mapped["extension"], false);
+        assert_eq!(arguments["req_format"], "native");
+        assert_eq!(arguments["extension"], false);
+        let invalid = serde_json::from_value(json!({"output_format":"html"})).unwrap();
+        assert!(CohereParseConfig.map_ocr_params(&invalid, "parse").is_err());
     }
 
     #[test]
@@ -463,7 +448,7 @@ mod tests {
         )
         .unwrap();
         let params = CohereParseConfig
-            .parse_options(&arguments, "parse")
+            .map_ocr_params(&arguments, "parse")
             .unwrap();
         assert_eq!(
             serde_json::to_value(&params).unwrap(),
@@ -668,10 +653,10 @@ mod tests {
                 Err(crate::ocr::Error::CohereImageOnly)
             );
         }
-        assert!(serde_json::from_value::<CohereParams>(json!({"output_format":"html"})).is_err());
+        assert!(serde_json::from_value::<CohereOptions>(json!({"output_format":"html"})).is_err());
         for format in ["markdown", "blocks"] {
             assert!(
-                serde_json::from_value::<CohereParams>(json!({"output_format":format})).is_ok()
+                serde_json::from_value::<CohereOptions>(json!({"output_format":format})).is_ok()
             );
         }
         let request = CohereParseConfig

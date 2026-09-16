@@ -12,6 +12,7 @@ use tokio::time::Instant;
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::AzureAuthInputs;
 
+use crate::call_arguments::CallArguments;
 use crate::constants::{
     AZURE_DI_API_VERSION, AZURE_DI_DEFAULT_DPI, AZURE_DI_DEFAULT_HEIGHT, AZURE_DI_DEFAULT_WIDTH,
     AZURE_DI_SUBSCRIPTION_HEADER, OCR_POLL_RETRY_SECS,
@@ -19,7 +20,6 @@ use crate::constants::{
 use crate::llms::base_llm::ocr::transformation::{
     BaseOcrConfig, OcrRequestContext, OcrResponseContext,
 };
-use crate::ocr::OcrArguments;
 use crate::ocr::OcrClient;
 use crate::ocr::client::read_json_response;
 use crate::ocr::document::InlineDocument;
@@ -30,7 +30,6 @@ use crate::ocr::types::{
     OcrResponseFormat, OcrUsageInfo,
 };
 use crate::ocr::wire::DecodedOcrResponse;
-use crate::params::OpaqueParams;
 use crate::serde_compat::{FiniteF64, LaxI64};
 use crate::url_utils::ApiUrl;
 
@@ -61,10 +60,6 @@ pub(crate) struct DocumentIntelligenceParams {
     pub pages: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub features: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub req_format: Option<OcrResponseFormat>,
-    #[serde(flatten)]
-    pub extra_fields: OpaqueParams,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -183,8 +178,6 @@ fn normalize_ocr_params(
             .map(normalize_features)
             .transpose()?
             .flatten(),
-        req_format: None,
-        extra_fields: OpaqueParams::default(),
     })
 }
 
@@ -485,53 +478,13 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
 
     fn map_ocr_params(
         &self,
-        non_default_params: &OcrArguments,
-        optional_params: &OcrArguments,
+        arguments: &CallArguments,
         _model: &str,
-    ) -> Result<OcrArguments, crate::ocr::Error> {
-        let mapped = normalize_ocr_params(decode_input_params(
-            non_default_params
-                .iter()
-                .filter(|(name, _)| matches!(name.as_str(), "pages" | "features"))
-                .map(|(name, value)| (name.clone(), value.clone()))
-                .collect(),
+    ) -> Result<DocumentIntelligenceParams, crate::ocr::Error> {
+        normalize_ocr_params(decode_input_params(
+            arguments.select(&["pages", "features"]),
             "optional_params",
-        )?)?;
-        let request_format = non_default_params
-            .get("req_format")
-            .filter(|value| !value.is_null())
-            .map(|value| {
-                serde_json::from_value::<OcrResponseFormat>(value.clone())
-                    .map_err(|_| crate::ocr::Error::RequestFormat)
-            })
-            .transpose()?;
-        let fields = optional_params
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .chain(
-                mapped
-                    .pages
-                    .map(|value| ("pages".into(), Value::String(value))),
-            )
-            .chain(
-                mapped
-                    .features
-                    .map(|value| ("features".into(), Value::String(value))),
-            )
-            .chain(request_format.map(|value| {
-                (
-                    "req_format".into(),
-                    Value::String(
-                        match value {
-                            OcrResponseFormat::Litellm => "litellm",
-                            OcrResponseFormat::Native => "native",
-                        }
-                        .into(),
-                    ),
-                )
-            }))
-            .collect();
-        Ok(fields)
+        )?)
     }
 
     async fn async_transform_ocr_request(
@@ -592,7 +545,7 @@ impl AzureDocumentIntelligenceOCRConfig {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.parse_options(&request.optional_params, &request.model)?;
+        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
         let config = AzureAuthInputs {
             azure_ad_token_provider: request.azure_ad_token_provider.clone(),
             ..AzureAuthInputs::from_sourced_optional_params(
@@ -728,35 +681,27 @@ mod tests {
             serde_json::from_value(json!({"pages":[], "features":null, "req_format":"native"}))
                 .unwrap();
         let mapped = AzureDocumentIntelligenceOCRConfig
-            .parse_options(&overrides, "model")
+            .map_ocr_params(&overrides, "model")
             .unwrap();
-        assert_eq!(
-            serde_json::to_value(mapped).unwrap(),
-            json!({
-                "req_format":"native"
-            })
-        );
+        assert_eq!(serde_json::to_value(mapped).unwrap(), json!({}));
     }
 
     #[test]
-    fn mapping_preserves_supplied_options_when_overrides_are_empty() {
-        let supplied = serde_json::from_value(json!({
+    fn options_normalize_query_fields_without_consuming_extensions() {
+        let arguments = serde_json::from_value(json!({
             "pages":"4", "features":"languages", "extension":true
         }))
         .unwrap();
-        let overrides = serde_json::from_value(json!({
-            "pages":[], "features":null, "req_format":"native", "ignored":true
-        }))
-        .unwrap();
         let mapped = AzureDocumentIntelligenceOCRConfig
-            .map_ocr_params(&overrides, &supplied, "model")
+            .map_ocr_params(&arguments, "model")
             .unwrap();
         assert_eq!(
             serde_json::to_value(mapped).unwrap(),
             json!({
-                "pages":"4", "features":"languages", "extension":true, "req_format":"native"
+                "pages":"4", "features":"languages"
             })
         );
+        assert_eq!(arguments["extension"], true);
     }
 
     #[test]

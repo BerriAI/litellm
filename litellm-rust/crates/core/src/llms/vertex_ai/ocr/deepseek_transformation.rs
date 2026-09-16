@@ -154,7 +154,7 @@ impl VertexAIDeepSeekOCRConfig {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, crate::ocr::Error> {
-        let params = self.parse_options(&request.optional_params, &request.model)?;
+        let params = self.map_ocr_params(&request.optional_params, &request.model)?;
         let config = VertexConfig::from_sourced_optional_params(
             &request.optional_params,
             &request.input_sources,
@@ -396,17 +396,25 @@ mod tests {
     use super::{VertexAIDeepSeekOCRConfig, provider_model};
 
     #[test]
-    fn inherited_parameter_mapping_only_returns_supplied_optional_params() {
+    fn unconsumed_options_remain_available_for_body_composition() {
         use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
         use serde_json::json;
 
-        let non_default = serde_json::from_value(json!({"temperature":0.5})).unwrap();
-        let supplied = serde_json::from_value(json!({"max_tokens":100,"extension":null})).unwrap();
+        let arguments =
+            serde_json::from_value(json!({"temperature":0.5,"extension":null})).unwrap();
         assert_eq!(
-            VertexAIDeepSeekOCRConfig
-                .map_ocr_params(&non_default, &supplied, "deepseek-ocr")
+            serde_json::to_value(
+                VertexAIDeepSeekOCRConfig
+                    .map_ocr_params(&arguments, "deepseek-ocr")
+                    .unwrap()
+            )
+            .unwrap(),
+            json!({})
+        );
+        assert_eq!(
+            crate::call_arguments::compose_body(&arguments, &json!({"model":"deepseek-ocr"}), &[])
                 .unwrap(),
-            supplied
+            json!({"model":"deepseek-ocr","temperature":0.5,"extension":null})
         );
     }
 
