@@ -15,6 +15,7 @@ from litellm.proxy._types import (
     LiteLLM_ModelTable,
     LiteLLM_ProxyModelTable,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LitellmUserRoles,
     Member,
     ReconcileOutcome,
@@ -1571,6 +1572,128 @@ class TestTeamModelUpdate:
             mock_team_model_add.assert_called_once()
             # update_team (model_aliases write) must NOT be called in the new implementation
             mock_update_team.assert_not_called()
+
+    # Moving a row between teams registers its public name on the destination; the source must
+    # give the name up too, unless a sibling row there still backs it, or it keeps a grant to a
+    # name nothing of its own serves. A legacy row lists its name through a team alias rather
+    # than team_public_model_name; the alias is scrubbed and its key released the same way.
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "moved_row, source_backing, released",
+        [
+            ("named", "nothing", True),
+            ("named", "sibling row with the same public name", False),
+            ("legacy alias", "nothing", True),
+        ],
+    )
+    async def test_team_move_releases_the_public_name_from_the_source_team(self, moved_row, source_backing, released):
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        named = moved_row == "named"
+        moved = LiteLLM_ProxyModelTable(
+            model_id="m-moved",
+            model_name="model_name_team_a_uuid1",
+            litellm_params={"model": "azure/gpt-4o-mini"},
+            model_info={"id": "m-moved", "team_id": "team_a", **({"team_public_model_name": "shared-name"} if named else {})},
+            created_by="admin",
+            updated_by="admin",
+        )
+        sibling = MagicMock()
+        sibling.model_name = "model_name_team_a_uuid2"
+        sibling.model_info = {"team_id": "team_a", "team_public_model_name": "shared-name"}
+        alias_row = MagicMock()
+        alias_row.id = 1
+        alias_row.model_aliases = {"shared-name": "model_name_team_a_uuid1"}
+        alias_row.team.team_id = "team_a"
+
+        async def team_update(where, data, include=None):
+            return LiteLLM_TeamTable(team_id=where["team_id"], models=data.get("models", ["shared-name"]))
+
+        prisma = MagicMock()
+        prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=moved)
+        prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=moved)
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[sibling] if source_backing.startswith("sibling") else []
+        )
+        prisma.db.litellm_modeltable.find_many = AsyncMock(return_value=[] if named else [alias_row])
+        prisma.db.litellm_modeltable.update = AsyncMock()
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=LiteLLM_TeamTable(team_id="team_a", models=["shared-name"])
+        )
+        prisma.db.litellm_teamtable.update = AsyncMock(side_effect=team_update)
+        prisma.db.execute_raw = AsyncMock()
+        cache = UserApiKeyCache()
+        router = MagicMock(**{"get_model_ids.return_value": ["m-moved"], "model_name_to_deployment_indices": {}})
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: same
+            patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: same
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", None),  # test-quality-ok: same
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: same
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: same
+            patch(  # test-quality-ok: the reload needs a live router; the team list write is what is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+            ),
+        ):
+            await patch_model(
+                model_id="m-moved",
+                patch_data=updateDeployment(model_info=ModelInfo(team_id="team_b")),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        source_team = await cache.async_get_cache(key="team_id:team_a", model_type=LiteLLM_TeamTableCachedObj)
+        assert (source_team.models if source_team is not None else ["shared-name"]) == ([] if released else ["shared-name"])
+        assert prisma.db.litellm_modeltable.update.await_count == (0 if named else 1)
+
+    # The cleanup keeps a name only while a deployment of exactly that name is live; a wildcard
+    # or alias that would merely answer a call to it is not a grant the team should keep.
+    @pytest.mark.asyncio
+    async def test_cleanup_ignores_wildcards_that_would_match_the_released_name(self):
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+        from litellm.proxy.management_endpoints.model_management_endpoints import _remove_unbacked_team_models
+
+        released = Deployment(
+            model_name="model_name_team_a_uuid1",
+            litellm_params=LiteLLM_Params(model="anthropic/claude-haiku-4-5"),
+            model_info=ModelInfo(id="m-moved", team_id="team_a", team_public_model_name="anthropic/team-name"),
+        )
+        llm_router = Router(
+            model_list=[
+                {"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*", "api_key": "k"}},
+                {
+                    "model_name": "model_name_team_b_uuid1",
+                    "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "k"},
+                    "model_info": {"id": "m-moved", "team_id": "team_b", "team_public_model_name": "anthropic/team-name"},
+                },
+            ],
+            model_group_alias={"anthropic/team-name": "anthropic/*"},
+        )
+
+        async def update(where, data, include=None):
+            return LiteLLM_TeamTable(team_id="team_a", models=data["models"])
+
+        prisma = MagicMock()
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=LiteLLM_TeamTable(team_id="team_a", models=["anthropic/team-name"])
+        )
+        prisma.db.litellm_teamtable.update = AsyncMock(side_effect=update)
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_modeltable.find_many = AsyncMock(return_value=[])
+        cache = UserApiKeyCache()
+
+        await _remove_unbacked_team_models(
+            model_params=released,
+            prisma_client=prisma,
+            user_api_key_cache=cache,
+            proxy_logging_obj=None,
+            llm_router=llm_router,
+        )
+
+        cached_team = await cache.async_get_cache(key="team_id:team_a", model_type=LiteLLM_TeamTableCachedObj)
+        assert cached_team is not None and cached_team.models == []
 
     @pytest.mark.asyncio
     async def test_rename_preserves_old_name_when_siblings_exist(self):
