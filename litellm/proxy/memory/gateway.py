@@ -89,7 +89,6 @@ class GatewayMemoryLoop:
         self.last_response: Mapping[str, object] | None = None
         self.headers: Mapping[str, str] = MappingProxyType({})
         self.costs: tuple[float | None, ...] = ()
-        self.pending_results: tuple[Mapping[str, object], ...] = ()
 
     async def prepare(self) -> None:
         previous: Final = self.original.get("previous_response_id")
@@ -102,20 +101,26 @@ class GatewayMemoryLoop:
         )
         if isinstance(previous, str) and previous.startswith("resp_litellm_memory_") and previous_patch is None:
             raise HTTPException(status_code=404, detail="Memory response not found or expired")
+        if previous_patch is not None and previous_patch.input is None:
+            raise HTTPException(status_code=409, detail="Memory response history unavailable; start a new conversation")
         field: Final = "input" if self.route == "aresponses" else "messages"
         functions: Final = memory_functions(self.store.access)
         injected: Final = inject_server_tools(
             {  # mutable-ok: Native provider JSON containers.
-                **self.original,
+                **{
+                    key: value
+                    for key, value in self.original.items()
+                    if previous_patch is None or key not in ("previous_response_id", "_litellm_addressed_response_id")
+                },
                 field: [  # mutable-ok: Native provider JSON containers.
-                    *(previous_patch.pending_results if previous_patch else ()),
+                    *((previous_patch.input or ()) if previous_patch else ()),
                     *self.visible_input,
                 ],
                 **(
                     {  # mutable-ok: Native provider JSON containers.
-                        "previous_response_id": previous_patch.upstream_ids[-1]
+                        "previous_response_id": previous_patch.previous_response_id
                     }
-                    if previous_patch
+                    if previous_patch and previous_patch.previous_response_id
                     else {  # mutable-ok: Native provider JSON containers.
                     }
                 ),
@@ -258,11 +263,15 @@ class GatewayMemoryLoop:
         if self.continuations is None or self.original.get("store") is False:
             return
         response: Final = self.stream.response()
+        root_response: Final = self.data.get("previous_response_id")
         try:
             await self.continuations.save(
                 str(response["id"]),
                 MemoryContinuation(
-                    response=response, upstream_ids=self.upstream_ids, pending_results=self.pending_results
+                    response=response,
+                    upstream_ids=self.upstream_ids,
+                    input=transcript_items(self.data, self.route),
+                    previous_response_id=root_response if isinstance(root_response, str) else None,
                 ),
             )
         except Exception:
@@ -308,23 +317,10 @@ class GatewayMemoryLoop:
             [await execute_memory_tool(self.store, call, self.visible_input) for call in memory_calls]
         )
         if memory_calls:
-            self.pending_results = (
-                tuple(
-                    {  # mutable-ok: Native provider JSON containers.
-                        "type": "function_call_output",
-                        "call_id": call["id"],
-                        "output": json.dumps(dict(result)),
-                    }
-                    for call, result in zip(memory_calls, results)
-                )
-                if self.route == "aresponses"
-                else ()
-            )
             self.data = continue_server_tools(
                 self.data, self.route, response, memory_calls, tuple(dict(result) for result in results)
             )
         else:
-            self.pending_results = ()
             field: Final = "input" if self.route == "aresponses" else "messages"
             self.data = {  # mutable-ok: Native provider JSON containers.
                 **self.data,

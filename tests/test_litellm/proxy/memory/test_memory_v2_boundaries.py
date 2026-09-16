@@ -106,6 +106,7 @@ async def test_saved_response_reads_are_scoped_and_never_return_internal_input(
         permission_revision=access_for().continuation_revision,
         response={"id": "resp_litellm_memory_test", "output": [{"type": "message", "content": []}]},
         upstream_ids=("native=one",),
+        input=({"type": "function_call_output", "call_id": "private", "output": "Private memory content"},),
     )
     prisma_edge.db.litellm_memorycontinuation.find_first.return_value = (
         None if operation == "missing" else SimpleNamespace(payload=patch.model_dump())
@@ -1110,13 +1111,23 @@ async def test_rounds_share_trace_and_keep_live_auth_objects(prisma_edge: MagicM
 
 
 @pytest.mark.asyncio
-async def test_previous_response_uses_owned_upstream_and_pending_tool_outputs(prisma_edge: MagicMock) -> None:
+@pytest.mark.parametrize("root_response", (None, "native-before-memory"))
+async def test_previous_response_replays_complete_history_and_pending_client_tools(
+    prisma_edge: MagicMock, root_response: str | None
+) -> None:
     pending = {"type": "function_call_output", "call_id": "memory-call", "output": "Memory saved"}
+    history = (
+        {"role": "user", "content": "Read the file and recall its port"},
+        {"type": "function_call", "name": "litellm_memory_search", "call_id": "memory-call", "arguments": "{}"},
+        {"type": "function_call", "name": "read_file", "call_id": "client-call", "arguments": "{}"},
+        pending,
+    )
     patch = MemoryContinuation(
         permission_revision=access_for().continuation_revision,
         response={"id": "resp_litellm_memory_owned"},
         upstream_ids=("native-first", "native-last"),
-        pending_results=(pending,),
+        input=history,
+        previous_response_id=root_response,
     )
     prisma_edge.db.litellm_memorycontinuation.find_first.return_value = SimpleNamespace(payload=patch.model_dump())
     execute = AsyncMock(return_value=JSONResponse(provider_response("aresponses", "answer")))
@@ -1126,7 +1137,7 @@ async def test_previous_response_uses_owned_upstream_and_pending_tool_outputs(pr
         {
             "previous_response_id": "resp_litellm_memory_owned",
             "input": [{"type": "function_call_output", "call_id": "client-call", "output": "File contents"}],
-            "store": False,
+            "_litellm_addressed_response_id": "resp_litellm_memory_owned",
         },
         "aresponses",
         store(prisma_edge),
@@ -1135,9 +1146,41 @@ async def test_previous_response_uses_owned_upstream_and_pending_tool_outputs(pr
     async for _ in loop.run():
         pass
     body = execute.call_args.args[1]
-    assert body["previous_response_id"] == "native-last"
-    assert pending in body["input"]
-    assert any(item.get("call_id") == "client-call" for item in body["input"])
+    assert body.get("previous_response_id") == root_response
+    assert "_litellm_addressed_response_id" not in body
+    assert body["input"] == [
+        *history,
+        {"type": "function_call_output", "call_id": "client-call", "output": "File contents"},
+    ]
+    saved = json.loads(prisma_edge.db.litellm_memorycontinuation.upsert.call_args.kwargs["data"]["create"]["payload"])
+    assert saved["input"] == [*body["input"], *provider_response("aresponses", "answer")["output"]]
+    assert saved["previous_response_id"] == root_response
+    assert loop.visible_input == (
+        {"type": "function_call_output", "call_id": "client-call", "output": "File contents"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_response_without_history_fails_before_calling_provider(prisma_edge: MagicMock) -> None:
+    prisma_edge.db.litellm_memorycontinuation.find_first.return_value = SimpleNamespace(
+        payload=MemoryContinuation(
+            permission_revision=access_for().continuation_revision, upstream_ids=("native-last",)
+        ).model_dump()
+    )
+    execute = AsyncMock()
+    loop = GatewayMemoryLoop(
+        execute,
+        request(),
+        {"previous_response_id": "resp_litellm_memory_old", "input": "Continue"},
+        "aresponses",
+        store(prisma_edge),
+        UserAPIKeyAuth(),
+    )
+    with pytest.raises(HTTPException) as error:
+        await loop.prepare()
+    assert error.value.status_code == 409
+    assert "start a new conversation" in error.value.detail
+    execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio

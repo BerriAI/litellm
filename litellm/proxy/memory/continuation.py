@@ -48,7 +48,8 @@ class MemoryContinuation(BaseModel):
 
     response: Mapping[str, object] | None = None
     upstream_ids: tuple[str, ...] = ()
-    pending_results: tuple[Mapping[str, object], ...] = ()
+    input: tuple[Mapping[str, object], ...] | None = None
+    previous_response_id: str | None = None
     permission_revision: str | None = None
 
 
