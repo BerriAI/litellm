@@ -13653,6 +13653,28 @@ class TestProtectedCredentialPreparation:
         assert await client.discovery_auth_fingerprint()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("static_headers,accepted", [
+        ({"apikey": "static-key"}, True),
+        ({"apikey": ""}, False),
+        ({"X-Tenant": "tenant"}, True),
+    ])
+    async def test_api_key_carried_by_static_header_passes_fail_closed_check(
+        self, static_headers: dict[str, str], accepted: bool
+    ) -> None:
+        server: Final = MCPServer(
+            server_id="static-slot", name="static-slot", url="https://upstream.example/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.api_key, static_headers=static_headers,
+        )
+        if not accepted:
+            with pytest.raises(HTTPException) as exc:
+                await MCPServerManager()._create_mcp_client(server, extra_headers=dict(static_headers))
+            assert exc.value.status_code == 500
+            return
+        client: Final = await MCPServerManager()._create_mcp_client(server, extra_headers=dict(static_headers))
+        request: Final = await client.prepare_request_auth()
+        assert all(request.headers[name] == value for name, value in static_headers.items())
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("static,forwarded,caller", [
         ({"X-API-Key": "static"}, {"x-api-key": "forwarded"}, None),
         ({}, {"X-API-Key": "forwarded"}, None),

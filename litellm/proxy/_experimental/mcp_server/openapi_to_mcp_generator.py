@@ -512,7 +512,7 @@ def create_tool_function(
             )
             from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok
 
-            match validate_static_credential(auth_type, effective_headers, upstream_token_header):
+            match validate_static_credential(auth_type, effective_headers, upstream_token_header, headers or ()):
                 case Error(error):
                     raise_public(error)
                 case Ok():
