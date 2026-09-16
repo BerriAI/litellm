@@ -383,3 +383,30 @@ class TestDeleteDeploymentKeepsConfigModelsOnEmptyConfigRead:
         assert "model-a-id" in model_ids
         assert "model-b-id" not in model_ids
         assert result == frozenset({"model-a-id"})
+
+    @pytest.mark.asyncio
+    async def test_delete_deployment_evicts_config_models_on_explicit_empty_model_list(self, tmp_path):
+        config_file_path = str(tmp_path / "config.yaml")
+        (tmp_path / "config.yaml").write_text("model_list: []\n")
+
+        router = self._router(
+            [
+                {
+                    "model_name": "config-model",
+                    "litellm_params": {"model": "gpt-4o-mini"},
+                    "model_info": {"id": "config-model-1"},
+                },
+            ]
+        )
+        proxy_config = ProxyConfig()
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: reads module global
+            patch(  # test-quality-ok: reads module global
+                "litellm.proxy.proxy_server.user_config_file_path",
+                config_file_path,
+            ),
+        ):
+            result = await proxy_config._delete_deployment(db_models=[])
+
+        assert router.get_model_ids() == []
+        assert result == frozenset()

@@ -6498,7 +6498,7 @@ class ProxyConfig:
                 if (deployment := llm_router.get_deployment(model_id=model_id)) is not None
                 and deployment.model_info.db_model is False
             )
-            if not model_list
+            if model_list is None
             else frozenset()
         )
         if kept_config_ids:
