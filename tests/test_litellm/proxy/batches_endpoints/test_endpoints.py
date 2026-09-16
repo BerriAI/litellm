@@ -51,6 +51,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
+from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CredentialItem, LiteLLMBatch
 
 from fastapi import Response
@@ -73,6 +74,17 @@ CREDS: Dict[str, Dict[str, str]] = {
         "api_base": "https://vertex.test",
         "model": "vertex_ai/gemini-2.0",
     },
+    "bedrock-batch-claude": {
+        "custom_llm_provider": "bedrock",
+        "api_key": "sk-aws",
+        "model": "bedrock/us.anthropic.claude-sonnet-5",
+    },
+}
+
+# The deployment's provider model (`litellm_params.model`) behind each public
+# group name, as returned by Router.get_deployment_by_model_group_name.
+DeploymentModelByGroup: Dict[str, str] = {
+    "bedrock-batch-claude": "bedrock/us.anthropic.claude-sonnet-5",
 }
 
 # A real model-encoded file id: decodes to "azure/gpt-4o", strips to "file-original123".
@@ -165,6 +177,16 @@ def harness():
     router = MagicMock(spec=Router)
     router.acreate_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
+
+    def _deployment_model_lookup(model_group_name: str):
+        # Mirror the O(1) group-index lookup: returns a Deployment whose
+        # litellm_params.model is the provider model id, else None.
+        provider_model = DeploymentModelByGroup.get(model_group_name)
+        if provider_model is None:
+            return None
+        return Deployment(model_name=model_group_name, litellm_params=LiteLLM_Params(model=provider_model))
+
+    router.get_deployment_by_model_group_name = MagicMock(side_effect=_deployment_model_lookup)
 
     read_body = AsyncMock(side_effect=lambda request: body_holder["body"])
     pre_call = AsyncMock(side_effect=lambda **kw: (body_holder["body"], MagicMock()))
@@ -316,6 +338,29 @@ async def test_create__model_encoded_file_id__resolver_gets_decoded_model(harnes
     await call_create(harness)
 
     harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+
+
+@pytest.mark.asyncio
+async def test_create__bedrock_forwards_deployment_model_not_alias(harness):
+    """Regression guard: Bedrock CreateModelInvocationJob needs the deployment's
+    real model id (us.anthropic.claude-sonnet-5), not the public alias
+    (bedrock-batch-claude). litellm.batches.main.create_batch re-derives `model`
+    into modelId, so the proxy must forward the deployment id."""
+    BEDROCK_FILE_ID = encode_file_id_with_model("file-original123", "bedrock-batch-claude", id_type="file")
+    set_body(
+        harness,
+        {
+            "input_file_id": BEDROCK_FILE_ID,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    await call_create(harness)
+
+    harness.creds_resolver.assert_called_once_with(model_id="bedrock-batch-claude")
+    assert harness.acreate_kwargs()["model"] == "bedrock/us.anthropic.claude-sonnet-5"
+    assert harness.acreate_kwargs()["custom_llm_provider"] == "bedrock"
 
 
 # =========================================================================== #

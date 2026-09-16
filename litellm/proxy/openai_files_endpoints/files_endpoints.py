@@ -28,6 +28,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
+from litellm.utils import get_llm_provider
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -47,6 +48,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     encode_file_id_with_model,
     extract_file_creation_params,
     get_credentials_for_model,
+    get_deployment_provider_model_name,
     handle_model_based_routing,
     prepare_data_with_credentials,
     validate_managed_files_requirement,
@@ -54,6 +56,10 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
+from litellm.router_utils.batch_utils import (
+    replace_model_in_jsonl,
+    should_replace_model_in_jsonl,
+)
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
     FileExpiresAfter,
@@ -196,6 +202,25 @@ async def route_create_file(
             data=_create_file_request,  # type: ignore
             credentials=credentials,
         )
+
+        # Rewrite the JSONL body models to the deployment's provider model,
+        # exactly as Router._acreate_file does for the load-balanced path. A
+        # public model name left in body.model is not a provider model id:
+        # Bedrock can't detect the invoke provider from it (records degrade to
+        # a passthrough modelInput it rejects) and leaks it into the S3 object
+        # key, while Azure rejects the batch outright. The credentials dict
+        # never carries `model`, so resolve it from the router and skip the
+        # rewrite when the model resolves to no deployment.
+        if should_replace_model_in_jsonl(purpose=purpose):
+            deployment_model: Final = get_deployment_provider_model_name(llm_router=llm_router, model_id=model)
+            if deployment_model is not None:
+                # Strip the provider prefix (bedrock/...) exactly as
+                # Router._acreate_file does before writing into body.model.
+                stripped_model, _, _, _ = get_llm_provider(model=deployment_model, custom_llm_provider=None)
+                _create_file_request["file"] = replace_model_in_jsonl(
+                    file_content=_create_file_request["file"],
+                    new_model_name=stripped_model,
+                )
 
         # Create the file with model credentials
         response = await litellm.acreate_file(

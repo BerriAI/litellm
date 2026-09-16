@@ -1,8 +1,9 @@
+import io
 import json
 import os
 import sys
 from typing import List
-from unittest.mock import ANY, AsyncMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 import respx
@@ -17,14 +18,14 @@ sys.path.insert(
 import litellm
 from litellm import Router
 from litellm.files.types import FileContentStreamingResult
-from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
 from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
     FileContentStreamingHandler,
 )
 from litellm.proxy.proxy_server import app
-from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIFileObject
+from litellm.types.llms.openai import CreateFileRequest, HttpxBinaryResponseContent, OpenAIFileObject
 
 client = TestClient(app)
 from litellm.caching.caching import DualCache
@@ -3051,3 +3052,96 @@ def test_list_files_key_allowed_openai_model_still_resolves_team_credentials(
         mocker, monkeypatch, _team_openai_plus_global_anthropic_router(), ["team-gpt"]
     )
     assert captured_kwargs.get("api_key") == "team-openai-key"
+
+
+@pytest.mark.asyncio
+async def test_route_create_file__batch_jsonl_model_rewritten_to_deployment(mocker, monkeypatch):
+    """
+    The direct (model=) upload branch must rewrite each JSONL record's body.model
+    from the public alias to the deployment's real provider model id, mirroring
+    Router._acreate_file. Without it, Bedrock can't detect the invoke provider
+    (records degrade to a passthrough modelInput it rejects) and the alias leaks
+    into the S3 object key; Azure rejects the batch outright.
+    """
+    from litellm.proxy.openai_files_endpoints import files_endpoints as fe
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-claude",
+                "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5", "api_key": "sk-aws"},
+                "model_info": {"id": "bedrock-batch-claude-id"},
+            },
+        ]
+    )
+
+    content = (
+        b'{"custom_id":"r-0","method":"POST","url":"/v1/chat/completions",'
+        b'"body":{"model":"bedrock-batch-claude","messages":[{"role":"user","content":"hi"}]}}\n'
+    )
+    file_handle = io.BytesIO(content)  # seekable, satisfies replace_model_in_jsonl streaming path
+
+    # Patch acreate_file to capture (not post) the rewritten request.
+    async def fake_acreate_file(**_kwargs):
+        return OpenAIFileObject(
+            id="file-1",
+            object="file",
+            bytes=0,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    mock_file = AsyncMock(side_effect=fake_acreate_file)
+    mocker.patch("litellm.acreate_file", mock_file)
+
+    request_obj: CreateFileRequest = {
+        "file": ("batch.jsonl", file_handle, "application/jsonl"),
+        "purpose": "batch",
+    }
+    logging = MagicMock(spec=ProxyLogging)
+    logging.get_proxy_hook = MagicMock(return_value=None)
+
+    await fe.route_create_file(
+        llm_router=router,
+        _create_file_request=request_obj,
+        purpose="batch",
+        proxy_logging_obj=logging,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN),
+        target_model_names_list=[],
+        is_router_model=False,
+        router_model=None,
+        custom_llm_provider="bedrock",
+        model="bedrock-batch-claude",
+    )
+
+    # The forwarded file body must carry the deployment's real model id.
+    sent_file = mock_file.call_args.kwargs["file"]
+    sent_handle = sent_file[1] if isinstance(sent_file, tuple) else sent_file
+    sent_handle.seek(0)
+    sent_lines = [json.loads(line) for line in sent_handle.read().decode("utf-8").splitlines() if line.strip()]
+    assert sent_lines[0]["body"]["model"] == "us.anthropic.claude-sonnet-5"
+
+    # Non-batch purposes must not rewrite the body.
+    request_obj2: CreateFileRequest = {
+        "file": ("data.jsonl", io.BytesIO(content), "application/jsonl"),
+        "purpose": "fine-tune",
+    }
+    await fe.route_create_file(
+        llm_router=router,
+        _create_file_request=request_obj2,
+        purpose="fine-tune",
+        proxy_logging_obj=logging,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN),
+        target_model_names_list=[],
+        is_router_model=False,
+        router_model=None,
+        custom_llm_provider="bedrock",
+        model="bedrock-batch-claude",
+    )
+    sent_file2 = mock_file.call_args.kwargs["file"]
+    sent_handle2 = sent_file2[1] if isinstance(sent_file2, tuple) else sent_file2
+    sent_handle2.seek(0)
+    sent_lines2 = [json.loads(line) for line in sent_handle2.read().decode("utf-8").splitlines() if line.strip()]
+    assert sent_lines2[0]["body"]["model"] == "bedrock-batch-claude"

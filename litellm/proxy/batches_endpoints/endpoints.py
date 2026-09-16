@@ -30,6 +30,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_batch_from_database,
     get_batch_id_from_unified_batch_id,
     get_credentials_for_model,
+    get_deployment_provider_model_name,
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     get_original_file_id,
@@ -198,6 +199,18 @@ async def create_batch(
                 data=_create_batch_data,  # type: ignore
                 credentials=credentials,
             )
+            # Bedrock dispatches on `model` at provider-config load
+            # (litellm.batches.main.create_batch re-derives it via
+            # get_llm_provider); forward the deployment's real model id so
+            # CreateModelInvocationJob gets modelId, not the public alias. The
+            # credentials dict never carries `model` (excluded from
+            # CredentialLiteLLMParams), so resolve it from the router. Leave the
+            # caller-supplied model untouched when it resolves to no deployment.
+            deployment_model: Final = get_deployment_provider_model_name(
+                llm_router=llm_router, model_id=model_from_file_id
+            )
+            if deployment_model is not None:
+                _create_batch_data["model"] = deployment_model
 
             # Create batch using model credentials
             response = await litellm.acreate_batch(
@@ -287,6 +300,14 @@ async def create_batch(
                     data=_create_batch_data,  # type: ignore
                     credentials=credentials,
                 )
+                # Forward the deployment's real model id (not the public alias):
+                # Bedrock dispatches on `model` at provider-config load. Leave the
+                # caller-supplied model untouched when it resolves to no deployment.
+                deployment_model: Final = get_deployment_provider_model_name(
+                    llm_router=llm_router, model_id=model_param
+                )
+                if deployment_model is not None:
+                    _create_batch_data["model"] = deployment_model
 
                 # Create batch using model credentials
                 response = await litellm.acreate_batch(

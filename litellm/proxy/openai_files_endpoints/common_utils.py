@@ -293,6 +293,23 @@ def get_credentials_for_model(
     return credentials
 
 
+def get_deployment_provider_model_name(llm_router: Optional["Router"], model_id: str) -> str | None:
+    """
+    The provider model id (``litellm_params.model``) behind a public model name,
+    resolved O(1) via the model group index. ``None`` when the router is absent
+    or the name matches no deployment group.
+
+    Credential lookups deliberately never carry ``model`` (it is excluded from
+    ``CredentialLiteLLMParams``), but Bedrock batch creation and the JSONL body
+    rewrite need the real provider model id (used as ``modelId`` and for invoke
+    provider detection), not the public alias the request was made with.
+    """
+    deployment: Final = (
+        llm_router.get_deployment_by_model_group_name(model_group_name=model_id) if llm_router is not None else None
+    )
+    return None if deployment is None else deployment.litellm_params.model
+
+
 def get_team_provider_credentials(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
