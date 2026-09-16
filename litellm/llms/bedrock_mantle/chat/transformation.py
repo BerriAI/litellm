@@ -117,7 +117,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             )
             if supported and param not in base_params
         )
-        return [*base_params, *extra_params]
+        return [*base_params, *extra_params]  # mutable-ok: fresh list required by the inherited signature
 
     def _supports_reasoning(self, model: str) -> bool:
         try:
