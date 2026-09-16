@@ -198,7 +198,8 @@ const openModal = async (props: Partial<React.ComponentProps<typeof CreateKey>> 
   return view;
 };
 
-const userSearchInput = (): Promise<HTMLElement> => screen.findByPlaceholderText("Type email to search for users");
+const userSearchInput = (): Promise<HTMLElement> =>
+  screen.findByPlaceholderText("Type email or user ID to search for users");
 
 const openSection = async (name: RegExp) => {
   await userEvent.click(await screen.findByRole("button", { name }));
@@ -612,7 +613,7 @@ describe("CreateKey", () => {
 
     it("mounts the user search control only once Another User is chosen", async () => {
       await openModal();
-      expect(screen.queryByPlaceholderText("Type email to search for users")).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("Type email or user ID to search for users")).not.toBeInTheDocument();
 
       await userEvent.click(screen.getByRole("radio", { name: "Another User" }));
 
@@ -899,18 +900,18 @@ describe("CreateKey", () => {
 
         expect(vi.mocked(userFilterUICall)).toHaveBeenCalledTimes(1);
         const params = vi.mocked(userFilterUICall).mock.calls[0][1] as URLSearchParams;
-        expect(params.get("user_email")).toBe("alice");
+        expect(params.get("search")).toBe("alice");
       } finally {
         vi.useRealTimers();
       }
     });
 
     it("keeps the current search's users when an abandoned search answers last", async () => {
-      const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
+      const answers = new Map<string, (users: { user_id: string; user_email: string | null }[]) => void>();
       vi.mocked(userFilterUICall).mockImplementation(
         (_accessToken, params) =>
           new Promise((resolve) => {
-            answers.set(params.get("user_email") ?? "", resolve);
+            answers.set(params.get("search") ?? "", resolve);
           }) as never,
       );
 
@@ -937,12 +938,36 @@ describe("CreateKey", () => {
       expect(screen.getByRole("option", { name: "alice.smith@example.com (u-smith)" })).toBeInTheDocument();
     });
 
-    it("stops searching once the box is cleared and the abandoned search answers", async () => {
-      const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
+    it("labels a user with no email by their user id", async () => {
+      const answers = new Map<string, (users: { user_id: string; user_email: string | null }[]) => void>();
       vi.mocked(userFilterUICall).mockImplementation(
         (_accessToken, params) =>
           new Promise((resolve) => {
-            answers.set(params.get("user_email") ?? "", resolve);
+            answers.set(params.get("search") ?? "", resolve);
+          }) as never,
+      );
+
+      const user = userEvent.setup();
+      renderCreateKey({ autoOpenCreate: true, prefillData: { owned_by: "another_user" } });
+      const search = await userSearchInput();
+
+      await user.type(search, "svc");
+      await waitFor(() => expect(answers.has("svc")).toBe(true), { timeout: 3000 });
+
+      await act(async () => {
+        answers.get("svc")?.([{ user_id: "svc-bot", user_email: null }]);
+      });
+
+      expect(await screen.findByRole("option", { name: "svc-bot" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /null/ })).not.toBeInTheDocument();
+    });
+
+    it("stops searching once the box is cleared and the abandoned search answers", async () => {
+      const answers = new Map<string, (users: { user_id: string; user_email: string | null }[]) => void>();
+      vi.mocked(userFilterUICall).mockImplementation(
+        (_accessToken, params) =>
+          new Promise((resolve) => {
+            answers.set(params.get("search") ?? "", resolve);
           }) as never,
       );
 
@@ -966,11 +991,11 @@ describe("CreateKey", () => {
     });
 
     it("keeps searching while a newer search is still in flight", async () => {
-      const answers = new Map<string, (users: { user_id: string; user_email: string }[]) => void>();
+      const answers = new Map<string, (users: { user_id: string; user_email: string | null }[]) => void>();
       vi.mocked(userFilterUICall).mockImplementation(
         (_accessToken, params) =>
           new Promise((resolve) => {
-            answers.set(params.get("user_email") ?? "", resolve);
+            answers.set(params.get("search") ?? "", resolve);
           }) as never,
       );
 
@@ -1000,12 +1025,12 @@ describe("CreateKey", () => {
     it("only warns about a failed search when it is the one the box is waiting on", async () => {
       const answers = new Map<
         string,
-        { resolve: (users: { user_id: string; user_email: string }[]) => void; reject: (error: Error) => void }
+        { resolve: (users: { user_id: string; user_email: string | null }[]) => void; reject: (error: Error) => void }
       >();
       vi.mocked(userFilterUICall).mockImplementation(
         (_accessToken, params) =>
           new Promise((resolve, reject) => {
-            answers.set(params.get("user_email") ?? "", { resolve, reject });
+            answers.set(params.get("search") ?? "", { resolve, reject });
           }) as never,
       );
 
@@ -1052,9 +1077,7 @@ describe("CreateKey", () => {
       ];
       vi.mocked(userFilterUICall).mockImplementation(
         (_accessToken, params) =>
-          Promise.resolve(
-            directory.filter((entry) => entry.user_email.includes(params.get("user_email") ?? "")),
-          ) as never,
+          Promise.resolve(directory.filter((entry) => entry.user_email.includes(params.get("search") ?? ""))) as never,
       );
 
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
