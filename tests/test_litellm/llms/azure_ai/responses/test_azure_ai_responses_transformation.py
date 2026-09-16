@@ -255,6 +255,24 @@ async def test_aresponses_sends_reasoning_and_tools_to_native_endpoint(model, ap
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_aresponses_catalog_name_remapped_to_azure_sends_bare_deployment_name(monkeypatch):
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://res.openai.azure.com")
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-5.4-nano"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/gpt-5.4-nano",
+        input="What is the weather in SF?",
+        api_base="https://res.openai.azure.com",
+        api_key="fake-key",
+    )
+
+    assert json.loads(route.calls.last.request.content)["model"] == "gpt-5.4-nano"
+
+
+@pytest.mark.asyncio
+@respx.mock
 @pytest.mark.parametrize("model,api_base,expected_url,expected_model", NATIVE_RESPONSES_CASES)
 async def test_router_aresponses_sends_bare_deployment_name(model, api_base, expected_url, expected_model):
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
