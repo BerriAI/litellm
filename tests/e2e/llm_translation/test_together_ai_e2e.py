@@ -744,6 +744,7 @@ class TestTogetherMessages:
         assert "22" in text, f"the model never saw the tool result: {response.content}"
 
     @pytest.mark.covers("llm.messages.together_ai.basic.stream.works")
+    @pytest.mark.provider_live
     def test_streams_text_deltas(
         self, client: PassthroughClient, resources: ResourceManager, reasoning_tool_backend: str
     ) -> None:

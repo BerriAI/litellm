@@ -60,6 +60,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     NewTeamRequest,
     ProxyErrorTypes,
     ProxyException,
@@ -71,6 +72,7 @@ from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
     should_throttle_budget_exceeded,
 )
+from litellm.proxy.auth.model_access_denied import model_access_denied_client_message
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
@@ -4170,8 +4172,13 @@ def _can_object_call_model(
         ):
             return True
 
-    raise ProxyException(
-        message=f"{object_type} not allowed to access model. This {object_type} can only access models={models}. Tried to access {model}",
+    internal_message: Final = (
+        f"{object_type} not allowed to access model. This {object_type} can only access models={models}. "
+        f"Tried to access {model}"
+    )
+    raise ModelAccessDeniedProxyException(
+        message=model_access_denied_client_message(model=model),
+        internal_message=internal_message,
         type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
         param="model",
         code=status.HTTP_403_FORBIDDEN,
@@ -4796,8 +4803,13 @@ async def can_user_call_model(
         return True
 
     if SpecialModelNames.no_default_models.value in user_object.models:
-        raise ProxyException(
-            message=f"User not allowed to access model. No default model access, only team models allowed. Tried to access {model}",
+        internal_message: Final = (
+            f"User not allowed to access model. No default model access, only team models allowed. "
+            f"Tried to access {model}"
+        )
+        raise ModelAccessDeniedProxyException(
+            message=model_access_denied_client_message(model=model),
+            internal_message=internal_message,
             type=ProxyErrorTypes.key_model_access_denied,
             param="model",
             code=status.HTTP_403_FORBIDDEN,
@@ -5398,8 +5410,13 @@ async def _check_team_member_model_access(
             team_id=team_object.team_id,
         )
     except ProxyException:
-        raise ProxyException(
-            message=f"Team member not allowed to access model. User={valid_token.user_id}, Team={team_object.team_id}, Model={model}. Allowed member models = {member_allowed_models}",
+        internal_message: Final = (
+            f"Team member not allowed to access model. User={valid_token.user_id}, Team={team_object.team_id}, "
+            f"Model={model}. Allowed member models = {member_allowed_models}"
+        )
+        raise ModelAccessDeniedProxyException(
+            message=model_access_denied_client_message(model=model),
+            internal_message=internal_message,
             type=ProxyErrorTypes.team_model_access_denied,
             param="model",
             code=status.HTTP_403_FORBIDDEN,
