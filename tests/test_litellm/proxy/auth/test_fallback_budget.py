@@ -5,6 +5,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.fallback_budget import (
     RouterFallbackBudgetCheck,
     is_token_within_budget_for_model,
+    router_fallback_budget_check,
 )
 
 FREE_MODEL = {
@@ -182,3 +183,20 @@ async def test_router_without_a_budget_check_attempts_every_fallback():
     over = {"metadata": {"user_api_key_auth": _token(user_spend=1900.0, user_max_budget=50.0)}}
 
     assert await _is_fallback_target_within_budget(router, "paid-model", "free-model", over) is True
+
+
+@pytest.mark.asyncio
+async def test_enforcement_is_on_by_default_and_opt_out_restores_the_leak(monkeypatch):
+    """
+    Leaving the paid fallback unguarded is the budget bypass this module exists to close, so an
+    unconfigured proxy has to enforce. `enforce_fallback_budget: false` is the deliberate opt-out.
+    """
+    from litellm.proxy import proxy_server
+
+    over = {"metadata": {"user_api_key_auth": _token(user_spend=1900.0, user_max_budget=50.0)}}
+
+    monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
+    assert await router_fallback_budget_check(model="paid-model", request_kwargs=over, llm_router=_router()) is False
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"enforce_fallback_budget": False}, raising=False)
+    assert await router_fallback_budget_check(model="paid-model", request_kwargs=over, llm_router=_router()) is True
