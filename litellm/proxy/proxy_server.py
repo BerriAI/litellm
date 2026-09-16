@@ -390,7 +390,11 @@ from litellm.proxy.common_utils.model_listing_utils import (
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
-from litellm.proxy.common_utils.openai_error_payload import litellm_call_id_headers
+from litellm.proxy.common_utils.openai_error_payload import (
+    LITELLM_CALL_ID_HEADER,
+    litellm_call_id_headers,
+    with_litellm_call_id,
+)
 from litellm.proxy.common_utils.periodic_reload_schedule import (
     MODEL_COST_MAP_RELOAD_PARAM_NAME,
     clear_reload_interval,
@@ -11530,7 +11534,7 @@ async def moderations(
         )
         log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, ProxyException):
-            raise
+            raise with_litellm_call_id(e, litellm_call_id)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
@@ -11678,8 +11682,14 @@ async def audio_speech(
             request_data=data,
         )
         log_llm_api_exception(e, litellm_call_id)
-        if isinstance(e, (ProxyException, HTTPException)):
-            raise e
+        if isinstance(e, ProxyException):
+            raise with_litellm_call_id(e, litellm_call_id)
+        if isinstance(e, HTTPException):
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=e.detail,
+                headers={LITELLM_CALL_ID_HEADER: litellm_call_id, **(e.headers or {})},
+            )
         raise ProxyException(
             message=getattr(e, "message", f"{e}"),
             type=getattr(e, "type", "None"),

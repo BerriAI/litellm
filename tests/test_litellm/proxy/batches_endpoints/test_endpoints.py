@@ -1976,6 +1976,24 @@ async def test_list__exception_calls_failure_hook(list_harness):
     assert list_harness.logging.post_call_failure_hook.call_args.kwargs["original_exception"].args[0] == "provider boom"
 
 
+@pytest.mark.asyncio
+async def test_list__failure_hook_and_response_share_the_request_litellm_call_id(list_harness):
+    call_id = "lit7836-list-batches-call-id"
+    list_harness.pre_call.side_effect = lambda **kw: (
+        {**list_harness.body["body"], "litellm_call_id": call_id},
+        MagicMock(),
+    )
+    list_harness.litellm_alist.side_effect = ValueError("provider boom")
+
+    with pytest.raises(ProxyException) as raised:
+        await call_list(list_harness, after="batch-0", limit=5)
+
+    failure_request_data = list_harness.logging.post_call_failure_hook.call_args.kwargs["request_data"]
+    assert failure_request_data["litellm_call_id"] == call_id
+    assert (failure_request_data["after"], failure_request_data["limit"]) == ("batch-0", 5)
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+
+
 # =========================================================================== #
 #                                                                             #
 #   POST /v1/batches/{batch_id}/cancel  -  cancel_batch routing-contract tests #

@@ -337,6 +337,36 @@ class TestErrorLogCarriesCallId:
         assert call_id in record.getMessage()
 
     @pytest.mark.asyncio
+    async def test_messages_already_shaped_failure_answers_with_the_call_id(self):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+
+        call_id = "messages-call-7836-shaped"
+
+        async def fake_process(self, **kwargs):
+            self.data = {**self.data, "litellm_call_id": call_id}
+            raise ProxyException(message="budget exceeded", type=ProxyErrorTypes.budget_exceeded, param="key", code=402)
+
+        request = MagicMock()
+        request.headers = {}
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),  # test-quality-ok: the proxy shaped failure happens inside this call; the test targets the endpoint's except block
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert response.status_code == 402
+        assert response.headers["x-litellm-call-id"] == call_id
+
+    @pytest.mark.asyncio
     async def test_count_tokens_failure_log_carries_callers_call_id(self, caplog: pytest.LogCaptureFixture):
         from fastapi import HTTPException
 

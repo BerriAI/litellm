@@ -20,7 +20,7 @@ import fastapi.routing
 import httpx
 import pytest
 import yaml
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
@@ -32,7 +32,7 @@ from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._types import LitellmUserRoles, TokenCountRequest, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyErrorTypes, ProxyException, TokenCountRequest, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, initialize
@@ -12968,6 +12968,73 @@ async def test_moderations_failure_log_carries_the_callers_litellm_call_id(caplo
     record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
     assert record.litellm_call_id == call_id
     assert call_id in record.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_moderations_already_shaped_failure_answers_with_the_callers_litellm_call_id():
+    """LIT-7836: a ProxyException raised inside /v1/moderations is re-raised unwrapped but still
+    answers with the caller's x-litellm-call-id so the client can join it to the error log."""
+    call_id = "moderations-call-7836-shaped"
+    exc = ProxyException(message="budget exceeded", type=ProxyErrorTypes.budget_exceeded, param="key", code=402)
+
+    request = MagicMock()
+    request.headers = {"x-litellm-call-id": call_id}
+    request.body = AsyncMock(return_value=b'{"input": "hi"}')
+    fake_logging = MagicMock()
+    fake_logging.post_call_failure_hook = AsyncMock()
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
+        pytest.raises(ProxyException) as raised,
+    ):
+        await proxy_server_module.moderations(
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", spend=0.0),
+        )
+
+    assert raised.value is exc
+    assert raised.value.code == "402"
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        HTTPException(status_code=401, detail="bad key"),
+        ProxyException(message="budget exceeded", type=ProxyErrorTypes.budget_exceeded, param="key", code=402),
+    ],
+    ids=["http_exception", "proxy_exception"],
+)
+async def test_audio_speech_already_shaped_failure_answers_with_the_callers_litellm_call_id(exc: Exception):
+    """LIT-7836: /v1/audio/speech re-raises HTTP and proxy shaped failures unchanged, and they must
+    still answer with the caller's x-litellm-call-id."""
+    call_id = "speech-call-7836-shaped"
+
+    request = MagicMock()
+    request.headers = {"x-litellm-call-id": call_id}
+    request.body = AsyncMock(return_value=b'{"model": "tts-1", "input": "hi", "voice": "alloy"}')
+    fake_logging = MagicMock()
+    fake_logging.post_call_failure_hook = AsyncMock()
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
+        pytest.raises(type(exc)) as raised,
+    ):
+        await proxy_server_module.audio_speech(
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", spend=0.0),
+        )
+
+    if isinstance(exc, HTTPException):
+        assert (raised.value.status_code, raised.value.detail) == (401, "bad key")
+    else:
+        assert raised.value is exc
+    assert raised.value.headers["x-litellm-call-id"] == call_id
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_param,
     openai_error_type,
+    with_litellm_call_id,
 )
 from litellm.types.utils import TokenCountResponse
 
@@ -222,7 +223,9 @@ async def anthropic_response(
         log_llm_api_exception(e, base_llm_response_processor.litellm_call_id)
 
         if isinstance(e, ProxyException):
-            return _anthropic_error_json_response(e, request)
+            return _anthropic_error_json_response(
+                with_litellm_call_id(e, base_llm_response_processor.litellm_call_id), request
+            )
 
         # Extract model_id from request metadata (same as success path)
         litellm_metadata: Final = data.get("litellm_metadata", {}) or {}
