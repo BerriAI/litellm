@@ -1817,6 +1817,9 @@ if TYPE_CHECKING:
     from .llms.azure.responses.o_series_transformation import (
         AzureOpenAIOSeriesResponsesAPIConfig as AzureOpenAIOSeriesResponsesAPIConfig,
     )
+    from .llms.azure_ai.responses.transformation import (
+        AzureAIResponsesAPIConfig as AzureAIResponsesAPIConfig,
+    )
     from .llms.xai.responses.transformation import (
         XAIResponsesAPIConfig as XAIResponsesAPIConfig,
     )

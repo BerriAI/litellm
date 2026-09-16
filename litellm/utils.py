@@ -8746,6 +8746,7 @@ class ProviderConfigManager:
     def get_provider_responses_api_config(
         provider: LlmProviders | str,
         model: str | None = None,
+        api_base: str | None = None,
     ) -> BaseResponsesAPIConfig | None:
         from litellm.llms.openai_like.dynamic_config import (
             create_responses_config_class,
@@ -8767,7 +8768,7 @@ class ProviderConfigManager:
                 pass
 
         # Check Python classes first (custom overrides take priority)
-        result: Final = ProviderConfigManager._get_python_responses_api_config(provider_enum, model)
+        result: Final = ProviderConfigManager._get_python_responses_api_config(provider_enum, model, api_base)
         if result is not None:
             return result
 
@@ -8783,6 +8784,7 @@ class ProviderConfigManager:
     def _get_python_responses_api_config(
         provider: LlmProviders | None,
         model: str | None = None,
+        api_base: str | None = None,
     ) -> BaseResponsesAPIConfig | None:
         """Check for Python-class-based responses API configs (custom overrides)."""
         if provider is None:
@@ -8801,6 +8803,14 @@ class ProviderConfigManager:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
                 return litellm.AzureOpenAIResponsesAPIConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.common_utils import (
+                azure_ai_supports_native_responses,
+            )
+
+            if azure_ai_supports_native_responses(model, api_base):
+                return litellm.AzureAIResponsesAPIConfig()
+            return None
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
