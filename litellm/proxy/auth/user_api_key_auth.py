@@ -2571,6 +2571,13 @@ def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseExc
     return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
 
 
+def is_no_auth_dev_mode(master_key: str | None, general_settings: Mapping[str, object]) -> bool:
+    return master_key is None and not any(
+        general_settings.get(flag, False)
+        for flag in ("enable_jwt_auth", "enable_oauth2_auth", "enable_oauth2_proxy_auth")
+    )
+
+
 @tracer.wrap()
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
@@ -2630,11 +2637,7 @@ async def _run_centralized_common_checks(
     # Running common_checks would block every admin route on these
     # deployments where that was previously not the contract. If any
     # authn is enabled (JWT, OAuth2, OAuth2-proxy), authz must run.
-    if master_key is None and not (
-        general_settings.get("enable_jwt_auth", False)
-        or general_settings.get("enable_oauth2_auth", False)
-        or general_settings.get("enable_oauth2_proxy_auth", False)
-    ):
+    if is_no_auth_dev_mode(master_key, general_settings):
         return
 
     if user_custom_auth is not None and not general_settings.get("custom_auth_run_common_checks", False):
