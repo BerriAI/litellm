@@ -278,22 +278,24 @@ class _BudgetCascade:
 
 
 @dataclass(frozen=True, slots=True)
-class _EndUserInvalidation:
-    """How far the post-commit customer walk got, and whether a failed page read
-    cut it short of the tail."""
+class _EndUserWalk:
+    """Where the post-commit customer walk stands: the keyset cursor its next
+    page resumes from, None once there is no next page, how many customers it
+    has reached, and whether a failed page read cut it short of the tail."""
 
+    cursor: str | None = ""
     invalidated: int = 0
     truncated: bool = False
 
 
-_NO_ENDUSERS_INVALIDATED: Final = _EndUserInvalidation()
+_ENDUSER_WALK_DONE: Final = _EndUserWalk(cursor=None)
 
 
 @dataclass(frozen=True, slots=True)
 class _BudgetCascadeCommitted:
     cascade: _BudgetCascade
     advanced: int
-    endusers: _EndUserInvalidation
+    endusers: _EndUserWalk
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,7 +442,7 @@ _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
 
 
 def _budget_cascade_event_metadata(
-    cascade: _BudgetCascade, endusers: _EndUserInvalidation = _NO_ENDUSERS_INVALIDATED
+    cascade: _BudgetCascade, endusers: _EndUserWalk = _ENDUSER_WALK_DONE
 ) -> dict[str, object]:
     return {
         "num_budgets_found": len(cascade.budgets),
@@ -674,7 +676,7 @@ class ResetBudgetJob:
             verbose_proxy_logger.warning("Failed to fetch %s for counter invalidation: %s", log_subject, e)
             return ()
 
-    async def _invalidate_enduser_caches(self, budget_ids: Sequence[str]) -> _EndUserInvalidation:
+    async def _invalidate_enduser_caches(self, budget_ids: Sequence[str]) -> _EndUserWalk:
         """Drop the cached spend of every customer the committed tier reset zeroed.
 
         Walked a page at a time with a keyset cursor, for the same reason
@@ -694,32 +696,38 @@ class ResetBudgetJob:
         passing the part it managed off as the whole.
         """
         if not budget_ids:
-            return _NO_ENDUSERS_INVALIDATED
+            return _ENDUSER_WALK_DONE
         where: Final = _enduser_invalidation_where(budget_ids)
-        cursor = ""
-        invalidated = 0
-        while True:
-            try:
-                rows = await self._fetch_enduser_page(where=where, cursor=cursor)
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    "Failed to fetch end users for cache invalidation after %s customers (cursor %r): %s. "
-                    "The customers past that page keep their cached spend until it expires.",
-                    invalidated,
-                    cursor,
-                    e,
-                )
-                return _EndUserInvalidation(invalidated=invalidated, truncated=True)
-            if not rows:
-                return _EndUserInvalidation(invalidated=invalidated)
-            await self._invalidate_caches(
-                counter_keys=tuple(_enduser_counter_key(row) for row in rows),
-                cache_keys=tuple(key for row in rows for key in _enduser_cache_keys(row)),
+        walk = _EndUserWalk()
+        while walk.cursor is not None:
+            walk = await self._invalidate_enduser_page(where=where, cursor=walk.cursor, reached=walk.invalidated)
+        return walk
+
+    async def _invalidate_enduser_page(
+        self, where: Mapping[str, object], cursor: str, reached: int
+    ) -> _EndUserWalk:
+        """Invalidate one page of customers and say where the walk goes next."""
+        try:
+            rows: Final = await self._fetch_enduser_page(where=where, cursor=cursor)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to fetch end users for cache invalidation after %s customers (cursor %r): %s. "
+                "The customers past that page keep their cached spend until it expires.",
+                reached,
+                cursor,
+                e,
             )
-            invalidated += len(rows)
-            if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
-                return _EndUserInvalidation(invalidated=invalidated)
-            cursor = rows[-1].user_id
+            return _EndUserWalk(cursor=None, invalidated=reached, truncated=True)
+        if not rows:
+            return _EndUserWalk(cursor=None, invalidated=reached)
+        await self._invalidate_caches(
+            counter_keys=tuple(_enduser_counter_key(row) for row in rows),
+            cache_keys=tuple(key for row in rows for key in _enduser_cache_keys(row)),
+        )
+        walked: Final = reached + len(rows)
+        if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
+            return _EndUserWalk(cursor=None, invalidated=walked)
+        return _EndUserWalk(cursor=rows[-1].user_id, invalidated=walked)
 
     async def _fetch_enduser_page(self, where: Mapping[str, object], cursor: str) -> tuple[_EndUserRow, ...]:
         """One keyset page of customers, ordered by primary key so the cursor never repeats a row."""
