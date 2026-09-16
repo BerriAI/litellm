@@ -1139,6 +1139,42 @@ class TestContentFilterGuardrail:
         assert entry["guardrail_status"] == "guardrail_intervened"
 
     @pytest.mark.asyncio
+    async def test_streaming_hook_blocks_conditional_identifier_straddling_cut(self):
+        """
+        The buffer is cut at a character offset, so a conditional identifier word
+        can sit half in the dropped head and half in the retained tail. That cut
+        must be refused: otherwise the block word arriving later in the same
+        sentence finds no identifier and the stream passes where a scan of the
+        full text blocks.
+        """
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-streaming-conditional-straddle",
+            categories=[{"category": "harmful_child_safety", "enabled": True, "action": "BLOCK"}],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        conditional: Final = guardrail.conditional_categories["harmful_child_safety"]
+        identifier, block_word = conditional["identifier_words"][0], conditional["block_words"][-1]
+        chunk_size: Final = 16
+        first_cut: Final = (
+            2 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS // chunk_size + 1
+        ) * chunk_size - CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS
+        prefix: Final = ("plain words " * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS)[: first_cut - 2]
+        filler: Final = "and then more plain words " * (3 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS // 26)
+        text: Final = f"{prefix}{identifier} {filler}shared an {block_word} moment. The end."
+        assert text[first_cut - 2 : first_cut - 2 + len(identifier)] == identifier
+        chunks: Final = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+        metadata: Final[dict[str, list[StandardLoggingGuardrailInformation]]] = {}
+
+        with pytest.raises(HTTPException):
+            await guardrail.apply_guardrail(inputs={"texts": [text]}, request_data={}, input_type="response")
+        with pytest.raises(HTTPException) as exc_info:
+            await self._collect_streamed_text(guardrail, chunks, metadata)
+
+        assert "harmful_child_safety" in str(exc_info.value.detail)
+        entry: Final = metadata["standard_logging_guardrail_information"][0]
+        assert entry["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.asyncio
     async def test_streaming_hook_masks_every_email_in_long_stream_and_logs_once(
         self,
     ):
