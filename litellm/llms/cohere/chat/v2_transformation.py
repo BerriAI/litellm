@@ -170,10 +170,10 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         data: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
         messages_to_send: Final = data.get("messages")
         if messages_to_send is not None:
@@ -185,10 +185,10 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         data: Final = await super().async_transform_request(model, messages, optional_params, litellm_params, headers)
         messages_to_send: Final = data.get("messages")
         if messages_to_send is not None:

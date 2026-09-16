@@ -261,11 +261,6 @@ def remove_index_from_tool_calls(
                 for tool_call in _tool_calls:
                     if isinstance(tool_call, dict) and "index" in tool_call:  # Type guard to ensure it's a dict
                         tool_call.pop("index", None)
-                    elif hasattr(tool_call, "index"):
-                        try:
-                            delattr(tool_call, "index")
-                        except Exception:
-                            pass
 
 
 def remove_items_at_indices(items: list[Any] | None, indices: Iterable[int]) -> None:
