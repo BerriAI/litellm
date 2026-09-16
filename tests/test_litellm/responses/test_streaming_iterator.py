@@ -5,12 +5,13 @@ completion_start_time = end_time."""
 
 import json
 from datetime import datetime
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import Mock, patch
 
 import httpx
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
@@ -351,8 +352,10 @@ def _mock_config_with_completed_response(response: ResponsesAPIResponse) -> Mock
             return completed
         stub = Mock()
         stub.type = evt_type
-        if evt_type == "response.output_text.delta":
+        if "delta" in parsed_chunk:
             stub.delta = parsed_chunk.get("delta")
+        if "item" in parsed_chunk:
+            stub.item = parsed_chunk.get("item")
         return stub
 
     mock_config.transform_streaming_response.side_effect = _transform
@@ -718,3 +721,74 @@ async def test_streaming_logging_copy_keeps_client_usage_when_response_fails_val
     assert isinstance(client_usage, ResponseAPIUsage)
     assert client_usage.input_tokens == 29
     assert client_usage.cost == pytest.approx(0.0001)
+
+
+@pytest.mark.asyncio
+async def test_completed_event_without_usage_counts_tool_call_arguments():
+    """A function-call-only stream still bills output tokens: streamed
+    function_call_arguments deltas feed the text estimate."""
+    response = _responses_api_response_without_usage()
+    iterator = _make_iterator(
+        sse_events=[
+            _sse_event(
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "function_call", "name": "get_weather", "call_id": "call_1"},
+                }
+            ),
+            _sse_event(
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "delta": '{"location": "San Francisco", "unit": "celsius"}',
+                }
+            ),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=_mock_config_with_completed_response(response),
+        request_data={"input": "what is the weather in san francisco"},
+    )
+
+    async for _ in iterator:
+        pass
+
+    usage = iterator.completed_response.response.usage
+    assert usage is not None
+    assert usage.output_tokens > 0
+    assert usage.total_tokens == usage.input_tokens + usage.output_tokens
+
+
+@pytest.mark.asyncio
+async def test_completed_event_without_usage_counts_multimodal_input_as_messages():
+    """Multimodal request input is counted as chat messages, not as a JSON blob:
+    a huge base64 image must not inflate the estimated input tokens."""
+    image_input: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "what is in this image"},
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64," + "A" * 4000,
+                },
+            ],
+        }
+    ]
+    json_count: Final = litellm.token_counter(model="gpt-4o-mini", text=json.dumps(image_input))
+    response = _responses_api_response_without_usage()
+    iterator = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_text.delta", "delta": "it is a cat"}),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=_mock_config_with_completed_response(response),
+        request_data={"input": image_input},
+    )
+
+    async for _ in iterator:
+        pass
+
+    usage = iterator.completed_response.response.usage
+    assert usage is not None
+    assert usage.input_tokens < json_count / 2

@@ -1,5 +1,4 @@
 import base64
-import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
@@ -1240,18 +1239,3 @@ class ResponseAPILoggingUtils:
             setattr(chat_usage, "cost", response_api_usage.cost)
 
         return chat_usage
-
-    @staticmethod
-    def estimate_usage_from_text(model: str, request_input: object, generated_text: str) -> ResponseAPIUsage:
-        input_text: Final = request_input if isinstance(request_input, str) else json.dumps(request_input, default=str)
-        input_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
-            model=model, text=input_text
-        )
-        output_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
-            model=model, text=generated_text, count_response_tokens=True
-        )
-        return ResponseAPIUsage(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=input_tokens + output_tokens,
-        )
