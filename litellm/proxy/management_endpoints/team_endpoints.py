@@ -140,9 +140,9 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
-    raise_for_team_admin_edit_verdict,
     resolve_team_admin_editable_fields,
     team_admin_edit_verdict,
+    team_admin_request_or_raise,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
     TEAM_ADVISORY_LOCK_SQL,
@@ -2218,7 +2218,7 @@ async def update_team(
         if access_role is None:
             _raise_team_access_denied()
         if access_role == "team_admin":
-            raise_for_team_admin_edit_verdict(
+            data = team_admin_request_or_raise(  # rebind-ok: resent values must not reach the derived writes below
                 team_admin_edit_verdict(
                     data=data,
                     existing=existing_team,

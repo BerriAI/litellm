@@ -35,6 +35,7 @@ _SETTINGS_LOCATION: Final = "Settings > UI > Team admin editable fields"
 
 @dataclass(frozen=True, slots=True)
 class TeamAdminEditAllowed:
+    request: UpdateTeamRequest
     kind: Literal["allowed"] = "allowed"
 
 
@@ -143,6 +144,15 @@ def changed_team_fields(data: UpdateTeamRequest, existing_row: LiteLLM_TeamTable
     return column_changes | _metadata_changes(data, submitted, existing)
 
 
+def _only_changes(data: UpdateTeamRequest, changed: frozenset[str]) -> UpdateTeamRequest:
+    """The request without the values it resends unchanged, which would otherwise still trigger derived writes
+    such as a resent budget_duration pushing budget_reset_at back."""
+    sent: Final = frozenset(data.model_fields_set)
+    via_metadata: Final = frozenset({"metadata"}) if changed - sent else frozenset()
+    kept: Final = frozenset({"team_id"}) | (changed & sent) | via_metadata
+    return UpdateTeamRequest.model_validate(data.model_dump(include=MappingProxyType({field: True for field in kept})))
+
+
 def team_admin_edit_verdict(
     data: UpdateTeamRequest,
     existing: LiteLLM_TeamTable,
@@ -150,16 +160,17 @@ def team_admin_edit_verdict(
 ) -> TeamAdminEditVerdict:
     if not permitted:
         return TeamAdminEditingDisabled()
-    blocked: Final = sorted(changed_team_fields(data, existing) - permitted)
+    changed: Final = changed_team_fields(data, existing)
+    blocked: Final = sorted(changed - permitted)
     if blocked:
         return TeamAdminFieldNotPermitted(field=blocked[0])
-    return TeamAdminEditAllowed()
+    return TeamAdminEditAllowed(request=_only_changes(data, changed))
 
 
-def raise_for_team_admin_edit_verdict(verdict: TeamAdminEditVerdict) -> None:
+def team_admin_request_or_raise(verdict: TeamAdminEditVerdict) -> UpdateTeamRequest:
     match verdict:
-        case TeamAdminEditAllowed():
-            return
+        case TeamAdminEditAllowed(request=request):
+            return request
         case TeamAdminEditingDisabled():
             raise HTTPException(
                 status_code=403,
