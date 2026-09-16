@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -216,6 +217,30 @@ class TestTransformRequest:
         round_tripped = json.loads(json.dumps(request_data.data))
         assert round_tripped["generationConfig"] == {"audioTranscriptionConfig": {"languageCodes": ["en-US"]}}
         assert round_tripped["contents"][0]["role"] == "user"
+
+    def test_webm_audio_uses_audio_mime_type(self, config):
+        audio_file = Mock(spec=["name", "read", "seek"])
+        audio_file.name = "speech.webm"
+        audio_file.read.return_value = AUDIO_BYTES
+
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe-preview",
+            audio_file=audio_file,
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert request_data.data["contents"][0]["parts"][0]["inlineData"]["mimeType"] == "audio/webm"
+
+    def test_incoming_audio_mime_type_is_preserved(self, config):
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe-preview",
+            audio_file=("speech.webm", AUDIO_BYTES, "audio/webm; codecs=opus"),
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert request_data.data["contents"][0]["parts"][0]["inlineData"]["mimeType"] == "audio/webm; codecs=opus"
 
 
 class TestTransformResponse:
