@@ -26,11 +26,13 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
+    CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
+    MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
@@ -76,6 +78,8 @@ from litellm.proxy.auth.auth_utils import (
     iter_request_fallback_targets,
     normalize_request_route,
     pre_db_read_auth_checks,
+    request_dispatched_to_pass_through_endpoint,
+    request_dispatched_to_provider_pass_through,
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
@@ -103,6 +107,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_set_request_parsed_body,
     populate_request_with_path_params,
     read_raw_json_body,
+    rewrite_request_model,
 )
 from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
@@ -124,6 +129,7 @@ from litellm.proxy.utils import (
     normalize_route_for_root_path,
 )
 from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
@@ -235,11 +241,45 @@ async def _normalize_claude_model(
         request.scope[_CLAUDE_MODEL_NORMALIZED] = True
     if source is None:
         return
-    request_data["model"] = source
-    _safe_set_request_parsed_body(request=request, parsed_body=request_data)
-    if request is not None:
-        request._json = request_data
-        request._body = orjson.dumps(request_data)
+    rewrite_request_model(request_data, request, source)
+
+
+async def _resolve_router_settings_model_group_alias(
+    request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
+    valid_token: UserAPIKeyAuth,
+    request: Request | None,
+    route: str,
+) -> None:
+    """Rewrite the requested model through the key's or team's ``router_settings.model_group_alias``
+    before the allowlist checks, so they authorize the model group the request is routed to.
+    """
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
+
+    if request is None or llm_router is None or not RouteChecks.is_llm_api_route(route=route):
+        return
+    if request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is True:
+        return
+    request.scope[MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY] = True
+    if request_dispatched_to_pass_through_endpoint(request) or request_dispatched_to_provider_pass_through(request):
+        return
+    requested: Final = request_data.get("model")
+    if not isinstance(requested, str) or await read_raw_json_body(request=request) is None:
+        return
+    settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=valid_token, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+    if not isinstance(settings, Mapping):
+        return
+    target: Final = resolve_model_group_alias(settings.get("model_group_alias"), requested)
+    if target is None or target == requested:
+        return
+    verbose_proxy_logger.debug(
+        "router_settings.model_group_alias resolved %s -> %s before auth",
+        requested.replace("\r", "").replace("\n", ""),
+        target.replace("\r", "").replace("\n", ""),
+    )
+    request.scope.setdefault(CLIENT_REQUESTED_MODEL_SCOPE_KEY, requested)
+    rewrite_request_model(request_data, request, target)
 
 
 def _get_model_names_for_budget_checks(
@@ -267,6 +307,17 @@ class _UserModelBudgetLimiter(Protocol):
 class _TokenTeamModels(Protocol):
     @property
     def team_models(self) -> list[str]: ...
+
+
+class _RawCacheRead(Protocol):
+    async def async_get_cache(self, *, key: str) -> object: ...
+
+
+def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
+    """View an untyped cache object's ``async_get_cache`` as returning ``object``
+    instead of ``Any``, so a caller can ``isinstance``-narrow it without paying
+    the ``reportAny`` cost of the underlying (unannotated) cache implementation."""
+    return cache
 
 
 def _token_team_models(valid_token: _TokenTeamModels) -> list[str]:
@@ -537,6 +588,9 @@ def _apply_budget_limits_to_end_user_params(
     if budget_info.rpm_limit is not None:
         end_user_params["end_user_rpm_limit"] = budget_info.rpm_limit
 
+    if budget_info.tpd_limit is not None:
+        end_user_params["end_user_tpd_limit"] = budget_info.tpd_limit
+
     if budget_info.max_budget is not None:
         end_user_params["end_user_max_budget"] = budget_info.max_budget
 
@@ -621,6 +675,8 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.end_user_tpm_limit = end_user_params["end_user_tpm_limit"]
     if end_user_params.get("end_user_rpm_limit") is not None:
         valid_token.end_user_rpm_limit = end_user_params["end_user_rpm_limit"]
+    if end_user_params.get("end_user_tpd_limit") is not None:
+        valid_token.end_user_tpd_limit = end_user_params["end_user_tpd_limit"]
     if end_user_params.get("allowed_model_region") is not None:
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
     if end_user_params.get("end_user_model_max_budget") is not None:
@@ -837,6 +893,7 @@ class _PendingAutoRegister(NamedTuple):
     claim_field: str
     claim_value: str
     cache_key: str
+    jwt_issuer: str | None = None
 
 
 async def _auto_register_jwt_mapping(
@@ -848,6 +905,7 @@ async def _auto_register_jwt_mapping(
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging,
     cache_key: str,
+    jwt_issuer: str | None = None,
     team_id: str | None = None,
     user_id: str | None = None,
     org_id: str | None = None,
@@ -900,6 +958,7 @@ async def _auto_register_jwt_mapping(
     try:
         await prisma_client.db.litellm_jwtkeymapping.create(
             data={
+                "jwt_issuer": jwt_issuer or "",
                 "jwt_claim_name": virtual_key_claim_field,
                 "jwt_claim_value": claim_value,
                 "token": token_hash,
@@ -934,6 +993,7 @@ async def _auto_register_jwt_mapping(
                 jwt_claim_name=virtual_key_claim_field,
                 jwt_claim_value=claim_value,
                 prisma_client=prisma_client,
+                jwt_issuer=jwt_issuer,
             )
             if token_hash is None:
                 # The winner's mapping vanished between the unique-constraint
@@ -976,6 +1036,43 @@ async def _auto_register_jwt_mapping(
         auto_registered_key.end_user_id = end_user_id
         auto_registered_key.api_key = auto_registered_key.token
     return auto_registered_key
+
+
+async def _lookup_jwt_mapping_token_hash(
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    virtual_key_claim_field: str,
+    claim_value: str,
+    normalized_issuer: str | None,
+    cache_key: str,
+    ttl: float,
+) -> str | None:
+    issuer_scoped: Final = await get_jwt_key_mapping_object(
+        jwt_claim_name=virtual_key_claim_field,
+        jwt_claim_value=claim_value,
+        prisma_client=prisma_client,
+        jwt_issuer=normalized_issuer,
+    )
+    if issuer_scoped is not None:
+        await user_api_key_cache.async_set_cache(key=cache_key, value=issuer_scoped, ttl=ttl)
+        return issuer_scoped
+    if normalized_issuer is None:
+        return None
+    # Another issuer may have already resolved (and cached) this same
+    # global mapping -- check its cache entry before re-querying the DB.
+    global_cache_key: Final = jwt_key_mapping_cache_key(virtual_key_claim_field, claim_value)
+    cached_global: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=global_cache_key)
+    if isinstance(cached_global, str) and cached_global != "__NO_MAPPING__":
+        return cached_global
+    global_row: Final = await get_jwt_key_mapping_object(
+        jwt_claim_name=virtual_key_claim_field,
+        jwt_claim_value=claim_value,
+        prisma_client=prisma_client,
+        jwt_issuer=None,
+    )
+    if global_row is not None:
+        await user_api_key_cache.async_set_cache(key=global_cache_key, value=global_row, ttl=ttl)
+    return global_row
 
 
 async def _resolve_jwt_to_virtual_key(
@@ -1036,7 +1133,7 @@ async def _resolve_jwt_to_virtual_key(
             )
         return None
 
-    cache_key: Final = jwt_key_mapping_cache_key(virtual_key_claim_field, str(claim_value))
+    cache_key: Final = jwt_key_mapping_cache_key(virtual_key_claim_field, str(claim_value), normalized_issuer)
     raw_cached_mapping: Final = await user_api_key_cache.async_get_cache(cache_key)
     sentinel_written_by_this_policy: Final = behavior == UnregisteredJWTClientBehavior.AUTO_REGISTER
     cached_mapping: Final = (
@@ -1076,6 +1173,7 @@ async def _resolve_jwt_to_virtual_key(
                 claim_field=virtual_key_claim_field,
                 claim_value=str(claim_value),
                 cache_key=cache_key,
+                jwt_issuer=normalized_issuer,
             )
         return None
     elif cached_mapping is not None:
@@ -1089,21 +1187,30 @@ async def _resolve_jwt_to_virtual_key(
         )
 
     # Resolve the mapping from DB, or treat prisma_client=None as a definitive
-    # miss (no DB → no mapping can exist → apply no-match policy below).
-    token_hash: str | None = None
-    if prisma_client is not None:
-        token_hash = await get_jwt_key_mapping_object(
-            jwt_claim_name=virtual_key_claim_field,
-            jwt_claim_value=str(claim_value),
+    # miss (no DB → no mapping can exist → apply no-match policy below). An
+    # issuer-scoped row wins; falling back to the global (no-issuer) row keeps
+    # mappings created before issuer scoping existed working for every issuer.
+    # Each tier is cached under ITS OWN key (the global tier under the
+    # issuer-less cache key, not under `cache_key`/this issuer's key) so that
+    # updating or deleting either row invalidates exactly the cache entries it
+    # can affect. Caching a global-row hit under the requesting issuer's key
+    # would leave every OTHER issuer that had fallen back to that same global
+    # mapping serving its stale token until TTL after the row changes.
+    token_hash: Final = (
+        await _lookup_jwt_mapping_token_hash(
             prisma_client=prisma_client,
-        )
-
-    if token_hash is not None:
-        await user_api_key_cache.async_set_cache(
-            key=cache_key,
-            value=token_hash,
+            user_api_key_cache=user_api_key_cache,
+            virtual_key_claim_field=virtual_key_claim_field,
+            claim_value=str(claim_value),
+            normalized_issuer=normalized_issuer,
+            cache_key=cache_key,
             ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
         )
+        if prisma_client is not None
+        else None
+    )
+
+    if token_hash is not None:
         return IdentityStore.key_from_principal(
             await IdentityStore(
                 prisma_client,
@@ -1144,6 +1251,7 @@ async def _resolve_jwt_to_virtual_key(
             claim_field=virtual_key_claim_field,
             claim_value=str(claim_value),
             cache_key=cache_key,
+            jwt_issuer=normalized_issuer,
         )
 
     # FALLBACK_TEAM_MAPPING (default): cache the miss and return None so the
@@ -1636,6 +1744,7 @@ async def _user_api_key_auth_builder(
                             parent_otel_span=parent_otel_span,
                             proxy_logging_obj=proxy_logging_obj,
                             cache_key=pending_auto_register.cache_key,
+                            jwt_issuer=pending_auto_register.jwt_issuer,
                             team_id=team_id,
                             user_id=user_id,
                             org_id=org_id,
@@ -2026,6 +2135,7 @@ async def _user_api_key_auth_builder(
             valid_token.end_user_id = end_user_params.get("end_user_id")
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
+            valid_token.end_user_tpd_limit = end_user_params.get("end_user_tpd_limit")
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
 
         if valid_token is not None:
@@ -2302,6 +2412,7 @@ async def _user_api_key_auth_builder(
                         spend=valid_token.team_spend,
                         tpm_limit=valid_token.team_tpm_limit,
                         rpm_limit=valid_token.team_rpm_limit,
+                        tpd_limit=valid_token.team_tpd_limit,
                         blocked=valid_token.team_blocked,
                         models=token_team_models,
                         metadata=valid_token.team_metadata,
@@ -2455,6 +2566,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
         spend=valid_token.team_spend,
         tpm_limit=valid_token.team_tpm_limit,
         rpm_limit=valid_token.team_rpm_limit,
+        tpd_limit=valid_token.team_tpd_limit,
         blocked=valid_token.team_blocked,
         models=token_team_models,
         metadata=valid_token.team_metadata,
@@ -2918,6 +3030,7 @@ async def _authorize_authenticated_request(
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
     await _normalize_claude_model(request_data, user_api_key_auth_obj, request, route)
+    await _resolve_router_settings_model_group_alias(request_data, user_api_key_auth_obj, request, route)
 
     # Single authorization point. Builder paths MUST NOT call common_checks.
     # Route through the same exception handler the builder uses so
@@ -3304,6 +3417,7 @@ async def _enforce_key_and_fallback_model_access(
     Not included in common_checks — common_checks enforces team/user/project model access only.
     """
     await _normalize_claude_model(request_data, valid_token, request, route)
+    await _resolve_router_settings_model_group_alias(request_data, valid_token, request, route)
     config: Final = valid_token.config
 
     if config != {}:

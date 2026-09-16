@@ -171,15 +171,25 @@ def _cost_of_usage(
 ) -> float | None:
     """What ``usage`` costs on ``model``, or ``None`` when the model has no pricing."""
     try:
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model=model.model,
-            usage=usage,
-            custom_llm_provider=model.provider,
-            service_tier=basis.service_tier,
-            data_residency=basis.data_residency,
-            model_info=model_info,
-            vertex_location=basis.vertex_location,
-        )
+        if model.provider == "anthropic":
+            from litellm.llms.anthropic.cost_calculation import cost_per_token
+
+            prompt_cost, completion_cost = cost_per_token(
+                model=model.model,
+                usage=usage,
+                service_tier=basis.service_tier,
+                model_info=model_info,
+            )
+        else:
+            prompt_cost, completion_cost = generic_cost_per_token(
+                model=model.model,
+                usage=usage,
+                custom_llm_provider=model.provider,
+                service_tier=basis.service_tier,
+                data_residency=basis.data_residency,
+                model_info=model_info,
+                vertex_location=basis.vertex_location,
+            )
     except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; degrade to zero savings
         verbose_proxy_logger.debug(
             "savings: cannot price usage for provider=%s model=%s (%s)", model.provider, model.model, e
@@ -196,11 +206,6 @@ def _cache_token_split(usage: Usage) -> tuple[int, int]:
     read: Final = getattr(details, "cached_tokens", 0) or 0
     created = (getattr(details, "cache_creation_tokens", 0) or 0) or (getattr(details, "cache_write_tokens", 0) or 0)
     return int(read), int(created)
-
-
-_CACHE_SPLIT_FIELDS: Final = frozenset(
-    ("cached_tokens", "cache_creation_tokens", "cache_write_tokens", "cache_creation_token_details", "text_tokens")
-)
 
 
 def _baseline_cache_rate_keys(baseline_info: ModelInfo | None) -> tuple[bool, bool]:
@@ -274,19 +279,22 @@ def _baseline_usage(usage: Usage, conversation_continuing: bool, baseline_info: 
         (getattr(details, field, 0) or 0) for field in ("audio_tokens", "image_tokens", "video_tokens")
     )
     return Usage(
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=usage.completion_tokens,
-        total_tokens=usage.total_tokens,
-        completion_tokens_details=usage.completion_tokens_details,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            **details.model_dump(exclude=_CACHE_SPLIT_FIELDS),
-            cached_tokens=reads,
-            cache_creation_tokens=writes,
-            cache_write_tokens=writes,
-            cache_creation_token_details=details.cache_creation_token_details if writes else None,
-            # Whatever no longer sits in a cache bucket is plain input on the baseline.
-            text_tokens=max(usage.prompt_tokens - reads - writes - other_modalities, 0),
-        ),
+        **{
+            **usage.model_dump(),
+            # Rebuild through Usage so private fallback counts agree with the public buckets.
+            "cache_read_input_tokens": reads,
+            "cache_creation_input_tokens": writes,
+            "prompt_tokens_details": PromptTokensDetailsWrapper(
+                **{
+                    **details.model_dump(),
+                    "cached_tokens": reads,
+                    "cache_creation_tokens": writes,
+                    "cache_write_tokens": writes,
+                    "cache_creation_token_details": details.cache_creation_token_details if writes else None,
+                    "text_tokens": max(usage.prompt_tokens - reads - writes - other_modalities, 0),
+                }
+            ),
+        },
     )
 
 

@@ -9,7 +9,7 @@ from fastapi import Request, UploadFile, status
 from typing_extensions import NotRequired, ReadOnly, Required
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
+from litellm.constants import CLIENT_REQUESTED_MODEL_SCOPE_KEY, MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -189,8 +189,9 @@ async def _read_request_body(request: Request | None) -> dict:
 
                     try:
                         parsed_body = json.loads(body_str)
-                    except json.JSONDecodeError:
-                        # If both orjson and json.loads fail, throw a proper error
+                        json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
+                    except (json.JSONDecodeError, UnicodeEncodeError):
+                        # json.loads accepts lone surrogate escapes that no provider can encode
                         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
                         raise ProxyException(
                             message=f"Invalid JSON payload: {e}",
@@ -234,6 +235,13 @@ def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
     return None
 
 
+def get_client_requested_model(request: Request | None) -> str | None:
+    if request is None or not hasattr(request, "scope"):
+        return None
+    model: Final = request.scope.get(CLIENT_REQUESTED_MODEL_SCOPE_KEY)
+    return model if isinstance(model, str) else None
+
+
 def _safe_get_request_query_params(request: Request | None) -> dict:
     if request is None:
         return {}
@@ -256,6 +264,24 @@ def _safe_set_request_parsed_body(
         request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
     except Exception as e:
         verbose_proxy_logger.debug("Unexpected error setting request parsed body - %s", e)
+
+
+def rewrite_request_model(
+    request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
+    request: Request | None,
+    model: str,
+) -> None:
+    """Point the auth-time payload, the parsed-body cache, ``request.json()`` and ``request.body()`` at ``model``.
+    The cache and raw body keep only the keys the client sent, not params auth merged into ``request_data``.
+    """
+    request_data["model"] = model
+    if request is None:
+        return
+    cached_body: Final = _safe_get_request_parsed_body(request=request)
+    body: Final = {**cached_body, "model": model} if cached_body is not None else request_data
+    _safe_set_request_parsed_body(request=request, parsed_body=body)
+    request._json = body
+    request._body = orjson.dumps(body)
 
 
 def _safe_get_request_headers(request: Request | None) -> dict:

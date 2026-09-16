@@ -238,6 +238,8 @@ def get_llm_provider(
             if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
                 raise Exception(f"dynamic_api_key needs to be a string. Got type={type(dynamic_api_key).__name__}")
             return model, custom_llm_provider, dynamic_api_key, api_base
+        if "/" in model and is_registered_custom_provider(provider_prefix):
+            return model.split("/", 1)[1], provider_prefix, dynamic_api_key, api_base
         # check if api base is a known openai compatible endpoint
         if api_base:
             for endpoint in litellm.openai_compatible_endpoints:
@@ -534,6 +536,10 @@ def get_llm_provider(
                 response=None,
                 llm_provider="",
             )
+
+
+def is_registered_custom_provider(custom_llm_provider: str | None) -> bool:
+    return any(item["provider"] == custom_llm_provider for item in litellm.custom_provider_map)
 
 
 def _dashscope_family_chat_config(custom_llm_provider: str) -> "litellm.DashScopeChatConfig":

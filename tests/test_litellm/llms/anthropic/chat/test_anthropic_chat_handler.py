@@ -1,6 +1,7 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -577,6 +578,20 @@ def test_text_only_streaming_has_index_zero():
             assert (
                 parsed.choices[0].index == 0
             ), f"Expected index=0, got {parsed.choices[0].index}"
+
+
+def test_message_delta_without_usage_returns_chunk_with_no_usage():
+    iterator: Final = ModelResponseIterator(None, sync_stream=True)
+
+    model_response: Final = iterator.chunk_parser(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        }
+    )
+
+    assert model_response.choices[0].finish_reason == "stop"
+    assert model_response.usage is None
 
 
 def test_streaming_thinking_deltas_count_reasoning_tokens_in_usage():
