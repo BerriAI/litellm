@@ -4,6 +4,8 @@ import base64
 import hashlib
 import hmac
 import io
+import json
+import os
 import threading
 import time
 from collections.abc import Callable, Generator, Mapping
@@ -400,6 +402,51 @@ def decode_response(secret: bytes, key: str, payload: bytes, mount: str, url: st
     return response
 
 
+def component_digests(
+    test_key: str, method: str, url: str, headers: Mapping[str, str], body: bytes | None,
+) -> dict[str, str]:
+    """Per-component digests of everything the key covers.
+
+    A mount whose corpus never converges is a mount where one of these moves
+    between builds, and the flat key cannot say which. Values are digested, so
+    no payload or credential is written, and a JSON body contributes one digest
+    per top-level field so the field that moved can be named."""
+    parts: dict[str, str] = {  # rebind-ok: a report assembled from three differently shaped sources
+        "test_key": test_key,
+        "method": method,
+        "url": short_digest(canonical_text(url).encode()),
+    }
+    for name, value in sorted(headers.items()):
+        parts[f"header:{name.lower()}"] = short_digest(value.encode())
+    canonical: Final = b"" if body is None else canonical_body(body)
+    parts["body"] = short_digest(canonical)
+    try:
+        parsed: Final = JSON_VALUE.validate_json(canonical)
+    except ValidationError:
+        return parts
+    if isinstance(parsed, dict):
+        for name, value in sorted(parsed.items()):
+            parts[f"body:{name}"] = short_digest(json.dumps(value, sort_keys=True).encode())
+    return parts
+
+
+def short_digest(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()[:16]
+
+
+@dataclass(slots=True)
+class KeyProbe:
+    """Every keyed request's components, when a metrics directory is configured."""
+
+    rows: tuple[tuple[tuple[str, str], ...], ...] = ()
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def observe(self, mount: str, outcome: str, parts: Mapping[str, str]) -> None:
+        row: Final = tuple({"mount": mount, "outcome": outcome, **parts}.items())
+        with self.lock:
+            self.rows = (*self.rows, row)
+
+
 @dataclass(slots=True)
 class CacheCounters:
     counts: tuple[tuple[str, int], ...] = ()
@@ -464,6 +511,7 @@ class CacheEdge:
     store: ResponseStore
     secret: bytes = field(repr=False)
     counters: CacheCounters = field(default_factory=CacheCounters)
+    probe: KeyProbe = field(default_factory=KeyProbe)
     slots: SlotCounter = field(default_factory=SlotCounter)
     policies: Mapping[str, MountPolicy] = NO_POLICIES
     wait_seconds: float = 2.0
@@ -480,6 +528,14 @@ class CacheEdge:
     def count(self, mount: str, name: str) -> None:
         self.counters.increment(name)
         self.counters.increment(f"mount:{mount}:{name}")
+
+    def record_key(
+        self, mount: str, outcome: str, test_key: str, method: str, url: str,
+        headers: Mapping[str, str], body: bytes | None,
+    ) -> None:
+        if not os.environ.get("E2E_PROVIDER_CACHE_METRICS_DIR"):
+            return
+        self.probe.observe(mount, outcome, component_digests(test_key, method, url, headers, body))
 
     def outbound(self, mount: str, method: str, url: str, headers: dict[str, str], body: bytes | None) -> dict[str, str]:
         """The headers actually sent upstream. A signing mount gets a signature
@@ -511,20 +567,21 @@ class CacheEdge:
         if isinstance(prepared, NetworkError):
             self.reject(mount, UNREACHABLE)
             return prepared
-        identity: Final = request_identity(
-            self.secret, test_key, method, url, self.keyed(mount, prepared.headers), body,
-        )
+        keyed_headers: Final = self.keyed(mount, prepared.headers)
+        identity: Final = request_identity(self.secret, test_key, method, url, keyed_headers, body)
         key: Final = slotted_key(self.secret, identity, self.slots.take(identity))
         found: Final = self.lookup(key)
         if isinstance(found, CacheHit):
             response: Final = decode_response(self.secret, key, found.payload, mount, url)
             if response is not None and self.clock() < found.valid_until:
                 self.count(mount, "hits")
+                self.record_key(mount, "hit", test_key, method, url, keyed_headers, body)
                 return StreamHead(response.status_code, response.headers, response_steps(response))
             self.count(mount, "corrupt" if response is None else "expired")
             self.store.discard(key, found.payload)
         capture_slot: Final = self.lookup(key) if isinstance(found, CacheHit) else found
         self.count(mount, "misses")
+        self.record_key(mount, "miss", test_key, method, url, keyed_headers, body)
         if isinstance(capture_slot, CacheUnavailable):
             self.count(mount, "cache_errors")
         self.count(mount, "upstream_attempts")
