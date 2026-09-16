@@ -19,9 +19,11 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
+from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
+    _is_redundant_scan,
 )
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
@@ -459,6 +461,11 @@ async def test_windowed_buffer_holds_tool_call_windows_until_end_of_stream_scan(
     assert _chat_text(collected) == "".join(content_chunks)
     assert _tool_argument_text(collected) == "".join(tool_argument_chunks)
     assert guardrail.tool_call_scan_indexes == [guardrail.scan_count]
+
+
+def test_tool_call_only_scan_key_is_not_skipped_as_empty():
+    assert _is_redundant_scan(StreamingScanKey(texts=("",)), None) is True
+    assert _is_redundant_scan(StreamingScanKey(texts=("",), tool_calls=("run_shell:{}",)), None) is False
 
 
 @pytest.mark.asyncio
