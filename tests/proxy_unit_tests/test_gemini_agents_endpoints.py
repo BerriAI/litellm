@@ -9,17 +9,14 @@ longer accepted — they would appear in server logs.
 """
 
 import json
+from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
 from fastapi.datastructures import Headers, QueryParams
 
-
-from types import MappingProxyType
-
 from litellm.proxy.google_endpoints.agents_endpoints import _route_data
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -59,15 +56,29 @@ class TestRouteData:
         assert "api_key" not in data
 
     def test_litellm_params_template_json_is_expanded(self):
-        template = json.dumps({"api_key": "AIzaFromTemplate", "api_base": "https://example.com"})
+        template = json.dumps({"api_key": "AIzaFromTemplate", "custom_llm_provider": "gemini"})
         from urllib.parse import quote
 
         request = _make_request(f"litellm_params_template={quote(template)}")
         data = _route_data(request, MappingProxyType({}))
         assert data["api_key"] == "AIzaFromTemplate"
-        assert data["api_base"] == "https://example.com"
+        assert data["custom_llm_provider"] == "gemini"
         # The raw template key itself must NOT appear in data
         assert "litellm_params_template" not in data
+
+    def test_litellm_params_template_api_base_is_refused_without_the_admin_opt_in(self):
+        """SECURITY: the template is expanded after the auth-time body check, so it gets the same
+        banned-param policy; otherwise any caller could point the proxy at an internal host."""
+        from urllib.parse import quote
+
+        from fastapi import HTTPException
+
+        template = json.dumps({"api_key": "AIzaFromTemplate", "api_base": "http://169.254.169.254"})
+        request = _make_request(f"litellm_params_template={quote(template)}")
+        with pytest.raises(HTTPException) as excinfo:
+            _route_data(request, MappingProxyType({}))
+        assert excinfo.value.status_code == 400
+        assert "api_base" in str(excinfo.value.detail)
 
     def test_litellm_params_template_overrides_the_provider_default_but_not_path_params(self):
         template = json.dumps({"api_key": "FromTemplate", "custom_llm_provider": "anthropic", "name": "INJECTED"})
@@ -282,8 +293,9 @@ async def test_get_gemini_agent_name_not_overwritten_by_query_param(mock_srv, us
 @pytest.mark.asyncio
 async def test_list_agents_template_via_query_param(mock_srv, user_api_key_dict):
     """litellm_params_template in query string is expanded."""
-    from litellm.proxy.google_endpoints.agents_endpoints import list_gemini_agents
     from urllib.parse import quote
+
+    from litellm.proxy.google_endpoints.agents_endpoints import list_gemini_agents
 
     template = json.dumps({"api_key": "TemplateKey", "vertex_project": "proj-x"})
 

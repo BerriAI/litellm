@@ -227,8 +227,10 @@ def _allow_model_level_clientside_configurable_parameters(
 # (e.g. Azure's ``extra_body.azure_ad_token``, Bedrock's
 # ``extra_body.aws_web_identity_token``) without re-validating, so the
 # banned-key check has to descend into it the same way it descends into
-# ``litellm_embedding_config``.
-_NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
+# ``litellm_embedding_config``. ``litellm_params_template`` is the managed-agent
+# routes' per-request credential container, spread into ``litellm_params`` the
+# same way.
+_NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body", "litellm_params_template")
 
 # Metadata containers that carry per-request configuration consumed by the
 # observability callbacks. The same banned-param list applies — a value

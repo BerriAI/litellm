@@ -27,6 +27,8 @@ def _lifecycle_data(
     ``api_base`` is selected with ``litellm_params_template`` (header or JSON query
     parameter); a non-admin caller supplies the provider key alongside any such
     override, otherwise the proxy's shared credential would follow the override.
+    ``api_base`` is a banned request param like everywhere else on the proxy, so it
+    also needs ``general_settings.allow_client_side_credentials``.
     """
     data: Final[dict[str, object]] = {  # mutable-ok: ProxyBaseLLMRequestProcessing owns and mutates the request data
         "custom_llm_provider": DEFAULT_PROVIDER,
