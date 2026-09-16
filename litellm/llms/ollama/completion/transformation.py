@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_ollama_image,
     custom_prompt,
+    function_call_prompt,
     ollama_pt,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
@@ -159,6 +160,9 @@ class OllamaConfig(BaseConfig):
             "response_format",
             "max_completion_tokens",
             "reasoning_effort",
+            "tools",
+            "tool_choice",
+            "functions",
         ]
 
     def map_openai_params(
@@ -193,6 +197,9 @@ class OllamaConfig(BaseConfig):
                     optional_params["format"] = "json"
                 elif value["type"] == "json_schema":
                     optional_params["format"] = value["json_schema"]["schema"]
+            elif param in ("tools", "functions") and value:
+                optional_params["format"] = "json"
+                optional_params["prompted_functions"] = "".join(f"\n{function}\n" for function in value)
 
         return optional_params
 
@@ -377,6 +384,12 @@ class OllamaConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict") or litellm.custom_prompt_dict
+        prompted_functions: Final = optional_params.pop("prompted_functions", None)
+        prompt_messages: Final = (
+            function_call_prompt(messages=messages, function_descriptions=prompted_functions)
+            if isinstance(prompted_functions, str)
+            else messages
+        )
 
         text_completion_request: Final = litellm_params.get("text_completion")
         if model in custom_prompt_dict:
@@ -386,12 +399,12 @@ class OllamaConfig(BaseConfig):
                 role_dict=model_prompt_details["roles"],
                 initial_prompt_value=model_prompt_details["initial_prompt_value"],
                 final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
+                messages=prompt_messages,
             )
         elif text_completion_request:  # handle `/completions` requests
-            ollama_prompt = get_str_from_messages(messages=messages)
+            ollama_prompt = get_str_from_messages(messages=prompt_messages)
         else:  # handle `/chat/completions` requests
-            modified_prompt: Final = ollama_pt(model=model, messages=messages)
+            modified_prompt: Final = ollama_pt(model=model, messages=prompt_messages)
             if isinstance(modified_prompt, dict):
                 ollama_prompt, images = (
                     modified_prompt["prompt"],

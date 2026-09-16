@@ -1,12 +1,13 @@
 import json
-from litellm._uuid import uuid
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm._uuid import uuid
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
     OllamaTextCompletionResponseIterator,
@@ -476,7 +477,7 @@ class TestOllamaTextCompletionResponseIterator:
         # Updated to handle ModelResponseStream return type
         assert isinstance(result, ModelResponseStream)
         assert result.choices and result.choices[0].delta is not None
-        assert result.choices[0].delta.content == None
+        assert result.choices[0].delta.content is None
         assert getattr(result.choices[0].delta, "reasoning_content", None) == ""
 
     def test_chunk_parser_done_chunk(self):
@@ -544,3 +545,219 @@ async def test_ollama_async_completion_inlines_remote_images_off_the_event_loop(
     assert response.choices[0].message.content == "Green"
     assert async_only_image_fetch.fetched == [image_url]
     assert captured["body"]["images"] == [async_only_image_fetch.base64_png]
+
+
+GRAPH_STATS_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "graph_stats",
+            "description": "Return node and edge counts of the code graph",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+]
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "http://ollama.example:11434",
+        "http://ollama.example:11434/",
+        "http://ollama.example:11434/api/generate",
+        "http://ollama.example:11434/api/generate/",
+        "http://ollama.example:11434/api/chat",
+    ],
+)
+def test_ollama_tool_result_turn_is_sent_to_native_chat_api(api_base: str):
+    """https://github.com/BerriAI/litellm/issues/40575"""
+    requests = []
+
+    def handle(request):
+        requests.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(
+            200,
+            json={
+                "model": "qwen3.8:27b",
+                "message": {"role": "assistant", "content": "The graph has 190921 nodes."},
+                "done": True,
+                "done_reason": "stop",
+                "prompt_eval_count": 1,
+                "eval_count": 1,
+            },
+        )
+
+    response = litellm.completion(
+        model="ollama/qwen3.8:27b",
+        messages=[
+            {"role": "user", "content": "How many nodes does the graph have?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "graph_stats", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "name": "graph_stats", "content": '{"nodes": 190921}'},
+        ],
+        tools=GRAPH_STATS_TOOLS,
+        api_base=api_base,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle))),
+    )
+
+    assert [path for path, _ in requests] == ["/api/chat"]
+    body = requests[0][1]
+    assert body["tools"] == GRAPH_STATS_TOOLS
+    assert "format" not in body
+    assert [m["role"] for m in body["messages"]] == ["user", "assistant", "tool"]
+    assert body["messages"][2]["content"] == '{"nodes": 190921}'
+    assert response.choices[0].message.content == "The graph has 190921 nodes."
+    assert response.choices[0].message.tool_calls is None
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_ollama_streamed_tool_call_is_returned_as_tool_call():
+    """https://github.com/BerriAI/litellm/issues/35711"""
+    chunks = [
+        {
+            "model": "qwen3.8:27b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "graph_stats", "arguments": {}}}],
+            },
+            "done": False,
+        },
+        {
+            "model": "qwen3.8:27b",
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 1,
+            "eval_count": 1,
+        },
+    ]
+
+    def handle(request):
+        assert request.url.path == "/api/chat"
+        return httpx.Response(200, content="\n".join(json.dumps(chunk) for chunk in chunks).encode())
+
+    streamed = list(
+        litellm.completion(
+            model="ollama/qwen3.8:27b",
+            messages=[{"role": "user", "content": "How many nodes does the graph have?"}],
+            tools=GRAPH_STATS_TOOLS,
+            stream=True,
+            api_base="http://ollama.example:11434",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle))),
+        )
+    )
+
+    tool_calls = [tool_call for chunk in streamed for tool_call in chunk.choices[0].delta.tool_calls or []]
+    assert [tool_call.function.name for tool_call in tool_calls] == ["graph_stats"]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in streamed) == ""
+    assert streamed[-1].choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.parametrize("empty_parameter", ["none", "tools", "functions"])
+def test_ollama_empty_tools_preserve_generate_request(empty_parameter: str) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert request.url.path == "/api/generate"
+        assert "format" not in body
+        assert "tools" not in body
+        return httpx.Response(200, json={"response": "Hello", "done": True})
+
+    response: Final = litellm.completion(
+        model="ollama/qwen3.8:27b",
+        messages=[{"role": "user", "content": "Hello"}],
+        tools=[] if empty_parameter == "tools" else None,
+        functions=[] if empty_parameter == "functions" else None,
+        api_base="http://ollama.example:11434/api/generate",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle))),
+    )
+    assert response.choices[0].message.content == "Hello"
+
+
+def test_ollama_native_tool_support_error_is_preserved() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/chat"
+        return httpx.Response(400, json={"error": "model does not support tools"})
+
+    with pytest.raises(litellm.BadRequestError, match="does not support tools"):
+        litellm.completion(
+            model="ollama/qwen3.8:27b",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=GRAPH_STATS_TOOLS,
+            api_base="http://ollama.example:11434/api/generate",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle))),
+            num_retries=0,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_functions", [False, True])
+async def test_ollama_async_native_tools(legacy_functions: bool) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert request.url.path == "/prefix/api/chat"
+        assert body["tools"] == GRAPH_STATS_TOOLS
+        return httpx.Response(
+            200,
+            json={
+                "model": "qwen3.8:27b",
+                "message": {"role": "assistant", "content": "Hello"},
+                "done": True,
+                "done_reason": "stop",
+                "prompt_eval_count": 1,
+                "eval_count": 1,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        handler: Final = AsyncHTTPHandler()
+        await handler.client.aclose()
+        handler.client = client
+        response: Final = await litellm.acompletion(
+            model="ollama/qwen3.8:27b",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=None if legacy_functions else GRAPH_STATS_TOOLS,
+            functions=[GRAPH_STATS_TOOLS[0]["function"]] if legacy_functions else None,
+            api_base="http://ollama.example:11434/prefix/api/generate/",
+            client=handler,
+        )
+    assert response.choices[0].message.content == "Hello"
+
+
+def test_ollama_add_function_to_prompt_keeps_legacy_json_emulation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "add_function_to_prompt", True)
+    requests = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(
+            200, json={"response": '{"name": "graph_stats", "arguments": {}}', "done": True, "prompt_eval_count": 1}
+        )
+
+    messages: Final = [
+        {"role": "system", "content": "You are a graph assistant."},
+        {"role": "user", "content": "How many nodes does the graph have?"},
+    ]
+
+    response: Final = litellm.completion(
+        model="ollama/qwen3.8:27b",
+        messages=messages,
+        tools=GRAPH_STATS_TOOLS,
+        tool_choice="auto",
+        api_base="http://ollama.example:11434",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle))),
+    )
+
+    assert [path for path, _ in requests] == ["/api/generate"]
+    body: Final = requests[0][1]
+    assert body["format"] == "json"
+    assert "Produce JSON OUTPUT ONLY" in body["prompt"]
+    assert "graph_stats" in body["prompt"]
+    assert "prompted_functions" not in body["options"]
+    assert response.choices[0].message.tool_calls[0].function.name == "graph_stats"
+    assert response.choices[0].finish_reason == "tool_calls"

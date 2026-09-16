@@ -944,3 +944,23 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected_url"),
+    [
+        (None, "http://localhost:11434/api/chat"),
+        ("http://ollama.example:11434", "http://ollama.example:11434/api/chat"),
+        ("http://ollama.example:11434/", "http://ollama.example:11434/api/chat"),
+        ("http://ollama.example:11434/api/chat", "http://ollama.example:11434/api/chat"),
+        ("http://ollama.example:11434/api/chat/", "http://ollama.example:11434/api/chat"),
+        ("http://ollama.example:11434/api/generate", "http://ollama.example:11434/api/chat"),
+        ("http://ollama.example:11434/prefix/api/generate/", "http://ollama.example:11434/prefix/api/chat"),
+    ],
+)
+def test_get_complete_url_points_at_chat_endpoint(api_base, expected_url):
+    url = OllamaChatConfig().get_complete_url(
+        api_base=api_base, api_key=None, model="qwen3.8:27b", optional_params={}, litellm_params={}
+    )
+
+    assert url == expected_url
