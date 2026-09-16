@@ -1,8 +1,10 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as renderWithoutProviders, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { PropsWithChildren } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { chooseSelectOption, renderWithProviders as render } from "@/../tests/test-utils";
+import { chooseSelectOption, renderWithProviders as render, testQueryClient } from "@/../tests/test-utils";
 import CompareUI, { type ComparisonInstance } from "./CompareUI";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
 
@@ -108,6 +110,22 @@ beforeEach(() => {
 const renderCompare = (options: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction } = {}) =>
   render(<CompareUI accessToken="test-token" disabledPersonalKeyCreation={false} />, options);
 
+const renderCompareKeepingMountUpdates = (searchParams: string, onUrlUpdate: OnUrlUpdateFunction) => {
+  const Providers = ({ children }: PropsWithChildren) => (
+    <NuqsTestingAdapter
+      searchParams={searchParams}
+      onUrlUpdate={onUrlUpdate}
+      hasMemory
+      resetUrlUpdateQueueOnMount={false}
+    >
+      <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+    </NuqsTestingAdapter>
+  );
+  return renderWithoutProviders(<CompareUI accessToken="test-token" disabledPersonalKeyCreation={false} />, {
+    wrapper: Providers,
+  });
+};
+
 const panelModels = () =>
   screen.queryAllByTestId(/^comparison-panel-/).map((panel) => panel.getAttribute("data-model"));
 
@@ -194,6 +212,14 @@ describe("CompareUI", () => {
       expect(screen.getByRole("button", { name: /Add Comparison/i })).toBeDisabled();
     });
 
+    it("opens at most three panels however many models the URL lists", async () => {
+      renderCompare({ searchParams: "?cmp_models=gpt-4,gpt-4,gpt-4,gpt-3.5-turbo" });
+
+      await waitFor(() => expect(panelModels()).toEqual(["gpt-4", "gpt-4", "gpt-4"]));
+      expect(screen.queryByTestId("comparison-panel-undefined")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Add Comparison/i })).toBeDisabled();
+    });
+
     it("opens a single panel for a single URL model", async () => {
       renderCompare({ searchParams: "?cmp_models=gpt-3.5-turbo" });
 
@@ -256,10 +282,12 @@ describe("CompareUI", () => {
       expect(await screen.findByRole("combobox", { name: "Endpoint" })).toHaveTextContent("/a2a (Agents)");
     });
 
-    it("ignores an unknown URL endpoint", async () => {
-      renderCompare({ searchParams: "?cmp_endpoint=/v1/unknown" });
+    it("ignores an unknown URL endpoint and clears it", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderCompareKeepingMountUpdates("?cmp_endpoint=/v1/unknown", onUrlUpdate);
 
       expect(await screen.findByRole("combobox", { name: "Endpoint" })).toHaveTextContent("/v1/chat/completions");
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.has("cmp_endpoint")).toBe(false));
     });
 
     it("writes the chosen endpoint to the URL", async () => {

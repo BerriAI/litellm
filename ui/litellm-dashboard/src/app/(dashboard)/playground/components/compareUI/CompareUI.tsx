@@ -56,9 +56,9 @@ const GENERIC_FOLLOW_UPS = [
   "What are the next steps?",
 ];
 const SUGGESTED_PROMPTS = ["Write me a poem", "Explain quantum computing", "Draft a polite email requesting a meeting"];
-const createComparison = (id: string, agent = ""): ComparisonInstance => ({
+type PanelState = Omit<ComparisonInstance, "model">;
+const createComparison = (id: string, agent = ""): PanelState => ({
   id,
-  model: "",
   agent,
   messages: [],
   isLoading: false,
@@ -72,7 +72,7 @@ const createComparison = (id: string, agent = ""): ComparisonInstance => ({
   useAdvancedParams: false,
 });
 export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: CompareUIProps) {
-  const [panelStates, setComparisons] = useState<ComparisonInstance[]>(() =>
+  const [panelStates, setComparisons] = useState<PanelState[]>(() =>
     Array.from({ length: MAX_COMPARISONS }, (_, index) => createComparison(String(index + 1))),
   );
   const [modelOptions, setModelOptions] = useState<string[]>([]);
@@ -87,7 +87,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
     addPanel,
     removePanel,
   } = useCompareUrlState(modelOptions);
-  const comparisons = useMemo(
+  const comparisons = useMemo<ComparisonInstance[]>(
     () => panelModels.map((model, index) => ({ ...panelStates[index], model })),
     [panelModels, panelStates],
   );

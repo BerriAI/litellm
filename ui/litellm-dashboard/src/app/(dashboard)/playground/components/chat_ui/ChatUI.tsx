@@ -70,7 +70,7 @@ import RealtimePlayground from "./RealtimePlayground";
 import { MessageType } from "@/components/chat_ui/types";
 import { useCodeInterpreter } from "../../hooks/useCodeInterpreter";
 import { useChatHistory } from "../../hooks/useChatHistory";
-import { dropUnlistedModel, toEndpointType, useChatUrlState } from "../../hooks/useChatUrlState";
+import { toEndpointType, useChatUrlState } from "../../hooks/useChatUrlState";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
@@ -200,7 +200,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
   const [inputMessage, setInputMessage] = useState("");
-  const { selectedModel, endpointType, setSelection } = useChatUrlState({ simplified, fixedModel });
+  const { selectedModel, endpointType, setSelection, dropUnlistedModel } = useChatUrlState({
+    simplified,
+    fixedModel,
+  });
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -425,7 +428,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         }
 
         setModelInfo(uniqueModels);
-        setSelection(dropUnlistedModel(uniqueModels));
+        dropUnlistedModel(uniqueModels);
       } catch (error) {
         if (cancelled) {
           return;
@@ -448,7 +451,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [accessToken, apiKeySource, apiKey, simplified, setSelection]);
+  }, [accessToken, apiKeySource, apiKey, simplified, dropUnlistedModel]);
 
   // Load tools when MCP direct mode has a server (or toolset) selected
   useEffect(() => {
@@ -616,7 +619,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
       setSelectedMCPServers((prev) => (prev.length === 1 && prev[0] !== "__all__" ? prev : []));
     }
     try {
-      sessionStorage.removeItem("selectedModel");
       sessionStorage.removeItem("selectedAgent");
     } catch {}
   };

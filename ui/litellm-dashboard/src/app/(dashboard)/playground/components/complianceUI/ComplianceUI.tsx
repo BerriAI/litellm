@@ -121,7 +121,6 @@ interface ComplianceUIProps {
     PROXY_BASE_URL?: string;
     LITELLM_UI_API_DOC_BASE_URL?: string | null;
   };
-  /** When false, keep the tab and selections in local state instead of the URL (e.g. embedded in Agent Builder). */
   persistInUrl?: boolean;
 }
 
@@ -146,7 +145,7 @@ export default function ComplianceUI({
     setSelectedPolicies,
     toggleGuardrail,
     clearSelection,
-  } = useComplianceUrlState(persistInUrl);
+  } = useComplianceUrlState({ persistInUrl, canViewPolicies });
   const [showGuardrailDropdown, setShowGuardrailDropdown] = useState(false);
 
   const [selectedPromptIds, setSelectedPromptIds] = useState<Set<string>>(new Set());

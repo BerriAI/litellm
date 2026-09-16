@@ -1,11 +1,14 @@
 import userEvent from "@testing-library/user-event";
-import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { PropsWithChildren } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, renderWithProviders, screen, waitFor } from "@/../tests/test-utils";
+import { fireEvent, render, renderWithProviders, screen, testQueryClient, waitFor } from "@/../tests/test-utils";
 import ComplianceUI from "./ComplianceUI";
 
 const getGuardrailsList = vi.fn();
 const testPoliciesAndGuardrails = vi.fn();
+const canViewPolicies = vi.fn(() => true);
 
 vi.mock("@/components/networking", () => ({
   getGuardrailsList: (...args: unknown[]) => getGuardrailsList(...args),
@@ -13,7 +16,7 @@ vi.mock("@/components/networking", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
-  default: () => true,
+  default: () => canViewPolicies(),
 }));
 
 vi.mock("@/components/policies/PolicySelector", () => ({
@@ -40,6 +43,20 @@ const renderCompliance = ({ searchParams, onUrlUpdate, persistInUrl }: RenderOpt
     onUrlUpdate,
   });
 
+const renderComplianceKeepingMountUpdates = (searchParams: string, onUrlUpdate: OnUrlUpdateFunction) => {
+  const Providers = ({ children }: PropsWithChildren) => (
+    <NuqsTestingAdapter
+      searchParams={searchParams}
+      onUrlUpdate={onUrlUpdate}
+      hasMemory
+      resetUrlUpdateQueueOnMount={false}
+    >
+      <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+    </NuqsTestingAdapter>
+  );
+  return render(<ComplianceUI accessToken="sk-test" />, { wrapper: Providers });
+};
+
 const lastUrlUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => {
   const update = onUrlUpdate.mock.calls.at(-1)?.[0];
   if (!update) throw new Error("expected a URL update");
@@ -50,6 +67,7 @@ const QUICK_TEST_HINT = "Type a prompt below to quickly test it.";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  canViewPolicies.mockReturnValue(true);
   Element.prototype.scrollIntoView = vi.fn();
   getGuardrailsList.mockResolvedValue({
     guardrails: [{ guardrail_name: "pii-mask" }, { guardrail_name: "toxicity-filter" }],
@@ -72,10 +90,12 @@ describe("ComplianceUI URL state", () => {
     expect(screen.queryByText(QUICK_TEST_HINT)).not.toBeInTheDocument();
   });
 
-  it("falls back to the quick test panel for an unknown URL tab", () => {
-    renderCompliance({ searchParams: "?cmpl_tab=history" });
+  it("falls back to the quick test panel for an unknown URL tab and clears it", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderComplianceKeepingMountUpdates("?cmpl_tab=history", onUrlUpdate);
 
     expect(screen.getByText(QUICK_TEST_HINT)).toBeInTheDocument();
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.has("cmpl_tab")).toBe(false));
   });
 
   it("writes the chosen panel to the URL", async () => {
@@ -114,6 +134,20 @@ describe("ComplianceUI URL state", () => {
       policy_names: ["pii-policy"],
       guardrail_names: ["pii-mask"],
     });
+  });
+
+  it("ignores URL policies for a user who cannot view policies", async () => {
+    const user = userEvent.setup();
+    canViewPolicies.mockReturnValue(false);
+    renderCompliance({ searchParams: "?cmpl_policies=pii-policy&cmpl_guardrails=pii-mask" });
+
+    fireEvent.change(screen.getByPlaceholderText("Enter text to test..."), { target: { value: "hello" } });
+    await user.click(screen.getByRole("button", { name: "Test 1 guardrail" }));
+
+    await waitFor(() => expect(testPoliciesAndGuardrails).toHaveBeenCalledTimes(1));
+    expect(testPoliciesAndGuardrails.mock.calls[0][1].policy_names).toBeUndefined();
+    expect(testPoliciesAndGuardrails.mock.calls[0][1].guardrail_names).toEqual(["pii-mask"]);
+    expect(screen.queryByText("pii-policy")).not.toBeInTheDocument();
   });
 
   it("writes chosen policies and guardrails to the URL and clears them on reset", async () => {

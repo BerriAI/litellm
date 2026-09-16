@@ -1,5 +1,7 @@
-import { parseAsArrayOf, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
+import { parseAsArrayOf, parseAsString, useQueryStates } from "nuqs";
 import { useCallback, useState } from "react";
+
+import { useUrlTab } from "@/hooks/useUrlTab";
 
 const RIGHT_PANEL_TABS = ["quick", "batch"] as const;
 
@@ -7,46 +9,48 @@ export type RightPanelTab = (typeof RIGHT_PANEL_TABS)[number];
 
 const NO_SELECTION: string[] = [];
 
-const complianceUrlParsers = {
-  cmpl_tab: parseAsStringLiteral(RIGHT_PANEL_TABS).withDefault("quick"),
+const selectionUrlParsers = {
   cmpl_policies: parseAsArrayOf(parseAsString).withDefault(NO_SELECTION),
   cmpl_guardrails: parseAsArrayOf(parseAsString).withDefault(NO_SELECTION),
 };
 
-type ComplianceUrlValues = {
-  cmpl_tab: RightPanelTab;
+type ComplianceSelection = {
   cmpl_policies: string[];
   cmpl_guardrails: string[];
 };
 
-const DEFAULT_VALUES: ComplianceUrlValues = {
-  cmpl_tab: "quick",
+const EMPTY_SELECTION: ComplianceSelection = {
   cmpl_policies: NO_SELECTION,
   cmpl_guardrails: NO_SELECTION,
 };
 
-type ComplianceUrlUpdate = (current: ComplianceUrlValues) => Partial<ComplianceUrlValues>;
+type SelectionUpdate = (current: ComplianceSelection) => Partial<ComplianceSelection>;
 
 const toggleValue = (values: string[], value: string): string[] =>
   values.includes(value) ? values.filter((current) => current !== value) : [...values, value];
 
-export function useComplianceUrlState(persistInUrl: boolean) {
-  const [urlValues, setUrlValues] = useQueryStates(complianceUrlParsers);
-  const [localValues, setLocalValues] = useState<ComplianceUrlValues>(DEFAULT_VALUES);
-  const values = persistInUrl ? urlValues : localValues;
+interface ComplianceUrlStateOptions {
+  persistInUrl: boolean;
+  canViewPolicies: boolean;
+}
+
+export function useComplianceUrlState({ persistInUrl, canViewPolicies }: ComplianceUrlStateOptions) {
+  const [urlTab, setUrlTab] = useUrlTab(RIGHT_PANEL_TABS, "quick", "cmpl_tab");
+  const [urlSelection, setUrlSelection] = useQueryStates(selectionUrlParsers);
+  const [localTab, setLocalTab] = useState<RightPanelTab>("quick");
+  const [localSelection, setLocalSelection] = useState<ComplianceSelection>(EMPTY_SELECTION);
+  const selection = persistInUrl ? urlSelection : localSelection;
 
   const update = useCallback(
-    (change: ComplianceUrlUpdate) => {
+    (change: SelectionUpdate) => {
       if (persistInUrl) {
-        void setUrlValues(change);
+        void setUrlSelection(change);
         return;
       }
-      setLocalValues((current) => ({ ...current, ...change(current) }));
+      setLocalSelection((current) => ({ ...current, ...change(current) }));
     },
-    [persistInUrl, setUrlValues],
+    [persistInUrl, setUrlSelection],
   );
-
-  const setRightTab = useCallback((tab: RightPanelTab) => update(() => ({ cmpl_tab: tab })), [update]);
 
   const setSelectedPolicies = useCallback(
     (policies: string[]) => update(() => ({ cmpl_policies: policies })),
@@ -58,16 +62,13 @@ export function useComplianceUrlState(persistInUrl: boolean) {
     [update],
   );
 
-  const clearSelection = useCallback(
-    () => update(() => ({ cmpl_policies: NO_SELECTION, cmpl_guardrails: NO_SELECTION })),
-    [update],
-  );
+  const clearSelection = useCallback(() => update(() => EMPTY_SELECTION), [update]);
 
   return {
-    rightTab: values.cmpl_tab,
-    selectedPolicies: values.cmpl_policies,
-    selectedGuardrails: values.cmpl_guardrails,
-    setRightTab,
+    rightTab: persistInUrl ? urlTab : localTab,
+    selectedPolicies: canViewPolicies ? selection.cmpl_policies : NO_SELECTION,
+    selectedGuardrails: selection.cmpl_guardrails,
+    setRightTab: persistInUrl ? setUrlTab : setLocalTab,
     setSelectedPolicies,
     toggleGuardrail,
     clearSelection,

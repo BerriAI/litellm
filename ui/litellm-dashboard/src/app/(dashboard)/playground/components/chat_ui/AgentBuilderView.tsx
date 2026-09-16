@@ -196,8 +196,9 @@ export default function AgentBuilderView({
   const [agentModels, setAgentModels] = useState<AgentModel[]>([]);
   const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(true);
-  const { selectedId, isNewAgent, selectAgent, keepValidSelection, activeTab, setActiveTab } =
-    useAgentBuilderUrlState();
+  const { selectedId, isNewAgent, selectAgent, dropStaleSelection, activeTab, setActiveTab } = useAgentBuilderUrlState(
+    agentModels.map(getAgentSelectionKey),
+  );
   const { onTabChange, hasVisited } = useVisitedTabs(activeTab);
   const goToTab = (tab: AgentTab) => {
     setActiveTab(tab);
@@ -232,7 +233,7 @@ export default function AgentBuilderView({
     try {
       const list = await fetchAvailableAgentModels(accessToken, userID, userRole);
       setAgentModels(list);
-      keepValidSelection(list.map(getAgentSelectionKey));
+      dropStaleSelection(list.map(getAgentSelectionKey));
       return list;
     } catch (e) {
       console.error(e);
@@ -241,7 +242,7 @@ export default function AgentBuilderView({
     } finally {
       setLoadingAgents(false);
     }
-  }, [accessToken, userID, userRole, keepValidSelection]);
+  }, [accessToken, userID, userRole, dropStaleSelection]);
 
   const loadModels = useCallback(async () => {
     if (!effectiveApiKey) return;
@@ -359,7 +360,7 @@ export default function AgentBuilderView({
       const created = createdId
         ? list.find((a) => getAgentModelId(a) === createdId) ?? list.find((a) => a.model_name === draftName.trim())
         : list.find((a) => a.model_name === draftName.trim());
-      selectAgent(created ? getAgentSelectionKey(created) : list[0] ? getAgentSelectionKey(list[0]) : null);
+      selectAgent(created ? getAgentSelectionKey(created) : list[0] ? getAgentSelectionKey(list[0]) : null, "replace");
       goToTab("chat");
     } catch (e) {
       toast.fromError("Failed to save agent");
@@ -394,7 +395,7 @@ export default function AgentBuilderView({
       const list = await loadAgents();
       const stillSelected = list.find((a) => getAgentModelId(a) === selectedAgentModelId);
       const target = stillSelected ?? list[0];
-      selectAgent(target ? getAgentSelectionKey(target) : null);
+      selectAgent(target ? getAgentSelectionKey(target) : null, "replace");
     } catch (e) {
       toast.fromError("Failed to update agent");
     } finally {
@@ -438,7 +439,7 @@ export default function AgentBuilderView({
       toast.success("Agent deleted");
       const list = await loadAgents();
       const remaining = list.filter((a) => getAgentModelId(a) !== selectedAgentModelId);
-      selectAgent(remaining.length > 0 ? getAgentSelectionKey(remaining[0]) : null);
+      selectAgent(remaining.length > 0 ? getAgentSelectionKey(remaining[0]) : null, "replace");
     } catch (e) {
       toast.fromError("Failed to delete agent");
     } finally {

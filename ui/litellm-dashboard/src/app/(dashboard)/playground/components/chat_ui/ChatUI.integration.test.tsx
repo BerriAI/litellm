@@ -1,8 +1,10 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as renderWithoutProviders, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders as render } from "@/../tests/test-utils";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { renderWithProviders as render, testQueryClient } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { PropsWithChildren } from "react";
 import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
@@ -67,6 +69,29 @@ function renderChatWithUrl(options: { searchParams?: string; onUrlUpdate?: OnUrl
       disabledPersonalKeyCreation={false}
     />,
     options,
+  );
+}
+
+function renderChatKeepingMountUpdates(searchParams: string, onUrlUpdate: OnUrlUpdateFunction) {
+  const Providers = ({ children }: PropsWithChildren) => (
+    <NuqsTestingAdapter
+      searchParams={searchParams}
+      onUrlUpdate={onUrlUpdate}
+      hasMemory
+      resetUrlUpdateQueueOnMount={false}
+    >
+      <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+    </NuqsTestingAdapter>
+  );
+  return renderWithoutProviders(
+    <ChatUI
+      accessToken="1234567890"
+      token="1234567890"
+      userRole="user"
+      userID="1234567890"
+      disabledPersonalKeyCreation={false}
+    />,
+    { wrapper: Providers },
   );
 }
 
@@ -815,6 +840,7 @@ describe("ChatUI", () => {
   describe("URL state", () => {
     it("prefers the model in the URL over the one saved in the session", async () => {
       sessionStorage.setItem("selectedModel", "Model 2");
+      sessionStorage.setItem("endpointType", "responses");
 
       renderChatWithUrl({ searchParams: "?chat_model=Model+1" });
 
@@ -872,6 +898,28 @@ describe("ChatUI", () => {
       expect(lastUrlUpdate(onUrlUpdate).searchParams.has("chat_model")).toBe(false);
       expect(screen.getByPlaceholderText("Select a Model")).toHaveValue("");
       expect(sessionStorage.getItem("selectedModel")).toBeNull();
+    });
+
+    it("drops a saved model the list lacks without touching the URL", async () => {
+      sessionStorage.setItem("selectedModel", "Retired Model");
+      sessionStorage.setItem("endpointType", "responses");
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+
+      renderChatWithUrl({ onUrlUpdate });
+
+      await waitFor(() => {
+        expect(sessionStorage.getItem("selectedModel")).toBeNull();
+      });
+      expect(screen.getByPlaceholderText("Select a Model")).toHaveValue("");
+      expect(screen.getByPlaceholderText("Select an endpoint")).toHaveValue("/v1/responses");
+
+      await selectComboboxOption("Select a Model", "Model 3");
+
+      await waitFor(() => {
+        expect(lastUrlUpdate(onUrlUpdate).searchParams.get("chat_model")).toBe("Model 3");
+      });
+      expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.get("chat_endpoint")).toBe("responses");
     });
 
     it("writes the picked model and endpoint to the URL", async () => {
@@ -936,15 +984,20 @@ describe("ChatUI", () => {
       expect(sessionStorage.getItem("endpointType")).toBeNull();
     });
 
-    it("ignores an unknown URL endpoint and keeps the one saved in the session", async () => {
+    it("ignores an unknown URL endpoint, clears it and keeps the one saved in the session", async () => {
       sessionStorage.setItem("endpointType", "responses");
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
 
-      renderChatWithUrl({ searchParams: "?chat_endpoint=bogus" });
+      renderChatKeepingMountUpdates("?chat_endpoint=bogus", onUrlUpdate);
 
       await waitFor(() => {
         expect(screen.getByPlaceholderText("Select a Model")).toBeEnabled();
       });
       expect(screen.getByPlaceholderText("Select an endpoint")).toHaveValue("/v1/responses");
+      await waitFor(() => {
+        expect(lastUrlUpdate(onUrlUpdate).searchParams.has("chat_endpoint")).toBe(false);
+      });
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.has("chat_model")).toBe(false);
     });
 
     it("uses the fixed model and leaves the URL alone in simplified mode", async () => {

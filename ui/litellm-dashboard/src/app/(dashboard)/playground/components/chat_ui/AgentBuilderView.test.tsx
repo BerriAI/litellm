@@ -2,7 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
-import { type PropsWithChildren, useState } from "react";
+import { type ComponentProps, type PropsWithChildren, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AgentBuilderView from "./AgentBuilderView";
 import type { AgentModel } from "../../llm_calls/fetch_agents";
@@ -15,6 +15,8 @@ const keyCreateCall = vi.fn().mockResolvedValue({ key: "sk-agent-key" });
 const fetchMCPServers = vi.fn().mockResolvedValue([]);
 const fetchAvailableAgentModels = vi.fn();
 const fetchAvailableModels = vi.fn().mockResolvedValue([{ model_group: "gpt-4o" }, { model_group: "claude-sonnet-4" }]);
+const getGuardrailsList = vi.fn().mockResolvedValue({ guardrails: [] });
+const embeddedCompliance = vi.hoisted(() => ({ renderReal: false }));
 
 vi.mock("@/components/networking", () => ({
   proxyBaseUrl: "https://proxy.example.com",
@@ -23,6 +25,17 @@ vi.mock("@/components/networking", () => ({
   modelDeleteCall: (...args: unknown[]) => modelDeleteCall(...args),
   keyCreateCall: (...args: unknown[]) => keyCreateCall(...args),
   fetchMCPServers: (...args: unknown[]) => fetchMCPServers(...args),
+  getGuardrailsList: (...args: unknown[]) => getGuardrailsList(...args),
+  testPoliciesAndGuardrails: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: () => true,
+}));
+
+vi.mock("@/components/policies/PolicySelector", () => ({
+  default: () => null,
+  getPolicyOptionEntries: () => [],
 }));
 
 vi.mock("../../llm_calls/fetch_agents", () => ({
@@ -46,9 +59,17 @@ vi.mock("./ChatUI", () => ({
   default: () => <StatefulPanel label="chat scratch" />,
 }));
 
-vi.mock("../complianceUI/ComplianceUI", () => ({
-  default: () => <StatefulPanel label="batch scratch" />,
-}));
+vi.mock("../complianceUI/ComplianceUI", async (importOriginal) => {
+  const { default: RealComplianceUI } = await importOriginal<typeof import("../complianceUI/ComplianceUI")>();
+  return {
+    default: (complianceProps: ComponentProps<typeof RealComplianceUI>) =>
+      embeddedCompliance.renderReal ? (
+        <RealComplianceUI {...complianceProps} />
+      ) : (
+        <StatefulPanel label="batch scratch" />
+      ),
+  };
+});
 
 const AGENTS: AgentModel[] = [
   {
@@ -102,6 +123,8 @@ const waitForRoster = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  embeddedCompliance.renderReal = false;
+  Element.prototype.scrollIntoView = vi.fn();
   fetchAvailableAgentModels.mockResolvedValue(AGENTS);
   fetchAvailableModels.mockResolvedValue([{ model_group: "gpt-4o" }, { model_group: "claude-sonnet-4" }]);
   fetchMCPServers.mockResolvedValue([]);
@@ -362,23 +385,76 @@ describe("AgentBuilderView", () => {
       expect(await screen.findByDisplayValue("research-agent")).toBeInTheDocument();
     });
 
-    it("records the first agent in the URL without adding a history entry", async () => {
+    it("shows the first agent without writing it to the URL", async () => {
+      const user = userEvent.setup();
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-      renderView({ onUrlUpdate });
+      renderViewKeepingMountUpdates("", onUrlUpdate);
       await waitForRoster();
+      expect(await screen.findByDisplayValue("support-agent")).toBeInTheDocument();
 
-      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_id")).toBe("agent-1"));
-      expect(lastUrlUpdate(onUrlUpdate).options.history).toBe("replace");
+      await user.click(screen.getByRole("tab", { name: /Connect/i }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_tab")).toBe("connect"));
+      expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.has("agent_id")).toBe(false);
+      expect(await screen.findByTestId("code-block")).toHaveTextContent('"model": "support-agent"');
     });
 
-    it("replaces an unknown agent in the URL with the first agent", async () => {
+    it("shows the first agent for an unknown URL agent and clears it without a history entry", async () => {
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
       renderView({ searchParams: "?agent_id=deleted-agent", onUrlUpdate });
       await waitForRoster();
 
       expect(await screen.findByDisplayValue("support-agent")).toBeInTheDocument();
-      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_id")).toBe("agent-1"));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.has("agent_id")).toBe(false));
       expect(lastUrlUpdate(onUrlUpdate).options.history).toBe("replace");
+    });
+
+    it("moves the URL to the next agent after a delete without adding a history entry", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderView({ searchParams: "?agent_id=agent-1", onUrlUpdate });
+      await waitForRoster();
+      await screen.findByDisplayValue("support-agent");
+
+      fetchAvailableAgentModels.mockResolvedValue([AGENTS[1]]);
+      await user.click(screen.getAllByRole("button", { name: /Delete$/ })[0]);
+      await screen.findByText(/Are you sure you want to delete "support-agent"/);
+      await user.click(screen.getAllByRole("button", { name: /Delete$/ }).at(-1)!);
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_id")).toBe("agent-2"));
+      expect(onUrlUpdate.mock.calls.map(([update]) => update.options.history)).not.toContain("push");
+      expect(await screen.findByDisplayValue("research-agent")).toBeInTheDocument();
+    });
+
+    it("leaves the URL alone after updating the selected agent", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderView({ searchParams: "?agent_id=agent-2", onUrlUpdate });
+      await waitForRoster();
+      await screen.findByDisplayValue("research-agent");
+
+      await user.click(screen.getByRole("button", { name: /Update Agent/i }));
+      await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+      await waitFor(() => expect(fetchAvailableAgentModels).toHaveBeenCalledTimes(2));
+      await user.click(screen.getByRole("tab", { name: /Connect/i }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_tab")).toBe("connect"));
+      expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+      expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_id")).toBe("agent-2");
+    });
+
+    it("keeps the embedded batch test panel out of the URL", async () => {
+      const user = userEvent.setup();
+      embeddedCompliance.renderReal = true;
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderView({ searchParams: "?agent_id=agent-1&agent_tab=batch", onUrlUpdate });
+      await waitForRoster();
+
+      await user.click(await screen.findByRole("button", { name: /Batch Results/ }));
+
+      expect(await screen.findByRole("heading", { name: "Results" })).toBeInTheDocument();
+      expect(onUrlUpdate.mock.calls.some(([update]) => update.searchParams.has("cmpl_tab"))).toBe(false);
     });
 
     it("writes the chosen tab to the URL", async () => {
@@ -439,6 +515,7 @@ describe("AgentBuilderView", () => {
 
       await waitFor(() => expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_id")).toBe("id-new"));
       expect(lastUrlUpdate(onUrlUpdate).searchParams.get("agent_tab")).toBe("chat");
+      expect(lastUrlUpdate(onUrlUpdate).options.history).toBe("replace");
       expect(screen.getByRole("tab", { name: /Chat/i })).toHaveAttribute("aria-selected", "true");
     });
   });
