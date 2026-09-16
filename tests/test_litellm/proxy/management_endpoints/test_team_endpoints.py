@@ -548,9 +548,41 @@ def test_set_budget_reset_at_treats_a_blank_duration_as_unset(blank):
     data = UpdateTeamRequest.model_construct(team_id="team-1", budget_duration=blank)
     updated_kv = {"budget_duration": blank}
 
-    _set_budget_reset_at(data, updated_kv)
+    persisted = _set_budget_reset_at(data, updated_kv)
 
-    assert updated_kv["budget_reset_at"] is None
+    assert persisted["budget_duration"] is None
+    assert persisted["budget_reset_at"] is None
+    assert updated_kv == {"budget_duration": blank}
+    assert data.budget_duration == blank
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_create_persistence_drops_blank_budget_duration_without_mutating_input(blank):
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _persistence_values_for_budget_duration,
+    )
+
+    dumped = {"team_alias": "blank-duration-team", "budget_duration": blank, "max_budget": 10}
+
+    persisted = _persistence_values_for_budget_duration(dumped, blank)
+
+    assert "budget_duration" not in persisted
+    assert persisted["team_alias"] == "blank-duration-team"
+    assert dumped == {"team_alias": "blank-duration-team", "budget_duration": blank, "max_budget": 10}
+
+
+def test_create_persistence_keeps_a_usable_budget_duration_without_mutating_input():
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _persistence_values_for_budget_duration,
+    )
+
+    dumped = {"team_alias": "daily-team", "budget_duration": "1d"}
+
+    persisted = _persistence_values_for_budget_duration(dumped, "1d")
+
+    assert persisted["budget_duration"] == "1d"
+    assert persisted is not dumped
+    assert dumped == {"team_alias": "daily-team", "budget_duration": "1d"}
 
 
 @pytest.mark.asyncio
@@ -10833,7 +10865,7 @@ async def test_update_team_blocks_non_admin_passthrough_routes(mock_db_client):
 def test_set_budget_reset_at_clears_when_budget_duration_null():
     """
     When budget_duration is explicitly set to null, _set_budget_reset_at
-    should set budget_reset_at=None in updated_kv so Prisma clears it in the DB.
+    should set budget_reset_at=None in the persistence copy so Prisma clears it.
     """
     from litellm.proxy._types import UpdateTeamRequest
     from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
@@ -10841,16 +10873,17 @@ def test_set_budget_reset_at_clears_when_budget_duration_null():
     data = UpdateTeamRequest(team_id="test-team", budget_duration=None)
     updated_kv = {"team_id": "test-team", "budget_duration": None}
 
-    _set_budget_reset_at(data, updated_kv)
+    persisted = _set_budget_reset_at(data, updated_kv)
 
-    assert "budget_reset_at" in updated_kv
-    assert updated_kv["budget_reset_at"] is None
+    assert persisted["budget_reset_at"] is None
+    assert persisted["budget_duration"] is None
+    assert updated_kv == {"team_id": "test-team", "budget_duration": None}
 
 
 def test_set_budget_reset_at_noop_when_budget_duration_not_sent():
     """
     When budget_duration is NOT sent (unset), _set_budget_reset_at should
-    not add budget_reset_at to updated_kv.
+    not add budget_reset_at to the persistence copy.
     """
     from litellm.proxy._types import UpdateTeamRequest
     from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
@@ -10858,15 +10891,17 @@ def test_set_budget_reset_at_noop_when_budget_duration_not_sent():
     data = UpdateTeamRequest(team_id="test-team")
     updated_kv = {"team_id": "test-team"}
 
-    _set_budget_reset_at(data, updated_kv)
+    persisted = _set_budget_reset_at(data, updated_kv)
 
-    assert "budget_reset_at" not in updated_kv
+    assert "budget_reset_at" not in persisted
+    assert persisted == {"team_id": "test-team"}
+    assert updated_kv == {"team_id": "test-team"}
 
 
 def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
     """
     When budget_duration is set to a valid string, _set_budget_reset_at
-    should compute and set budget_reset_at.
+    should compute and set budget_reset_at on the persistence copy.
     """
     from litellm.proxy._types import UpdateTeamRequest
     from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
@@ -10874,10 +10909,11 @@ def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
     data = UpdateTeamRequest(team_id="test-team", budget_duration="30d")
     updated_kv = {"team_id": "test-team", "budget_duration": "30d"}
 
-    _set_budget_reset_at(data, updated_kv)
+    persisted = _set_budget_reset_at(data, updated_kv)
 
-    assert "budget_reset_at" in updated_kv
-    assert updated_kv["budget_reset_at"] is not None
+    assert persisted["budget_reset_at"] is not None
+    assert persisted["budget_duration"] == "30d"
+    assert updated_kv == {"team_id": "test-team", "budget_duration": "30d"}
 
 
 @pytest.mark.asyncio
