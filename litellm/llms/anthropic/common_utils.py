@@ -560,13 +560,22 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return value if isinstance(value, bool) else None
 
     @staticmethod
-    def _supports_model_capability(model: str, key: str, custom_llm_provider: str) -> bool:
+    def _supports_model_capability(
+        model: str, key: str, custom_llm_provider: str, base_model: str | None = None
+    ) -> bool:
         """Check a boolean capability ``key`` in the model map under the caller's provider.
 
         The provider-aware lookup is authoritative when it resolves an explicit flag,
         so ``key: false`` on the provider-namespaced entry wins over every fallback.
         Otherwise ``_supports_factory``'s provider-level fallbacks and the raw
         model-map walk remain as backstops for alias forms the lookup misses.
+
+        ``base_model`` is an opaque-``model``-string fallback (the same
+        ``litellm_params.base_model`` Azure deployments use for model-type
+        detection): a Bedrock application inference profile ARN carries no
+        version substring, so every lookup above resolves nothing for it. When
+        the direct lookups are inconclusive and ``base_model`` names the actual
+        underlying model (e.g. ``claude-sonnet-5``), retry them against it.
         """
         from litellm.utils import _supports_factory
 
@@ -582,52 +591,67 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         except Exception:
             pass
-        return AnthropicModelInfo._get_model_capability(model, key) is True
+        if AnthropicModelInfo._get_model_capability(model, key) is True:
+            return True
+        if base_model is not None and base_model != model:
+            return AnthropicModelInfo._supports_model_capability(base_model, key, custom_llm_provider)
+        return False
 
     @staticmethod
-    def _is_adaptive_thinking_model(model: str, custom_llm_provider: str) -> bool:
+    def _is_adaptive_thinking_model(model: str, custom_llm_provider: str, base_model: str | None = None) -> bool:
         """Whether ``model`` uses adaptive thinking (``output_config.effort``).
 
         The model cost map is authoritative: an explicit ``supports_adaptive_thinking``
         entry resolved under ``custom_llm_provider``, or a ``fallback_generalizations``
         rule for unknown Claude models. The version gate (>= 4.6, including
         provider-prefixed Bedrock/Vertex ids that map to no exact entry) lives entirely
-        in that declarative rule, not here.
+        in that declarative rule, not here. ``base_model`` is the opaque-id fallback —
+        see ``_supports_model_capability``.
         """
-        return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking", custom_llm_provider)
+        return AnthropicModelInfo._supports_model_capability(
+            model, "supports_adaptive_thinking", custom_llm_provider, base_model=base_model
+        )
 
     @staticmethod
-    def _is_always_on_thinking_model(model: str, custom_llm_provider: str) -> bool:
+    def _is_always_on_thinking_model(model: str, custom_llm_provider: str, base_model: str | None = None) -> bool:
         """Whether ``model`` always thinks and rejects ``thinking.type=disabled``
         (Fable 5 / Mythos 5 generation). The model cost map is authoritative: an
         explicit ``thinking_always_on`` entry resolved under ``custom_llm_provider``,
         or a ``fallback_generalizations`` rule for unmapped ids of those families.
+        ``base_model`` is the opaque-id fallback — see ``_supports_model_capability``.
         """
-        return AnthropicModelInfo._supports_model_capability(model, "thinking_always_on", custom_llm_provider)
+        return AnthropicModelInfo._supports_model_capability(
+            model, "thinking_always_on", custom_llm_provider, base_model=base_model
+        )
 
     @staticmethod
-    def _supports_legacy_thinking(model: str, custom_llm_provider: str) -> bool:
+    def _supports_legacy_thinking(model: str, custom_llm_provider: str, base_model: str | None = None) -> bool:
         """Whether ``model`` is an adaptive-thinking model that still accepts legacy
         ``thinking.type=enabled`` with ``budget_tokens`` (the Claude 4.6 family).
         The model cost map is authoritative: an explicit ``supports_legacy_thinking``
         entry resolved under ``custom_llm_provider``, or a ``fallback_generalizations``
         rule for unmapped 4.6 ids. Absent flag means the model rejects the legacy shape.
+        ``base_model`` is the opaque-id fallback — see ``_supports_model_capability``.
         """
-        return AnthropicModelInfo._supports_model_capability(model, "supports_legacy_thinking", custom_llm_provider)
+        return AnthropicModelInfo._supports_model_capability(
+            model, "supports_legacy_thinking", custom_llm_provider, base_model=base_model
+        )
 
     @staticmethod
     def maybe_drop_disabled_thinking(
         model: str,
         optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param, as in _maybe_drop_speed_param
         custom_llm_provider: str,
+        base_model: str | None = None,
     ) -> None:
         """Omit ``thinking={'type': 'disabled'}`` for always-on-thinking models
         (Fable 5 / Mythos 5), which 400 on it; omission is the API-documented
-        remedy and yields the model's default adaptive thinking."""
+        remedy and yields the model's default adaptive thinking. ``base_model``
+        is the opaque-id fallback — see ``_supports_model_capability``."""
         thinking: Final = optional_params.get("thinking")
         if not isinstance(thinking, dict) or thinking.get("type") != "disabled":
             return
-        if not AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+        if not AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider, base_model=base_model):
             return
         litellm.verbose_logger.warning(
             DROP_DISABLED_THINKING_WARNING,
@@ -640,17 +664,19 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         model: str,
         optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
         custom_llm_provider: str,
+        base_model: str | None = None,
     ) -> None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for the
         adaptive-thinking models that reject it (4.7+ and the 5 families).
         Models flagged ``supports_legacy_thinking`` (the 4.6 family) accept the
         legacy shape natively, so it is forwarded verbatim and the caller's
         ``budget_tokens`` cap keeps applying. Caller-provided
-        ``output_config.effort`` is never overridden.
+        ``output_config.effort`` is never overridden. ``base_model`` is the
+        opaque-id fallback — see ``_supports_model_capability``.
         """
-        if not AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
+        if not AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider, base_model=base_model):
             return
-        if AnthropicModelInfo._supports_legacy_thinking(model, custom_llm_provider):
+        if AnthropicModelInfo._supports_legacy_thinking(model, custom_llm_provider, base_model=base_model):
             return
         thinking: Final = optional_params.get("thinking")
         if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
@@ -660,6 +686,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             model=model,
             budget_tokens=int(thinking.get("budget_tokens") or 0),
             custom_llm_provider=custom_llm_provider,
+            base_model=base_model,
         )
         existing_output_config: Final = optional_params.get("output_config")
         optional_params["thinking"] = {"type": "adaptive"}
@@ -669,9 +696,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         }
 
     @staticmethod
-    def _legacy_budget_to_effort(model: str, budget_tokens: int, custom_llm_provider: str) -> str:
+    def _legacy_budget_to_effort(
+        model: str, budget_tokens: int, custom_llm_provider: str, base_model: str | None = None
+    ) -> str:
         if budget_tokens >= DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET and (
-            AnthropicModelInfo._supports_model_capability(model, "supports_xhigh_reasoning_effort", custom_llm_provider)
+            AnthropicModelInfo._supports_model_capability(
+                model, "supports_xhigh_reasoning_effort", custom_llm_provider, base_model=base_model
+            )
         ):
             return "xhigh"
         if budget_tokens >= DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET:

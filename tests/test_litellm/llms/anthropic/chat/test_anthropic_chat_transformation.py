@@ -2889,6 +2889,27 @@ def test_is_adaptive_thinking_model_is_sourced_from_cost_map(
     assert AnthropicConfig._is_adaptive_thinking_model(model, "anthropic") is expected
 
 
+def test_is_adaptive_thinking_model_falls_back_to_base_model_for_opaque_ids(
+    local_model_cost_map,
+):
+    """A Bedrock application inference profile ARN carries no version substring,
+    so every direct cost-map lookup for it resolves nothing. ``base_model`` is
+    the same opaque-id fallback Azure deployments use for model-type detection
+    (``litellm_params.base_model``); when set, it must be retried so a chart/config
+    pin still resolves adaptive-thinking correctly."""
+    opaque_model = "arn:aws:bedrock:ap-northeast-1:111111111111:application-inference-profile/abc123"
+
+    assert AnthropicConfig._is_adaptive_thinking_model(opaque_model, "bedrock") is False
+    assert (
+        AnthropicConfig._is_adaptive_thinking_model(opaque_model, "bedrock", base_model="claude-sonnet-5")
+        is True
+    )
+    assert (
+        AnthropicConfig._is_adaptive_thinking_model(opaque_model, "bedrock", base_model="claude-opus-4-5")
+        is False
+    )
+
+
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias(
     local_model_cost_map,
 ):
