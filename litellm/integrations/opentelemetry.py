@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 import litellm
@@ -20,7 +21,9 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     OTELSemconvCategory,
     parse_semconv_opt_in,
 )
+from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
+from litellm.integrations.otel.model.metadata import flatten_metadata
 from litellm.integrations.otel.model.semconv import Metric
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -288,6 +291,7 @@ class OpenTelemetryConfig:
     # under ``litellm.team.metadata``. Empty by default so none of a team's
     # metadata leaves the process until explicitly allowlisted.
     baggage_team_metadata_keys: list[str] = field(default_factory=list)
+    baggage_metadata_keys: list[str] = field(default_factory=list)
     # Prometheus-style include/exclude control over which attributes are stamped
     # on emitted metrics, to cap metric cardinality.
     attributes: OTELMetricAttributeFilter | None = None
@@ -314,6 +318,9 @@ class OpenTelemetryConfig:
         self.baggage_team_metadata_keys = _normalize_team_metadata_keys(
             self.baggage_team_metadata_keys
         ) or _normalize_team_metadata_keys(os.getenv("LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS"))
+        self.baggage_metadata_keys = _normalize_team_metadata_keys(
+            self.baggage_metadata_keys
+        ) or _normalize_team_metadata_keys(os.getenv("LITELLM_OTEL_BAGGAGE_METADATA_KEYS"))
 
     @classmethod
     def from_env(cls):
@@ -366,11 +373,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         **kwargs,
     ):
         team_metadata_keys_override: Final = kwargs.pop("baggage_team_metadata_keys", None)
+        metadata_keys_override: Final = kwargs.pop("baggage_metadata_keys", None)
         metric_attributes_override: Final = kwargs.pop("attributes", None)
         if config is None:
             config = OpenTelemetryConfig.from_env()
         if team_metadata_keys_override is not None:
             config.baggage_team_metadata_keys = _normalize_team_metadata_keys(team_metadata_keys_override)
+        if metadata_keys_override is not None:
+            config.baggage_metadata_keys = _normalize_team_metadata_keys(metadata_keys_override)
         if metric_attributes_override is not None:
             config.attributes = _build_metric_attribute_filter(metric_attributes_override)
 
@@ -1541,6 +1551,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
         if team_metadata:
             self.safe_set_attribute(span=span, key=TEAM_METADATA_ATTRIBUTE, value=team_metadata)
+
+        if self.config.baggage_metadata_keys:
+            flat_metadata: Final = MappingProxyType(dict(flatten_metadata(metadata)))
+            for key, value in promoted_metadata(flat_metadata, tuple(self.config.baggage_metadata_keys)).items():
+                self.safe_set_attribute(span=span, key=key, value=value)
 
         model_group: Final = standard_logging_payload.get("model_group")
         if model_group:

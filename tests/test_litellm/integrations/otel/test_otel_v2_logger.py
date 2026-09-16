@@ -1655,6 +1655,41 @@ def test_pre_call_hook_seeds_baggage_onto_server_and_child_spans():
     assert srv.attributes[f"{LiteLLM.METADATA_PREFIX}user_api_key_user_id"] == "u1"
 
 
+def test_pre_call_hook_promotes_nested_request_metadata_key():
+    """``baggage_metadata_keys: [requester_metadata.trace_id]`` reads the caller's
+    ``metadata.trace_id`` (snapshotted by the proxy under ``requester_metadata``)
+    and stamps ``litellm.metadata.trace_id`` on the server, LLM-call and service
+    spans of the request; unlisted siblings are not promoted."""
+    cfg = OpenTelemetryV2Config(exporter="in_memory", baggage_metadata_keys=["requester_metadata.trace_id"])
+    exporter = InMemorySpanExporter()
+    logger = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter))
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    data = {"model": "gpt-4o", "metadata": {"requester_metadata": {"trace_id": "abc", "nested": {"deep": "x"}}}}
+    kwargs = _kwargs()
+
+    async def _flow():
+        await logger.async_pre_call_hook(_Auth(), None, data, "completion")
+        logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+        await logger.async_log_success_event(kwargs, None, None, None)
+        await logger.async_service_success_hook(payload=_ServicePayload("redis", "set"), parent_otel_span=server)
+
+    with trace.use_span(server, end_on_exit=False):
+        asyncio.run(_flow())
+    server.end()
+
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    key = f"{LiteLLM.METADATA_PREFIX}trace_id"
+    assert spans[LITELLM_PROXY_REQUEST_SPAN_NAME].attributes[key] == "abc"
+    assert spans["chat gpt-4o"].attributes[key] == "abc"
+    assert spans["redis set"].attributes[key] == "abc"
+    assert data == {"model": "gpt-4o", "metadata": {"requester_metadata": {"trace_id": "abc", "nested": {"deep": "x"}}}}
+    assert not any(
+        k.startswith(f"{LiteLLM.METADATA_PREFIX}requester_metadata") or k == f"{LiteLLM.METADATA_PREFIX}deep"
+        for s in spans.values()
+        for k in s.attributes
+    )
+
+
 # --------------------------------------------------------------------------- #
 #  Service hooks (Phase 3)
 # --------------------------------------------------------------------------- #
