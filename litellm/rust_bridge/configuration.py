@@ -4,10 +4,11 @@ import os
 from enum import Enum, auto
 from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
-_TRUE_ENV_VALUES: Final = frozenset({"1", "true", "yes", "on"})
 _GLOBAL_ENV_NAME: Final = "LITELLM_RUST"
+_ENV_BOOL: Final = TypeAdapter(bool)
 
 
 class Rollout(Enum):
@@ -34,7 +35,10 @@ _CONFIGURATION: Final = _RustConfiguration()
 def _parse_env_bool(value: str | None) -> bool | None:
     if value is None:
         return None
-    return value.strip().lower() in _TRUE_ENV_VALUES
+    try:
+        return _ENV_BOOL.validate_python(value.strip())
+    except ValidationError:
+        return None
 
 
 def decide(
@@ -50,10 +54,10 @@ def decide(
             return Decision.RUST_REQUIRED
         case Rollout.RUST_OPT_IN | Rollout.RUST_OPT_OUT:
             switch: Final = (
-                process_override
-                if process_override is not None
-                else environment_override
+                environment_override
                 if environment_override is not None
+                else process_override
+                if process_override is not None
                 else rollout is Rollout.RUST_OPT_OUT
             )
             return Decision.RUST_WITH_FALLBACK if switch else Decision.PYTHON
@@ -80,6 +84,7 @@ def reset_rust_configuration() -> None:
 def rust(enabled: bool | None) -> None:
     """Set the process override for optional Rust paths.
 
-    ``PYTHON_ONLY`` and ``RUST_REQUIRED`` routes in the catalog ignore this switch.
+    ``PYTHON_ONLY`` and ``RUST_REQUIRED`` routes in the catalog ignore this switch,
+    and an explicit ``LITELLM_RUST`` environment value wins over it.
     """
     _CONFIGURATION.override = enabled
