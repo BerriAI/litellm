@@ -874,11 +874,23 @@ class ChunkProcessor:
                     completion_tokens = usage_chunk_dict["completion_tokens"]
                     completion_usage_updates += 1
                 if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
-                    usage_chunk_dict["cache_creation_input_tokens"] > 0 or cache_creation_input_tokens is None
+                    usage_chunk_dict["cache_creation_input_tokens"] > 0
+                    or cache_creation_input_tokens is None
+                    or (usage_chunk_dict["prompt_tokens"] is not None and usage_chunk_dict["prompt_tokens"] > 0)
+                    or (
+                        usage_chunk_dict["cache_read_input_tokens"] is not None
+                        and usage_chunk_dict["cache_read_input_tokens"] > 0
+                    )
                 ):
                     cache_creation_input_tokens = usage_chunk_dict["cache_creation_input_tokens"]
                 if usage_chunk_dict["cache_read_input_tokens"] is not None and (
-                    usage_chunk_dict["cache_read_input_tokens"] > 0 or cache_read_input_tokens is None
+                    usage_chunk_dict["cache_read_input_tokens"] > 0
+                    or cache_read_input_tokens is None
+                    or (usage_chunk_dict["prompt_tokens"] is not None and usage_chunk_dict["prompt_tokens"] > 0)
+                    or (
+                        usage_chunk_dict["cache_creation_input_tokens"] is not None
+                        and usage_chunk_dict["cache_creation_input_tokens"] > 0
+                    )
                 ):
                     cache_read_input_tokens = usage_chunk_dict["cache_read_input_tokens"]
                 if usage_chunk_dict["completion_tokens_details"] is not None:
