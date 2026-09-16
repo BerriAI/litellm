@@ -15,10 +15,11 @@ from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 from opentelemetry import trace
+from opentelemetry.sdk._logs import LogData
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -6032,19 +6033,13 @@ class TestOTELServiceTierAttributes(unittest.TestCase):
 
 
 class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
-    """A call whose litellm_params carry custom_llm_provider=None (routes like
-    /v1/messages, /v1/responses, streaming chat and the passthrough endpoints
-    all leave it unset) used to hand a None straight to the OTLP exporter,
-    which rejects it per export with 'Invalid type <class NoneType> of value
-    None' and keeps re-logging it forever because metric attribute sets are
-    cumulative. These drive the real record/emit paths and then run the actual
-    OTLP encoder over what came out, so they fail if the guard is reverted."""
+    """Regression for the OTLP exporter rejecting gen_ai.system=None on every export cycle."""
 
     HERE = os.path.dirname(__file__)
     POLL_INTERVAL = 0.05
     POLL_TIMEOUT = 2.0
 
-    def _providerless_kwargs(self):
+    def _providerless_kwargs(self) -> tuple[dict[str, object], dict[str, object]]:
         with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")) as f:
             kwargs = json.load(f)
         with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")) as f:
@@ -6052,7 +6047,7 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
         kwargs["litellm_params"]["custom_llm_provider"] = None
         return kwargs, response_obj
 
-    def _recorded_metrics(self):
+    def _recorded_metrics(self) -> MetricsData | None:
         metric_reader = InMemoryMetricReader()
         meter_provider = MeterProvider(metric_readers=[metric_reader])
         tracer_provider = TracerProvider()
@@ -6076,7 +6071,7 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
             time.sleep(self.POLL_INTERVAL)
         return None
 
-    def _emitted_log_records(self, semconv_opt_in: str):
+    def _emitted_log_records(self, semconv_opt_in: str) -> tuple[LogData, ...]:
         log_exporter = InMemoryLogExporter()
         logger_provider = OTLoggerProvider()
         logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
@@ -6089,17 +6084,13 @@ class TestOpenTelemetryProviderlessCallAttributes(unittest.TestCase):
 
         kwargs, response_obj = self._providerless_kwargs()
         span = handler.tracer.start_span("test")
-        # The SDK drops an invalid attribute value and warns per record, so the
-        # symptom on this path is unbounded warning volume, not a lost export.
         with self.assertNoLogs("opentelemetry.attributes", level="WARNING"):
             handler._emit_semantic_logs(kwargs, response_obj, span)
         span.end()
         handler._logger_provider.force_flush(2000)
         return log_exporter.get_finished_logs()
 
-    def _assert_every_attribute_encodes(self, attrs):
-        """The exporter logs and drops any attribute it cannot encode, so a
-        surviving None shows up as a missing key-value rather than a raise."""
+    def _assert_every_attribute_encodes(self, attrs: dict[str, object]) -> None:
         from opentelemetry.exporter.otlp.proto.common._internal import _encode_attributes
 
         self.assertEqual(len(_encode_attributes(attrs) or []), len(attrs))
