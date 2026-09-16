@@ -681,9 +681,7 @@ class ResetBudgetJob:
             walk = await self._invalidate_enduser_page(where=where, cursor=walk.cursor, reached=walk.invalidated)
         return walk
 
-    async def _invalidate_enduser_page(
-        self, where: Mapping[str, object], cursor: str, reached: int
-    ) -> _EndUserWalk:
+    async def _invalidate_enduser_page(self, where: Mapping[str, object], cursor: str, reached: int) -> _EndUserWalk:
         """Invalidate one page of customers and say where the walk goes next."""
         try:
             rows: Final = await self._fetch_enduser_page(where=where, cursor=cursor)
