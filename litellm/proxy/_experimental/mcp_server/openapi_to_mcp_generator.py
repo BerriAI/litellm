@@ -215,6 +215,21 @@ def _load_local_openapi_spec(filepath: str) -> dict[str, Any]:
             raise json_exc from None
 
 
+def _load_remote_openapi_spec(text: str, as_yaml: bool) -> dict[str, Any]:
+    """Parse a fetched spec body. Runs in a worker thread: YAML parsing is
+    synchronous CPU work with no nesting/alias limits, so it must not run on
+    the event loop where a pathological document could stall the proxy."""
+    if as_yaml:
+        return _load_yaml_mapping(text)
+    try:
+        return json.loads(text)
+    except ValueError as json_exc:
+        try:
+            return _load_yaml_mapping(text)
+        except (TypeError, ValueError):
+            raise json_exc from None
+
+
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
@@ -226,17 +241,10 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
         r.raise_for_status()
 
         content_type = r.headers.get("content-type", "")
-        if _is_yaml_content(filepath, content_type):
-            return _load_yaml_mapping(r.text)
         # Try JSON first; fall back to YAML for specs served without
         # proper Content-Type headers (common with raw GitHub URLs).
-        try:
-            return r.json()
-        except ValueError as json_exc:
-            try:
-                return _load_yaml_mapping(r.text)
-            except (TypeError, ValueError):
-                raise json_exc from None
+        as_yaml = _is_yaml_content(filepath, content_type)
+        return await asyncio.to_thread(_load_remote_openapi_spec, r.text, as_yaml)
 
     # Local files go through a worker thread: the async path must not
     # perform blocking disk I/O directly (ruff ASYNC230).
