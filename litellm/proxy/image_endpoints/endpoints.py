@@ -297,11 +297,9 @@ async def image_edit_api(
     #########################################################
     data: Final = {
         key: value
-        for key, value in dict(
-            coerce_numeric_form_fields(
-                parsed_body=await _read_request_body(request=request),
-                numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
-            )
+        for key, value in coerce_numeric_form_fields(
+            parsed_body=await _read_request_body(request=request),
+            numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
         ).items()
         if key not in BRACKETED_FILE_FIELDS
     }
