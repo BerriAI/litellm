@@ -1,6 +1,7 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -577,6 +578,20 @@ def test_text_only_streaming_has_index_zero():
             assert (
                 parsed.choices[0].index == 0
             ), f"Expected index=0, got {parsed.choices[0].index}"
+
+
+def test_message_delta_without_usage_returns_chunk_with_no_usage():
+    iterator: Final = ModelResponseIterator(None, sync_stream=True)
+
+    model_response: Final = iterator.chunk_parser(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        }
+    )
+
+    assert model_response.choices[0].finish_reason == "stop"
+    assert model_response.usage is None
 
 
 def test_streaming_thinking_deltas_count_reasoning_tokens_in_usage():
@@ -1380,6 +1395,52 @@ def test_current_content_block_type_tracking():
     chunk4 = {"type": "content_block_stop", "index": 1}
     iterator.chunk_parser(chunk4)
     assert iterator.current_content_block_type is None
+
+
+def test_web_search_calls_are_cumulative_through_incomplete_search():
+    iterator = ModelResponseIterator(None, sync_stream=True)
+    first_start = iterator.chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_A",
+                "name": "web_search",
+                "input": {"query": "a"},
+            },
+        }
+    )
+    first_result = iterator.chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_A",
+                "content": [],
+            },
+        }
+    )
+    second_start = iterator.chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "server_tool_use",
+                "id": "srvtoolu_B",
+                "name": "web_search",
+                "input": {"query": "b"},
+            },
+        }
+    )
+
+    assert list(first_start.choices[0].delta.provider_specific_fields["web_search_calls"]) == ["srvtoolu_A"]
+    assert first_result.choices[0].delta.provider_specific_fields["web_search_calls"]["srvtoolu_A"].status == "completed"
+    calls = second_start.choices[0].delta.provider_specific_fields["web_search_calls"]
+    assert list(calls) == ["srvtoolu_A", "srvtoolu_B"]
+    assert calls["srvtoolu_A"].status == "completed"
+    assert calls["srvtoolu_B"].status == "in_progress"
 
 
 def test_web_search_tool_result_captured_in_provider_specific_fields():

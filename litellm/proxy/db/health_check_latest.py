@@ -74,10 +74,14 @@ class LatestHealthCheckRow(BaseModel):
 _ROWS_ADAPTER: Final = TypeAdapter(tuple[LatestHealthCheckRow, ...])
 
 
+async def query_latest_health_checks(prisma_client: PrismaClient) -> tuple[LatestHealthCheckRow, ...]:
+    rows: Final = await prisma_client.db.query_raw(LATEST_HEALTH_CHECKS_SQL)
+    return _ROWS_ADAPTER.validate_python(rows)
+
+
 async def fetch_latest_health_checks(prisma_client: PrismaClient) -> tuple[LatestHealthCheckRow, ...]:
     try:
-        rows: Final = await prisma_client.db.query_raw(LATEST_HEALTH_CHECKS_SQL)
-        return _ROWS_ADAPTER.validate_python(rows)
+        return await query_latest_health_checks(prisma_client)
     except Exception as query_err:  # noqa: BLE001  # health decorates other reads; a driver error must not fail them
         verbose_proxy_logger.error("Error getting all latest health checks: %s", query_err)
         return ()

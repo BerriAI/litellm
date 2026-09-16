@@ -40,6 +40,23 @@ def test_python_projection_collapses_unmapped_parents_and_counts_noise() -> None
     ]
 
 
+@pytest.mark.parametrize("engine", ("python", "rust"))
+def test_projection_without_mappings_keeps_every_call_and_parent(engine: Engine) -> None:
+    events: Final = (
+        event(0, "module.py:1 entry"),
+        event(1, "module.py:2 internal_helper", 0),
+        event(2, "module.py:3 nested", 1),
+        event(3, "module.py:2 internal_helper", 0),
+    )
+
+    projection: Final = pipeline_projection(engine, events)
+
+    assert projection.unmatched == 0
+    assert tuple((step.id, step.parent_id, step.span, step.raw) for step in projection.steps) == tuple(
+        (item.id, item.parent_id, item.function, item.raw) for item in events
+    )
+
+
 def test_rust_projection_keeps_unknown_spans() -> None:
     projection: Final = pipeline_projection("rust", (event(0, "route"), event(1, "new_span", 0)), MAPPINGS)
     assert [(step.span, step.parent_id) for step in projection.steps] == [("route", None), ("new_span", 0)]
@@ -146,9 +163,7 @@ def test_trace_diff_allows_reordered_concurrent_children() -> None:
 def test_trace_diff_prunes_declared_engine_only_nodes_but_requires_them() -> None:
     mappings: Final = (MAPPINGS[0], mapping(rust_span="rust_prepare"))
     python: Final = pipeline_projection("python", (event(0, "module.py:1 entry"),), mappings).steps
-    rust: Final = pipeline_projection(
-        "rust", (event(0, "route"), event(1, "rust_prepare", 0)), mappings
-    ).steps
+    rust: Final = pipeline_projection("rust", (event(0, "route"), event(1, "rust_prepare", 0)), mappings).steps
     assert trace_diff(python, rust, mappings).matches
     assert trace_diff(python, rust[:1], mappings).missing_mappings == ("rust_prepare",)
 

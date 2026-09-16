@@ -33,13 +33,16 @@ impl OcrAdapter for AzureMistralAdapter {
             known: params,
             extra_params: _extra_params,
         } = _prepare_ocr_request::<MistralOcrParams>(request)?;
-        let config = AzureAuthInputs::from_sourced_optional_params(
+        let mut config = AzureAuthInputs::from_sourced_optional_params(
             &request.optional_params,
             &request.input_sources,
         )
         .map_err(Error::from)?;
-        let headers = validate_environment(&request.connection, &config, &credential_env).await?;
+        config.azure_ad_token_provider = request.azure_ad_token_provider.clone();
         let url = get_complete_url(request.connection.api_base.as_deref(), &credential_env)?;
+        let headers = validate_environment(&request.connection, &config, &credential_env).await?;
+        let retains_document = !request.document.source().starts_with("http://")
+            && !request.document.source().starts_with("https://");
         let document = inline_remote_document(
             client.document_fetcher(),
             request.document.clone(),
@@ -47,9 +50,15 @@ impl OcrAdapter for AzureMistralAdapter {
         )
         .await?;
         let body = mistral::transform_ocr_request(&request.model, document, &params)?;
-        transform_request_body(client, request, &url, &headers, body, |body| {
-            validate_inline_document(&body.document)
-        })
+        transform_request_body(
+            client,
+            request,
+            &url,
+            &headers,
+            retains_document,
+            body,
+            |body| validate_inline_document(&body.document),
+        )
         .await
     }
 
@@ -83,12 +92,15 @@ fn get_complete_url(
         })
 }
 
-async fn validate_environment(
+pub(in crate::ocr::adapters) async fn validate_environment(
     connection: &OcrConnection,
     config: &AzureAuthInputs,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<(String, String)>, OcrError> {
     if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
+        if config.azure_ad_token_provider.is_some() {
+            super::resolve_entra(config, env_lookup).await?;
+        }
         super::validate_destination(connection, connection.extra_headers_source)?;
         return Ok(connection.extra_headers.clone());
     }

@@ -5,6 +5,7 @@ import os
 import secrets
 from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
 
 from litellm._logging import verbose_logger
@@ -883,7 +884,9 @@ class CustomGuardrail(CustomLogger):
         """logging_only: run apply_guardrail on copies of the logged request/response and record the verdict."""
         from litellm.llms import get_guardrail_translation_mapping
 
-        if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
+        if not self.uses_apply_guardrail_interface():
+            return kwargs, result
+        if not self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
             return kwargs, result
         try:
             translation: Final = get_guardrail_translation_mapping(CallTypes(call_type))()
@@ -900,8 +903,18 @@ class CustomGuardrail(CustomLogger):
             for key, value in (litellm_params.get("metadata") or {}).items()
             if key != "standard_logging_guardrail_information"
         }
+        response: Final = (
+            kwargs.get("async_complete_streaming_response") or kwargs.get("complete_streaming_response") or result
+        )
+        from litellm.types.utils import ModelResponse
+
+        output_translation: Final = (
+            get_guardrail_translation_mapping(CallTypes.acompletion)()
+            if isinstance(response, ModelResponse)
+            else translation
+        )
         try:
-            await self._scan_logged_call(kwargs, result, translation, scratch_metadata)
+            await self._scan_logged_call(kwargs, response, translation, output_translation, scratch_metadata)
         except Exception as e:
             verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
         recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
@@ -918,8 +931,9 @@ class CustomGuardrail(CustomLogger):
     async def _scan_logged_call(
         self,
         kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
-        result: object,
+        response: object | None,
         translation: "BaseTranslation",
+        output_translation: "BaseTranslation",
         scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
         optional_params: Final = kwargs.get("optional_params") or {}
@@ -933,8 +947,10 @@ class CustomGuardrail(CustomLogger):
             "metadata": scratch_metadata,
         }
         await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
-        await translation.process_output_response(
-            response=copy.deepcopy(result), guardrail_to_apply=self, request_data=scratch_request
+        if response is None:
+            return
+        await output_translation.process_output_response(
+            response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
         )
 
     def supports_scan_only_tool_results(self) -> bool:
@@ -1217,6 +1233,7 @@ class CustomGuardrail(CustomLogger):
 
         _, metadata_bucket = get_or_create_metadata_bucket(request_data)
         _append_guardrail_info(metadata_bucket)
+        _sync_guardrail_info_to_logging_obj(request_data, request_data.get("litellm_logging_obj"))
 
         _guardrail_self_recorded.set(True)
 
@@ -1278,6 +1295,7 @@ class CustomGuardrail(CustomLogger):
         guardrail_response: Final = self._summarize_guardrail_response(
             response=response,
             original_inputs=original_inputs,
+            event_type=event_type,
         )
 
         verbose_logger.debug("Guardrail response: %s", response)
@@ -1297,6 +1315,7 @@ class CustomGuardrail(CustomLogger):
         self,
         response: object,
         original_inputs: Mapping[str, object] | None,
+        event_type: GuardrailEventHooks | None,
     ) -> object:
         """Reduce a hook's return value to what is safe to log as ``guardrail_response``.
 
@@ -1304,15 +1323,21 @@ class CustomGuardrail(CustomLogger):
         returns the (possibly modified) request payload. Neither is a provider verdict, and
         logging them verbatim ships the user's prompt to every logging sink (OTEL spans,
         Datadog, spend logs), so both collapse to ``"allow"`` / ``"mask"`` by comparing
-        against ``original_inputs``, a copy taken before the hook ran. A string result is the
-        hook's own rejection message (the proxy turns it into a 400), not user input, so it is
-        logged as is.
+        against ``original_inputs``, a copy taken before the hook ran. A pre_call baseline only
+        holds the prompt-bearing keys, so the returned request is narrowed to those same keys
+        before the comparison. A string result is the hook's own rejection message (the proxy
+        turns it into a 400), not user input, so it is logged as is.
         """
         if response is None:
             return {}
         if original_inputs is None or not isinstance(response, Mapping):
             return response
-        return "mask" if self._inputs_were_modified(original_inputs, response) else "allow"
+        compared_response: Final[Mapping[str, object]] = (
+            MappingProxyType({key: value for key, value in response.items() if key in _PRE_CALL_CONTENT_KEYS})
+            if event_type == GuardrailEventHooks.pre_call
+            else response
+        )
+        return "mask" if self._inputs_were_modified(original_inputs, compared_response) else "allow"
 
     @staticmethod
     def _is_guardrail_intervention(e: Exception) -> bool:
@@ -1354,8 +1379,8 @@ class CustomGuardrail(CustomLogger):
         raise e
 
     def _inputs_were_modified(self, original_inputs: Mapping[str, object], response: Mapping[str, object]) -> bool:
-        """True when any baseline key's value differs in ``response`` (mask), False otherwise (allow)."""
-        return any(response.get(key) != value for key, value in original_inputs.items())
+        """True when any key of either mapping differs between them (mask), False otherwise (allow)."""
+        return any(original_inputs.get(key) != response.get(key) for key in original_inputs.keys() | response.keys())
 
     def mask_content_in_string(
         self,
@@ -1475,13 +1500,13 @@ def _original_inputs_for(
 ) -> dict | None:  # mutable-ok: matches _process_response(original_inputs=) signature
     """Baseline the hook's return value is compared against to decide "allow" vs "mask".
 
-    ``apply_guardrail`` masks a fresh ``inputs`` dict, so that dict is the baseline. Pre-call
-    hooks edit the request in place and return it, so the baseline is a deep copy of the
-    prompt-bearing keys taken before the hook runs.
+    Hooks may edit their argument in place and return it, so the baseline is always a deep
+    copy taken before the hook runs: the whole ``inputs`` dict for ``apply_guardrail``, the
+    prompt-bearing request keys for pre-call hooks.
     """
     if func_name == "apply_guardrail":
         inputs: Final = kwargs.get("inputs")
-        return inputs if isinstance(inputs, dict) else None
+        return copy.deepcopy(inputs) if isinstance(inputs, dict) else None
     if event_type != GuardrailEventHooks.pre_call:
         return None
     return {key: copy.deepcopy(value) for key, value in request_data.items() if key in _PRE_CALL_CONTENT_KEYS}
