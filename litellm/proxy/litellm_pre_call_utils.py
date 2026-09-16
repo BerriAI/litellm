@@ -121,7 +121,7 @@ def _trace_id_from_otel_span(span: "OtelSpan | None") -> str | None:
 def add_otel_trace_id_to_request(
     data: dict[str, object], _metadata_variable_name: str, parent_otel_span: "OtelSpan | None"
 ) -> None:
-    if "litellm_trace_id" in data:
+    if data.get("litellm_trace_id"):
         return
     metadata: Final = data.get(_metadata_variable_name)
     if isinstance(metadata, dict) and metadata.get("trace_id"):
@@ -131,7 +131,7 @@ def add_otel_trace_id_to_request(
         return
     data["litellm_trace_id"] = trace_id  # rebind-ok: data is an out-param
     if isinstance(metadata, dict):
-        metadata["trace_id"] = trace_id
+        metadata["trace_id"] = trace_id  # rebind-ok: metadata is the request's own out-param dict
 
 
 def _session_id_from_baggage(baggage: str) -> str | None:
