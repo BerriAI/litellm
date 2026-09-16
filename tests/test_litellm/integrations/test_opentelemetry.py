@@ -5582,6 +5582,38 @@ class TestOpenTelemetryInferenceIdentityAttributes(unittest.TestCase):
         otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
         assert "http.route" not in self._attr(span, exp)
 
+    def test_nested_metadata_key_promoted_under_caller_path(self):
+        """``baggage_metadata_keys: [requester_metadata.trace_id]`` stamps the
+        caller's nested metadata value as ``litellm.metadata.trace_id`` and a deeper
+        path keeps its dotted name; unlisted siblings stay inside the
+        ``metadata.requester_metadata`` blob."""
+        otel = OpenTelemetry(
+            config=OpenTelemetryConfig(
+                baggage_metadata_keys=["requester_metadata.trace_id", "requester_metadata.nested.deep"]
+            )
+        )
+        kwargs = self._kwargs()
+        kwargs["standard_logging_object"]["metadata"]["requester_metadata"] = {
+            "trace_id": "abc",
+            "nested": {"deep": "x", "skipped": "y"},
+        }
+        span, exp = self._span()
+        otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
+        attrs = self._attr(span, exp)
+        assert attrs["litellm.metadata.trace_id"] == "abc"
+        assert attrs["litellm.metadata.nested.deep"] == "x"
+        assert "litellm.metadata.deep" not in attrs
+        assert "litellm.metadata.nested.skipped" not in attrs
+        assert not any(k.startswith("litellm.metadata.requester_metadata") for k in attrs)
+
+    def test_metadata_keys_default_to_none_promoted(self):
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        kwargs["standard_logging_object"]["metadata"]["requester_metadata"] = {"trace_id": "abc"}
+        span, exp = self._span()
+        otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
+        assert not any(k.startswith("litellm.metadata.") for k in self._attr(span, exp))
+
     def test_team_metadata_json_helper(self):
         keys = ["a", "b"]
         assert OpenTelemetry._team_metadata_json(None, keys) is None
@@ -5631,6 +5663,11 @@ class TestOpenTelemetryTeamMetadataKeysConfig(unittest.TestCase):
         ):
             cfg = OpenTelemetryConfig(baggage_team_metadata_keys=["from_arg"])
             assert cfg.baggage_team_metadata_keys == ["from_arg"]
+
+    def test_metadata_keys_from_kwargs_and_env(self):
+        with patch.dict("os.environ", {"LITELLM_OTEL_BAGGAGE_METADATA_KEYS": "requester_metadata.trace_id, a.b"}):
+            assert OpenTelemetryConfig().baggage_metadata_keys == ["requester_metadata.trace_id", "a.b"]
+        assert OpenTelemetry(baggage_metadata_keys="x.y").config.baggage_metadata_keys == ["x.y"]
 
 
 class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
