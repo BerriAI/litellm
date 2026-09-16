@@ -17,7 +17,6 @@ import pytest
 
 from .conftest import VOLATILE_KEYS, normalize
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -461,4 +460,118 @@ async def test_create_invitation_for_user_target_user_fk_error(monkeypatch):
         )
     assert exc_info.value.status_code == 400
     assert "User id does not exist in 'LiteLLM_UserTable'" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_invitation_for_user_updated_by_fk_error(monkeypatch):
+    """When updated_by FK fails, error message identifies updater user."""
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import InvitationNew, UserAPIKeyAuth
+    from litellm.proxy.management_helpers.user_invitation import create_invitation_for_user
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.upsert = AsyncMock()
+    mock_prisma.db.litellm_invitationlink.create = AsyncMock(
+        side_effect=Exception("Foreign key constraint failed on the field: `LiteLLM_InvitationLink_updated_by_fkey`")
+    )
+
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_invitation_for_user(
+            data=InvitationNew(user_id="user-target"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="custom-updater-id"),
+        )
+    assert exc_info.value.status_code == 400
+    assert "Updater user 'custom-updater-id' does not exist" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_invitation_for_user_relation_names_fk_error(monkeypatch):
+    """When CreatedBy or UpdatedBy relation names are present in FK error, appropriate message is returned."""
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import InvitationNew, UserAPIKeyAuth
+    from litellm.proxy.management_helpers.user_invitation import create_invitation_for_user
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.upsert = AsyncMock()
+    mock_prisma.db.litellm_invitationlink.create = AsyncMock(
+        side_effect=Exception("Foreign key constraint failed on the field: CreatedBy")
+    )
+
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_invitation_for_user(
+            data=InvitationNew(user_id="user-target"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-id"),
+        )
+    assert exc_info.value.status_code == 400
+    assert "Creator user 'admin-id' does not exist" in str(exc_info.value.detail)
+
+    mock_prisma.db.litellm_invitationlink.create = AsyncMock(
+        side_effect=Exception("Foreign key constraint failed on the field: UpdatedBy")
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await create_invitation_for_user(
+            data=InvitationNew(user_id="user-target"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-id"),
+        )
+    assert exc_info.value.status_code == 400
+    assert "Updater user 'admin-id' does not exist" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_invitation_for_user_general_db_error_500(monkeypatch):
+    """Non-FK database error results in a 500 status code."""
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import InvitationNew, UserAPIKeyAuth
+    from litellm.proxy.management_helpers.user_invitation import create_invitation_for_user
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.upsert = AsyncMock()
+    mock_prisma.db.litellm_invitationlink.create = AsyncMock(
+        side_effect=Exception("Database connection timeout")
+    )
+
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_invitation_for_user(
+            data=InvitationNew(user_id="user-target"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-id"),
+        )
+    assert exc_info.value.status_code == 500
+    assert "Database connection timeout" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_create_invitation_for_user_admin_upsert_failure_ignored(monkeypatch):
+    """When default admin upsert encounters an exception, invitation creation still proceeds."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import InvitationNew, UserAPIKeyAuth
+    from litellm.proxy.management_helpers.user_invitation import create_invitation_for_user
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.upsert = AsyncMock(side_effect=Exception("DB locked"))
+    mock_prisma.db.litellm_invitationlink.create = AsyncMock(
+        return_value=_make_invitation(created_by="default_user_id")
+    )
+
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "litellm_proxy_admin_name", "default_user_id")
+
+    res = await create_invitation_for_user(
+        data=InvitationNew(user_id="user-target"),
+        user_api_key_dict=UserAPIKeyAuth(user_id=None),
+    )
+    assert res.created_by == "default_user_id"
+    mock_prisma.db.litellm_usertable.upsert.assert_awaited_once()
+
 

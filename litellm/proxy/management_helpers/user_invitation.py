@@ -41,7 +41,7 @@ async def create_invitation_for_user(
                     "update": {},
                 },
             )
-        except Exception:  # noqa: S110, BLE001
+        except Exception:  # noqa: S110, BLE001  # Best-effort upsert of default admin user
             pass
 
     current_time: Final = litellm.utils.get_utc_datetime()
@@ -59,7 +59,7 @@ async def create_invitation_for_user(
             }
         )
         return response
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001  # Catch database exceptions to format error response
         err_str = str(e)
         if "Foreign key constraint failed on the field" in err_str:
             if "created_by" in err_str or "CreatedBy" in err_str:
