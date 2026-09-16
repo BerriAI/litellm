@@ -4,12 +4,11 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Final, Generic, TypeVar
 
-from litellm.rust_bridge import catalog
+from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Context, Route, Rules
 from litellm.rust_bridge.configuration import Decision
 from litellm.rust_bridge.configuration import decision as rollout_decision
-from litellm.rust_bridge.runtime import arun, run
 
 RequestT = TypeVar("RequestT")
 NativeT = TypeVar("NativeT")
@@ -50,7 +49,7 @@ class PublicDispatch(Generic[RequestT]):
         request: Final = self.request(args, kwargs)
         if request is None or (self.bypass is not None and self.bypass(request)):
             return python(*args, **kwargs)
-        return run(
+        return runtime.run(
             self.context(request),
             binding=binding,
             native=lambda hook: native(hook, request, args, kwargs),
@@ -74,7 +73,7 @@ class PublicDispatch(Generic[RequestT]):
         request: Final = self.request(args, kwargs)
         if request is None or (self.bypass is not None and self.bypass(request)):
             return await python(*args, **kwargs)
-        return await arun(
+        return await runtime.arun(
             self.context(request),
             binding=binding,
             native=lambda hook: native(hook, request, args, kwargs),
