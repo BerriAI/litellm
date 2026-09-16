@@ -42,6 +42,10 @@ from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
+from ..llms.dashscope.realtime.handler import (
+    DashScopeRealtime,
+    resolve_dashscope_realtime_api_base,
+)
 from ..llms.openai.live.handler import OpenAILiveSessions
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
@@ -61,6 +65,7 @@ openai_realtime: Final = OpenAIRealtime()
 openai_live_sessions: Final = OpenAILiveSessions()
 bedrock_realtime: Final = BedrockRealtime()
 xai_realtime: Final = XAIRealtime()
+dashscope_realtime: Final = DashScopeRealtime()
 vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
@@ -718,6 +723,25 @@ async def _arealtime(
             litellm_metadata=_build_litellm_metadata(kwargs),
             query_params=query_params,
         )
+    elif _custom_llm_provider == "dashscope":
+        dashscope_api_base: Final = resolve_dashscope_realtime_api_base(
+            api_base=api_base,
+            dynamic_api_base=dynamic_api_base,
+        )
+        dashscope_api_key: Final = dynamic_api_key or api_key
+
+        await dashscope_realtime.async_realtime(  # pyright: ignore[reportUnknownMemberType]  # the shared realtime handler's signature is partially unknown for every provider branch
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            api_base=dashscope_api_base,
+            api_key=dashscope_api_key,
+            client=None,
+            timeout=timeout,
+            query_params=query_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # proxy kwargs are untyped, as in the sibling provider branches
+            litellm_metadata=_build_litellm_metadata(kwargs),
+        )
     else:
         raise ValueError(f"Unsupported model: {model}")
 
@@ -849,6 +873,11 @@ async def realtime_health_check(
     elif custom_llm_provider == "xai":
         url = xai_realtime.construct_url(
             api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}
+        )
+    elif custom_llm_provider == "dashscope":
+        url = dashscope_realtime.construct_url(  # rebind-ok: shares the health-check url slot with the provider branches above
+            api_base=resolve_dashscope_realtime_api_base(api_base=resolved_api_base),
+            query_params={"model": model},
         )
     elif custom_llm_provider == "vertex_ai":
         if is_vertex_speech_to_text_model(model):
