@@ -143,7 +143,12 @@ def _seed_cli_identity(config_dir: str) -> None:
     `userID`, and sends them in `metadata.user_id` forever after, so the value
     is stable for exactly as long as that file lives. Pinning it, and the
     session id passed beside it, costs nothing: both feed abuse detection
-    rather than quota, caching or continuity."""
+    rather than quota, caching or continuity.
+
+    The staged name has to be unique per *thread*, not per process:
+    `run_claude_models_parallel` drives several models from one process, so a
+    pid-suffixed name lets one thread rename the file another is still
+    writing, and the loser dies on a missing path."""
     path = os.path.join(config_dir, ".claude.json")
     try:
         with open(path, encoding="utf-8") as handle:
@@ -151,8 +156,8 @@ def _seed_cli_identity(config_dir: str) -> None:
                 return
     except (OSError, ValueError):
         pass
-    staged = f"{path}.{os.getpid()}"
-    with open(staged, "w", encoding="utf-8") as handle:
+    handle_fd, staged = tempfile.mkstemp(dir=config_dir, prefix=".claude.json.")
+    with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
         json.dump({"userID": _FIXED_CLI_USER_ID}, handle)
     os.replace(staged, path)
 
