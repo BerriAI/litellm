@@ -3974,6 +3974,60 @@ def test_openai_custom_tool_call_stream_deltas_survive_conversion(logging_obj: L
     assert "tool_calls" in finish_reasons
 
 
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_openai_stream_preserves_upstream_total_tokens(logging_obj: Logging, sync_mode: bool) -> None:
+    from collections.abc import AsyncIterator
+
+    from openai.types.chat.chat_completion_chunk import ChatCompletionChunk, Choice, ChoiceDelta
+    from openai.types.completion_usage import CompletionUsage
+
+    upstream_usage: Final = CompletionUsage(prompt_tokens=35, completion_tokens=130, total_tokens=601)
+    sdk_chunks: Final = (
+        ChatCompletionChunk(
+            id="chatcmpl-total-tokens",
+            object="chat.completion.chunk",
+            created=1,
+            model="test-openai-compatible-model",
+            choices=[Choice(index=0, delta=ChoiceDelta(role="assistant", content="5/9"))],
+        ),
+        ChatCompletionChunk(
+            id="chatcmpl-total-tokens",
+            object="chat.completion.chunk",
+            created=1,
+            model="test-openai-compatible-model",
+            choices=[Choice(index=0, delta=ChoiceDelta(), finish_reason="stop")],
+        ),
+        ChatCompletionChunk(
+            id="chatcmpl-total-tokens",
+            object="chat.completion.chunk",
+            created=1,
+            model="test-openai-compatible-model",
+            choices=[],
+            usage=upstream_usage,
+        ),
+    )
+
+    async def stream_chunks() -> AsyncIterator[ChatCompletionChunk]:
+        for chunk in sdk_chunks:
+            yield chunk
+
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(sdk_chunks) if sync_mode else stream_chunks(),
+        model="test-openai-compatible-model",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+    emitted: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+    final_usage: Final = emitted[-1].usage
+
+    assert final_usage is not None
+    assert final_usage.prompt_tokens == upstream_usage.prompt_tokens
+    assert final_usage.completion_tokens == upstream_usage.completion_tokens
+    assert final_usage.total_tokens == upstream_usage.total_tokens
+
+
 def test_sync_completion_never_stamps_correlation_context(monkeypatch):
     """wrapper() (the sync entry point) does not participate in
     request_correlation_in_logs at all: Logging.__init__() is called with
