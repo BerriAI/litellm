@@ -21,13 +21,7 @@ from typing import Final, Protocol
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.proxy.auth.auth_checks import _delete_cache_access_object
-
-# hashtext collisions only cost two unrelated teams a little serialization, and the
-# lock is never taken by the access-group endpoints as a SELECT ... FOR UPDATE row lock,
-# so it cannot join their access-group-then-team lock order to form a cycle. team_endpoints
-# reuses this exact statement to serialize /team/member_add and /team/delete against each
-# other and against this mirror, rather than defining a second, divergent lock on the same key.
-TEAM_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
+from litellm.repositories.team_repository import TEAM_ADVISORY_LOCK_SQL
 
 _READ_TEAM_SQL: Final = 'SELECT access_group_ids FROM "LiteLLM_TeamTable" WHERE team_id = $1'
 
