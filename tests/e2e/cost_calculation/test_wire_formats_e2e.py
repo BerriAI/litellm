@@ -144,6 +144,10 @@ _SHAPES: Final[tuple[tuple[str, str, Case], ...]] = (
 )
 
 
+def _shape_id(entry: tuple[str, str, Case]) -> str:
+    return entry[0]
+
+
 class TestWireFormats:
     @pytest.mark.parametrize("wire", tuple(_WIRE_USAGE))
     @pytest.mark.covers("quota_management.spend_tracking.scripted_wire.logs_cost")
@@ -237,7 +241,7 @@ class TestWireFormats:
         )
         cost_rows.assert_total_is_sum_of_components(row)
 
-    @pytest.mark.parametrize("shape_wire_case", _SHAPES, ids=lambda entry: entry[0])
+    @pytest.mark.parametrize("shape_wire_case", _SHAPES, ids=_shape_id)
     @pytest.mark.covers("quota_management.spend_tracking.scripted_wire.logs_cost")
     def test_response_shape_bills_reported_usage(
         self,
