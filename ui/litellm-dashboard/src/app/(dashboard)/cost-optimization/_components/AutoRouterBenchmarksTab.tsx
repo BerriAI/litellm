@@ -1,5 +1,6 @@
 "use client";
 
+import { parseAsString, useQueryState } from "nuqs";
 import React, { useState } from "react";
 
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
@@ -13,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/http/client";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 import {
@@ -35,6 +37,10 @@ import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 import { DailyActivityRange } from "./useDailyActivityRange";
+import { useVisitedTabs } from "./useVisitedTabs";
+
+const ROUTER_TABS = ["usage", "shadow-evals"] as const;
+const selectedRouterParser = parseAsString.withDefault(ALL_ROUTERS);
 
 const Message: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <p className="py-8 text-center text-sm text-muted-foreground">{children}</p>
@@ -315,10 +321,23 @@ interface AutoRouterBenchmarksTabProps {
   apiKey?: string;
 }
 
-export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity, apiKey }) => {
+interface AutoRouterUsageViewProps extends AutoRouterBenchmarksTabProps {
+  selectedRouter?: string;
+  onSelectedRouterChange?: (router: string) => void;
+}
+
+export const AutoRouterUsageView: React.FC<AutoRouterUsageViewProps> = ({
+  accessToken,
+  activity,
+  apiKey,
+  selectedRouter,
+  onSelectedRouterChange,
+}) => {
   const { dateValue, onDateChange } = activity;
   const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, dateValue, apiKey);
-  const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
+  const [localSelectedKey, setLocalSelectedKey] = useState<string>(ALL_ROUTERS);
+  const selectedKey = selectedRouter ?? localSelectedKey;
+  const setSelectedKey = onSelectedRouterChange ?? setLocalSelectedKey;
   const { data: autoRouters } = useAutoRouters();
 
   const groups = data?.groups ?? [];
@@ -364,18 +383,12 @@ export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ ac
 };
 
 const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity }) => {
-  const [visitedTabs, setVisitedTabs] = useState<readonly string[]>(["usage"]);
-
-  const handleTabChange = (value: unknown) => {
-    if (typeof value !== "string") {
-      return;
-    }
-
-    setVisitedTabs((currentTabs) => (currentTabs.includes(value) ? currentTabs : [...currentTabs, value]));
-  };
+  const [tab, setTab] = useUrlTab(ROUTER_TABS, "usage", "router_tab");
+  const visitedTabs = useVisitedTabs(tab);
+  const [selectedRouter, setSelectedRouter] = useQueryState("router", selectedRouterParser);
 
   return (
-    <Tabs defaultValue="usage" onValueChange={handleTabChange} className="w-full gap-4">
+    <Tabs value={tab} onValueChange={setTab} className="w-full gap-4">
       <TabsList>
         <TabsTrigger value="usage" className="px-3">
           Usage
@@ -386,7 +399,12 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
       </TabsList>
 
       <TabsContent value="usage" keepMounted={visitedTabs.includes("usage")}>
-        <AutoRouterUsageView accessToken={accessToken} activity={activity} />
+        <AutoRouterUsageView
+          accessToken={accessToken}
+          activity={activity}
+          selectedRouter={selectedRouter}
+          onSelectedRouterChange={(router) => void setSelectedRouter(router)}
+        />
       </TabsContent>
       <TabsContent value="shadow-evals" keepMounted={visitedTabs.includes("shadow-evals")}>
         <ShadowEvalSection />

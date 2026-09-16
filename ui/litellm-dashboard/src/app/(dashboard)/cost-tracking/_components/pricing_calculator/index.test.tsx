@@ -1,7 +1,8 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { renderWithProviders } from "../../../../../../tests/test-utils";
 import PricingCalculator from "./index";
 import type { ModelEntry } from "./types";
@@ -129,6 +130,31 @@ describe("PricingCalculator", () => {
 
       await user.click(screen.getByText("Per Month"));
       expect(screen.getByText("Requests/Month")).toBeInTheDocument();
+    });
+
+    it("should read the period from ?period=", () => {
+      renderWithProviders(<PricingCalculator {...DEFAULT_PROPS} />, { searchParams: "?period=day" });
+
+      expect(screen.getByText("Requests/Day")).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "Per Day" })).toBeChecked();
+    });
+
+    it("should fall back to the monthly period for an unknown ?period=", () => {
+      renderWithProviders(<PricingCalculator {...DEFAULT_PROPS} />, { searchParams: "?period=week" });
+
+      expect(screen.getByText("Requests/Month")).toBeInTheDocument();
+    });
+
+    it("should write ?period=day when Per Day is selected and drop it when Per Month is selected", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<PricingCalculator {...DEFAULT_PROPS} />, { onUrlUpdate });
+
+      await user.click(screen.getByText("Per Day"));
+      await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("period")).toBe("day"));
+
+      await user.click(screen.getByText("Per Month"));
+      await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("period")).toBe(false));
     });
   });
 

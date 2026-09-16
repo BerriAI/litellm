@@ -1,9 +1,11 @@
+import { useQueryStates } from "nuqs";
 import { useMemo, useState } from "react";
 
 import { userDailyActivityAggregatedCall, userDailyActivityCall } from "@/components/networking";
 import { DailyData } from "@/components/UsagePage/types";
 import { spendScopeUserId } from "@/utils/roles";
 import { usePaginatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity";
+import { parseAsLocalDay, useUrlDayRange } from "./useUrlDayRange";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -47,6 +49,19 @@ export const useActivityDateRange = (): ActivityDateRange => {
   return { dateValue, onDateChange: setDateValue };
 };
 
+export interface ActivityDateRangeUrlKeys {
+  start: string;
+  end: string;
+}
+
+const ACTIVITY_DAY_PARSERS = { start: parseAsLocalDay, end: parseAsLocalDay };
+
+export const useUrlActivityDateRange = (urlKeys: ActivityDateRangeUrlKeys): ActivityDateRange => {
+  const { dateValue: defaultRange } = useActivityDateRange();
+  const [days, setDays] = useQueryStates(ACTIVITY_DAY_PARSERS, { urlKeys });
+  return useUrlDayRange(days, setDays, defaultRange);
+};
+
 export const useScopedDailyActivityRange = (
   accessToken: string | null,
   scope: DailyActivityScope,
@@ -85,7 +100,12 @@ export const useDailyActivityRange = (
   accessToken: string | null,
   userId: string | null,
   userRole: string,
+  dateRange?: ActivityDateRange,
 ): DailyActivityRange => {
-  const dateRange = useActivityDateRange();
-  return useScopedDailyActivityRange(accessToken, { userId: spendScopeUserId(userRole, userId) }, dateRange);
+  const localDateRange = useActivityDateRange();
+  return useScopedDailyActivityRange(
+    accessToken,
+    { userId: spendScopeUserId(userRole, userId) },
+    dateRange ?? localDateRange,
+  );
 };

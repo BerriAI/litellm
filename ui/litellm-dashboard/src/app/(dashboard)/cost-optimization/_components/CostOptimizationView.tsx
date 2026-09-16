@@ -4,6 +4,7 @@ import React from "react";
 import { Info, PiggyBank } from "lucide-react";
 
 import useCan from "@/app/(dashboard)/hooks/useCan";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -11,7 +12,13 @@ import UsageTab from "./UsageTab";
 import PromptCompressionTab from "./PromptCompressionTab";
 import PromptCachingTab from "./PromptCachingTab";
 import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
-import { useDailyActivityRange } from "./useDailyActivityRange";
+import { useDailyActivityRange, useUrlActivityDateRange } from "./useDailyActivityRange";
+import { useVisitedTabs } from "./useVisitedTabs";
+
+const ALL_TABS = ["usage", "compression", "caching", "autorouter-usage"] as const;
+type CostOptimizationTab = (typeof ALL_TABS)[number];
+const UNPRIVILEGED_TABS: readonly CostOptimizationTab[] = ["usage"];
+const ACTIVITY_URL_KEYS = { start: "start_date", end: "end_date" };
 
 interface CostOptimizationViewProps {
   accessToken: string | null;
@@ -20,21 +27,15 @@ interface CostOptimizationViewProps {
 }
 
 const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken, userId, userRole }) => {
-  const activity = useDailyActivityRange(accessToken, userId, userRole);
+  const dateRange = useUrlActivityDateRange(ACTIVITY_URL_KEYS);
+  const activity = useDailyActivityRange(accessToken, userId, userRole, dateRange);
   const canViewProxyWideCostData = useCan("viewProxyWideCostData");
-  const [visitedTabs, setVisitedTabs] = React.useState<readonly string[]>(["usage"]);
-
-  const handleTabChange = (value: unknown) => {
-    if (typeof value !== "string") {
-      return;
-    }
-
-    setVisitedTabs((currentTabs) => (currentTabs.includes(value) ? currentTabs : [...currentTabs, value]));
-  };
+  const [tab, setTab] = useUrlTab(canViewProxyWideCostData ? ALL_TABS : UNPRIVILEGED_TABS, "usage");
+  const visitedTabs = useVisitedTabs(tab);
 
   return (
     <main className="w-full p-8">
-      <Tabs defaultValue="usage" onValueChange={handleTabChange} className="gap-6">
+      <Tabs value={tab} onValueChange={setTab} className="gap-6">
         <PageHeader
           icon={<PiggyBank />}
           title="Cost Optimization"

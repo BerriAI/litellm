@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Info } from "lucide-react";
+import { parseAsStringLiteral, useQueryStates } from "nuqs";
 
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,17 +17,30 @@ interface CacheLeakageCardProps {
   activity: DailyActivityRange;
 }
 
-type SortColumn = "uncachedPromptTokens" | "cacheHitRatio" | "potentialSavings";
+const SORT_COLUMNS = ["uncachedPromptTokens", "cacheHitRatio", "potentialSavings"] as const;
+type SortColumn = (typeof SORT_COLUMNS)[number];
+const SORT_DIRS = ["asc", "desc"] as const;
+type SortDir = (typeof SORT_DIRS)[number];
 interface SortState {
   column: SortColumn;
-  dir: "asc" | "desc";
+  dir: SortDir;
 }
 
-const NATURAL_DIR: Record<SortColumn, "asc" | "desc"> = {
+const DIMENSIONS: readonly CacheLeakageDimension[] = ["key", "model"];
+
+const LEAKAGE_URL_STATE = {
+  leak_by: parseAsStringLiteral(DIMENSIONS).withDefault("key"),
+  leak_sort: parseAsStringLiteral(SORT_COLUMNS).withDefault("potentialSavings"),
+  leak_dir: parseAsStringLiteral(SORT_DIRS).withDefault("desc"),
+};
+
+const NATURAL_DIR: Record<SortColumn, SortDir> = {
   uncachedPromptTokens: "desc",
   cacheHitRatio: "asc",
   potentialSavings: "desc",
 };
+
+const flipped = (dir: SortDir): SortDir => (dir === "asc" ? "desc" : "asc");
 
 const compareRows = (a: CacheLeakageRow, b: CacheLeakageRow, sort: SortState): number => {
   const av = a[sort.column];
@@ -82,17 +96,17 @@ const SortableHead = ({
 
 const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
   const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
-  const [dimension, setDimension] = useState<CacheLeakageDimension>("key");
-  const [sort, setSort] = useState<SortState>({ column: "potentialSavings", dir: "desc" });
+  const [{ leak_by: dimension, leak_sort: sortColumn, leak_dir: sortDir }, setLeakageState] =
+    useQueryStates(LEAKAGE_URL_STATE);
+  const sort = useMemo<SortState>(() => ({ column: sortColumn, dir: sortDir }), [sortColumn, sortDir]);
   const leakage = useMemo(() => computeCacheLeakage(results, dimension), [results, dimension]);
   const rows = useMemo(() => [...leakage.rows].sort((a, b) => compareRows(a, b, sort)), [leakage.rows, sort]);
 
   const onSort = (column: SortColumn) =>
-    setSort((prev) =>
-      prev.column === column
-        ? { column, dir: prev.dir === "asc" ? "desc" : "asc" }
-        : { column, dir: NATURAL_DIR[column] },
-    );
+    void setLeakageState((prev) => ({
+      leak_sort: column,
+      leak_dir: prev.leak_sort === column ? flipped(prev.leak_dir) : NATURAL_DIR[column],
+    }));
 
   const subject = dimension === "model" ? "Models" : "Keys";
   const firstColumn = dimension === "model" ? "Model" : "Key";
@@ -115,7 +129,10 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
               <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
             </div>
           </div>
-          <Tabs value={dimension} onValueChange={(value) => setDimension(value === "model" ? "model" : "key")}>
+          <Tabs
+            value={dimension}
+            onValueChange={(value) => void setLeakageState({ leak_by: value === "model" ? "model" : "key" })}
+          >
             <TabsList>
               <TabsTrigger value="key">By virtual key</TabsTrigger>
               <TabsTrigger value="model">By model</TabsTrigger>

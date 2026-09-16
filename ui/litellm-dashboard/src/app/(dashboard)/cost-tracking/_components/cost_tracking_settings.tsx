@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { ChevronDown } from "lucide-react";
+import { parseAsArrayOf, parseAsStringLiteral, useQueryState } from "nuqs";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -26,6 +27,7 @@ import { useMarginConfig } from "./use_margin_config";
 import { useBlockUnpricedConfig } from "./use_block_unpriced_config";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useUrlTab } from "@/hooks/useUrlTab";
 
 const DOCS_LINKS = [
   { label: "Custom pricing for models", href: "https://docs.litellm.ai/docs/proxy/custom_pricing" },
@@ -42,6 +44,19 @@ interface PendingRemoval {
   provider: string;
   displayName: string;
 }
+
+const SECTIONS = ["discounts", "margin", "block-unpriced", "calculator"] as const;
+type Section = (typeof SECTIONS)[number];
+const openSectionsParser = parseAsArrayOf(parseAsStringLiteral(SECTIONS)).withDefault(["calculator"]);
+
+const withSection = (openSections: readonly Section[], section: Section, open: boolean): Section[] => {
+  const others = openSections.filter((openSection) => openSection !== section);
+  return open ? [...others, section] : others;
+};
+
+const DISCOUNT_TABS = ["discounts", "test"] as const;
+type DiscountTab = (typeof DISCOUNT_TABS)[number];
+const UNPRIVILEGED_DISCOUNT_TABS: readonly DiscountTab[] = ["discounts"];
 
 const SECTION_HEADER_CLASS = "group/section flex w-full items-center justify-between px-6 py-4 text-left";
 
@@ -70,6 +85,17 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   const [isRemoving, setIsRemoving] = useState(false);
 
   const isProxyAdmin = userRole === "proxy_admin" || userRole === "Admin";
+  const [openSections, setOpenSections] = useQueryState("open", openSectionsParser);
+  const [discountTab, setDiscountTab] = useUrlTab(
+    isProxyAdmin ? DISCOUNT_TABS : UNPRIVILEGED_DISCOUNT_TABS,
+    "discounts",
+    "discount_tab",
+  );
+
+  const sectionOpenState = (section: Section) => ({
+    open: openSections.includes(section),
+    onOpenChange: (open: boolean) => void setOpenSections((current) => withSection(current, section, open)),
+  });
 
   // Use custom hooks for discount and margin config
   const {
@@ -199,18 +225,18 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
       <div className="bg-card rounded-lg shadow-sm w-full max-w-full space-y-4">
         {/* Accordion 1: Provider Discounts - Only for proxy admins */}
         {isProxyAdmin && (
-          <Collapsible className="rounded-lg border">
+          <Collapsible {...sectionOpenState("discounts")} className="rounded-lg border">
             <SectionHeader
               title="Provider Discounts"
               description="Apply percentage-based discounts to reduce costs for specific providers"
             />
             <CollapsibleContent className="px-0">
-              <Tabs defaultValue="discounts">
+              <Tabs value={discountTab} onValueChange={setDiscountTab}>
                 <TabsList variant="line" className="mx-6 mt-4 h-auto justify-start rounded-none border-b p-0">
                   <TabsTrigger value="discounts" className="flex-none rounded-none px-4 py-2">
                     Discounts
                   </TabsTrigger>
-                  <TabsTrigger value="test-it" className="flex-none rounded-none px-4 py-2">
+                  <TabsTrigger value="test" className="flex-none rounded-none px-4 py-2">
                     Test It
                   </TabsTrigger>
                 </TabsList>
@@ -252,7 +278,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
                     )}
                   </div>
                 </TabsContent>
-                <TabsContent value="test-it" keepMounted>
+                <TabsContent value="test" keepMounted>
                   <div className="px-6 pb-4">
                     <HowItWorks />
                   </div>
@@ -264,7 +290,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
 
         {/* Accordion 2: Fee/Price Margin - Only for proxy admins */}
         {isProxyAdmin && (
-          <Collapsible className="rounded-lg border">
+          <Collapsible {...sectionOpenState("margin")} className="rounded-lg border">
             <SectionHeader
               title="Fee/Price Margin"
               description="Add fees or margins to LLM costs for internal billing and cost recovery"
@@ -312,7 +338,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
 
         {/* Accordion 3: Block Unpriced Models - Only for proxy admins */}
         {isProxyAdmin && (
-          <Collapsible className="rounded-lg border">
+          <Collapsible {...sectionOpenState("block-unpriced")} className="rounded-lg border">
             <SectionHeader
               title="Block Unpriced Models"
               description="Reject requests for models that have no pricing in the cost map instead of logging them as $0 spend"
@@ -339,7 +365,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
         )}
 
         {/* Accordion 4: Pricing Calculator - Available to all roles */}
-        <Collapsible defaultOpen={true} className="rounded-lg border">
+        <Collapsible {...sectionOpenState("calculator")} className="rounded-lg border">
           <SectionHeader
             title="Pricing Calculator"
             description="Estimate LLM costs based on expected token usage and request volume"

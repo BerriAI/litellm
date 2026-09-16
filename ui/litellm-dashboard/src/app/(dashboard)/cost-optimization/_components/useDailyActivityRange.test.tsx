@@ -1,4 +1,6 @@
-import { renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 const mockUsePaginatedDailyActivity = vi.fn();
@@ -25,7 +27,7 @@ vi.mock("@/components/networking", () => ({
 }));
 
 import { userDailyActivityAggregatedCall } from "@/components/networking";
-import { useActivityDateRange, useDailyActivityRange } from "./useDailyActivityRange";
+import { useActivityDateRange, useDailyActivityRange, useUrlActivityDateRange } from "./useDailyActivityRange";
 
 const argsOfLastCall = () => mockUsePaginatedDailyActivity.mock.calls.at(-1)?.[0].args as unknown[];
 
@@ -79,5 +81,96 @@ describe("useDailyActivityRange", () => {
     renderHook(() => useDailyActivityRange(null, "u1", "proxy_admin"));
 
     expect(mockUsePaginatedDailyActivity).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: false }));
+  });
+});
+
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const URL_KEYS = { start: "start_date", end: "end_date" };
+
+const renderUrlRange = (searchParams = "", onUrlUpdate?: OnUrlUpdateFunction) =>
+  renderHook(() => useUrlActivityDateRange(URL_KEYS), {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <NuqsTestingAdapter searchParams={searchParams} onUrlUpdate={onUrlUpdate} hasMemory>
+        {children}
+      </NuqsTestingAdapter>
+    ),
+  });
+
+describe("useUrlActivityDateRange", () => {
+  it("reads the range from the URL as whole local days", () => {
+    const { result } = renderUrlRange("?start_date=2026-01-05&end_date=2026-01-07");
+
+    expect(result.current.dateValue.from).toEqual(new Date(2026, 0, 5));
+    expect(result.current.dateValue.to).toEqual(new Date(2026, 0, 7, 23, 59, 59, 999));
+  });
+
+  it.each([
+    ["an impossible calendar day", "?start_date=2026-02-30&end_date=2026-03-02"],
+    ["a start after the end", "?start_date=2026-03-02&end_date=2026-03-01"],
+    ["a missing end", "?start_date=2026-03-01"],
+    ["a non-date value", "?start_date=yesterday&end_date=2026-03-01"],
+  ])("falls back to the trailing 30 days for %s", (_label, searchParams) => {
+    const before = Date.now();
+    const { result } = renderUrlRange(searchParams);
+    const { from, to } = result.current.dateValue;
+
+    expect(to!.getTime()).toBeGreaterThanOrEqual(before);
+    expect(to!.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(to!.getTime() - from!.getTime()).toBe(THIRTY_DAYS_MS);
+  });
+
+  it("keeps the same range object across rerenders so date-keyed effects do not refire", () => {
+    const fromUrl = renderUrlRange("?start_date=2026-01-05&end_date=2026-01-07");
+    const firstUrlValue = fromUrl.result.current.dateValue;
+    fromUrl.rerender();
+    expect(fromUrl.result.current.dateValue).toBe(firstUrlValue);
+
+    const fallback = renderUrlRange();
+    const firstFallback = fallback.result.current.dateValue;
+    fallback.rerender();
+    expect(fallback.result.current.dateValue).toBe(firstFallback);
+  });
+
+  it("writes the picked local days to the URL keys and reflects them back", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const { result } = renderUrlRange("", onUrlUpdate);
+
+    act(() => result.current.onDateChange({ from: new Date(2026, 3, 1), to: new Date(2026, 3, 9, 23, 59, 59) }));
+
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    const { searchParams } = onUrlUpdate.mock.calls.at(-1)![0];
+    expect(searchParams.get("start_date")).toBe("2026-04-01");
+    expect(searchParams.get("end_date")).toBe("2026-04-09");
+    expect(result.current.dateValue.from).toEqual(new Date(2026, 3, 1));
+    expect(result.current.dateValue.to).toEqual(new Date(2026, 3, 9, 23, 59, 59, 999));
+  });
+
+  it("removes both URL keys when the range is cleared", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const { result } = renderUrlRange("?start_date=2026-01-05&end_date=2026-01-07", onUrlUpdate);
+
+    act(() => result.current.onDateChange({ from: undefined, to: undefined }));
+
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    const { searchParams } = onUrlUpdate.mock.calls.at(-1)![0];
+    expect(searchParams.has("start_date")).toBe(false);
+    expect(searchParams.has("end_date")).toBe(false);
+  });
+
+  it("drives the daily-activity query when handed to useDailyActivityRange", () => {
+    renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin", useUrlActivityDateRange(URL_KEYS)), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <NuqsTestingAdapter searchParams="?start_date=2026-01-05&end_date=2026-01-07">{children}</NuqsTestingAdapter>
+      ),
+    });
+
+    expect(argsOfLastCall()).toEqual([
+      "test-token",
+      new Date(2026, 0, 5),
+      new Date(2026, 0, 7, 23, 59, 59, 999),
+      null,
+      true,
+      null,
+    ]);
   });
 });

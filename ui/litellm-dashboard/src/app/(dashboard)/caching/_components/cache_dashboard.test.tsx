@@ -1,7 +1,11 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { renderWithProviders } from "../../../../../tests/test-utils";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import CacheDashboard from "./cache_dashboard";
 
 const { useCacheActivity, cachingHealthCheckCall } = vi.hoisted(() => ({
@@ -15,6 +19,17 @@ vi.mock("@/components/networking", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/caching/useCacheActivity", () => ({
   useCacheActivity,
+}));
+
+vi.mock("@/components/shared/advanced_date_picker", () => ({
+  __esModule: true,
+  default: ({ onValueChange }: { onValueChange: (value: DateRangePickerValue) => void }) => (
+    <button
+      type="button"
+      data-testid="date-picker"
+      onClick={() => onValueChange({ from: new Date(2026, 7, 1), to: new Date(2026, 7, 5, 23, 59, 59, 999) })}
+    />
+  ),
 }));
 
 const cacheActivity = {
@@ -54,10 +69,22 @@ const cacheActivity = {
   ],
 };
 
-const renderDashboard = () =>
+const renderDashboard = (url: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction } = {}) =>
   renderWithProviders(
     <CacheDashboard accessToken="sk-test" token="tok" userRole="Admin" userID="u1" premiumUser={false} />,
+    url,
   );
+
+const lastUrlUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+  onUrlUpdate.mock.calls.at(-1)?.[0];
+
+const failedBarOf = (card: HTMLElement) => {
+  const redBar = Array.from(card.querySelectorAll(".recharts-bar")).find((bar) =>
+    bar.querySelector("path.recharts-rectangle")?.getAttribute("fill")?.includes("red"),
+  );
+  expect(redBar).toBeDefined();
+  return redBar!.querySelectorAll("path.recharts-rectangle")[0];
+};
 
 const REQUESTS_CHART_TITLE = "Cache Hits vs API Requests";
 const TOKENS_CHART_TITLE = "Cached Completion Tokens vs Generated Completion Tokens";
@@ -194,13 +221,9 @@ describe("CacheDashboard cache analytics charts", () => {
     renderDashboard();
     const { requestsCard } = await findChartCards();
 
-    const redBar = Array.from(requestsCard.querySelectorAll(".recharts-bar")).find((bar) =>
-      bar.querySelector("path.recharts-rectangle")?.getAttribute("fill")?.includes("red"),
-    );
-    expect(redBar).toBeDefined();
     expect(screen.queryByText(/Failed requests by error code/)).not.toBeInTheDocument();
 
-    fireEvent.click(redBar!.querySelectorAll("path.recharts-rectangle")[0]);
+    fireEvent.click(failedBarOf(requestsCard));
 
     const drilldownCard = cardTitled("Failed requests by error code: acompletion");
     expect(within(drilldownCard).getAllByText("429").length).toBeGreaterThan(0);
@@ -215,10 +238,7 @@ describe("CacheDashboard cache analytics charts", () => {
     const { rerender } = renderDashboard();
     const { requestsCard } = await findChartCards();
 
-    const redBar = Array.from(requestsCard.querySelectorAll(".recharts-bar")).find((bar) =>
-      bar.querySelector("path.recharts-rectangle")?.getAttribute("fill")?.includes("red"),
-    );
-    fireEvent.click(redBar!.querySelectorAll("path.recharts-rectangle")[0]);
+    fireEvent.click(failedBarOf(requestsCard));
     expect(screen.getByText("Failed requests by error code: acompletion")).toBeInTheDocument();
 
     useCacheActivity.mockReturnValue({
@@ -276,5 +296,158 @@ describe("CacheDashboard cache analytics charts", () => {
 
     expect(compactTicks(requestsCard).length).toBeGreaterThan(0);
     expect(compactTicks(tokensCard)).toContain("60K");
+  });
+});
+
+describe("CacheDashboard URL state", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useCacheActivity.mockReturnValue({ data: cacheActivity, refetch: vi.fn() });
+  });
+
+  it("opens the tab named in ?tab=", () => {
+    renderDashboard({ searchParams: "?tab=coordination-redis" });
+
+    expect(screen.getByRole("tab", { name: "Coordination Redis" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Cache Analytics" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("writes ?tab= when a tab is chosen and drops it for analytics", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderDashboard({ onUrlUpdate });
+
+    fireEvent.click(screen.getByRole("tab", { name: "Cache Health" }));
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("tab")).toBe("health"));
+    expect(screen.getByRole("tab", { name: "Cache Health" })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Cache Analytics" }));
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("tab")).toBe(false));
+  });
+
+  it("falls back to analytics and clears an unknown ?tab= while keeping the filters", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    render(<CacheDashboard accessToken="sk-test" token="tok" userRole="Admin" userID="u1" premiumUser={false} />, {
+      wrapper: ({ children }) => (
+        <NuqsTestingAdapter
+          searchParams="?tab=coordination&keys=my-key"
+          onUrlUpdate={onUrlUpdate}
+          hasMemory
+          resetUrlUpdateQueueOnMount={false}
+        >
+          <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+        </NuqsTestingAdapter>
+      ),
+    });
+
+    expect(screen.getByRole("tab", { name: "Cache Analytics" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("tab")).toBe(false);
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("keys")).toBe("my-key");
+  });
+
+  it("queries the days, keys and models named in the URL and shows them as chips", () => {
+    renderDashboard({
+      searchParams: "?start_date=2026-01-05&end_date=2026-01-07&keys=my-key&models=gpt-5.1,text-embedding-3-large",
+    });
+
+    const expectedQuery = {
+      startDate: "2026-01-05",
+      endDate: "2026-01-07",
+      keyAliases: ["my-key"],
+      models: ["gpt-5.1", "text-embedding-3-large"],
+    };
+    expect(useCacheActivity).toHaveBeenLastCalledWith(expectedQuery);
+    expect(screen.getByLabelText("my-key")).toBeInTheDocument();
+    expect(screen.getByLabelText("gpt-5.1")).toBeInTheDocument();
+    expect(screen.getByLabelText("text-embedding-3-large")).toBeInTheDocument();
+  });
+
+  it("ignores a reversed date range in the URL and keeps querying the default week", () => {
+    renderDashboard({ searchParams: "?start_date=2026-01-07&end_date=2026-01-05" });
+
+    const { startDate, endDate } = useCacheActivity.mock.calls.at(-1)![0];
+    expect(startDate).not.toBe("2026-01-07");
+    expect(endDate).not.toBe("2026-01-05");
+    expect(startDate < endDate).toBe(true);
+  });
+
+  it("writes the picked days to ?start_date= and ?end_date= and queries them", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderDashboard({ onUrlUpdate });
+
+    fireEvent.click(screen.getByTestId("date-picker"));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("start_date")).toBe("2026-08-01"));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("end_date")).toBe("2026-08-05");
+    expect(useCacheActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ startDate: "2026-08-01", endDate: "2026-08-05" }),
+    );
+  });
+
+  it("writes a chosen virtual key to ?keys= and removes it again", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderDashboard({ onUrlUpdate });
+
+    await user.click(screen.getByPlaceholderText("Select Virtual Keys"));
+    await user.click(await screen.findByRole("option", { name: "my-key" }));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("keys")).toBe("my-key"));
+    expect(useCacheActivity).toHaveBeenLastCalledWith(expect.objectContaining({ keyAliases: ["my-key"] }));
+
+    await user.click(within(screen.getByLabelText("my-key")).getByRole("button"));
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("keys")).toBe(false));
+  });
+
+  it("writes a chosen model to ?models=", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderDashboard({ onUrlUpdate });
+
+    await user.click(screen.getByPlaceholderText("Select Models"));
+    await user.click(await screen.findByRole("option", { name: "gpt-5.1" }));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("models")).toBe("gpt-5.1"));
+    expect(useCacheActivity).toHaveBeenLastCalledWith(expect.objectContaining({ models: ["gpt-5.1"] }));
+  });
+
+  it("opens the drilldown named in ?error_call_type=", () => {
+    renderDashboard({ searchParams: "?error_call_type=aembedding" });
+
+    const drilldownCard = cardTitled("Failed requests by error code: aembedding");
+    expect(within(drilldownCard).getAllByText("500").length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["a call_type the data does not have", "?error_call_type=aimage_generation"],
+    ["a call_type with no failures", "?error_call_type=aresponses"],
+  ])("keeps the drilldown closed for %s", async (_label, searchParams) => {
+    useCacheActivity.mockReturnValue({
+      data: {
+        ...cacheActivity,
+        groups: [...cacheActivity.groups, { ...cacheActivity.groups[1], call_type: "aresponses", failed_requests: 0 }],
+      },
+      refetch: vi.fn(),
+    });
+    renderDashboard({ searchParams });
+    await screen.findByText(REQUESTS_CHART_TITLE);
+
+    expect(screen.queryByText(/Failed requests by error code/)).not.toBeInTheDocument();
+  });
+
+  it("pushes the clicked call_type to ?error_call_type= and removes it on close", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderDashboard({ onUrlUpdate });
+    const { requestsCard } = await findChartCards();
+
+    fireEvent.click(failedBarOf(requestsCard));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("error_call_type")).toBe("acompletion"));
+    expect(lastUrlUpdate(onUrlUpdate)?.options.history).toBe("push");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close error breakdown" }));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("error_call_type")).toBe(false));
+    expect(screen.queryByText(/Failed requests by error code/)).not.toBeInTheDocument();
   });
 });

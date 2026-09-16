@@ -1,6 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "../../../../../tests/test-utils";
 import type { ToolSpendResponse } from "@/components/networking";
 
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
@@ -101,6 +103,8 @@ interface RenderOptions {
   from?: Date;
   to?: Date;
   userRole?: string;
+  searchParams?: string;
+  onUrlUpdate?: OnUrlUpdateFunction;
 }
 
 const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
@@ -109,10 +113,12 @@ const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
     from = new Date(2026, 6, 1),
     to = new Date(2026, 6, 14),
     userRole = "Admin",
+    searchParams,
+    onUrlUpdate,
   } = options;
   mockGetToolSpend.mockResolvedValue(toolSpend);
   useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole });
-  return render(
+  return renderWithProviders(
     <UsageTab
       accessToken="test-token"
       activity={{
@@ -127,6 +133,7 @@ const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
         cancel: vi.fn(),
       }}
     />,
+    { searchParams, onUrlUpdate },
   );
 };
 
@@ -240,6 +247,33 @@ describe("UsageTab", () => {
     expect(screen.getByText("Running total saved · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: "Per day" }));
     expect(screen.getByText("Saved per day · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
+  });
+
+  it("opens on the per-day bars when ?savings=per-day", () => {
+    renderWith(twoDays(), { searchParams: "?savings=per-day" });
+
+    expect(screen.getByRole("tab", { name: "Per day" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("bar-chart")).toBeInTheDocument();
+    expect(screen.queryByTestId("area-chart")).not.toBeInTheDocument();
+  });
+
+  it("opens on the running total for an unknown ?savings= value", () => {
+    renderWith(twoDays(), { searchParams: "?savings=weekly" });
+
+    expect(screen.getByRole("tab", { name: "Cumulative" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("area-chart")).toBeInTheDocument();
+  });
+
+  it("writes ?savings=per-day for the per-day view and drops it for the running total", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWith(twoDays(), { onUrlUpdate });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Per day" }));
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("savings")).toBe("per-day"));
+
+    await userEvent.click(screen.getByRole("tab", { name: "Cumulative" }));
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("savings")).toBe(false));
+    expect(screen.getByTestId("area-chart")).toBeInTheDocument();
   });
 
   it("builds the per-driver donut from the range totals, not the running total", () => {
