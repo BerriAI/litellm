@@ -18,6 +18,7 @@ from litellm.a2a_protocol.card_resolver import (
     normalize_agent_card_interfaces,
     set_agent_card_url,
 )
+from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError
 
 
 @pytest.mark.asyncio
@@ -174,8 +175,6 @@ class _FakeHttpxClient:
 
 @pytest.mark.asyncio
 async def test_card_resolver_falls_through_to_the_foundry_card_path():
-    """Microsoft Foundry agents serve their card only at /agentCard/v1.0 and 404 both well-known
-    paths, so discovery must reach that path after the two well-known probes fail."""
     httpx_client = _FakeHttpxClient(
         base_url=_FOUNDRY_BASE_URL,
         responses={
@@ -209,10 +208,6 @@ async def test_card_resolver_explicit_path_skips_the_probes():
 
 @pytest.mark.asyncio
 async def test_card_resolver_names_every_probed_path_when_discovery_fails():
-    """A Foundry agent 401s its well-known paths and 404s the rest; surfacing only the last probe's
-    error would hide the auth failure that actually explains the outage."""
-    from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError
-
     httpx_client = _FakeHttpxClient(
         base_url=_FOUNDRY_BASE_URL,
         responses={
@@ -226,8 +221,29 @@ async def test_card_resolver_names_every_probed_path_when_discovery_fails():
     with pytest.raises(A2AAgentCardDiscoveryError) as raised:
         await resolver.get_agent_card()
 
+    assert raised.value.status_code == 401
     message = str(raised.value)
     assert _FOUNDRY_BASE_URL in message
     assert "/.well-known/agent-card.json (" in message and "HTTP 404" in message
     assert "/.well-known/agent.json (" in message and "HTTP 401" in message
     assert "/agentCard/v1.0 (" in message
+
+
+@pytest.mark.asyncio
+async def test_card_resolver_discovery_error_is_404_when_every_probe_is_404():
+    resolver = LiteLLMA2ACardResolver(
+        httpx_client=_FakeHttpxClient(
+            base_url=_FOUNDRY_BASE_URL,
+            responses={
+                "/.well-known/agent-card.json": (404, {"error": "not found"}),
+                "/.well-known/agent.json": (404, {"error": "not found"}),
+                "/agentCard/v1.0": (404, {"error": "not found"}),
+            },
+        ),
+        base_url=_FOUNDRY_BASE_URL,
+    )
+
+    with pytest.raises(A2AAgentCardDiscoveryError) as raised:
+        await resolver.get_agent_card()
+
+    assert raised.value.status_code == 404

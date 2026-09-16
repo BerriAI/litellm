@@ -102,11 +102,12 @@ class A2AAgentCardError(A2AError):
         model: str | None = None,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
+        status_code: int = 404,
     ):
         self.url = url
         super().__init__(
             message=message,
-            status_code=404,
+            status_code=status_code,
             llm_provider="a2a_agent",
             model=model,
             response=response,
@@ -115,12 +116,14 @@ class A2AAgentCardError(A2AError):
 
 
 class A2AAgentCardDiscoveryError(A2AAgentCardError):
-    """Raised when no known agent card path answered; names every path probed and why each failed."""
-
-    def __init__(self, base_url: str, failures: tuple[tuple[str, Exception], ...]) -> None:
+    def __init__(self, base_url: str, failures: tuple[tuple[str, Exception], ...], status_code: int) -> None:
         self.failures = failures
         attempts: Final = ", ".join(f"{path} ({error})" for path, error in failures)
-        super().__init__(message=f"Failed to fetch agent card from {base_url}. Tried {attempts}", url=base_url)
+        super().__init__(
+            message=f"Failed to fetch agent card from {base_url}. Tried {attempts}",
+            url=base_url,
+            status_code=status_code,
+        )
 
 
 class A2ALocalhostURLError(A2AConnectionError):
