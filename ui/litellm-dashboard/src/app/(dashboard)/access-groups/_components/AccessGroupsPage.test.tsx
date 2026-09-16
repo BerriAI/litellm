@@ -1,6 +1,7 @@
 import { fireEvent, renderWithProviders, screen, within } from "@/../tests/test-utils";
 import { waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AccessGroupsPage } from "./AccessGroupsPage";
 import type { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
@@ -62,6 +63,7 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 }));
 
 vi.mock("./AccessGroupsDetailsPage", () => ({
+  ACCESS_GROUP_DETAIL_TAB_KEY: "detail_tab",
   AccessGroupDetail: ({ accessGroupId, onBack }: { accessGroupId: string; onBack: () => void }) => (
     <div data-testid="access-group-detail">
       <span>Detail for {accessGroupId}</span>
@@ -89,6 +91,16 @@ const makeGroups = (count: number): AccessGroupResponse[] =>
       description: `Group ${suffix} description`,
     };
   });
+
+const SEARCH_PLACEHOLDER = "Search groups by name, ID, or description...";
+
+const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => onUrlUpdate.mock.calls.at(-1)?.[0];
+
+const renderedGroupIds = () =>
+  screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => within(row).getAllByRole("cell")[0].textContent);
 
 const openRowMenu = async (user: ReturnType<typeof userEvent.setup>, groupId: string) => {
   await user.click(screen.getByTestId(`access-group-actions-${groupId}`));
@@ -275,5 +287,91 @@ describe("AccessGroupsPage", () => {
     expect(screen.queryByTestId("access-group-actions-ag-1")).not.toBeInTheDocument();
     // The read-only view still lists the groups.
     expect(screen.getByText("Admin Group")).toBeInTheDocument();
+  });
+
+  describe("URL state", () => {
+    it("opens the detail view for the group named in the URL", () => {
+      renderWithProviders(<AccessGroupsPage />, { searchParams: "?group=ag-2" });
+      expect(screen.getByText("Detail for ag-2")).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText(SEARCH_PLACEHOLDER)).not.toBeInTheDocument();
+    });
+
+    it("pushes the clicked group into the URL and resets the detail tab", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<AccessGroupsPage />, { searchParams: "?detail_tab=agents", onUrlUpdate });
+      await user.click(screen.getByText("ag-1"));
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("group")).toBe("ag-1");
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("detail_tab")).toBe(false);
+      expect(lastUrl(onUrlUpdate)?.options.history).toBe("push");
+    });
+
+    it("clears the group and its detail tab on Back but keeps the list search", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<AccessGroupsPage />, {
+        searchParams: "?group=ag-1&detail_tab=mcp&group_search=Read",
+        onUrlUpdate,
+      });
+      await user.click(screen.getByRole("button", { name: "Back" }));
+      const url = lastUrl(onUrlUpdate);
+      expect(url?.searchParams.has("group")).toBe(false);
+      expect(url?.searchParams.has("detail_tab")).toBe(false);
+      expect(url?.searchParams.get("group_search")).toBe("Read");
+      expect(url?.options.history).toBe("push");
+      expect(screen.getByPlaceholderText(SEARCH_PLACEHOLDER)).toHaveValue("Read");
+      expect(screen.getByText("Read Only")).toBeInTheDocument();
+      expect(screen.queryByText("Admin Group")).not.toBeInTheDocument();
+    });
+
+    it("filters by the search in the URL", () => {
+      renderWithProviders(<AccessGroupsPage />, { searchParams: "?group_search=admin" });
+      expect(screen.getByPlaceholderText(SEARCH_PLACEHOLDER)).toHaveValue("admin");
+      expect(screen.getByText("Admin Group")).toBeInTheDocument();
+      expect(screen.queryByText("Read Only")).not.toBeInTheDocument();
+    });
+
+    it("writes the search to group_search, resets the page, and removes it when cleared", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      mockUseAccessGroups.mockReturnValue({ data: makeGroups(25), isLoading: false });
+      renderWithProviders(<AccessGroupsPage />, { searchParams: "?page=2", onUrlUpdate });
+      fireEvent.change(screen.getByPlaceholderText(SEARCH_PLACEHOLDER), { target: { value: "Group 0" } });
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.get("group_search")).toBe("Group 0"));
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("search")).toBe(false);
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("page")).toBe(false);
+      await user.click(screen.getByRole("button", { name: "Clear search" }));
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("group_search")).toBe(false));
+      expect(screen.getByPlaceholderText(SEARCH_PLACEHOLDER)).toHaveValue("");
+    });
+
+    it("opens the page named in the URL and writes page changes back", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      mockUseAccessGroups.mockReturnValue({ data: makeGroups(25), isLoading: false });
+      renderWithProviders(<AccessGroupsPage />, { searchParams: "?page=3", onUrlUpdate });
+      expect(renderedGroupIds()).toEqual(["ag-21", "ag-22", "ag-23", "ag-24", "ag-25"]);
+      await user.click(screen.getByTestId("pagination-prev"));
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("page")).toBe("2");
+      expect(screen.getByText("ag-11")).toBeInTheDocument();
+    });
+
+    it("sorts by the column in the URL and writes header sort changes back", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      mockUseAccessGroups.mockReturnValue({ data: [mockAccessGroups[1], mockAccessGroups[0]], isLoading: false });
+      renderWithProviders(<AccessGroupsPage />, { searchParams: "?sort_by=name&sort_order=asc", onUrlUpdate });
+      expect(renderedGroupIds()).toEqual(["ag-1", "ag-2"]);
+      await user.click(screen.getByTestId("sort-header-name"));
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("sort_by")).toBe("name");
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("sort_order")).toBe(false);
+      expect(renderedGroupIds()).toEqual(["ag-2", "ag-1"]);
+    });
+
+    it("falls back to newest first when the URL names an unsortable column", () => {
+      mockUseAccessGroups.mockReturnValue({ data: [mockAccessGroups[1], mockAccessGroups[0]], isLoading: false });
+      renderWithProviders(<AccessGroupsPage />, { searchParams: "?sort_by=bogus" });
+      expect(renderedGroupIds()).toEqual(["ag-1", "ag-2"]);
+    });
   });
 });

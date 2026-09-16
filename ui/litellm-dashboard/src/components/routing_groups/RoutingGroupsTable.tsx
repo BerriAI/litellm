@@ -1,14 +1,16 @@
 "use client";
 
-import type { ExpandedState, SortingState } from "@tanstack/react-table";
+import { functionalUpdate, type ExpandedState, type OnChangeFn, type SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
-import React, { useCallback, useMemo, useState } from "react";
+import { parseAsStringLiteral, useQueryStates } from "nuqs";
+import React, { useCallback, useMemo } from "react";
 
 import { DataTable } from "@/components/shared/DataTable";
 
 import { RoutingGroupUsagePanel } from "./RoutingGroupUsagePanel";
 import { getRoutingGroupsTableColumns } from "./RoutingGroupsTableColumns";
 import type { RoutingGroup } from "./types";
+import { useExpandedRoutingGroups } from "./useExpandedRoutingGroups";
 
 interface RoutingGroupsTableProps {
   groups: RoutingGroup[];
@@ -17,6 +19,13 @@ interface RoutingGroupsTableProps {
   onDelete: (group: RoutingGroup) => void;
   proxyBaseUrl?: string;
 }
+
+const SORTABLE_COLUMNS = ["group_name", "routing_strategy"] as const;
+
+const SORT_URL_STATE = {
+  sort_by: parseAsStringLiteral(SORTABLE_COLUMNS),
+  sort_order: parseAsStringLiteral(["asc", "desc"] as const).withDefault("asc"),
+};
 
 const resolveBaseUrl = (proxyBaseUrl?: string): string => {
   if (proxyBaseUrl && proxyBaseUrl.trim()) return proxyBaseUrl;
@@ -45,16 +54,49 @@ const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({
   onDelete,
   proxyBaseUrl,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>([]);
-  const [expanded, setExpanded] = useState<ExpandedState>({});
+  const [{ sort_by: sortBy, sort_order: sortOrder }, setSort] = useQueryStates(SORT_URL_STATE);
+  const [expandedGroups, setExpandedGroups] = useExpandedRoutingGroups();
   const baseUrl = resolveBaseUrl(proxyBaseUrl);
 
-  const toggleUsage = useCallback((group: RoutingGroup) => {
-    setExpanded((previous) => {
-      const current = previous === true ? {} : previous;
-      return { ...current, [group.group_name]: current[group.group_name] !== true };
-    });
-  }, []);
+  const sorting = useMemo<SortingState>(
+    () => (sortBy ? [{ id: sortBy, desc: sortOrder === "desc" }] : []),
+    [sortBy, sortOrder],
+  );
+
+  const onSortingChange = useCallback<OnChangeFn<SortingState>>(
+    (updaterOrValue) => {
+      const active = functionalUpdate(updaterOrValue, sorting)[0];
+      const column = SORTABLE_COLUMNS.find((id) => id === active?.id) ?? null;
+      void setSort({ sort_by: column, sort_order: column && active?.desc ? "desc" : null });
+    },
+    [setSort, sorting],
+  );
+
+  const expanded = useMemo<ExpandedState>(
+    () => Object.fromEntries(expandedGroups.map((name) => [name, true])),
+    [expandedGroups],
+  );
+
+  const onExpandedChange = useCallback<OnChangeFn<ExpandedState>>(
+    (updaterOrValue) => {
+      const next = functionalUpdate(updaterOrValue, expanded);
+      void setExpandedGroups(
+        next === true ? groups.map((group) => group.group_name) : Object.keys(next).filter((name) => next[name]),
+      );
+    },
+    [expanded, groups, setExpandedGroups],
+  );
+
+  const toggleUsage = useCallback(
+    (group: RoutingGroup) => {
+      void setExpandedGroups((previous) =>
+        previous.includes(group.group_name)
+          ? previous.filter((name) => name !== group.group_name)
+          : [...previous, group.group_name],
+      );
+    },
+    [setExpandedGroups],
+  );
 
   const columns = useMemo(() => {
     const deps = { onEdit, onDelete, onToggleUsage: toggleUsage };
@@ -69,9 +111,9 @@ const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({
       getRowId={(group) => group.group_name}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       expanded={expanded}
-      onExpandedChange={setExpanded}
+      onExpandedChange={onExpandedChange}
       getRowCanExpand={() => true}
       renderSubComponent={({ row }) => <RoutingGroupUsagePanel group={row.original} baseUrl={baseUrl} />}
       isLoading={isLoading}

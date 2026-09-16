@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import { parseAsString, useQueryState } from "nuqs";
+import React, { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
@@ -14,6 +15,7 @@ import RoutingGroupsTable from "./RoutingGroupsTable";
 import RoutingGroupModal from "./RoutingGroupModal";
 import { toast } from "@/lib/toast";
 import type { RoutingGroup } from "./types";
+import { useExpandedRoutingGroups } from "./useExpandedRoutingGroups";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const RoutingGroups: React.FC = () => {
@@ -24,13 +26,21 @@ const RoutingGroups: React.FC = () => {
   const proxySettings = useProxySettings(accessToken);
   const saveMutation = useSaveRoutingGroups();
 
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useQueryState("group_search", parseAsString.withDefault(""));
+  const [expandedGroups, setExpandedGroups] = useExpandedRoutingGroups();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<"create" | "edit">("create");
   const [editingGroup, setEditingGroup] = useState<RoutingGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<RoutingGroup | null>(null);
 
-  const groups = data?.routingGroups ?? [];
+  const loadedGroups = data?.routingGroups;
+  const groups = loadedGroups ?? [];
+
+  useEffect(() => {
+    if (!loadedGroups) return;
+    const existing = expandedGroups.filter((name) => loadedGroups.some((group) => group.group_name === name));
+    if (existing.length !== expandedGroups.length) void setExpandedGroups(existing);
+  }, [loadedGroups, expandedGroups, setExpandedGroups]);
 
   const filteredGroups = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -112,11 +122,11 @@ const RoutingGroups: React.FC = () => {
               <InputGroupInput
                 placeholder="Search groups..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => void setSearchQuery(e.target.value)}
               />
               {searchQuery && (
                 <InputGroupAddon align="inline-end">
-                  <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchQuery("")}>
+                  <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => void setSearchQuery("")}>
                     <X />
                   </InputGroupButton>
                 </InputGroupAddon>

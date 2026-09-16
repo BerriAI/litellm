@@ -10,6 +10,7 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import type { components } from "@/lib/http/schema";
 import { keyDetailHref, teamDetailHref } from "@/utils/entityLinks";
 import { AccessGroupEditModal } from "./AccessGroupsModal/AccessGroupEditModal";
@@ -22,6 +23,9 @@ interface AccessGroupDetailProps {
 }
 
 const MAX_PREVIEW = 5;
+
+export const ACCESS_GROUP_DETAIL_TAB_KEY = "detail_tab";
+const DETAIL_TABS = ["models", "mcp", "agents"] as const;
 
 const shortId = (id: string) => (id.length > 20 ? `${id.slice(0, 10)}...${id.slice(-6)}` : id);
 
@@ -70,6 +74,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [showAllKeys, setShowAllKeys] = useState(false);
   const [showAllTeams, setShowAllTeams] = useState(false);
+  const [activeTab, setActiveTab] = useUrlTab(DETAIL_TABS, "models", ACCESS_GROUP_DETAIL_TAB_KEY);
 
   if (isLoading) {
     return (
@@ -214,7 +219,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
 
       <Card>
         <CardContent>
-          <Tabs defaultValue="models">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
               <TabsTrigger value="models" className="flex-none gap-2 rounded-none px-4 py-2">
                 <LayersIcon className="size-4" />

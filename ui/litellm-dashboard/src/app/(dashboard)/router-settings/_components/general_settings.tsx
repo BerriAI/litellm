@@ -10,12 +10,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "@/components/networking";
 import { Trash2 } from "lucide-react";
 import { StatusBadge } from "@/components/shared/table_cells";
+import { useUrlTab } from "@/hooks/useUrlTab";
 
 import RouterSettings from "@/components/router_settings";
 import Fallbacks from "@/components/Settings/RouterSettings/Fallbacks/Fallbacks";
 import RoutingGroups from "@/components/routing_groups";
 
 const PROMPT_CACHING_TAB = "prompt_caching";
+const ROUTER_SETTINGS_TABS = ["loadbalancing", "routing-groups", "fallbacks", "prompt-caching", "general"] as const;
 const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
 const ANTHROPIC_PROMPT_CACHING_TTL = "anthropic_prompt_caching_ttl";
 const OPENAI_SYSTEM_MESSAGES_FIRST = "openai_system_messages_first";
@@ -200,6 +202,7 @@ export const PromptCachingPanel: React.FC<{
 
 const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID }) => {
   const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>([]);
+  const [activeTab, setActiveTab] = useUrlTab(ROUTER_SETTINGS_TABS, "loadbalancing");
 
   useEffect(() => {
     if (!accessToken) {
@@ -270,7 +273,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
 
   return (
     <div className="w-full">
-      <Tabs defaultValue="loadbalancing" className="h-[75vh] w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="h-[75vh] w-full">
         <TabsList variant="line" className="mx-8 mt-4">
           <TabsTrigger value="loadbalancing">Loadbalancing</TabsTrigger>
           <TabsTrigger value="routing-groups">Routing Groups</TabsTrigger>

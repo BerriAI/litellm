@@ -1,10 +1,9 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Layers } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 
 import { getAccessGroupsTableColumns } from "./AccessGroupsTableColumns";
 import { AccessGroup } from "./types";
@@ -19,6 +18,15 @@ interface AccessGroupsTableProps {
 }
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
+
+export const ACCESS_GROUPS_TABLE_STATE: UrlTableStateOptions<never> = {
+  sortFields: ["name", "createdAt"],
+  defaultSort: { id: "createdAt", desc: true },
+  defaultPageSize: PAGE_SIZE_OPTIONS[0],
+  maxPageSize: PAGE_SIZE_OPTIONS[PAGE_SIZE_OPTIONS.length - 1],
+  filterColumns: [],
+  urlKeys: { search: "group_search" },
+};
 
 function EmptyState({ isFiltered }: { isFiltered: boolean }) {
   return (
@@ -46,7 +54,7 @@ export function AccessGroupsTable({
   onGroupClick,
   onDeleteClick,
 }: AccessGroupsTableProps) {
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(ACCESS_GROUPS_TABLE_STATE);
 
   const columns = useMemo(() => {
     const deps = { canModify, onGroupClick, onDeleteClick };
@@ -60,8 +68,10 @@ export function AccessGroupsTable({
       getRowId={(group, index) => group.id || String(index)}
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       pageSizeOptions={PAGE_SIZE_OPTIONS}
       isLoading={isLoading}
       loadingMessage="Loading access groups…"

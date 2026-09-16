@@ -1,5 +1,6 @@
 import { renderWithProviders, screen, within } from "../../../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import GeneralSettings from "./general_settings";
 import { deleteConfigFieldSetting, getGeneralSettingsCall, updateConfigFieldSetting } from "@/components/networking";
@@ -156,6 +157,28 @@ describe("GeneralSettings tabs", () => {
       expect(await screen.findByRole("tab", { name })).toBeInTheDocument();
     }
     expect(screen.queryByRole("tab", { name: /auto.?router/i })).not.toBeInTheDocument();
+  });
+
+  it("opens the tab named in the URL so Routing Groups has an address", async () => {
+    renderWithProviders(<GeneralSettings accessToken="token" userRole="proxy_admin" userID="u" />, {
+      searchParams: "?tab=routing-groups",
+    });
+
+    expect(await screen.findByRole("tab", { name: "Routing Groups" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Loadbalancing" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("writes the clicked tab to the URL and drops it again for Loadbalancing", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<GeneralSettings accessToken="token" userRole="proxy_admin" userID="u" />, { onUrlUpdate });
+
+    await user.click(await screen.findByRole("tab", { name: "Prompt Caching" }));
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("tab")).toBe("prompt-caching");
+    expect(screen.getByRole("tab", { name: "Prompt Caching" })).toHaveAttribute("aria-selected", "true");
+
+    await user.click(screen.getByRole("tab", { name: "Loadbalancing" }));
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("tab")).toBe(false);
   });
 });
 

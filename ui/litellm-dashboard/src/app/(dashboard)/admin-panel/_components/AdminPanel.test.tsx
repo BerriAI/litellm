@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
 import AdminPanel from "./AdminPanel";
 
 const mockGetSSOSettings = vi.fn();
@@ -63,14 +64,14 @@ describe("AdminPanel", () => {
   });
 
   it("should render the admin panel", () => {
-    render(<AdminPanel />);
+    renderWithProviders(<AdminPanel />);
     expect(screen.getByRole("heading", { name: /admin access/i })).toBeInTheDocument();
     expect(screen.getByText(/go to 'internal users' page to add other admins/i)).toBeInTheDocument();
   });
 
   describe("Tabs", () => {
     it("should render all tabs", () => {
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       expect(screen.getByRole("tab", { name: /sso settings/i })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name: /security settings/i })).toBeInTheDocument();
       expect(screen.getByRole("tab", { name: /scim/i })).toBeInTheDocument();
@@ -79,7 +80,7 @@ describe("AdminPanel", () => {
 
     it("should display Security Settings content when Security Settings tab is clicked", async () => {
       const user = userEvent.setup();
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       const securityTab = screen.getByRole("tab", { name: /security settings/i });
       await user.click(securityTab);
       expect(screen.getByRole("heading", { name: /security settings/i })).toBeInTheDocument();
@@ -88,9 +89,31 @@ describe("AdminPanel", () => {
       expect(screen.getByRole("button", { name: /ui access control/i })).toBeInTheDocument();
     });
 
+    it("opens the tab named in the URL", () => {
+      renderWithProviders(<AdminPanel />, { searchParams: "?tab=scim" });
+      expect(screen.getByRole("tab", { name: /scim/i })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("tabpanel")).toHaveTextContent("SCIM Config");
+    });
+
+    it("falls back to SSO Settings when the URL names an unknown tab", () => {
+      renderWithProviders(<AdminPanel />, { searchParams: "?tab=billing" });
+      expect(screen.getByRole("tab", { name: /sso settings/i })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("tabpanel")).toHaveTextContent("SSO Settings");
+    });
+
+    it("writes the clicked tab to the URL and clears it when returning to the first tab", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<AdminPanel />, { onUrlUpdate });
+      await user.click(screen.getByRole("tab", { name: /ui settings/i }));
+      await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("tab")).toBe("ui-settings"));
+      await user.click(screen.getByRole("tab", { name: /sso settings/i }));
+      await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("tab")).toBe(false));
+    });
+
     it("should display SCIM content when SCIM tab is clicked", async () => {
       const user = userEvent.setup();
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       const scimTab = screen.getByRole("tab", { name: /scim/i });
       await user.click(scimTab);
       expect(screen.getByText("SCIM Config")).toBeInTheDocument();
@@ -99,7 +122,7 @@ describe("AdminPanel", () => {
 
   describe("SSO Configuration", () => {
     it("should check SSO configuration on mount when accessToken is available", async () => {
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       await waitFor(() => {
         expect(mockGetSSOSettings).toHaveBeenCalledWith("test-token");
       });
@@ -110,7 +133,7 @@ describe("AdminPanel", () => {
       mockGetSSOSettings.mockResolvedValue({
         values: {},
       });
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       const securityTab = screen.getByRole("tab", { name: /security settings/i });
       await user.click(securityTab);
       await waitFor(() => {
@@ -126,7 +149,7 @@ describe("AdminPanel", () => {
           google_client_secret: "test-secret",
         },
       });
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       const securityTab = screen.getByRole("tab", { name: /security settings/i });
       await user.click(securityTab);
       await waitFor(() => {
@@ -141,7 +164,7 @@ describe("AdminPanel", () => {
           google_client_secret: "test-secret",
         },
       });
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       await waitFor(() => {
         expect(mockGetSSOSettings).toHaveBeenCalled();
       });
@@ -154,7 +177,7 @@ describe("AdminPanel", () => {
           microsoft_client_secret: "test-secret",
         },
       });
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       await waitFor(() => {
         expect(mockGetSSOSettings).toHaveBeenCalled();
       });
@@ -167,7 +190,7 @@ describe("AdminPanel", () => {
           generic_client_secret: "test-secret",
         },
       });
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       await waitFor(() => {
         expect(mockGetSSOSettings).toHaveBeenCalled();
       });
@@ -175,7 +198,7 @@ describe("AdminPanel", () => {
 
     it("should handle SSO configuration check error gracefully", async () => {
       mockGetSSOSettings.mockRejectedValue(new Error("Network error"));
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       await waitFor(() => {
         expect(mockGetSSOSettings).toHaveBeenCalled();
       });
@@ -190,7 +213,7 @@ describe("AdminPanel", () => {
         accessToken: "test-token",
         userId: "user-1",
       });
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       const securityTab = screen.getByRole("tab", { name: /security settings/i });
       await user.click(securityTab);
     });
@@ -268,7 +291,7 @@ describe("AdminPanel", () => {
         accessToken: "test-token",
         userId: "user-1",
       });
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       const securityTab = screen.getByRole("tab", { name: /security settings/i });
       await user.click(securityTab);
       const uiAccessControlButton = screen.getByRole("button", { name: /ui access control/i });
@@ -285,7 +308,7 @@ describe("AdminPanel", () => {
         accessToken: "test-token",
         userId: "user-1",
       });
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       const securityTab = screen.getByRole("tab", { name: /security settings/i });
       await user.click(securityTab);
       const uiAccessControlButton = screen.getByRole("button", { name: /ui access control/i });
@@ -300,7 +323,7 @@ describe("AdminPanel", () => {
   describe("Login without SSO", () => {
     it("should display fallback login URL", async () => {
       const user = userEvent.setup();
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       const securityTab = screen.getByRole("tab", { name: /security settings/i });
       await user.click(securityTab);
       const link = screen.getByRole("link", { name: /http:\/\/localhost:4000\/fallback\/login/i });
@@ -313,7 +336,7 @@ describe("AdminPanel", () => {
   describe("SSO Configuration Deprecation Warning", () => {
     it("should display deprecation warning in Security Settings tab", async () => {
       const user = userEvent.setup();
-      render(<AdminPanel />);
+      renderWithProviders(<AdminPanel />);
       const securityTab = screen.getByRole("tab", { name: /security settings/i });
       await user.click(securityTab);
       await waitFor(() => {
@@ -339,7 +362,7 @@ describe("AdminPanel add allowed IP form", () => {
     mockAddAllowedIP.mockResolvedValue({});
 
     const user = userEvent.setup();
-    render(<AdminPanel />);
+    renderWithProviders(<AdminPanel />);
     await user.click(screen.getByRole("tab", { name: /security settings/i }));
     await user.click(screen.getByRole("button", { name: /allowed ips/i }));
     const manageDialog = await screen.findByRole("dialog", { name: /manage allowed ip addresses/i });

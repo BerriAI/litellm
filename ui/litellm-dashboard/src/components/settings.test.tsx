@@ -1,7 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { ReactNode } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "../../tests/test-utils";
 import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall, setCallbacksCall } from "./networking";
 import Settings, { backendCallbackLogoSrc, CallbackSelector } from "./settings";
 
@@ -77,7 +80,7 @@ describe("Settings", () => {
   });
 
   it("should render the logging callbacks tab when access token is provided", async () => {
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -85,7 +88,7 @@ describe("Settings", () => {
   });
 
   it("should display additional settings tabs", async () => {
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("CloudZero Cost Tracking")).toBeInTheDocument();
@@ -96,7 +99,7 @@ describe("Settings", () => {
   });
 
   it("should load callback configs from the backend when access token is provided", async () => {
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockGetCallbackConfigsCall).toHaveBeenCalledWith(defaultProps.accessToken);
@@ -140,7 +143,7 @@ describe("Settings", () => {
     ]);
 
     const user = userEvent.setup();
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -250,7 +253,7 @@ describe("Settings", () => {
 
   const openOtelEditModal = async () => {
     const user = userEvent.setup();
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
     await user.click(await screen.findByTestId("callback-actions-otel-success"));
     await user.click(await screen.findByTestId("callback-action-edit"));
     return user;
@@ -333,7 +336,7 @@ describe("Settings", () => {
 
   const openS3EditModal = async (callbackName = "s3") => {
     const user = userEvent.setup();
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
     await user.click(await screen.findByTestId(`callback-actions-${callbackName}-success`));
     await user.click(await screen.findByTestId("callback-action-edit"));
     return user;
@@ -411,7 +414,7 @@ describe("Settings", () => {
 
   it("should send the typed webhook url for an alert type when the alerting tab is saved", async () => {
     const user = userEvent.setup();
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await user.click(await screen.findByRole("tab", { name: "Alerting Types" }));
 
@@ -444,7 +447,7 @@ describe("Settings", () => {
       }),
     );
 
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
 
@@ -459,7 +462,7 @@ describe("Settings", () => {
   });
 
   it("should resolve loading without fetching when the user id is missing", async () => {
-    render(<Settings {...defaultProps} userID={null as unknown as string} />);
+    renderWithProviders(<Settings {...defaultProps} userID={null as unknown as string} />);
 
     await waitFor(() => {
       expect(screen.queryByTestId("skeleton-row")).not.toBeInTheDocument();
@@ -468,8 +471,171 @@ describe("Settings", () => {
     expect(screen.getByText("No callbacks configured")).toBeInTheDocument();
   });
 
+  describe("URL state", () => {
+    const langfuseVariables = (host: string) => ({
+      LANGFUSE_PUBLIC_KEY: "test-public-key",
+      LANGFUSE_SECRET_KEY: "test-secret-key",
+      LANGFUSE_HOST: host,
+      SLACK_WEBHOOK_URL: null,
+      OPENMETER_API_KEY: null,
+    });
+
+    const mockLangfuseRows = () => {
+      mockGetCallbacksCall.mockResolvedValue({
+        callbacks: [
+          { name: "langfuse", type: "success", variables: langfuseVariables("https://success.langfuse.com") },
+          { name: "langfuse", type: "failure", variables: langfuseVariables("https://failure.langfuse.com") },
+          { name: "datadog", type: "success", variables: langfuseVariables(""), read_only: true },
+        ],
+        available_callbacks: {},
+        alerts: [],
+      });
+      mockGetCallbackConfigsCall.mockResolvedValue([
+        {
+          id: "langfuse",
+          displayName: "Langfuse",
+          dynamic_params: {
+            LANGFUSE_PUBLIC_KEY: { type: "text", ui_name: "Public Key", required: true },
+            LANGFUSE_SECRET_KEY: { type: "password", ui_name: "Secret Key", required: true },
+            LANGFUSE_HOST: { type: "text", ui_name: "Host", required: false },
+          },
+        },
+      ]);
+    };
+
+    const renderRetainingMountWrites = (searchParams: string, onUrlUpdate: OnUrlUpdateFunction) =>
+      render(<Settings {...defaultProps} />, {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <NuqsTestingAdapter
+            searchParams={searchParams}
+            onUrlUpdate={onUrlUpdate}
+            hasMemory
+            resetUrlUpdateQueueOnMount={false}
+          >
+            {children}
+          </NuqsTestingAdapter>
+        ),
+      });
+
+    const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => onUrlUpdate.mock.calls.at(-1)?.[0];
+
+    it("opens the tab named in the URL", async () => {
+      renderWithProviders(<Settings {...defaultProps} />, { searchParams: "?tab=ms-teams-alerts" });
+      expect(await screen.findByRole("tab", { name: "MS Teams Alerts" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("tab", { name: "Logging Callbacks" })).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("writes the clicked tab to the URL and drops it for Logging Callbacks", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<Settings {...defaultProps} />, { onUrlUpdate });
+
+      await user.click(await screen.findByRole("tab", { name: "Alerting Settings" }));
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("tab")).toBe("alerting-settings");
+      expect(screen.getByRole("tab", { name: "Alerting Settings" })).toHaveAttribute("aria-selected", "true");
+
+      await user.click(screen.getByRole("tab", { name: "Logging Callbacks" }));
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("tab")).toBe(false);
+    });
+
+    it("opens the edit dialog for the callback and mode in the URL", async () => {
+      mockLangfuseRows();
+      renderWithProviders(<Settings {...defaultProps} />, { searchParams: "?callback=langfuse&callback_mode=failure" });
+
+      const dialog = await screen.findByRole("dialog", { name: "Edit Callback Settings" });
+      await waitFor(() => expect(within(dialog).getByLabelText("Host")).toHaveValue("https://failure.langfuse.com"));
+    });
+
+    it("treats a callback link without a mode as the success registration", async () => {
+      mockLangfuseRows();
+      renderWithProviders(<Settings {...defaultProps} />, { searchParams: "?callback=langfuse" });
+
+      const dialog = await screen.findByRole("dialog", { name: "Edit Callback Settings" });
+      await waitFor(() => expect(within(dialog).getByLabelText("Host")).toHaveValue("https://success.langfuse.com"));
+    });
+
+    it("pushes the edited callback and its mode into the URL", async () => {
+      mockLangfuseRows();
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<Settings {...defaultProps} />, { onUrlUpdate });
+
+      await user.click(await screen.findByTestId("callback-actions-langfuse-failure"));
+      await user.click(await screen.findByTestId("callback-action-edit"));
+
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("callback")).toBe("langfuse");
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("callback_mode")).toBe("failure");
+      expect(lastUrl(onUrlUpdate)?.options.history).toBe("push");
+      const dialog = await screen.findByRole("dialog", { name: "Edit Callback Settings" });
+      await waitFor(() => expect(within(dialog).getByLabelText("Host")).toHaveValue("https://failure.langfuse.com"));
+    });
+
+    it("clears the callback from the URL when the edit dialog is cancelled", async () => {
+      mockLangfuseRows();
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<Settings {...defaultProps} />, {
+        searchParams: "?callback=langfuse&callback_mode=failure",
+        onUrlUpdate,
+      });
+
+      const dialog = await screen.findByRole("dialog", { name: "Edit Callback Settings" });
+      await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("callback")).toBe(false);
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("callback_mode")).toBe(false);
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Edit Callback Settings" })).not.toBeInTheDocument(),
+      );
+    });
+
+    it("clears the callback from the URL after a successful save", async () => {
+      mockLangfuseRows();
+      vi.mocked(setCallbacksCall).mockResolvedValue({});
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<Settings {...defaultProps} />, { searchParams: "?callback=langfuse", onUrlUpdate });
+
+      const dialog = await screen.findByRole("dialog", { name: "Edit Callback Settings" });
+      await waitFor(() => expect(within(dialog).getByLabelText("Host")).toHaveValue("https://success.langfuse.com"));
+      await user.click(within(dialog).getByRole("button", { name: "Save Changes" }));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("callback")).toBe(false));
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ["an unknown callback", "?callback=missing&tab=email-alerts"],
+      [
+        "a mode the callback is not registered for",
+        "?callback=langfuse&callback_mode=success_and_failure&tab=email-alerts",
+      ],
+      ["a read-only callback", "?callback=datadog&tab=email-alerts"],
+    ])("drops a link to %s once callbacks load", async (_label, searchParams) => {
+      mockLangfuseRows();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderRetainingMountWrites(searchParams, onUrlUpdate);
+
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("callback")).toBe(false);
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("callback_mode")).toBe(false);
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("tab")).toBe("email-alerts");
+      expect(lastUrl(onUrlUpdate)?.options.history).toBe("replace");
+      expect(screen.queryByRole("dialog", { name: "Edit Callback Settings" })).not.toBeInTheDocument();
+    });
+
+    it("keeps a callback link while callbacks are still loading", async () => {
+      mockGetCallbacksCall.mockReturnValue(new Promise(() => {}));
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderRetainingMountWrites("?callback=langfuse", onUrlUpdate);
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+    });
+  });
+
   it("should display CloudZero Cost Tracking tab", async () => {
-    render(<Settings {...defaultProps} />);
+    renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
       expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
