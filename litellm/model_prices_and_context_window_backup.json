@@ -8806,6 +8806,7 @@
         "cache_read_input_token_cost_above_272k_tokens_priority": 2e-06,
         "cache_read_input_token_cost_flex": 2.5e-07,
         "input_cost_per_token": 5e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "input_cost_per_token_above_272k_tokens": 1e-05,
         "input_cost_per_token_above_272k_tokens_flex": 5e-06,
         "input_cost_per_token_priority": 1.25e-05,
@@ -8817,6 +8818,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3e-05,
+        "output_cost_per_token_batches": 1.5e-05,
         "output_cost_per_token_above_272k_tokens": 4.5e-05,
         "output_cost_per_token_priority": 7.5e-05,
         "output_cost_per_token_above_272k_tokens_priority": 9e-05,
@@ -8907,9 +8909,11 @@
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
         "cache_read_input_token_cost_priority": 1.375e-06,
         "input_cost_per_token": 5.5e-06,
+        "input_cost_per_token_batches": 2.75e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
         "input_cost_per_token_priority": 1.375e-05,
         "output_cost_per_token": 3.3e-05,
+        "output_cost_per_token_batches": 1.65e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
         "output_cost_per_token_priority": 8.25e-05,
         "litellm_provider": "azure",
@@ -9004,9 +9008,11 @@
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
         "cache_read_input_token_cost_priority": 1.375e-06,
         "input_cost_per_token": 5.5e-06,
+        "input_cost_per_token_batches": 2.75e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,
         "input_cost_per_token_priority": 1.375e-05,
         "output_cost_per_token": 3.3e-05,
+        "output_cost_per_token_batches": 1.65e-05,
         "output_cost_per_token_above_272k_tokens": 4.95e-05,
         "output_cost_per_token_priority": 8.25e-05,
         "litellm_provider": "azure",
@@ -56989,7 +56995,10 @@
         "prompt_cache_min_tokens": 4096,
         "supports_native_streaming": true,
         "supports_url_context": true,
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_read_input_token_cost_flex": 2e-07,
+        "input_cost_per_token_flex": 1e-06,
+        "output_cost_per_token_flex": 6e-06
     },
     "gemini/gemini-pro-latest": {
         "cache_read_input_token_cost": 2e-07,
@@ -57048,7 +57057,10 @@
         "prompt_cache_min_tokens": 4096,
         "supports_native_streaming": true,
         "supports_url_context": true,
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "cache_read_input_token_cost_flex": 2e-07,
+        "input_cost_per_token_flex": 1e-06,
+        "output_cost_per_token_flex": 6e-06
     },
     "gemini-exp-1206": {
         "cache_read_input_token_cost": 3e-08,
