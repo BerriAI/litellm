@@ -1693,11 +1693,19 @@ class DBSpendUpdateWriter:
                                 team_id = key.split("::")[1]
                                 user_id = key.split("::")[3]
 
-                                batcher.litellm_teammembership.update_many(  # 'update_many' prevents error from being raised if no row exists
-                                    where={"team_id": team_id, "user_id": user_id},
+                                batcher.litellm_teammembership.upsert(
+                                    where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
                                     data={
-                                        "spend": {"increment": response_cost},
-                                        "total_spend": {"increment": response_cost},
+                                        "create": {
+                                            "team_id": team_id,
+                                            "user_id": user_id,
+                                            "spend": response_cost,
+                                            "total_spend": response_cost,
+                                        },
+                                        "update": {
+                                            "spend": {"increment": response_cost},
+                                            "total_spend": {"increment": response_cost},
+                                        },
                                     },
                                 )
                     # Transaction succeeded, break out of retry loop
