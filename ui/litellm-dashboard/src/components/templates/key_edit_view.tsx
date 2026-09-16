@@ -49,7 +49,11 @@ import {
   tagLimitsToRows,
   tagRowsToLimits,
 } from "../key_team_helpers/TagRateLimitEditor";
-import { excludeProxyWideSentinel, hasAllModelsSentinel } from "../key_team_helpers/fetch_available_models_team_key";
+import {
+  collapseModelSentinelSelection,
+  excludeProxyWideSentinel,
+  hasModelSentinel,
+} from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
@@ -325,13 +329,17 @@ export function KeyEditView({
     form.setValue("disabled_callbacks", internalValues);
   };
 
+  const sentinelOptions = modelSentinelOptions(keyData.team_id, team != null);
+  const sentinelValues = new Set(sentinelOptions.map((option) => option.value));
   const modelOptions = [
-    ...modelSentinelOptions(keyData.team_id, team != null),
-    ...availableModels.map((model) => ({
-      value: model,
-      label: model,
-      disabled: hasAllModelsSentinel(selectedModels),
-    })),
+    ...sentinelOptions,
+    ...availableModels
+      .filter((model) => !sentinelValues.has(model))
+      .map((model) => ({
+        value: model,
+        label: model,
+        disabled: hasModelSentinel(selectedModels),
+      })),
   ];
 
   const visibleTeams = selectedOrganizationId
@@ -361,15 +369,7 @@ export function KeyEditView({
                 id={id}
                 options={modelOptions}
                 value={isModelsDisabled ? [] : (value as string[] | undefined) ?? []}
-                onValueChange={(next) => {
-                  if (next.includes("all-team-models")) {
-                    onChange(["all-team-models"]);
-                  } else if (next.includes("all-proxy-models")) {
-                    onChange(["all-proxy-models"]);
-                  } else {
-                    onChange(next);
-                  }
-                }}
+                onValueChange={(next) => onChange(collapseModelSentinelSelection(next))}
                 disabled={isModelsDisabled}
                 placeholder="Select models"
               />

@@ -776,6 +776,44 @@ describe("CreateKey", () => {
       expect(await screen.findByRole("option", { name: "All Team Models" })).toBeInTheDocument();
       expect(screen.queryByRole("option", { name: "All Proxy Models" })).not.toBeInTheDocument();
     });
+
+    it("offers No Default Models whether or not a team is selected", async () => {
+      await openModal();
+      await userEvent.click(await screen.findByLabelText("Models"));
+
+      expect(await screen.findByRole("option", { name: "No Default Models" })).toBeInTheDocument();
+    });
+
+    it("sends the no-default-models sentinel rather than an empty list", async () => {
+      await openModal();
+      await nameTheKey();
+
+      await userEvent.click(await screen.findByLabelText("Models"));
+      await userEvent.click(await screen.findByRole("option", { name: "No Default Models" }));
+      await userEvent.keyboard("{Escape}");
+
+      await submit();
+
+      expect((await createdPayload()).models).toStrictEqual(["no-default-models"]);
+    });
+
+    it("drops a model already picked when No Default Models is chosen after it", async () => {
+      state.teams = [{ team_id: "team-1", team_alias: "Team One", models: ["team-model-1"] }];
+      await openModal({ teams: state.teams as unknown as Team[] });
+      await nameTheKey();
+
+      await userEvent.click(await screen.findByLabelText("Team"));
+      await userEvent.click(await screen.findByRole("option", { name: /Team One/ }));
+
+      await userEvent.click(await screen.findByLabelText("Models"));
+      await userEvent.click(await screen.findByRole("option", { name: "team-model-1" }));
+      await userEvent.click(await screen.findByRole("option", { name: "No Default Models" }));
+      await userEvent.keyboard("{Escape}");
+
+      await submit();
+
+      expect((await createdPayload()).models).toStrictEqual(["no-default-models"]);
+    });
   });
 
   describe("organization dropdown", () => {

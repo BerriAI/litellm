@@ -58,7 +58,8 @@ import { TagRateLimitEditor, TagRateLimitEntry } from "../key_team_helpers/TagRa
 import {
   excludeProxyWideSentinel,
   getModelDisplayName,
-  hasAllModelsSentinel,
+  collapseModelSentinelSelection,
+  hasModelSentinel,
 } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -626,18 +627,25 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedProjectId(projectId);
   };
 
+  const sentinelOptions: MultiSelectOption[] =
+    selectedProjectId === null
+      ? [
+          selectedCreateKeyTeam
+            ? { value: "all-team-models", label: "All Team Models" }
+            : { value: "all-proxy-models", label: "All Proxy Models" },
+          { value: "no-default-models", label: "No Default Models" },
+        ]
+      : [];
+  const sentinelValues = new Set(sentinelOptions.map((option) => option.value));
   const modelOptions: MultiSelectOption[] = [
-    ...(selectedProjectId === null && selectedCreateKeyTeam
-      ? [{ value: "all-team-models", label: "All Team Models" }]
-      : []),
-    ...(selectedProjectId === null && !selectedCreateKeyTeam
-      ? [{ value: "all-proxy-models", label: "All Proxy Models" }]
-      : []),
-    ...modelsToPick.map((model) => ({
-      value: model,
-      label: getModelDisplayName(model),
-      disabled: hasAllModelsSentinel(selectedModels),
-    })),
+    ...sentinelOptions,
+    ...modelsToPick
+      .filter((model) => !sentinelValues.has(model))
+      .map((model) => ({
+        value: model,
+        label: getModelDisplayName(model),
+        disabled: hasModelSentinel(selectedModels),
+      })),
   ];
 
   const changeKeyType = (write: FieldWrite) => (value: string) => {
@@ -908,14 +916,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         value={(control.value as string[] | undefined) ?? []}
                         placeholder="Select models"
                         disabled={keyType === "management" || keyType === "read_only"}
-                        onValueChange={(values) => {
-                          control.onChange(values);
-                          if (values.includes("all-team-models")) {
-                            form.setValue("models", ["all-team-models"]);
-                          } else if (values.includes("all-proxy-models")) {
-                            form.setValue("models", ["all-proxy-models"]);
-                          }
-                        }}
+                        onValueChange={(values) => control.onChange(collapseModelSentinelSelection(values))}
                       />
                     )}
                   </MountedFormField>

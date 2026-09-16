@@ -332,6 +332,30 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("lists No Default Models once when the available models already carry the sentinel", async () => {
+    vi.mocked(modelAvailableCall).mockResolvedValue({
+      data: [{ id: "gpt-4" }, { id: "no-default-models" }],
+    });
+
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
+        accessToken={"test-token"}
+        userID={"user-1"}
+        userRole={"Admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await userEvent.click(await screen.findByLabelText("Models"));
+
+    expect(await screen.findByRole("option", { name: "gpt-4" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option", { name: "No Default Models" })).toHaveLength(1);
+    expect(screen.queryByRole("option", { name: "no-default-models" })).not.toBeInTheDocument();
+  });
+
   it("should render tags", async () => {
     renderWithProviders(
       <KeyEditView
