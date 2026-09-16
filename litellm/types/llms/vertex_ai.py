@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
+    ReadOnly,
     Required,
     TypedDict,
 )
@@ -231,6 +232,11 @@ class SpeechConfig(TypedDict, total=False):
     languageCode: str
 
 
+class TranslationConfig(TypedDict, total=False):
+    targetLanguageCode: ReadOnly[str]
+    echoTargetLanguage: ReadOnly[bool]
+
+
 class GenerationConfig(TypedDict, total=False):
     temperature: float
     top_p: float
@@ -252,6 +258,7 @@ class GenerationConfig(TypedDict, total=False):
     thinkingConfig: GeminiThinkingConfig
     mediaResolution: str
     speechConfig: SpeechConfig
+    translationConfig: ReadOnly[TranslationConfig]
 
 
 class VertexToolName(str, Enum):

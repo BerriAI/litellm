@@ -1,6 +1,6 @@
 import json
 from collections.abc import Mapping
-from typing import cast
+from typing import Final, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -2249,3 +2249,49 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
 
     assert input_details.get("web_search_requests") is None
     assert input_details.get("google_maps_grounding_requests") is None
+
+
+def test_map_openai_params_translation_config_snake_and_camel():
+    """``session.translation_config`` reaches ``generationConfig.translationConfig``
+    whether the client spells the keys OpenAI-style or Gemini-style."""
+    cfg: Final = GeminiRealtimeConfig()
+
+    snake: Final = cfg.map_openai_params(
+        optional_params={},
+        non_default_params={"translation_config": {"target_language_code": "ko", "echo_target_language": True}},
+    )
+    assert snake["generationConfig"]["translationConfig"] == {"targetLanguageCode": "ko", "echoTargetLanguage": True}
+
+    camel: Final = cfg.map_openai_params(
+        optional_params={},
+        non_default_params={"translation_config": {"targetLanguageCode": "pl"}},
+    )
+    assert camel["generationConfig"]["translationConfig"] == {"targetLanguageCode": "pl"}
+
+
+def test_map_openai_params_translation_config_requires_target_language():
+    """Without a target language the live-translate models stream silence, so an
+    incomplete config is dropped rather than forwarded."""
+    cfg: Final = GeminiRealtimeConfig()
+
+    for bad in ({}, {"echo_target_language": True}, {"target_language_code": ""}, "ko", None):
+        mapped: Final = cfg.map_openai_params(optional_params={}, non_default_params={"translation_config": bad})
+        assert "translationConfig" not in mapped.get("generationConfig", {})
+
+
+def test_gemini_session_update_forwards_translation_config_in_setup():
+    """End to end: the first session.update carries translationConfig into the Gemini setup."""
+    config: Final = GeminiRealtimeConfig()
+    session_update: Final = {
+        "type": "session.update",
+        "session": {"modalities": ["audio"], "translation_config": {"target_language_code": "ko"}},
+    }
+
+    messages: Final = config.transform_realtime_request(
+        json.dumps(session_update), "gemini-3.5-live-translate-preview", session_configuration_request=None
+    )
+
+    setup: Final = json.loads(messages[0])["setup"]
+    assert setup["model"] == "models/gemini-3.5-live-translate-preview"
+    assert setup["generationConfig"]["translationConfig"] == {"targetLanguageCode": "ko"}
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
