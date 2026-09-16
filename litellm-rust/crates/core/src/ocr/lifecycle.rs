@@ -9,6 +9,7 @@ use super::hooks::{
     OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrLogFuture, OcrPostCallRequest,
     OcrPreCallRequest,
 };
+use super::types::{OcrDocumentInput, OcrFileContent};
 use super::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
 use crate::call_lifecycle::host::{
     HostCall, HostCallFuture, HostCallStep, HostFailure, HostLifecycle, HostPhase,
@@ -52,6 +53,7 @@ impl OcrAdmission {
 #[derive(Clone, Debug)]
 pub enum OcrHostOperation {
     ProjectRequest,
+    ReadDocument,
     Lifecycle(HostPhase),
     ConstructResponse(Arc<LiteLLMOcrResponse>),
     MapFailure(Error),
@@ -83,7 +85,8 @@ impl OcrHostOperation {
 }
 
 pub enum OcrHostResult {
-    Request(Result<(Box<LiteLLMOcrRequest>, bool), Error>),
+    Request(Result<(Box<LiteLLMOcrRequest<OcrDocumentInput>>, bool), Error>),
+    Document(Result<OcrFileContent, Error>),
     Lifecycle(Result<(), HostFailure<Error>>),
     AzureAdToken(Result<ResolvedCredential, AuthError>),
     PreCall(Result<OcrPreCallRequest, Error>),
@@ -313,7 +316,7 @@ struct PendingOperation {
 
 struct OcrExecution {
     client: Option<OcrClient>,
-    request: Option<LiteLLMOcrRequest>,
+    request: Option<LiteLLMOcrRequest<OcrDocumentInput>>,
     operations_tx: mpsc::UnboundedSender<PendingOperation>,
     operations_rx: mpsc::UnboundedReceiver<PendingOperation>,
     pending_result: Option<oneshot::Sender<OcrHostResult>>,
@@ -397,12 +400,14 @@ impl OcrExecution {
                 },
             )));
         }
-        request.hooks = Arc::new(ProtocolHooks {
+        let hooks = Arc::new(ProtocolHooks {
             operations: self.operations_tx.clone(),
             intercepts_requests,
             terminal: self.terminal.clone(),
         });
+        request.hooks = hooks.clone();
         self.execution = Some(tokio::spawn(async move {
+            let request = prepare_request_document(request, &hooks).await?;
             perform_ocr_request(&client, request).await
         }));
     }
@@ -421,6 +426,39 @@ impl OcrExecution {
         }
         self.execution = None;
     }
+}
+
+async fn prepare_request_document(
+    request: LiteLLMOcrRequest<OcrDocumentInput>,
+    hooks: &ProtocolHooks,
+) -> Result<LiteLLMOcrRequest, Error> {
+    let request = match &request.document {
+        OcrDocumentInput::HostReader { mime_type } => {
+            let mime_type = mime_type.clone();
+            let content = match hooks.invoke(OcrHostOperation::ReadDocument).await? {
+                OcrHostResult::Document(result) => result?,
+                _ => {
+                    return Err(Error::InvalidRequest(
+                        "invalid OCR document read host result".into(),
+                    ));
+                }
+            };
+            request.with_document(OcrDocumentInput::Bytes {
+                bytes: content.bytes,
+                file_name: content.file_name,
+                mime_type,
+            })
+        }
+        _ => request,
+    };
+    if let OcrDocumentInput::Document(_) = &request.document {
+        return request.map_document(super::document::prepare_document);
+    }
+    tokio::task::spawn_blocking(move || request.map_document(super::document::prepare_document))
+        .await
+        .map_err(|error| {
+            Error::InvalidRequest(format!("OCR document preparation task failed: {error}"))
+        })?
 }
 
 impl Drop for OcrExecution {
@@ -567,6 +605,9 @@ impl OcrHost for NoopOcrHost {
                 OcrHostOperation::ProjectRequest => OcrHostResult::Request(Err(
                     Error::InvalidRequest("OCR host has no request projection".into()),
                 )),
+                OcrHostOperation::ReadDocument => OcrHostResult::Document(Err(
+                    Error::InvalidRequest("OCR host has no document reader".into()),
+                )),
                 OcrHostOperation::Lifecycle(_)
                 | OcrHostOperation::ConstructResponse(_)
                 | OcrHostOperation::MapFailure(_)
@@ -601,6 +642,9 @@ impl OcrHost for OcrHookHost {
             match operation {
                 OcrHostOperation::ProjectRequest => OcrHostResult::Request(Err(
                     Error::InvalidRequest("OCR hook host has no request projection".into()),
+                )),
+                OcrHostOperation::ReadDocument => OcrHostResult::Document(Err(
+                    Error::InvalidRequest("OCR hook host has no document reader".into()),
                 )),
                 OcrHostOperation::Success {
                     context,
