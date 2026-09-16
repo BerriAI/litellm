@@ -102,6 +102,10 @@ class ReconcileOutcome(NamedTuple):
     live_after: frozenset[str] | None
 
 
+class InternalRequestOrigin(enum.Enum):
+    REALTIME_OBSERVER = enum.auto()
+
+
 class SupportedDBObjectType(str, enum.Enum):
     """
     Supported database object types for fine-grained DB storage control.
@@ -405,6 +409,9 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
+        "/live",
+        "/v1/live",
+        "/v1/live/{call_id}",
         # realtime (GA WebRTC HTTP routes)
         "/realtime/client_secrets",
         "/v1/realtime/client_secrets",

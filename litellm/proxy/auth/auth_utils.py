@@ -1866,15 +1866,27 @@ def _extract_model_candidates_from_request(
     uses_completion_model_sources: Final = _route_matches_any_marker(
         route=route, markers=_MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS
     )
+    session: Final[object] = (
+        request_data.get("session")
+        if _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS)
+        else None
+    )
+    parsed_session: Final[object] = safe_json_loads(session) if isinstance(session, str) else session
+    session_model: Final[object] = parsed_session.get("model") if isinstance(parsed_session, dict) else None
+    if (
+        _route_matches_any_marker(route=route, markers=("/realtime/calls",))
+        and isinstance(session_model, str)
+        and session_model
+    ):
+        candidates.append(session_model)
+        return candidates
 
     body_model: Final = request_data.get("model")
     _append_model_candidates(candidates, body_model)
     if uses_body_target_model_sources or not body_model:
         _append_model_candidates(candidates, request_data.get("target_model_names"))
     if _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS):
-        session: Final = request_data.get("session")
-        if isinstance(session, dict):
-            _append_model_candidates(candidates, session.get("model"))
+        _append_model_candidates(candidates, session_model)
     if uses_completion_model_sources and isinstance(request_data.get("completion"), dict):
         _append_model_candidates(candidates, request_data["completion"].get("model"))
 

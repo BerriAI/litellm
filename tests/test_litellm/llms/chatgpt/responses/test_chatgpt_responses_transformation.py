@@ -20,6 +20,29 @@ from litellm.utils import ProviderConfigManager
 
 
 class TestChatGPTResponsesAPITransformation:
+    def test_guardian_preserves_strict_output_schema(self):
+        text = {
+            "format": {
+                "type": "json_schema",
+                "name": "review",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {"allowed": {"type": "boolean"}},
+                    "required": ["allowed"],
+                    "additionalProperties": False,
+                },
+            }
+        }
+        request = ChatGPTResponsesAPIConfig().transform_responses_api_request(
+            model="codex-auto-review",
+            input="Review the command pwd",
+            response_api_optional_request_params={"text": text},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert request["text"] == text
+
     @pytest.mark.parametrize(
         "model_name",
         [

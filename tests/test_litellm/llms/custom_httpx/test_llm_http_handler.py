@@ -3713,3 +3713,62 @@ def test_image_edit_handler_keeps_the_sync_transform():
     assert config.transform_calls == ["sync"]
     assert captured["body"] == {"transformed_by": "sync"}
     assert response.data[0].b64_json == "sync"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["client_secrets", "transcription_sessions"])
+@pytest.mark.parametrize("provider", ["chatgpt", "openai"])
+@pytest.mark.parametrize("authorization_header", ["Authorization", "aUtHoRiZaTiOn"])
+async def test_realtime_http_sessions_preserve_provider_identity(
+    endpoint, provider, authorization_header, tmp_path, monkeypatch
+):
+    import time
+
+    from litellm.llms.chatgpt.realtime import ChatGPTRealtimeHTTPConfig
+    from litellm.llms.openai.realtime.http_transformation import OpenAIRealtimeHTTPConfig
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", "auth.json")
+    (tmp_path / "auth.json").write_text(
+        json.dumps({"access_token": "test-resolved", "account_id": "test-selected", "expires_at": time.time() + 3600})
+    )
+    config = ChatGPTRealtimeHTTPConfig(GenericLiteLLMParams()) if provider == "chatgpt" else OpenAIRealtimeHTTPConfig()
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={"id": "session-test"})
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        response = await BaseLLMHTTPHandler()._async_realtime_session_post(
+            endpoint=endpoint,
+            api_base="https://gateway.example/v1",
+            api_key="test-openai",
+            request_data={"session": {"model": "gpt-realtime-1.5"}},
+            logging_obj=Mock(),
+            timeout=5,
+            provider_config=config,
+            model="gpt-realtime-1.5",
+            extra_headers={
+                authorization_header: "Bearer test-override",
+                "CHATGPT-ACCOUNT-ID": "test-other-account",
+                "x-gateway-route": "required",
+            },
+            client=client,
+        )
+        assert response.status_code == 200
+        assert not client.client.is_closed
+    finally:
+        await client.client.aclose()
+    assert len(requests) == 1
+    assert requests[0].url.path == f"/v1/realtime/{endpoint}"
+    assert requests[0].headers["x-gateway-route"] == "required"
+    if provider == "chatgpt":
+        assert requests[0].headers.get_list("authorization") == ["Bearer test-resolved"]
+        assert requests[0].headers.get_list("chatgpt-account-id") == ["test-selected"]
+    else:
+        assert requests[0].headers.get_list("authorization")[-1] == "Bearer test-override"
+        assert requests[0].headers["chatgpt-account-id"] == "test-other-account"

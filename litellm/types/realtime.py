@@ -49,6 +49,7 @@ class RealtimeModalityResponseTransformOutput(TypedDict):
 class RealtimeQueryParams(TypedDict, total=False):
     model: str
     intent: str | None
+    call_id: ReadOnly[str]
     # Add more fields as needed
 
 

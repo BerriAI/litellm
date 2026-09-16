@@ -1645,7 +1645,31 @@ def calculate_image_response_cost_from_usage(
         usage=normalized_usage,
         custom_llm_provider=custom_llm_provider,
     )
-    return prompt_cost + completion_cost
+    cached_details: Final = (
+        input_tokens_details.get("cached_tokens_details")
+        if isinstance(input_tokens_details, dict)
+        else getattr(input_tokens_details, "cached_tokens_details", None)
+    )
+    if cached_details is None:
+        return prompt_cost + completion_cost
+    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    cached_text: Final = _get_token_detail_value(cached_details, "text_tokens") or 0
+    cached_image: Final = _get_token_detail_value(cached_details, "image_tokens") or 0
+    input_text_tokens: Final = _get_token_detail_value(input_tokens_details, "text_tokens") or 0
+    input_image_tokens: Final = _get_token_detail_value(input_tokens_details, "image_tokens") or 0
+    if not (0 <= cached_text <= input_text_tokens and 0 <= cached_image <= input_image_tokens):
+        raise ValueError("Image cached token counts exceed their input modality counts")
+    text_rate: Final = model_info.get("input_cost_per_token") or 0.0
+    image_rate: Final = model_info.get("input_cost_per_image_token")
+    cache_text_rate: Final = model_info.get("cache_read_input_token_cost")
+    cache_image_rate: Final = model_info.get("cache_read_input_image_token_cost")
+    text_savings: Final = cached_text * (text_rate - cache_text_rate) if cache_text_rate is not None else 0.0
+    image_savings: Final = (
+        cached_image * ((image_rate if image_rate is not None else text_rate) - cache_image_rate)
+        if cache_image_rate is not None
+        else 0.0
+    )
+    return prompt_cost + completion_cost - text_savings - image_savings
 
 
 def calculate_image_response_web_search_cost(

@@ -4848,6 +4848,105 @@ def test_collect_and_combine_realtime_usage_stores_partitioned_text_tokens() -> 
     assert combined.completion_tokens_details.audio_tokens == 0
 
 
+def _live_terminal_event(duration=4000):
+    return {"type": "session.closed", "usage": {"audio_duration_ms": duration, "backend_model_usage": []}}
+
+
+@pytest.mark.parametrize("rate,expected", [(0.025, 0.1), (0, 0), (None, 0)])
+def test_live_terminal_duration_uses_configured_second_price(monkeypatch, rate, expected):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-priced-test",
+        {"litellm_provider": "chatgpt", "mode": "realtime", "input_cost_per_second": rate},
+    )
+    assert handle_realtime_stream_cost_calculation(
+        [_live_terminal_event()], Usage(), "chatgpt", "live-priced-test"
+    ) == pytest.approx(expected)
+
+
+def test_live_terminal_duration_honors_deployment_override(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-deployment-test",
+        {"litellm_provider": "chatgpt", "mode": "realtime", "input_cost_per_second": 0.025},
+    )
+    result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(Usage(), [_live_terminal_event()])
+    assert completion_cost(
+        completion_response=result,
+        model="gpt-live-1",
+        custom_llm_provider="chatgpt",
+        call_type="_arealtime",
+        custom_pricing=True,
+        router_model_id="live-deployment-test",
+    ) == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize("duration", [-1, True, "4000", float("inf"), float("nan"), None])
+def test_live_terminal_invalid_duration_does_not_create_spend(monkeypatch, duration):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-priced-test",
+        {"litellm_provider": "chatgpt", "mode": "realtime", "input_cost_per_second": 0.025},
+    )
+    assert (
+        handle_realtime_stream_cost_calculation(
+            [_live_terminal_event(duration)], Usage(), "chatgpt", "live-priced-test"
+        )
+        == 0
+    )
+
+
+def test_live_terminal_is_not_counted_twice(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-priced-test",
+        {"litellm_provider": "chatgpt", "mode": "realtime", "input_cost_per_second": 0.025},
+    )
+    assert handle_realtime_stream_cost_calculation(
+        [_live_terminal_event(), _live_terminal_event()], Usage(), "chatgpt", "live-priced-test"
+    ) == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize("with_tokens", [False, True])
+@pytest.mark.parametrize("terminal_count", [1, 2])
+@pytest.mark.parametrize("duration_priced", [False, True])
+def test_live_terminal_with_response_done_preserves_configured_billing(
+    monkeypatch, with_tokens, terminal_count, duration_priced
+):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "realtime-deployment-test",
+        {
+            "litellm_provider": "chatgpt",
+            "mode": "realtime",
+            **(
+                {"input_cost_per_second": 0.025}
+                if duration_priced
+                else {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+            ),
+        },
+    )
+    events = [
+        {
+            "type": "response.done",
+            "response": {
+                "usage": ({"input_tokens": 10, "output_tokens": 5, "total_tokens": 15} if with_tokens else {})
+            },
+        },
+        *(_live_terminal_event() for _ in range(terminal_count)),
+    ]
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(events)
+    result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(usage, events)
+    assert completion_cost(
+        completion_response=result,
+        model="gpt-live-1-codex" if duration_priced else "gpt-realtime-1.5",
+        custom_llm_provider="chatgpt",
+        call_type="_arealtime",
+        custom_pricing=True,
+        router_model_id="realtime-deployment-test",
+    ) == pytest.approx(0.1 if duration_priced else (0.02 if with_tokens else 0))
+
+
 UNMAPPED_OCR_MODEL: Final = "azure_ai/some-unmapped-ocr-model-for-testing"
 MAPPED_OCR_MODEL: Final = "mistral/mistral-ocr-4-0"
 

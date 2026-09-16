@@ -947,7 +947,8 @@ def test_get_model_from_request_handles_managed_id_decoder_failures():
         "/openai/v1/realtime/calls",
     ],
 )
-def test_get_model_from_request_extracts_realtime_session_model(route):
+@pytest.mark.parametrize("encoded", [False, True])
+def test_get_model_from_request_extracts_realtime_session_model(route, encoded):
     """The effective realtime model lives in ``session.model`` (not the
     top-level ``model``). It must be surfaced so can_key_call_model() can
     validate the model a restricted key is actually requesting.
@@ -957,11 +958,34 @@ def test_get_model_from_request_extracts_realtime_session_model(route):
     """
     assert (
         get_model_from_request(
-            request_data={"session": {"type": "realtime", "model": "gpt-realtime"}},
+            request_data={"session": '{"model":"gpt-realtime"}' if encoded else {"model": "gpt-realtime"}},
             route=route,
         )
         == "gpt-realtime"
     )
+
+
+@pytest.mark.parametrize("session", ['{"model":"actual-voice"}', {"model": "actual-voice"}])
+def test_realtime_calls_auth_uses_executed_session_model_despite_decoys(session):
+    assert (
+        get_model_from_request(
+            request_data={"model": "body-decoy", "session": session},
+            route="/v1/realtime/calls",
+            request_query_params={"model": "query-decoy"},
+            request_headers={"x-litellm-model": "header-decoy"},
+        )
+        == "actual-voice"
+    )
+
+
+@pytest.mark.parametrize("model", ["voice,alias", " voice "])
+def test_realtime_calls_auth_preserves_exact_session_model(model):
+    assert get_model_from_request(request_data={"session": {"model": model}}, route="/v1/realtime/calls") == model
+
+
+@pytest.mark.parametrize("session", ["invalid", "null", "[]", "12", '"text"', "{}"])
+def test_realtime_model_extraction_ignores_invalid_serialized_session(session):
+    assert get_model_from_request(request_data={"session": session}, route="/v1/realtime/calls") is None
 
 
 def test_get_model_from_request_realtime_includes_top_level_and_session_model():

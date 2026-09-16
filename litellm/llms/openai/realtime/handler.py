@@ -38,6 +38,14 @@ class OpenAIRealtime(OpenAIChatCompletion):
         """
         return "https://api.openai.com/"
 
+    def _resolve_api_key(self, api_key: str | None) -> str:
+        if api_key is None:
+            raise ValueError("api_key is required for OpenAI realtime calls")
+        return api_key
+
+    def _accounts_for_call_usage(self) -> bool:
+        return True
+
     def _get_additional_headers(
         self,
         api_key: str,
@@ -117,6 +125,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: object | None = None,
         litellm_metadata: dict | None = None,
+        account_usage: bool = True,
         **kwargs: object,
     ):
         import websockets
@@ -124,8 +133,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
 
         if api_base is None:
             api_base = self._get_default_api_base()
-        if api_key is None:
-            raise ValueError("api_key is required for OpenAI realtime calls")
+        resolved_api_key: Final = self._resolve_api_key(api_key)
 
         # Use all query params if provided, else fallback to just model
         if query_params is None:
@@ -143,12 +151,12 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     "If your client expects beta event names, add 'OpenAI-Beta: realtime=v1' "
                     "to the WebSocket headers sent to the LiteLLM proxy."
                 )
-            headers: Final = self._get_additional_headers(api_key, openai_beta_realtime=openai_beta_realtime)
+            headers: Final = self._get_additional_headers(resolved_api_key, openai_beta_realtime=openai_beta_realtime)
 
             # Log a masked request preview consistent with other endpoints.
             logging_obj.pre_call(
                 input=None,
-                api_key=api_key,
+                api_key=resolved_api_key,
                 additional_args={
                     "api_base": url,
                     "headers": headers,
@@ -172,6 +180,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                         model if (query_params or {}).get("intent") == "transcription" else None
                     ),
                     event_normalizer=self._make_event_normalizer(),
+                    account_usage=account_usage and self._accounts_for_call_usage(),
                 )
                 await realtime_streaming.bidirectional_forward()
 

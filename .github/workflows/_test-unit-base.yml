@@ -68,6 +68,16 @@ jobs:
       pull-requests: read
     outputs:
       decision: ${{ steps.changes.outputs.decision }}
+    services:
+      redis:
+        image: ${{ inputs.artifact-name == 'proxy-auth' && 'redis:8.2.9-alpine@sha256:30abb90e62f14b737010746def3ba99cc79fe19dcdb3d37b41f21fc62e7da19d' || '' }}
+        ports:
+          - '127.0.0.1::6379'
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -137,6 +147,7 @@ jobs:
           RERUNS: ${{ inputs.reruns }}
           DIST: ${{ inputs.dist }}
           COVERAGE_CORE: sysmon
+          LITELLM_TEST_REDIS_PORT: ${{ job.services.redis.ports['6379'] }}
         run: |
           if [ "${WORKERS}" = "0" ]; then
             uv run --no-sync pytest ${TEST_PATH:?} \

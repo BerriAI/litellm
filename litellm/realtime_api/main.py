@@ -76,6 +76,7 @@ def _get_realtime_http_provider_config(
     dynamic_api_base: str | None,
     dynamic_api_key: str | None,
     litellm_params: GenericLiteLLMParams,
+    is_call: bool = False,
 ) -> tuple["BaseRealtimeHTTPConfig | None", str, str]:
     """
     Return (provider_config, resolved_api_base, resolved_api_key) for the
@@ -93,13 +94,15 @@ def _get_realtime_http_provider_config(
         provider_config = ProviderConfigManager.get_provider_realtime_http_config(
             model="",
             provider=LlmProviders(custom_llm_provider),
+            params=litellm_params,
+            is_call=is_call,
         )
 
     raw_api_base: Final = dynamic_api_base or litellm_params.api_base
     raw_api_key: Final = dynamic_api_key or litellm_params.api_key
 
     if provider_config is not None:
-        resolved_api_base = provider_config.get_api_base(api_base=raw_api_base)
+        resolved_api_base = provider_config.resolve_api_base(litellm_params.api_base, dynamic_api_base)
         resolved_api_key = provider_config.get_api_key(api_key=raw_api_key)
     else:
         # Fallback for providers without a dedicated HTTP config (treated as OpenAI-compatible).
@@ -272,9 +275,15 @@ async def arealtime_calls(
         dynamic_api_base=dynamic_api_base,
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
+        is_call=True,
     )
     if session is not None:
         session = _with_resolved_session_model(session, model_name)
+    call_headers: Final = (
+        provider_config.get_realtime_calls_extra_headers(kwargs.get("extra_headers"))
+        if provider_config is not None
+        else kwargs.get("extra_headers")
+    )
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model_name,
@@ -282,7 +291,7 @@ async def arealtime_calls(
         litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
-    return await base_llm_http_handler.async_realtime_calls_handler(
+    response: Final = await base_llm_http_handler.async_realtime_calls_handler(
         api_base=resolved_api_base,
         openai_ephemeral_key=openai_ephemeral_key,
         sdp_body=sdp_body,
@@ -291,9 +300,16 @@ async def arealtime_calls(
         provider_config=provider_config,
         model=model_name,
         session_config=session,
-        extra_headers=kwargs.get("extra_headers"),
+        extra_headers=call_headers,
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
+    )
+    return (
+        provider_config.transform_realtime_calls_response(
+            response, model_name, litellm_logging_obj.get_router_model_id(), call_headers
+        )
+        if provider_config is not None
+        else response
     )
 
 
@@ -391,7 +407,26 @@ async def _arealtime(
             model=model,
             provider=LlmProviders(_custom_llm_provider),
         )
-    if provider_config is not None:
+    provider_handler: Final = (
+        ProviderConfigManager.get_provider_realtime_handler(
+            LlmProviders(_custom_llm_provider), litellm_params, lambda: websocket.headers, headers
+        )
+        if _custom_llm_provider in LlmProviders._member_map_.values()
+        else None
+    )
+    if provider_handler is not None:
+        await provider_handler.async_realtime(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base or None,
+            api_key=api_key,
+            timeout=timeout,
+            query_params=query_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
+        )
+    elif provider_config is not None:
         await base_llm_http_handler.async_realtime(
             model=model,
             websocket=websocket,

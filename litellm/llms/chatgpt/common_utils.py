@@ -4,6 +4,8 @@ Constants and helpers for ChatGPT subscription OAuth.
 
 import os
 import platform
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 from uuid import uuid4
 
@@ -103,6 +105,12 @@ You are producing plain text that will later be styled by the CLI. Follow these 
   * Do not provide range of lines
   * Examples: src/app.ts, src/app.ts:42, b/server/index.js#L10, C:\\repo\\project\\main.rs:12:5
 """
+
+
+def without_oauth_identity_headers(headers: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {key: value for key, value in headers.items() if key.lower() not in ("authorization", "chatgpt-account-id")}
+    )
 
 
 class ChatGPTAuthError(BaseLLMException):
