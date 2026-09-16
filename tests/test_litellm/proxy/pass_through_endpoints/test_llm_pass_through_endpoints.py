@@ -1984,8 +1984,6 @@ class TestBedrockAgentRuntimePassthroughToggle:
 
 
 class TestBedrockAgentRuntimePassthroughVirtualKeyLeak:
-    """Regression for LIT-7912: the agent-runtime branch of ``/bedrock/{endpoint}`` forwarded every caller header,
-    so a LiteLLM key presented in ``x-api-key`` or ``x-litellm-api-key`` rode to AWS next to the SigV4 signature."""
 
     VKEY: Final = "sk-litellm-victim-key"
     MASTER_KEY: Final = "sk-master-1234"
