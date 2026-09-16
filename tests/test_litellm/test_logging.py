@@ -1061,11 +1061,15 @@ def test_secret_free_extra_keeps_its_original_object(monkeypatch, extra):
 
 
 @pytest.mark.parametrize(
-    "extra",
-    (("gpt-4o", "sk-1234567890abcdefghij"), {"gpt-4o", "sk-1234567890abcdefghij"}),
-    ids=("tuple", "set"),
+    "extra,scrubbed",
+    (
+        (("gpt-4o", "sk-1234567890abcdefghij"), ("gpt-4o", "REDACTED")),
+        ({"gpt-4o", "sk-1234567890abcdefghij"}, ["REDACTED", "gpt-4o"]),
+        ({"model": "gpt-4o", "key": "sk-1234567890abcdefghij"}, {"model": "gpt-4o", "key": "REDACTED"}),
+    ),
+    ids=("tuple", "set", "dict"),
 )
-def test_extra_that_carried_a_secret_comes_back_scrubbed(monkeypatch, extra):
+def test_extra_that_carried_a_secret_comes_back_scrubbed(monkeypatch, extra, scrubbed):
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.WARNING, "request sent")
     record.payload = extra
@@ -1073,10 +1077,36 @@ def test_extra_that_carried_a_secret_comes_back_scrubbed(monkeypatch, extra):
     assert SecretRedactionFilter().filter(record) is True
     rendered = JsonFormatter().format(record)
 
-    assert isinstance(record.payload, list)
-    assert sorted(record.payload) == ["REDACTED", "gpt-4o"]
+    assert record.payload == scrubbed
+    assert type(record.payload) is type(scrubbed)
     assert "sk-1234567890abcdefghij" not in rendered
     assert "REDACTED" in rendered
+
+
+class _AmbiguousArray:
+    def __eq__(self, other: object) -> bool:
+        raise ValueError("The truth value of an array with more than one element is ambiguous")
+
+    def __repr__(self) -> str:
+        return "array([1, 2])"
+
+
+@pytest.mark.parametrize(
+    "extra,scrubbed",
+    ((_AmbiguousArray(), "array([1, 2])"), ({"weights": _AmbiguousArray()}, {"weights": "array([1, 2])"})),
+    ids=("top_level", "nested"),
+)
+def test_extra_whose_equality_raises_still_comes_back_scrubbed(monkeypatch, extra, scrubbed):
+    """numpy arrays and torch tensors raise when compared for truth, so the keep-or-scrub
+    decision must fall on the scrubbed copy instead of breaking the caller's log call."""
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.WARNING, "request sent")
+    record.payload = extra
+
+    assert SecretRedactionFilter().filter(record) is True
+
+    assert record.payload == scrubbed
+    assert json.loads(JsonFormatter().format(record))["payload"] == scrubbed
 
 
 @pytest.mark.parametrize(

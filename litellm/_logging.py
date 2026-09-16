@@ -1,7 +1,6 @@
 import ast
 import contextvars
 import functools
-import json
 import logging
 import os
 import re
@@ -13,14 +12,13 @@ from urllib.parse import unquote
 
 import litellm
 from litellm.constants import (
-    DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
     MAX_BASE64_LENGTH_STDOUT_LOG,
     MAX_STRING_LENGTH_STDOUT_LOG,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, safe_json_structure
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.secret_redaction import (
     redact_internal_details,
@@ -89,27 +87,19 @@ def _is_redacted(record: logging.LogRecord) -> bool:
     return getattr(record, _REDACTED_RECORD_ATTR, False) is True
 
 
-def _is_secret_free(key: str | None, value: object, depth: int) -> bool:
-    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+def _scrubbing_changed_nothing(scrubbed: object, original: object) -> bool:
+    try:
+        return bool(scrubbed == original)
+    except Exception:
         return False
-    if isinstance(value, str):
-        return _redact_structured_value(key, value) == value
-    if isinstance(value, _UNREDACTED_SCALAR_TYPES):
-        return True
-    if isinstance(value, dict):
-        return all(isinstance(k, str) and _is_secret_free(k, v, depth + 1) for k, v in value.items())
-    if isinstance(value, (list, tuple)):
-        return all(_is_secret_free(key, item, depth + 1) for item in value)
-    return False
 
 
 def _redact_extra_value(key: str, value: object) -> object:
-    if _is_secret_free(key, value, 1):
-        return value
     try:
-        return json.loads(safe_dumps({key: value}, value_transform=_redact_structured_value))[key]
-    except (TypeError, ValueError, KeyError):
+        scrubbed: Final = safe_json_structure(value, value_transform=_redact_structured_value, key=key)
+    except (TypeError, ValueError):
         return _redact_string(str(value))
+    return value if _scrubbing_changed_nothing(scrubbed, value) else scrubbed
 
 
 def redact_secrets(value: str) -> str:
