@@ -47,10 +47,10 @@ def _mock_config() -> Mock:
     def _transform(model, parsed_chunk, logging_obj):
         evt_type = parsed_chunk.get("type")
         if evt_type == "response.completed":
-            completed = Mock(spec=ResponseCompletedEvent)
-            completed.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-            completed.response = mock_responses_api_response
-            return completed
+            return ResponseCompletedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=mock_responses_api_response,
+            )
         stub = Mock()
         stub.type = evt_type
         return stub
@@ -348,10 +348,10 @@ def _mock_config_with_completed_response(response: ResponsesAPIResponse) -> Mock
     def _transform(model, parsed_chunk, logging_obj):
         evt_type = parsed_chunk.get("type")
         if evt_type == "response.completed":
-            completed = Mock(spec=ResponseCompletedEvent)
-            completed.type = ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-            completed.response = response
-            return completed
+            return ResponseCompletedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=response,
+            )
         stub = Mock()
         stub.type = evt_type
         if "delta" in parsed_chunk:

@@ -450,11 +450,7 @@ class BaseResponsesAPIStreamingIterator:
                     _terminal_chunk: Final = (
                         openai_responses_api_chunk
                         if _billed_response is None or _billed_response is _response_obj
-                        else (
-                            openai_responses_api_chunk.model_copy(update={"response": _billed_response})
-                            if issubclass(type(openai_responses_api_chunk), BaseModel)  # pyright: ignore[reportUnnecessaryIsInstance]  # test stubs use spec'd Mocks whose __class__ reports BaseModel but whose model_copy returns a Mock
-                            else _replace_response(openai_responses_api_chunk, _billed_response)
-                        )
+                        else openai_responses_api_chunk.model_copy(update={"response": _billed_response})
                     )
                     self.completed_response = _terminal_chunk
                     _stamp_responses_usage_cost(_billed_response, self.logging_obj)
@@ -1357,13 +1353,6 @@ def _billed_terminal_response(
     return ResponsesAPIResponse.model_construct(
         **{**response_obj, "usage": usage if usage is not None or estimate is None else estimate()}  # pyright: ignore[reportUnknownArgumentType, reportArgumentType]  # same untyped dict spread
     )
-
-
-def _replace_response(
-    event: ResponsesAPIStreamingResponse, response: ResponsesAPIResponse
-) -> ResponsesAPIStreamingResponse:
-    setattr(event, "response", response)
-    return event
 
 
 def _dump_json_safely(response: BaseModel) -> str | None:
