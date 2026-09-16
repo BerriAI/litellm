@@ -512,8 +512,8 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     the repair must be skipped and the existing 400 raised immediately, while bodies
     at or below the limit still get repaired.
 
-    `\\ud83d` is a lone high-surrogate escape: orjson rejects it, the json fallback
-    accepts it, so a body containing it is only salvaged when the repair path runs.
+    `NaN` is rejected by orjson and accepted by the json fallback, so a body containing
+    it is only salvaged when the repair path runs.
     """
     import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 
@@ -522,14 +522,14 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
         http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 100 / (1024 * 1024)
     )
 
-    small_body = b'{"model":"gpt-4o","x":"\\ud83d"}'
+    small_body = b'{"model":"gpt-4o","x":NaN}'
     assert len(small_body) <= 100
     repaired = await _read_request_body(_make_json_request(small_body))
     assert repaired["model"] == "gpt-4o"
 
     padding = "a" * 200
     large_body = (
-        b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":"\\ud83d"}'
+        b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":NaN}'
     )
     assert len(large_body) > 100
     with pytest.raises(ProxyException) as exc_info:
@@ -544,6 +544,33 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     )
     repaired_large = await _read_request_body(_make_json_request(large_body))
     assert repaired_large["model"] == "gpt-4o"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(b"say ok \\ud83d", id="lone-high-surrogate"),
+        pytest.param(b"say ok \\ude00", id="lone-low-surrogate"),
+        pytest.param(b"\\ud83d\\ud83d\\ude00", id="lone-high-before-valid-pair"),
+    ],
+)
+async def test_lone_surrogate_escape_is_rejected_with_400(content: bytes):
+    """
+    orjson rejects a lone surrogate escape, and the json fallback accepts it, so the
+    parsed body used to carry a code point no provider request can UTF-8 encode. That
+    surfaced as a 500 from the provider handler instead of a 400 for the bad input.
+    """
+    body = b'{"model":"gpt-4o","messages":[{"role":"user","content":"' + content + b'"}]}'
+    with pytest.raises(ProxyException) as exc_info:
+        await _read_request_body(_make_json_request(body))
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert "Invalid JSON payload" in exc_info.value.message
+
+    paired = body.replace(content, b"say ok \\ud83d\\ude00")
+    parsed = await _read_request_body(_make_json_request(paired))
+    assert parsed["messages"][0]["content"] == "say ok \U0001F600"
 
 
 @pytest.mark.asyncio

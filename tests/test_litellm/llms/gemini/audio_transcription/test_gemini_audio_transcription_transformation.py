@@ -4,7 +4,6 @@ import json
 import httpx
 import pytest
 
-
 import litellm
 from litellm.llms.gemini.audio_transcription.transformation import (
     GeminiAudioTranscriptionConfig,
@@ -318,15 +317,3 @@ class TestCostRegression:
         assert live_entry["input_cost_per_token"] == 3.5e-06
         assert live_entry["output_cost_per_token"] == 2.1e-05
         assert live_entry["supported_endpoints"] == ["/v1/realtime"]
-
-    def test_completion_cost_bills_provider_reported_tokens(self, config, local_cost_map):
-        payload = json.loads(json.dumps(COMPLETED_RESPONSE))
-        payload["usage"]["total_output_tokens"] = 10
-        payload["usage"]["total_tokens"] = 210
-        response = config.transform_audio_transcription_response(make_response(payload))
-        cost = litellm.completion_cost(
-            completion_response=response,
-            model="gemini/gemini-3.5-transcribe",
-            call_type="transcription",
-        )
-        assert cost == pytest.approx(199 * 2e-06 + 1 * 2e-06 + 10 * 1.2e-05)

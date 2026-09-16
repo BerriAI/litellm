@@ -48,6 +48,19 @@ const baseParams: BuildComplexityRouterConfigParams = {
 };
 
 describe("buildComplexityRouterConfig", () => {
+  it("carries Fast and reasoning overrides independently into a new router payload", () => {
+    const params = { speed: "fast", reasoning_effort: "high", max_tokens: 1024 };
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tiers: { ...tiers, COMPLEX: ["primary"], REASONING: ["secondary"] },
+      tierModelParams: { COMPLEX: { primary: params }, REASONING: { secondary: { speed: "fast" } } },
+    });
+    expect(config.tier_model_configs).toEqual({
+      COMPLEX: [{ model_name: "primary", litellm_params: params }],
+      REASONING: [{ model_name: "secondary", litellm_params: { speed: "fast" } }],
+    });
+  });
+
   it("emits tiers, classifier_type, and escalation_keywords when nothing else is configured", () => {
     const config = buildComplexityRouterConfig(baseParams);
     const expected = {

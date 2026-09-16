@@ -959,8 +959,9 @@ async def _set_reserved_entries_actual_cost(
 
 async def _reseed_reserved_entry(item: _EntryAdjustment, actual_cost: float) -> None:
     """Post-call reconcile / release of a counter that was flushed, expired or reseeded between reservation and
-    reconcile: the optimistic delta no longer applies, so reseed from the DB floor (which cannot include this
-    request's cost yet) and add the settled cost, since increment_spend_counters skips reserved keys."""
+    reconcile: the optimistic delta no longer applies, so reseed from the DB floor and add the settled cost, since
+    increment_spend_counters skips reserved keys. The reconcile runs before this request's spend is enqueued to the
+    DB, so the reseeded floor excludes it."""
     from litellm.proxy.proxy_server import _increment_spend_counter_cache, reseed_spend_counter_from_db
 
     reseeded: Final = await reseed_spend_counter_from_db(counter_key=item.counter_key)

@@ -135,9 +135,7 @@ def test_fill_missing_requires_per_rule_opt_in(restore_generalizations):
         "supports_vision": True,
     }
 
-    restore_generalizations(
-        [{"name": "base", "pattern": r"^acme-", "model_info": {"supports_reasoning": True}}]
-    )
+    restore_generalizations([{"name": "base", "pattern": r"^acme-", "model_info": {"supports_reasoning": True}}])
     assert match_fill_missing_generalizations("acme-1", "openai") is None
 
     restore_generalizations(
@@ -449,6 +447,94 @@ def shipped_cost_map(monkeypatch):
         litellm.model_cost = original_cost
         litellm.get_model_info.cache_clear()
         set_fallback_generalizations(previous_rules)
+
+
+@pytest.mark.parametrize(
+    "model,provider",
+    [
+        ("gemini-4-pro", "gemini"),
+        ("gemini/gemini-4-pro", None),
+        ("gemini-3.9-flash-lite-preview-09-2026", "vertex_ai"),
+        ("vertex_ai/gemini-4-pro", None),
+        ("gemini-4-pro-preview-customtools", "gemini"),
+        ("google/gemini-4-pro", "openrouter"),
+        ("google/gemini-4-pro", "deepinfra"),
+        ("google/gemini-4-pro", "vercel_ai_gateway"),
+        ("google.gemini-4-pro", "oci"),
+        ("databricks-gemini-4-1-pro", "databricks"),
+    ],
+)
+def test_shipped_gemini_chat_baseline_resolves_unmapped_ids(shipped_cost_map, model, provider):
+    assert model not in litellm.model_cost
+    if provider == "gemini":
+        assert f"gemini/{model}" not in litellm.model_cost
+    elif provider in {"openrouter", "deepinfra", "vercel_ai_gateway", "oci", "databricks"}:
+        assert f"{provider}/{model}" not in litellm.model_cost
+
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info["litellm_provider"] == (provider or model.split("/")[0])
+    assert info["mode"] == "chat"
+    assert not info.get("max_input_tokens")
+    assert info["supports_reasoning"] is True
+    assert info["supports_function_calling"] is True
+    assert info["supports_tool_choice"] is True
+    assert info["supports_system_messages"] is True
+    assert info["supports_vision"] is True
+    assert info["supports_response_schema"] is True
+    assert info["supports_pdf_input"] is True
+    assert info["supports_prompt_caching"] is True
+    assert info["supports_web_search"] is True
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
+
+
+def test_shipped_gemini_chat_baseline_loses_to_perplexity_exact_entries(shipped_cost_map):
+    info = litellm.get_model_info("google/gemini-2.5-pro", custom_llm_provider="perplexity")
+    entry = litellm.model_cost["perplexity/google/gemini-2.5-pro"]
+    assert info["mode"] == "responses"
+    assert entry["supports_reasoning"] is False
+
+
+def test_shipped_gemini_chat_baseline_skips_non_chat_and_pre_2_5_ids(shipped_cost_map):
+    for model in (
+        "gemini/gemini-4-flash-image",
+        "gemini/gemini-3.9-flash-preview-tts",
+        "gemini/gemini-4-flash-live-preview",
+        "gemini/gemini-4-flash-native-audio",
+        "gemini/gemini-embedding-4",
+        "gemini/gemini-2.5-computer-use-preview-12-2026",
+        "gemini/gemini-2.0-flash-new",
+        "gemini/gemini-1.5-pro-new",
+        "gemini/gemini-4-flashy",
+        "gemini/gemini-4-flash-transcribe",
+        "gemini/gemini-4-flash-live-translate-preview",
+        "databricks-gemini-3-1-flash-image",
+        "openrouter/google/gemini-2.0-flash-001",
+    ):
+        assert match_capability_generalizations(model) is None, model
+
+
+def test_shipped_gemini_chat_baseline_keeps_reasoning_effort_on_unmapped_model(shipped_cost_map):
+    assert litellm.supports_reasoning(model="gemini-4-pro", custom_llm_provider="gemini") is True
+
+    optional_params = litellm.utils.get_optional_params(
+        model="gemini-4-pro",
+        custom_llm_provider="gemini",
+        reasoning_effort="medium",
+        drop_params=False,
+    )
+    assert isinstance(optional_params, dict)
+    assert optional_params["thinkingConfig"]["thinkingBudget"] > 0
+    assert optional_params["thinkingConfig"]["includeThoughts"] is True
+
+
+def test_shipped_gemini_chat_baseline_loses_to_exact_entries(shipped_cost_map):
+    model = "gemini-2.5-flash-lite"
+    info = litellm.get_model_info(model, custom_llm_provider="gemini")
+    entry = litellm.model_cost["gemini/gemini-2.5-flash-lite"]
+    assert info["max_tokens"] == entry["max_tokens"]
+    assert info["input_cost_per_token"] == entry["input_cost_per_token"]
+    assert entry["input_cost_per_token"] > 0
 
 
 def test_shipped_bare_claude_id_routes_to_anthropic(shipped_cost_map):
