@@ -1,5 +1,7 @@
 import asyncio
 import time
+from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,6 +10,7 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router import Router
+from litellm.router import _silent_experiment_kwargs_snapshot
 from litellm.router import _silent_experiment_targets
 
 
@@ -124,7 +127,6 @@ def test_get_silent_experiment_kwargs():
     assert result["metadata"]["is_silent_experiment"] is True
     assert result["metadata"]["foo"] == "bar"
     assert "litellm_call_id" not in result
-    # the shadow must stream exactly like the primary so TTFT / ITL metrics are comparable
     assert result["stream"] is True
     # proxy_server_request must be preserved for spend log metadata
     assert "proxy_server_request" in result
@@ -253,6 +255,87 @@ def test_multiple_shadow_targets_fan_out_sync(recording_logger):
     model_groups = sorted(call["litellm_params"]["metadata"]["model_group"] for call in shadow_successes)
     assert model_groups == ["shadow-a", "shadow-b"]
     assert all(call["stream"] is False for call in shadow_successes)
+
+
+def _tagged_primary_model_list() -> list[dict[str, object]]:
+    return [
+        {
+            "model_name": "primary-model",
+            "litellm_params": {
+                "model": "openai/gpt-5.4-mini",
+                "api_key": "fake-key",
+                "silent_model": "shadow-b",
+                "tags": ["primary-only"],
+            },
+        },
+        {
+            "model_name": "shadow-b",
+            "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "fake-key"},
+        },
+    ]
+
+
+def test_silent_experiment_kwargs_snapshot_is_isolated_from_later_primary_mutations():
+    metadata = {"foo": "bar"}
+    kwargs: dict[str, object] = {"metadata": metadata, "stream": True}
+    snapshot = _silent_experiment_kwargs_snapshot(kwargs)
+    kwargs["messages"] = [{"role": "user", "content": "added by the primary"}]
+    metadata["tags"] = ["primary-only"]
+
+    assert dict(snapshot) == {"metadata": {"foo": "bar"}, "stream": True}
+    assert dict(_silent_experiment_kwargs_snapshot({"stream": False, "metadata": None})) == {
+        "stream": False,
+        "metadata": None,
+    }
+
+
+def test_sync_shadow_gets_kwargs_snapshot_taken_before_primary_mutates_them(recording_logger):
+    deferred: list[Callable[[], None]] = []
+
+    class _DeferredThread:
+        def __init__(self, target, args, kwargs, daemon) -> None:
+            deferred.append(lambda: target(*args, **kwargs))
+
+        def start(self) -> None:
+            return None
+
+    router = Router(model_list=_tagged_primary_model_list())
+    with patch(  # test-quality-ok: Router has no thread factory to inject; deferring start is the only deterministic way to expose the race
+        "litellm.router.threading", SimpleNamespace(Thread=_DeferredThread)
+    ):
+        response = router.completion(
+            model="primary-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="pong",
+            metadata={"foo": "bar"},
+        )
+    assert response.choices[0].message.content == "pong"
+    assert len(deferred) == 1
+    deferred[0]()
+    _wait_for_shadow_successes_sync(recording_logger, expected=1)
+
+    shadow_successes = recording_logger.shadow_successes()
+    assert len(shadow_successes) == 1
+    shadow_metadata = shadow_successes[0]["litellm_params"]["metadata"]
+    assert shadow_metadata["model_group"] == "shadow-b"
+    assert "primary-only" not in shadow_metadata.get("tags", [])
+
+
+@pytest.mark.asyncio
+async def test_async_shadow_does_not_inherit_primary_deployment_tags(recording_logger):
+    router = Router(model_list=_tagged_primary_model_list())
+    response = await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+        metadata={"foo": "bar"},
+    )
+    assert response.choices[0].message.content == "pong"
+    await _wait_for_shadow_successes(recording_logger, expected=1)
+
+    shadow_successes = recording_logger.shadow_successes()
+    assert len(shadow_successes) == 1
+    assert "primary-only" not in shadow_successes[0]["litellm_params"]["metadata"].get("tags", [])
 
 
 @pytest.mark.asyncio
