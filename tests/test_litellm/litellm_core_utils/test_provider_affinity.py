@@ -1,5 +1,5 @@
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -217,6 +217,57 @@ def test_pre_call_callback_redacts_affinity_and_preserves_header_mutations():
         "X-Conversation-Id": PROVIDER_AFFINITY_REDACTED_VALUE,
         "X-Customer-Header": "edited",
     }
+
+
+def test_post_call_redacts_provider_affinity_header_without_mutating_request():
+    logger_fn = Mock()
+    logging = Logging(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="call-123",
+        function_id="function-123",
+    )
+    logging.update_environment_variables(
+        litellm_params={
+            "provider_affinity_header": "X-Conversation-Id",
+            "logger_fn": logger_fn,
+        },
+        optional_params={},
+    )
+    additional_args = {
+        "headers": {
+            "X-Conversation-Id": "session-header",
+            "X-Customer-Header": "customer-value",
+        },
+        "complete_input_dict": {
+            "extra_headers": {
+                "x-conversation-id": "session-extra-header",
+                "X-Customer-Header": "customer-value",
+            }
+        },
+    }
+
+    logging.post_call(
+        original_response='{"ok": true}',
+        input="hello",
+        api_key="test-key",
+        additional_args=additional_args,
+    )
+
+    logged_args = logger_fn.call_args.args[0]["additional_args"]
+    assert logged_args["headers"] == {
+        "X-Conversation-Id": PROVIDER_AFFINITY_REDACTED_VALUE,
+        "X-Customer-Header": "customer-value",
+    }
+    assert logged_args["complete_input_dict"]["extra_headers"] == {
+        "x-conversation-id": PROVIDER_AFFINITY_REDACTED_VALUE,
+        "X-Customer-Header": "customer-value",
+    }
+    assert additional_args["headers"]["X-Conversation-Id"] == "session-header"
+    assert additional_args["complete_input_dict"]["extra_headers"]["x-conversation-id"] == "session-extra-header"
 
 
 def test_pre_call_does_not_share_omitted_additional_args():

@@ -1539,7 +1539,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["input"] = input
         self.model_call_details["api_key"] = api_key
         self.model_call_details["original_response"] = original_response
-        self.model_call_details["additional_args"] = additional_args
+        self.model_call_details["additional_args"] = self._provider_affinity_logged_additional_args(additional_args)
         self.model_call_details["log_event_type"] = "post_api_call"
 
     def post_call(self, original_response, input=None, api_key=None, additional_args={}):
