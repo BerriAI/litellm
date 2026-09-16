@@ -971,8 +971,6 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             buffer_until_moderated = False
 
-        # Buffering can only moderate the assembled response, so it always
-        # defers to end-of-stream.
         if buffer_until_moderated and not release_on_scan:
             end_of_stream_only = True
 
