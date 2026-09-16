@@ -325,13 +325,11 @@ def _outgoing_trace_context(parent_span: object) -> Context | None:
 
 
 def inject_trace_context(headers: Mapping[str, str], parent_span: object = None) -> dict[str, str]:
-    """``headers`` plus W3C ``traceparent``/``tracestate`` for the current request's span.
+    """``headers`` plus W3C ``traceparent``/``tracestate`` for this request's span.
 
-    Parent preference: the request span auth stashed on the key (the legacy
-    ``litellm_request`` SERVER span, or the FastAPI server span under otel_v2), then
-    the anchored request root span, then the ambient active span. Only trace context
-    is injected, never Baggage, so per-request identity baggage cannot leak upstream.
-    Unchanged when no valid span context exists anywhere.
+    Parent preference: ``parent_span`` (the request span auth stashed on the key), then
+    the anchored request root span, then the ambient active span. Only trace context is
+    injected, never Baggage. Unchanged when no valid span exists anywhere.
     """
     context: Final = _outgoing_trace_context(parent_span)
     if context is None:
