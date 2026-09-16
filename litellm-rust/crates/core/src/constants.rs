@@ -42,8 +42,6 @@ pub const CHAT_COMPLETION_OBJECT: &str = "chat.completion";
 pub const EMPTY_TEXT_PLACEHOLDER: &str =
     "[System: Empty message content sanitised to satisfy protocol]";
 
-pub const FUNCTION_TRACE_TARGET: &str = "litellm::function_trace";
-
 pub(crate) const MEDIA_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 pub(crate) const OCR_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
