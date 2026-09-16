@@ -11,6 +11,10 @@ import pytest
 
 from fastapi import HTTPException
 
+from litellm.constants import (
+    CONTENT_FILTER_STREAMING_HOLDBACK_CHARS,
+    CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS,
+)
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
@@ -22,6 +26,7 @@ from litellm.types.guardrails import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
+    ContentFilterDetection,
 )
 
 
@@ -899,6 +904,178 @@ class TestContentFilterGuardrail:
         assert pattern_detections[0].get("pattern_name") == "email"
         # masked_entity_count for email is the real count, not N×.
         assert entry["masked_entity_count"].get("email") == 1
+
+    @staticmethod
+    async def _collect_streamed_text(
+        guardrail: ContentFilterGuardrail, chunks: list[str], request_data: dict
+    ) -> str:
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        async def mock_stream():
+            for i, content in enumerate(chunks):
+                yield ModelResponseStream(
+                    id=f"c{i}",
+                    choices=[StreamingChoices(delta=Delta(content=content), index=0)],
+                    model="gpt-4",
+                )
+            yield ModelResponseStream(
+                id="final",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content=""), index=0, finish_reason="stop"
+                    )
+                ],
+                model="gpt-4",
+            )
+
+        yielded = []
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            yielded.append(chunk.choices[0].delta.content or "")
+        return "".join(yielded)
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_scans_bounded_window_per_chunk(self):
+        """
+        Regression: the streaming hook used to re-scan the whole accumulated
+        buffer on every chunk, so scan work grew quadratically with the length
+        of the response. Each scan must now cover only the new chunk plus a
+        bounded tail of what came before, without dropping any output.
+        """
+        scanned_lengths: list[int] = []
+
+        class RecordingGuardrail(ContentFilterGuardrail):
+            def _filter_single_text(
+                self,
+                text: str,
+                detections: list[ContentFilterDetection] | None = None,
+            ) -> str:
+                scanned_lengths.append(len(text))
+                return super()._filter_single_text(text, detections=detections)
+
+        guardrail = RecordingGuardrail(
+            guardrail_name="test-streaming-bounded-scan",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="email",
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        chunk = "Item: a plain household object description. "
+        chunks = [chunk] * 200
+        request_data = {"messages": [], "model": "gpt-4o", "metadata": {}}
+
+        streamed = await self._collect_streamed_text(guardrail, chunks, request_data)
+
+        assert streamed == chunk * 200
+        assert len(chunk) * 200 > 4 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS
+        window_bound = 2 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS + len(chunk) + 1
+        assert max(scanned_lengths) <= window_bound, (
+            f"scan input grew to {max(scanned_lengths)} chars for a "
+            f"{len(chunk)}-char chunk; expected at most {window_bound}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_blocks_match_longer_than_holdback_across_chunks(
+        self,
+    ):
+        """
+        A blocked phrase longer than the holdback window arrives in small chunks,
+        so its start has already been yielded before its end shows up. The scan
+        still has to see the whole phrase and block.
+        """
+        phrase = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima"
+        assert len(phrase) > CONTENT_FILTER_STREAMING_HOLDBACK_CHARS
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-long-block",
+            blocked_words=[BlockedWord(keyword=phrase, action=ContentFilterAction.BLOCK)],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        text = "Here is the codeword list: " + phrase + " and that is all."
+        chunks = [text[i : i + 4] for i in range(0, len(text), 4)]
+        request_data = {"messages": [], "model": "gpt-4o", "metadata": {}}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._collect_streamed_text(guardrail, chunks, request_data)
+
+        assert exc_info.value.detail["keyword"] == phrase
+        entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert entry["guardrail_status"] == "guardrail_intervened"
+        assert [d["keyword"] for d in entry["guardrail_response"]] == [phrase]
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_masks_every_email_in_long_stream_and_logs_once(
+        self,
+    ):
+        """
+        A response made of nothing but emails, several times longer than the
+        rescanned buffer, must come out as nothing but redaction tags, and the log
+        must carry one email detection, matching what a single scan of the full
+        text reports. Wherever the buffer is cut, an email sits on the cut, so
+        dropping text without checking that the cut leaves the masked output
+        unchanged corrupts the stream.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-many-emails",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="email",
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        emails = [f"user{i:03d}@example.com" for i in range(200)]
+        text = " ".join(emails)
+        assert len(text) > 4 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS
+        chunks = [text[i : i + 3] for i in range(0, len(text), 3)]
+        request_data = {"messages": [], "model": "gpt-4o", "metadata": {}}
+
+        streamed = await self._collect_streamed_text(guardrail, chunks, request_data)
+
+        assert streamed == " ".join(["[EMAIL_REDACTED]"] * len(emails))
+        entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert entry["guardrail_status"] == "success"
+        assert [d["pattern_name"] for d in entry["guardrail_response"]] == ["email"]
+        assert entry["masked_entity_count"] == {"email": 1}
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_logs_detection_masked_long_before_stream_end(self):
+        """
+        An email at the start of a long response is masked and then falls out of
+        the rescanned buffer well before the stream ends. The final log entry must
+        still report it, as a scan of the full text would.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-early-detection",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="email",
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        filler = "filler text " * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS
+        text = f"Contact one@example.com for details. {filler}"
+        chunks = [text[i : i + 40] for i in range(0, len(text), 40)]
+        request_data = {"messages": [], "model": "gpt-4o", "metadata": {}}
+
+        streamed = await self._collect_streamed_text(guardrail, chunks, request_data)
+
+        assert streamed == text.replace("one@example.com", "[EMAIL_REDACTED]")
+        entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert entry["guardrail_status"] == "success"
+        assert [d["pattern_name"] for d in entry["guardrail_response"]] == ["email"]
+        assert entry["masked_entity_count"] == {"email": 1}
 
     def test_init_with_plain_dicts(self):
         """

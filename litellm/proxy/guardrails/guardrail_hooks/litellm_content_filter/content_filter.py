@@ -11,6 +11,7 @@ import os
 import re
 import time
 from collections.abc import AsyncGenerator, Coroutine, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
 from re import Pattern
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, cast
@@ -20,7 +21,11 @@ from fastapi import HTTPException
 
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import (
+    CONTENT_FILTER_STREAMING_HOLDBACK_CHARS,
+    CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS,
+    DEFAULT_MAX_RECURSE_DEPTH,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import (
@@ -110,6 +115,14 @@ class _CategoryConfigView(TypedDict):
     enabled: object
     action: object
     category_file: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamedChoiceState:
+    buffered_text: str = ""
+    yielded_masked_text_len: int = 0
+    committed_detections: tuple[ContentFilterDetection, ...] = ()
+    latest_detections: tuple[ContentFilterDetection, ...] = ()
 
 
 class CategoryFileData(TypedDict, total=False):
@@ -1950,6 +1963,40 @@ class ContentFilterGuardrail(CustomGuardrail):
                 exception_str=exception_str,
             )
 
+    def _trim_streamed_choice_buffer(self, state: _StreamedChoiceState, masked_text: str) -> _StreamedChoiceState:
+        """
+        Bound the per-choice buffer rescanned on every streamed chunk.
+
+        Once the buffer exceeds twice the scan context, drop everything but the last
+        context-sized tail, provided the two halves mask to the same output as the whole
+        (so no match, phrase or exception straddles the cut) and the dropped prefix has
+        already been yielded. Otherwise keep the buffer and retry on the next chunk.
+
+        Detections found in the dropped prefix move to the state's committed detections.
+        """
+        if len(state.buffered_text) <= 2 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS:
+            return state
+        head: Final = state.buffered_text[:-CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS]
+        tail: Final = state.buffered_text[-CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS:]
+        head_detections: Final[list[ContentFilterDetection]] = []  # mutable-ok: filled by _filter_single_text
+        try:
+            masked_head: Final = self._filter_single_text(head, detections=head_detections)
+            masked_tail: Final = self._filter_single_text(tail)
+        except Exception:
+            return state
+        if masked_head + masked_tail != masked_text or len(masked_head) > state.yielded_masked_text_len:
+            return state
+        return replace(
+            state,
+            buffered_text=tail,
+            yielded_masked_text_len=state.yielded_masked_text_len - len(masked_head),
+            committed_detections=state.committed_detections + tuple(head_detections),
+        )
+
+    @staticmethod
+    def _merge_detections(detections: Sequence[ContentFilterDetection]) -> tuple[ContentFilterDetection, ...]:
+        return tuple(detection for index, detection in enumerate(detections) if detection not in detections[:index])
+
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1968,10 +2015,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         and the UI Request Lifecycle panel. Mirrors apply_guardrail's finally-block
         contract.
         """
-        accumulated_text_by_choice: Final[dict[int, str]] = {}
-        yielded_masked_text_len_by_choice: Final[dict[int, int]] = {}
-        latest_detections_by_choice: Final[dict[int, list[ContentFilterDetection]]] = {}
-        buffer_size: Final = 50  # Increased buffer to catch patterns split across many chunks
+        state_by_choice: Final[dict[int, _StreamedChoiceState]] = {}
 
         start_time: Final = datetime.now()
         scan_seconds: float = 0.0  # rebind-ok: accumulates per-chunk scan time across the stream
@@ -1997,69 +2041,57 @@ class ContentFilterGuardrail(CustomGuardrail):
 
                         content = getattr(choice.delta, "content", None)
                         is_final = bool(getattr(choice, "finish_reason", None))
-                        if isinstance(content, str) and content:
-                            accumulated_text_by_choice[choice_index] = (
-                                accumulated_text_by_choice.get(choice_index, "") + content
-                            )
-                        elif not is_final:
+                        new_content = content if isinstance(content, str) else ""
+                        if not new_content and not is_final:
                             continue
 
-                        text_to_check = accumulated_text_by_choice.get(choice_index, "")
-                        if not text_to_check:
+                        previous_state = state_by_choice.get(choice_index, _StreamedChoiceState())
+                        buffered_text = previous_state.buffered_text + new_content
+                        if not buffered_text:
                             continue
 
                         # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
-                        text_to_scan = text_to_check + (" " if is_final else "")
+                        text_to_scan = buffered_text + (" " if is_final else "")
                         choice_detections: list[ContentFilterDetection] = []
                         scan_started = time.perf_counter()
 
                         try:
-                            # _filter_single_text scans the whole accumulated
-                            # choice buffer every chunk, so previous-chunk
-                            # matches are guaranteed to be re-found. Keeping
-                            # only each choice's latest scan avoids duplicate
-                            # detections in the final log row.
                             masked_text = self._filter_single_text(text_to_scan, detections=choice_detections)
                             if is_final and masked_text.endswith(" "):
                                 masked_text = masked_text[:-1]
-                            latest_detections_by_choice[choice_index] = choice_detections
+                            latest_detections = tuple(choice_detections)
                         except HTTPException:
-                            latest_detections_by_choice[choice_index] = choice_detections
+                            state_by_choice[choice_index] = replace(
+                                previous_state, latest_detections=tuple(choice_detections)
+                            )
                             raise
                         except Exception as e:
                             verbose_proxy_logger.error("ContentFilterGuardrail: Error in masking: %s", e)
                             masked_text = text_to_scan  # Fallback to current text
+                            latest_detections = previous_state.latest_detections
                         finally:
                             scan_seconds += time.perf_counter() - scan_started
 
-                        # Determine how much can be safely yielded
+                        safe_to_yield_len = max(
+                            previous_state.yielded_masked_text_len,
+                            len(masked_text) - (0 if is_final else CONTENT_FILTER_STREAMING_HOLDBACK_CHARS),
+                        )
+                        choice.delta.content = masked_text[previous_state.yielded_masked_text_len : safe_to_yield_len]
+                        next_state = _StreamedChoiceState(
+                            buffered_text, safe_to_yield_len, previous_state.committed_detections, latest_detections
+                        )
                         if is_final:
-                            safe_to_yield_len = len(masked_text)
-                        else:
-                            safe_to_yield_len = max(0, len(masked_text) - buffer_size)
+                            state_by_choice[choice_index] = next_state
+                            continue
 
-                        yielded_masked_text_len = yielded_masked_text_len_by_choice.get(choice_index, 0)
-                        if safe_to_yield_len > yielded_masked_text_len:
-                            new_masked_content = masked_text[yielded_masked_text_len:safe_to_yield_len]
-                            choice.delta.content = new_masked_content
-                            yielded_masked_text_len_by_choice[choice_index] = safe_to_yield_len
-                        else:
-                            # Hold content by yielding empty content on this choice
-                            # while preserving chunk metadata and other choices.
-                            choice.delta.content = ""
+                        trim_started = time.perf_counter()
+                        state_by_choice[choice_index] = self._trim_streamed_choice_buffer(next_state, masked_text)
+                        scan_seconds += time.perf_counter() - trim_started
 
                     yield item
                 else:
                     # Not a ModelResponseStream or no choices - yield as is
                     yield item
-
-            # Any remaining content (should have been handled by is_final, but just in case)
-            if any(
-                yielded_masked_text_len_by_choice.get(choice_index, 0) < len(accumulated_text)
-                for choice_index, accumulated_text in accumulated_text_by_choice.items()
-            ):
-                # We already reached the end of the generator
-                pass
         except HTTPException:
             status = "guardrail_intervened"
             raise
@@ -2070,8 +2102,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         finally:
             detections = [
                 detection
-                for choice_detections in latest_detections_by_choice.values()
-                for detection in choice_detections
+                for state in state_by_choice.values()
+                for detection in self._merge_detections((*state.committed_detections, *state.latest_detections))
             ]
             self._count_masked_entities(detections, masked_entity_count)
             self._log_guardrail_information(
