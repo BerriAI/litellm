@@ -44,6 +44,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.repositories.team_repository import TeamRepository
@@ -68,10 +69,15 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    from prisma.types import LiteLLM_EndUserTableInclude, LiteLLM_EndUserTableOrderByInput
+    from prisma.types import (
+        LiteLLM_BudgetTableWhereUniqueInput,
+        LiteLLM_EndUserTableInclude,
+        LiteLLM_EndUserTableOrderByInput,
+    )
     from prometheus_client import Gauge
     from prometheus_client.metrics import MetricWrapperBase
 
+    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
 else:
     AsyncIOScheduler = Any
@@ -1983,7 +1989,7 @@ class PrometheusLogger(CustomLogger):
             and isinstance(self.litellm_remaining_api_key_budget_metric, NoOpMetric)
             and isinstance(self.litellm_remaining_user_budget_metric, NoOpMetric)
             and isinstance(self.litellm_remaining_org_budget_metric, NoOpMetric)
-            and isinstance(self.litellm_remaining_customer_budget_metric, NoOpMetric)
+            and self._customer_budget_gauges_are_noop()
         ):
             return
 
@@ -3794,15 +3800,17 @@ class PrometheusLogger(CustomLogger):
             verbose_logger.debug("Prometheus: skipping customer metrics initialization, DB not initialized")
             return
 
-        if isinstance(self.litellm_remaining_customer_budget_metric, NoOpMetric):
+        if self._customer_budget_gauges_are_noop():
             return
 
         if not _customer_budget_metrics_enabled():
             verbose_logger.debug("Prometheus: skipping customer metrics initialization, end_user tracking disabled")
             return
 
+        default_budget: Final = await self._get_default_customer_budget(prisma_client)
         customers_table: Final = EndUserRepository(prisma_client).table
-        budgeted_customers: Final[_BudgetedCustomerFilter] = {"budget_id": {"not": None}}
+        with_persisted_budget: Final[_BudgetedCustomerFilter] = {"budget_id": {"not": None}}
+        budgeted_customers: Final = None if default_budget is not None else with_persisted_budget
         by_user_id: Final[LiteLLM_EndUserTableOrderByInput] = {"user_id": "asc"}
         with_budget: Final[LiteLLM_EndUserTableInclude] = {"litellm_budget_table": True}
 
@@ -3815,12 +3823,16 @@ class PrometheusLogger(CustomLogger):
                 order=by_user_id,
                 include=with_budget,
             )
-            total_count: Final = await customers_table.count(where=budgeted_customers)
+            total_count: Final = await customers_table.count(where=budgeted_customers) if page == 1 else None
             return customers, total_count
+
+        async def set_customer_metrics(customers: Sequence[_CustomerBudgetRow]) -> None:
+            for customer in customers:
+                self._set_customer_budget_metrics_from_row(customer, default_budget=default_budget)
 
         await self._initialize_budget_metrics(
             data_fetch_function=fetch_customers,
-            set_metrics_function=self._set_customer_list_budget_metrics,
+            set_metrics_function=set_customer_metrics,
             data_type="customers",
         )
 
@@ -3924,12 +3936,12 @@ class PrometheusLogger(CustomLogger):
                 budget_reset_at=(getattr(budget_table, "budget_reset_at", None) if budget_table else None),
             )
 
-    async def _set_customer_list_budget_metrics(self, customers: Sequence[_CustomerBudgetRow]):
-        for customer in customers:
-            self._set_customer_budget_metrics_from_row(customer)
-
-    def _set_customer_budget_metrics_from_row(self, customer: _CustomerBudgetRow):
-        budget_table: Final = customer.litellm_budget_table
+    def _set_customer_budget_metrics_from_row(
+        self, customer: _CustomerBudgetRow, default_budget: _JoinedBudgetRow | None
+    ):
+        budget_table: Final = (
+            customer.litellm_budget_table if customer.litellm_budget_table is not None else default_budget
+        )
         self._set_customer_budget_metrics(
             end_user_id=customer.user_id,
             spend=customer.spend,
@@ -4191,7 +4203,7 @@ class PrometheusLogger(CustomLogger):
         end_user_id: str | None,
         response_cost: float,
     ):
-        if isinstance(self.litellm_remaining_customer_budget_metric, NoOpMetric):
+        if self._customer_budget_gauges_are_noop():
             return
 
         if not end_user_id:
@@ -4222,6 +4234,24 @@ class PrometheusLogger(CustomLogger):
             spend=end_user_object.spend + response_cost,
             max_budget=budget_table.max_budget if budget_table is not None else None,
             budget_reset_at=None,
+        )
+
+    async def _get_default_customer_budget(self, prisma_client: PrismaClient) -> _JoinedBudgetRow | None:
+        default_budget_id: Final = litellm.max_end_user_budget_id
+        if default_budget_id is None:
+            return None
+        default_budget_key: Final[LiteLLM_BudgetTableWhereUniqueInput] = {"budget_id": default_budget_id}
+        try:
+            return await BudgetRepository(prisma_client).table.find_unique(where=default_budget_key)
+        except Exception as e:
+            verbose_logger.debug("[Non-Blocking] Prometheus: Error getting default customer budget: %s", e)
+            return None
+
+    def _customer_budget_gauges_are_noop(self) -> bool:
+        return (
+            isinstance(self.litellm_remaining_customer_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_customer_max_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_customer_budget_remaining_hours_metric, NoOpMetric)
         )
 
     def _set_customer_budget_metrics(
