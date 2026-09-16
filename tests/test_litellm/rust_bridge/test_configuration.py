@@ -22,48 +22,56 @@ def _isolated_configuration(  # pyright: ignore[reportUnusedFunction]  # pytest 
     configuration.reset_rust_configuration()
 
 
+Rollout: Final = configuration.Rollout
+Decision: Final = configuration.Decision
+
+
 @pytest.mark.parametrize(
-    ("process", "environment", "release_default", "expected"),
+    ("rollout", "process", "environment", "expected"),
     (
-        (False, True, True, False),
-        (True, False, False, True),
-        (None, False, True, False),
-        (None, True, False, True),
-        (None, None, False, False),
-        (None, None, True, True),
+        (Rollout.PYTHON_ONLY, True, True, Decision.PYTHON),
+        (Rollout.RUST_REQUIRED, False, False, Decision.RUST_REQUIRED),
+        (Rollout.RUST_OPT_IN, None, None, Decision.PYTHON),
+        (Rollout.RUST_OPT_IN, None, True, Decision.RUST_WITH_FALLBACK),
+        (Rollout.RUST_OPT_IN, True, False, Decision.RUST_WITH_FALLBACK),
+        (Rollout.RUST_OPT_IN, False, True, Decision.PYTHON),
+        (Rollout.RUST_OPT_OUT, None, None, Decision.RUST_WITH_FALLBACK),
+        (Rollout.RUST_OPT_OUT, None, False, Decision.PYTHON),
+        (Rollout.RUST_OPT_OUT, False, True, Decision.PYTHON),
+        (Rollout.RUST_OPT_OUT, True, False, Decision.RUST_WITH_FALLBACK),
     ),
 )
-def test_resolution_precedence(
+def test_decide_precedence(
+    rollout: configuration.Rollout,
     process: bool | None,
     environment: bool | None,
-    release_default: bool,
-    expected: bool,
+    expected: configuration.Decision,
 ) -> None:
-    assert (
-        configuration.resolve_rust_enabled(
-            process_override=process,
-            environment_override=environment,
-            release_default=release_default,
-        )
-        is expected
-    )
+    assert configuration.decide(rollout, process_override=process, environment_override=environment) is expected
 
 
-def test_release_default_remains_disabled() -> None:
-    assert configuration.DEFAULT_RUST_ENABLED is False
+def test_release_default_keeps_opt_in_routes_on_python() -> None:
+    assert configuration.decision(Rollout.RUST_OPT_IN) is Decision.PYTHON
+    assert configuration.decision(Rollout.RUST_OPT_OUT) is Decision.RUST_WITH_FALLBACK
     assert configuration.rust_enabled() is False
-    assert configuration.rust_ocr_enabled() is True
 
 
-@pytest.mark.parametrize("process", [None, False, True])
-@pytest.mark.parametrize("environment", [None, "0", "1", "off"])
-def test_ocr_configuration(monkeypatch: pytest.MonkeyPatch, process: bool | None, environment: str | None) -> None:
+@pytest.mark.parametrize("process", (None, False, True))
+@pytest.mark.parametrize("environment", (None, "0", "1", "off"))
+def test_opt_out_route_configuration(
+    monkeypatch: pytest.MonkeyPatch, process: bool | None, environment: str | None
+) -> None:
     if environment is not None:
         monkeypatch.setenv("LITELLM_RUST", environment)
     if process is not None:
         configuration.rust(process)
 
-    assert configuration.rust_ocr_enabled() is (environment not in {"0", "off"} and process is not False)
+    expected: Final = (
+        Decision.RUST_WITH_FALLBACK
+        if process is True or (process is None and environment not in frozenset({"0", "off"}))
+        else Decision.PYTHON
+    )
+    assert configuration.decision(Rollout.RUST_OPT_OUT) is expected
 
 
 def test_process_override_wins_over_environment(monkeypatch: pytest.MonkeyPatch) -> None:

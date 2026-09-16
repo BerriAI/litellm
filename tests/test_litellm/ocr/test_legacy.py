@@ -1,4 +1,3 @@
-import importlib
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from io import BytesIO
@@ -16,7 +15,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUs
 from litellm.llms.custom_httpx import llm_http_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.ocr.legacy import _prepare_ocr_request
-from litellm.rust_bridge import bindings, configuration
+from litellm.rust_bridge import bindings, configuration, runtime
 from litellm.rust_bridge.ocr_lifecycle import NATIVE_OCR_LIFECYCLE
 
 
@@ -61,8 +60,7 @@ async def test_python_request_response_and_callbacks(
     if dispatch != "disabled":
         monkeypatch.setenv("LITELLM_RUST", "1")
         NATIVE_OCR_LIFECYCLE.override(Mock(side_effect=Declined()) if dispatch == "declined" else None)
-        main: Final = importlib.import_module("litellm.ocr.main")
-        monkeypatch.setattr(main, "native_exception_types", lambda: (Declined, RuntimeError))
+        monkeypatch.setattr(runtime, "native_exception_types", lambda: (Declined, RuntimeError))
     logger: Final = Mock(spec=CustomLogger)
     monkeypatch.setattr(litellm, "input_callback", [logger])
     arguments: Final = {

@@ -166,9 +166,11 @@ from litellm.utils import (
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
 ) -> bool:
-    from litellm.rust_bridge.configuration import rust_enabled
+    from litellm.rust_bridge.catalog import Context, Delivery, Route, decision
+    from litellm.rust_bridge.configuration import Decision
 
-    return custom_llm_provider == "openai" and rust_enabled()
+    context: Final = Context(Route.RESPONSES, provider=custom_llm_provider, delivery=Delivery.WEBSOCKET)
+    return decision(context) is not Decision.PYTHON
 
 
 from .http_handler import get_shared_realtime_ssl_context
@@ -2454,11 +2456,10 @@ class BaseLLMHTTPHandler:
         request_body: dict,
         timeout: float | httpx.Timeout | None,
     ) -> AnthropicMessagesResponse | None:
-        if custom_llm_provider not in ("azure_ai", "anthropic"):
-            return None
-        from litellm.rust_bridge.configuration import rust_enabled
+        from litellm.rust_bridge.catalog import Context, Route, decision
+        from litellm.rust_bridge.configuration import Decision
 
-        if not rust_enabled():
+        if decision(Context(Route.MESSAGES, provider=custom_llm_provider, model=model)) is Decision.PYTHON:
             return None
         if has_agentic_hook:
             return None

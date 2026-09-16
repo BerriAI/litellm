@@ -40,12 +40,6 @@ def _binding(value: object) -> NativeOcrLifecycle | None:
 NATIVE_OCR_LIFECYCLE: Final = NativeBinding("_ocr_lifecycle", validate=_binding)
 
 
-def select(request: LiteLLMOcrRequest) -> NativeOcrLifecycle | None:
-    if request.kwargs.get("aocr"):
-        return None
-    return NATIVE_OCR_LIFECYCLE.load()
-
-
 def arguments(request: LiteLLMOcrRequest) -> Mapping[str, object]:
     return request.kwargs
 
