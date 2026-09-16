@@ -305,6 +305,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_keys,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
@@ -1373,8 +1374,26 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
+    model_info_scheduler: Final = scheduler if scheduler is not None else AsyncIOScheduler()
+    model_info_scheduler.add_job(
+        ProxyStartupEvent.refresh_model_info,
+        "interval",
+        seconds=MODEL_INFO_REFRESH_SECONDS,
+        id="refresh_model_info",
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        replace_existing=True,
+    )
+    if not model_info_scheduler.running:
+        model_info_scheduler.start()
+
     # End of startup event
     yield
+
+    if model_info_scheduler.running:
+        model_info_scheduler.remove_job("refresh_model_info")
+        if model_info_scheduler is not scheduler:
+            model_info_scheduler.shutdown(wait=False)
 
     # Shutdown event - drain in-flight requests before tearing down dependencies
     # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
@@ -9293,6 +9312,12 @@ def get_litellm_model_info(model: dict = {}):
     model_info: Final = model.get("model_info", {})
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
     try:
+        if llm_router is not None and model_info.get("id") is not None:
+            deployment_info: Final = llm_router.get_deployment_model_info(
+                model_id=model_info["id"], model_name=model_to_lookup
+            )
+            if deployment_info is not None:
+                return deployment_info
         if "azure" in model_to_lookup or model_info.get("base_model"):
             model_to_lookup = model_info.get("base_model", None)
         litellm_model_info: Final = litellm.get_model_info(model_to_lookup)
@@ -9325,6 +9350,11 @@ def giveup(e):
 
 
 class ProxyStartupEvent:
+    @staticmethod
+    async def refresh_model_info() -> None:
+        if llm_router is not None:
+            await llm_router.arefresh_model_info()
+
     @staticmethod
     def _warn_budget_without_db(max_budget: float | None, prisma_client: PrismaClient | None) -> None:
         if prisma_client is not None or not max_budget or max_budget <= 0:
@@ -13597,7 +13627,7 @@ def _enrich_model_info_with_litellm_data(
             except Exception:
                 litellm_model_info = {}
     for k, v in litellm_model_info.items():
-        if k not in model_info:
+        if model_info.get(k) is None:
             model_info[k] = v
     model["model_info"] = model_info
     # don't return the api key / vertex credentials
