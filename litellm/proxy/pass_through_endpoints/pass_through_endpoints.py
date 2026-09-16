@@ -986,10 +986,7 @@ async def pass_through_request(
             forward_headers=forward_headers,
         )
 
-        requested_query_params: dict | None = {
-            **dict(url.params),
-            **(query_params or dict(request.query_params)),
-        } or None
+        requested_query_params: dict | None = query_params or dict(request.query_params) or None
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(str(url))
 
