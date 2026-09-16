@@ -3963,6 +3963,33 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
     assert payload["litellm_call_id"] == call_id
 
 
+def test_get_standard_logging_object_payload_falls_back_when_the_provider_id_is_null(logging_obj):
+    """A null provider `id` falls back to the call id instead of logging the string "None"."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    call_id = "test-call-id-def-456"
+    now = datetime.datetime.now()
+
+    def payload_for(response_obj: dict):
+        payload = get_standard_logging_object_payload(
+            kwargs={"litellm_call_id": call_id, "model": "gpt-4o", "messages": []},
+            init_response_obj=response_obj,
+            start_time=now,
+            end_time=now,
+            logging_obj=logging_obj,
+            status="success",
+        )
+        assert payload is not None
+        return payload
+
+    assert payload_for({"id": None})["id"] == call_id
+    assert payload_for({"id": "chatcmpl-provider-id"})["id"] == "chatcmpl-provider-id"
+
+
 def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):
     """Access groups stamped at auth time reach the logging payload, so integrations see what a request billed."""
     from datetime import datetime
