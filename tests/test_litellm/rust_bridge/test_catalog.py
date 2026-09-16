@@ -24,21 +24,22 @@ def test_every_route_has_an_explicit_default_rule() -> None:
         (Context(Route.TRANSCRIPTION, provider="bedrock"), Rollout.RUST_REQUIRED),
         (Context(Route.TRANSCRIPTION, provider="openai"), Rollout.PYTHON_ONLY),
         (Context(Route.TRANSCRIPTION), Rollout.PYTHON_ONLY),
-        (Context(Route.CHAT_COMPLETIONS, provider="anthropic"), Rollout.RUST_OPT_IN),
-        (Context(Route.CHAT_COMPLETIONS, provider="bedrock"), Rollout.RUST_OPT_IN),
-        (Context(Route.CHAT_COMPLETIONS, provider="anthropic", delivery=Delivery.STREAMING), Rollout.PYTHON_ONLY),
-        (Context(Route.CHAT_COMPLETIONS, provider="openai"), Rollout.PYTHON_ONLY),
-        (Context(Route.MESSAGES, provider="anthropic"), Rollout.RUST_OPT_IN),
-        (Context(Route.MESSAGES, provider="azure_ai"), Rollout.RUST_OPT_IN),
-        (Context(Route.MESSAGES, provider="bedrock"), Rollout.PYTHON_ONLY),
-        (Context(Route.RESPONSES, provider="openai", delivery=Delivery.WEBSOCKET), Rollout.RUST_OPT_IN),
-        (Context(Route.RESPONSES, provider="openai"), Rollout.PYTHON_ONLY),
-        (Context(Route.RESPONSES, provider="azure", delivery=Delivery.WEBSOCKET), Rollout.PYTHON_ONLY),
-        (Context(Route.EMBEDDING, provider="openai"), Rollout.PYTHON_ONLY),
+        (Context(Route.CHAT_COMPLETIONS, provider="anthropic"), Rollout.PYTHON_ONLY),
+        (Context(Route.CHAT_COMPLETIONS, provider="bedrock"), Rollout.PYTHON_ONLY),
+        (Context(Route.MESSAGES, provider="anthropic"), Rollout.PYTHON_ONLY),
+        (Context(Route.MESSAGES, provider="azure_ai"), Rollout.PYTHON_ONLY),
+        (Context(Route.RESPONSES, provider="openai", delivery=Delivery.WEBSOCKET), Rollout.PYTHON_ONLY),
     ),
 )
 def test_shipped_rules(context: Context, expected: Rollout) -> None:
     assert catalog.rollout(context) is expected
+
+
+def test_only_ocr_and_bedrock_transcription_can_reach_rust() -> None:
+    rust_capable: Final = frozenset(
+        (rule.route, rule.providers) for rule in catalog.RULES if rule.rollout is not Rollout.PYTHON_ONLY
+    )
+    assert rust_capable == frozenset({(Route.OCR, None), (Route.TRANSCRIPTION, frozenset({"bedrock"}))})
 
 
 def test_first_matching_rule_wins() -> None:
