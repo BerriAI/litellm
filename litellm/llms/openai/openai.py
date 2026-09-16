@@ -362,13 +362,22 @@ def _embedding_request_without_sdk_defaults(
     return body, options
 
 
+def _image_generation_logged_body(data: Mapping[str, object]) -> dict[str, object]:
+    extra_body: Final = {
+        key: item for key, item in _as_mapping(data.get("extra_body")).items() if key != "extra_headers"
+    }
+    extra_query: Final = dict(_as_mapping(data.get("extra_query")))
+    return {  # mutable-ok: loggers isinstance-check this payload as a dict
+        **{key: item for key, item in data.items() if key not in _SDK_OPTION_KEYS},
+        **({} if not extra_query else {"extra_query": extra_query}),
+        **({} if not extra_body else {"extra_body": extra_body}),
+    }
+
+
 def _image_generation_request_data(
     data: Mapping[str, object], headers: Mapping[str, object] | None
 ) -> tuple[dict[str, object], Mapping[str, object]]:
     extra_body_source: Final = _as_mapping(data.get("extra_body"))
-    extra_body: Final = types.MappingProxyType(
-        {key: item for key, item in extra_body_source.items() if key != "extra_headers"}
-    )
     extra_headers: Final = types.MappingProxyType(
         {
             **_as_mapping(extra_body_source.get("extra_headers")),
@@ -376,17 +385,12 @@ def _image_generation_request_data(
             **_as_mapping(headers),
         }
     )
-    extra_query: Final = _as_mapping(data.get("extra_query"))
-    logged_body: Final = {  # mutable-ok: loggers isinstance-check this payload as a dict
-        key: item for key, item in data.items() if key not in _SDK_OPTION_KEYS
-    }
+    logged_body: Final = _image_generation_logged_body(data)
     request_data: Final = types.MappingProxyType(
         dict(
             (
                 *logged_body.items(),
                 *((("extra_headers", extra_headers),) if extra_headers else ()),
-                *((("extra_query", extra_query),) if extra_query else ()),
-                *((("extra_body", extra_body),) if extra_body else ()),
             )
         )
     )
@@ -1483,6 +1487,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=prompt,
                 api_key=api_key,
+                additional_args={"complete_input_dict": _image_generation_logged_body(data)},
                 original_response=str(e),
             )
             raise e
@@ -1569,7 +1574,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=prompt,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": _image_generation_logged_body(data)},
                 original_response=str(e),
             )
             raise e
@@ -1578,7 +1583,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             logging_obj.post_call(
                 input=prompt,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data},
+                additional_args={"complete_input_dict": _image_generation_logged_body(data)},
                 original_response=str(e),
             )
             if hasattr(e, "status_code"):

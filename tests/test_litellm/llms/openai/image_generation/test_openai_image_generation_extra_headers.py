@@ -10,7 +10,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.openai import OpenAIChatCompletion
+
+_SECRET_HEADERS = {"Authorization": "Bearer leaked-token", "cf-aig-authorization": "Bearer custom-token"}
+
+
+def _assert_logged_body_omits_credentials(logged_body: object) -> None:
+    assert isinstance(logged_body, dict)
+    assert "extra_headers" not in logged_body
+    assert "Authorization" not in logged_body
+    assert "cf-aig-authorization" not in logged_body
+    extra_body = logged_body.get("extra_body") or {}
+    assert "extra_headers" not in extra_body
+    assert "Bearer leaked-token" not in str(logged_body)
+    assert extra_body.get("foo") == "bar"
+    assert logged_body.get("extra_query") == {"user": "alice"}
+    assert logged_body.get("size") == "1024x1024"
 
 
 @pytest.fixture
@@ -235,6 +251,7 @@ class TestImageGenerationExtraHeaders:
             "quality": "low",
             "extra_headers": test_headers,
             "extra_body": {"extra_headers": test_headers, "foo": "bar"},
+            "extra_query": {"user": "alice"},
         }
 
         if is_async:
@@ -267,10 +284,10 @@ class TestImageGenerationExtraHeaders:
         extra_body = kwargs.get("extra_body") or {}
         assert "extra_headers" not in extra_body
         assert extra_body.get("foo") == "bar"
+        assert kwargs.get("extra_query") == {"user": "alice"}
 
         logged_body = mock_logging_obj.pre_call.call_args[1]["additional_args"]["complete_input_dict"]
-        assert "extra_headers" not in logged_body
-        assert "extra_headers" not in (logged_body.get("extra_body") or {})
+        _assert_logged_body_omits_credentials(logged_body)
 
     def test_optional_params_headers_merge_prefers_caller_headers(self, openai_chat_completions, mock_logging_obj):
         """When both optional_params and the headers arg carry extra_headers,
@@ -301,6 +318,63 @@ class TestImageGenerationExtraHeaders:
 
         _, kwargs = mock_openai_client.images.generate.call_args
         assert kwargs.get("extra_headers") == {"cf-aig-authorization": "Bearer from-headers"}
+
+    @pytest.mark.parametrize(
+        "is_async,raised",
+        [
+            (False, OpenAIError(status_code=400, message="bad image params")),
+            (False, RuntimeError("forced failure")),
+            (True, OpenAIError(status_code=400, message="bad image params")),
+            (True, RuntimeError("forced failure")),
+        ],
+        ids=["sync-openai-error", "sync-runtime-error", "async-openai-error", "async-runtime-error"],
+    )
+    @pytest.mark.asyncio
+    async def test_failure_telemetry_omits_extra_headers(
+        self, openai_chat_completions, mock_logging_obj, is_async, raised
+    ):
+        """post_call on a generate() failure must use the sanitized body, not raw data."""
+        mock_openai_client = MagicMock()
+        mock_openai_client.api_key = "test-key"
+        mock_openai_client._base_url._uri_reference = "https://api.openai.com"
+
+        optional_params = {
+            "size": "1024x1024",
+            "extra_headers": _SECRET_HEADERS,
+            "extra_body": {"extra_headers": _SECRET_HEADERS, "foo": "bar"},
+            "extra_query": {"user": "alice"},
+        }
+
+        if is_async:
+            mock_openai_client.images.generate = AsyncMock(side_effect=raised)
+            with pytest.raises(type(raised)):
+                await openai_chat_completions.aimage_generation(
+                    prompt="A white cat",
+                    data={"model": "gpt-image-2", "prompt": "A white cat", **optional_params},
+                    model_response=MagicMock(),
+                    timeout=60.0,
+                    logging_obj=mock_logging_obj,
+                    api_key="test-key",
+                    headers=_SECRET_HEADERS,
+                    client=mock_openai_client,
+                )
+        else:
+            mock_openai_client.images.generate.side_effect = raised
+            with pytest.raises(OpenAIError):
+                openai_chat_completions.image_generation(
+                    model="gpt-image-2",
+                    prompt="A white cat",
+                    timeout=60.0,
+                    optional_params=optional_params,
+                    logging_obj=mock_logging_obj,
+                    api_key="test-key",
+                    headers=_SECRET_HEADERS,
+                    client=mock_openai_client,
+                )
+
+        mock_openai_client.images.generate.assert_called_once()
+        logged_body = mock_logging_obj.post_call.call_args[1]["additional_args"]["complete_input_dict"]
+        _assert_logged_body_omits_credentials(logged_body)
 
 
 class TestImageGenerationEntryPointHeaders:
