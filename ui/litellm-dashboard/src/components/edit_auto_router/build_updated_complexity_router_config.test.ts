@@ -675,7 +675,11 @@ describe("managed keys survive an untouched open-and-save", () => {
 
   // The opt-in fifth tier requires the LLM classifier, which this heuristic_first fixture is not,
   // so it gets its own round trip below.
-  const KEYS_ANOTHER_TIER_LADDER_OWNS = new Set(["enable_non_reasoning_tier"]);
+  const KEYS_ANOTHER_TIER_LADDER_OWNS = new Set([
+    "capability_classifier_config",
+    "llm_v2_config",
+    "enable_non_reasoning_tier",
+  ]);
 
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
@@ -850,7 +854,12 @@ describe("LLM V2 configuration preservation", () => {
     harness: "Shell access, one attempt",
     max_quality_gap: 0.03,
     response_format: "json_object",
-    calibration: { version: "pair-v1", prompt_version: "llm-v2-1" },
+    calibration: {
+      version: "pair-v1",
+      prompt_version: "llm-v2-1",
+      efficient: { slope: 1.2, intercept: -0.3 },
+      capable: { slope: 0.9, intercept: 0.1 },
+    },
   };
   const stored = {
     tiers: { SIMPLE: ["efficient"], REASONING: ["capable"] },
