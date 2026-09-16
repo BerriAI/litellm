@@ -875,7 +875,11 @@ async def test_commit_spend_updates_to_db_increments_team_member_spend_and_total
     """
     Verify that _commit_spend_updates_to_db increments BOTH spend (cycle-scoped)
     and total_spend (non-resetting) on LiteLLM_TeamMembership in a single
-    update_many call, using the same response_cost.
+    upsert call, using the same response_cost.
+
+    Regression (LIT-5502): members added without a budget had no membership row, and
+    the previous update_many matched zero rows, so their spend was silently dropped.
+    The upsert has to create the row seeded with this call's cost in that case.
     """
     db_writer = DBSpendUpdateWriter()
 
@@ -887,7 +891,7 @@ async def test_commit_spend_updates_to_db_increments_team_member_spend_and_total
     mock_batcher.litellm_teamtable = MagicMock()
     mock_batcher.litellm_teamtable.update_many = MagicMock()
     mock_batcher.litellm_teammembership = MagicMock()
-    mock_batcher.litellm_teammembership.update_many = MagicMock()
+    mock_batcher.litellm_teammembership.upsert = MagicMock()
     mock_batcher.litellm_organizationtable = MagicMock()
     mock_batcher.litellm_organizationtable.update_many = MagicMock()
     mock_batcher.litellm_tagtable = MagicMock()
@@ -936,12 +940,21 @@ async def test_commit_spend_updates_to_db_increments_team_member_spend_and_total
             db_spend_update_transactions=db_spend_update_transactions,
         )
 
-    mock_batcher.litellm_teammembership.update_many.assert_called_once()
-    call_kwargs = mock_batcher.litellm_teammembership.update_many.call_args[1]
-    assert call_kwargs["where"] == {"team_id": team_id, "user_id": user_id}
+    mock_batcher.litellm_teammembership.upsert.assert_called_once()
+    mock_batcher.litellm_teammembership.update_many.assert_not_called()
+    call_kwargs = mock_batcher.litellm_teammembership.upsert.call_args.kwargs
+    assert call_kwargs["where"] == {"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
     assert call_kwargs["data"] == {
-        "spend": {"increment": response_cost},
-        "total_spend": {"increment": response_cost},
+        "create": {
+            "team_id": team_id,
+            "user_id": user_id,
+            "spend": response_cost,
+            "total_spend": response_cost,
+        },
+        "update": {
+            "spend": {"increment": response_cost},
+            "total_spend": {"increment": response_cost},
+        },
     }
 
 
@@ -2125,9 +2138,13 @@ async def test_commit_daily_tag_spend_no_requeue_on_success():
                 "team_id::team_b::user_id::user_x": 0.3,
             },
             "litellm_teammembership",
-            "update_many",
-            "team_id",
-            ["team_a", "team_b", "team_c"],
+            "upsert",
+            "user_id_team_id",
+            [
+                {"user_id": "user_x", "team_id": "team_a"},
+                {"user_id": "user_x", "team_id": "team_b"},
+                {"user_id": "user_x", "team_id": "team_c"},
+            ],
             id="team_member",
         ),
         pytest.param(

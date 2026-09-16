@@ -123,6 +123,8 @@ class BatchTable(Protocol):
 
     def update_many(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
 
+    def upsert(self, *, where: Mapping[str, object], data: Mapping[str, Mapping[str, object]]) -> None: ...
+
 
 class PrismaBatch(Protocol):
     @property
