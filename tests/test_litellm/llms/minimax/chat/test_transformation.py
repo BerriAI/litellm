@@ -11,6 +11,7 @@ import pytest
 import litellm
 from litellm import completion
 from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
+from litellm.types.utils import Choices, Message, ModelResponse
 
 
 def test_minimax_chat_config():
@@ -99,12 +100,108 @@ def test_minimax_provider_config_manager():
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
-    config = ProviderConfigManager.get_provider_chat_config(
-        model="MiniMax-M2.1", provider=LlmProviders.MINIMAX
-    )
+    config = ProviderConfigManager.get_provider_chat_config(model="MiniMax-M2.1", provider=LlmProviders.MINIMAX)
 
     assert config is not None
     assert isinstance(config, MinimaxChatConfig)
+
+
+def _build_response_with_reasoning(content: str | None, reasoning_content: str | None):
+    """Helper: a ModelResponse whose single choice has the given content/reasoning_content."""
+    message = Message(content=content, role="assistant", reasoning_content=reasoning_content)
+    return ModelResponse(
+        id="test",
+        choices=[Choices(finish_reason="stop", index=0, message=message)],
+        model="MiniMax-M2.1",
+    )
+
+
+def test_transform_response_promotes_reasoning_content_when_content_empty():
+    """Issue #38197: when the model's whole answer sits inside
+    with nothing trailing, the shared parser leaves content empty. The override
+    must fall back to reasoning_content so the model's output isn't discarded."""
+    config = MinimaxChatConfig()
+    raw = MagicMock(status_code=200, json=lambda: {})
+    original = _build_response_with_reasoning(
+        content=None,
+        reasoning_content="The answer to 2+2 is 4.",
+    )
+
+    with patch(  # test-quality-ok: isolates override's reasoning_content fallback from parent's HTTP/parsing machinery; no injection seam for super().transform_response
+        "litellm.llms.openai.chat.gpt_transformation.OpenAIGPTConfig.transform_response",
+        return_value=original,
+    ):
+        result = config.transform_response(
+            model="MiniMax-M2.1",
+            raw_response=raw,
+            model_response=ModelResponse(model="MiniMax-M2.1"),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    assert result.choices[0].message.content == "The answer to 2+2 is 4."
+
+
+def test_transform_response_keeps_content_when_already_present():
+    """When content is non-empty (answer follows the  tag), the override
+    must not clobber it with reasoning_content."""
+    config = MinimaxChatConfig()
+    raw = MagicMock(status_code=200, json=lambda: {})
+    original = _build_response_with_reasoning(
+        content="The answer is 4.",
+        reasoning_content="Let me work this out.",
+    )
+
+    with patch(  # test-quality-ok: isolates override's no-clobber path from parent's HTTP/parsing machinery; no injection seam for super().transform_response
+        "litellm.llms.openai.chat.gpt_transformation.OpenAIGPTConfig.transform_response",
+        return_value=original,
+    ):
+        result = config.transform_response(
+            model="MiniMax-M2.1",
+            raw_response=raw,
+            model_response=ModelResponse(model="MiniMax-M2.1"),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    assert result.choices[0].message.content == "The answer is 4."
+    assert result.choices[0].message.reasoning_content == "Let me work this out."
+
+
+def test_transform_response_noop_without_reasoning_content():
+    """When reasoning_content is absent/None, content is left untouched."""
+    config = MinimaxChatConfig()
+    raw = MagicMock(status_code=200, json=lambda: {})
+    original = _build_response_with_reasoning(
+        content="plain answer",
+        reasoning_content=None,
+    )
+
+    with patch(  # test-quality-ok: isolates override's no-op path from parent's HTTP/parsing machinery; no injection seam for super().transform_response
+        "litellm.llms.openai.chat.gpt_transformation.OpenAIGPTConfig.transform_response",
+        return_value=original,
+    ):
+        result = config.transform_response(
+            model="MiniMax-M2.1",
+            raw_response=raw,
+            model_response=ModelResponse(model="MiniMax-M2.1"),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    assert result.choices[0].message.content == "plain answer"
 
 
 @pytest.mark.skip(reason="Requires actual MiniMax API key")
