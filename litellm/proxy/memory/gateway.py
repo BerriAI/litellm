@@ -13,9 +13,9 @@ from starlette.responses import JSONResponse, Response
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.server_tool_responses import (
     executable_server_calls,
-    object_items,
     object_value,
     response_has_client_tools,
+    response_is_truncated,
     response_messages,
 )
 from litellm.litellm_core_utils.prompt_templates.server_tool_stream import ServerToolStream, ServerToolStreamError
@@ -300,6 +300,8 @@ class GatewayMemoryLoop:
         if response is None:
             raise HTTPException(status_code=502, detail="No model response received")
         self.upstream_ids = (*self.upstream_ids, str(response["id"]))
+        if self.preparing_output and response_is_truncated(response):
+            return True
         try:
             memory_calls: Final = executable_server_calls(response, self.route, MEMORY_TOOL_NAMES)
         except ValueError as exc:
@@ -341,14 +343,13 @@ class GatewayMemoryLoop:
                 yield chunk
             if await self.advance(round_index):
                 break
-        if self.preparing_output and not (
-            (self.last_response or {}).get("status") == "incomplete"
-            or (self.last_response or {}).get("stop_reason") == "max_tokens"
-            or any(
-                choice.get("finish_reason") == "length"
-                for choice in object_items((self.last_response or {}).get("choices"))
+        if self.preparing_output:
+            preparation_status: Final = (
+                "Memory preparation ran out of tokens. Do not claim a save or recall succeeded unless "
+                "the completed tool results confirm it. "
+                if self.last_response is not None and response_is_truncated(self.last_response)
+                else "Memory preparation is complete. "
             )
-        ):
             response_id: Final = self.stream.response_id
             self.stream = ServerToolStream(self.route, MEMORY_TOOL_NAMES, self.original)
             if self.route == "aresponses":
@@ -357,7 +358,7 @@ class GatewayMemoryLoop:
             self.data = append_server_reference(
                 restore_client_output(self.data, self.original),
                 self.route,
-                "Memory preparation is complete. Now respond to the user's request using the required output "
+                preparation_status + "Now respond to the user's request using the required output "
                 "format and any application tools provided. Do not describe the memory preparation.",
             )
             async for chunk in self._call():

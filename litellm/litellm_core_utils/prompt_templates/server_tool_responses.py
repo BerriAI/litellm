@@ -138,6 +138,14 @@ def response_has_client_tools(
     )
 
 
+def response_is_truncated(response: Mapping[str, object]) -> bool:
+    return (
+        response.get("status") == "incomplete"
+        or response.get("stop_reason") == "max_tokens"
+        or any(choice.get("finish_reason") == "length" for choice in object_items(response.get("choices")))
+    )
+
+
 def executable_server_calls(
     response: Mapping[str, object], route: ServerToolRoute, server_names: frozenset[str]
 ) -> tuple[NormalizedToolCall, ...]:
@@ -163,11 +171,7 @@ def executable_server_calls(
         else bool(choices) and choices[0].get("finish_reason") == "tool_calls"
     )
     if not completed:
-        if (
-            response.get("status") == "incomplete"
-            or response.get("stop_reason") == "max_tokens"
-            or (choices and choices[0].get("finish_reason") == "length")
-        ):
+        if response_is_truncated(response):
             return ()
         raise ValueError("The model did not complete its memory tool calls")
 

@@ -1237,6 +1237,54 @@ async def test_private_tools_have_room_but_final_answer_keeps_client_token_cap(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", _ROUTES)
+@pytest.mark.parametrize("streaming", (False, True))
+async def test_truncated_preparation_discards_partial_call_and_still_generates_final_answer(
+    prisma_edge: MagicMock, route: ServerToolRoute, streaming: bool
+) -> None:
+    observed = []
+    limit_field = "max_output_tokens" if route == "aresponses" else "max_tokens"
+    partial = {"id": "discard-partial-call", "name": "litellm_memory_capture", "arguments": {"key": "unfinished"}}
+
+    async def execute(inner: Request, body: dict[str, object], auth: UserAPIKeyAuth) -> Response:
+        observed.append(body)
+        reply = (
+            provider_response(route, "", (partial,), truncated=True)
+            if len(observed) == 1
+            else provider_response(route, "Memory was not saved")
+        )
+        return wire_response(reply, route, body.get("stream") is True)
+
+    loop = GatewayMemoryLoop(
+        execute,
+        request(),
+        {
+            "input": "Remember this",
+            "messages": [{"role": "user", "content": "Remember this"}],
+            limit_field: 40,
+            "stream": streaming,
+        },
+        route,
+        store(prisma_edge),
+        UserAPIKeyAuth(),
+    )
+    chunks = b"".join([chunk async for chunk in loop.run()])
+    assert [body[limit_field] for body in observed] == [4096, 40]
+    assert "discard-partial-call" not in json.dumps(observed[-1])
+    assert "ran out of tokens" in json.dumps(observed[-1])
+    assert "Memory was not saved" in json.dumps(loop.stream.response())
+    prisma_edge.db.litellm_memorytable.create.assert_not_awaited()
+    if route == "aresponses":
+        saved = json.loads(
+            prisma_edge.db.litellm_memorycontinuation.upsert.call_args.kwargs["data"]["create"]["payload"]
+        )
+        assert "discard-partial-call" not in json.dumps(saved)
+        assert saved["response"]["status"] == "completed"
+    if streaming:
+        assert b"Memory was not saved" in chunks and b"discard-partial-call" not in chunks
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", (False, True))
 @pytest.mark.parametrize("tool_name", ("litellm_memory_capture", "read_file"))
 async def test_truncated_tool_response_is_not_saved_as_a_resumable_conversation(
