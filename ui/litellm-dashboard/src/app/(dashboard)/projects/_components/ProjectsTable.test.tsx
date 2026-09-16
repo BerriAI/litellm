@@ -73,7 +73,7 @@ describe("ProjectsTable pagination URL state", () => {
     expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 11-14 of 14");
   });
 
-  it("should push ?page=2 onto history when the next page control is clicked", async () => {
+  it("should write ?page=2 to the URL when the next page control is clicked", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     renderTable({ onUrlUpdate });
@@ -83,7 +83,7 @@ describe("ProjectsTable pagination URL state", () => {
     await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
     const [update] = onUrlUpdate.mock.calls[0];
     expect(update.searchParams.get("page")).toBe("2");
-    expect(update.options.history).toBe("push");
+    expect(update.searchParams.has("page_size")).toBe(false);
     expect(firstDataRow().getByText("Project 11")).toBeInTheDocument();
   });
 
