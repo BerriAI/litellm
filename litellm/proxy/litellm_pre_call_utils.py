@@ -112,9 +112,10 @@ def _trace_id_from_otel_span(span: "OtelSpan | None") -> str | None:
     if span is None:
         return None
     span_context: Final = span.get_span_context()
-    if not span_context.is_valid:
+    trace_id: Final = span_context.trace_id
+    if not span_context.is_valid or not isinstance(trace_id, int):
         return None
-    return format(span_context.trace_id, "032x")
+    return format(trace_id, "032x")
 
 
 def add_otel_trace_id_to_request(
