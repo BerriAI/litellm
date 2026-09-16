@@ -7,7 +7,7 @@ from typing import Final
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, SpanLimits
-from opentelemetry.sdk.trace import Tracer as SdkTracer
+from opentelemetry.sdk.trace import Span as SdkSpan
 from opentelemetry.trace import Link, Span, Tracer
 from opentelemetry.trace.status import Status, StatusCode
 
@@ -84,11 +84,20 @@ def error_attributes(error: SpanError) -> Mapping[str, AttrValue]:
     return MappingProxyType({key: value for key, value in pairs if value})
 
 
-def span_attribute_limit(tracer: Tracer) -> int | None:
-    """The attribute count limit spans started by ``tracer`` are built with, ``None`` when unbounded."""
-    if not isinstance(tracer, SdkTracer):
+def span_attribute_limit(span: Span) -> int | None:
+    """The attribute count limit ``span`` was built with, ``None`` when unbounded."""
+    if not isinstance(span, SdkSpan):
         return SpanLimits().max_span_attributes
-    return tracer._span_limits.max_span_attributes  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
+    return span._limits.max_span_attributes  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
+
+
+def attribute_budget(span: Span, reserved: int) -> int | None:
+    """How many mapped attributes fit on ``span`` next to what it already carries and ``reserved`` more."""
+    limit: Final = span_attribute_limit(span)
+    if limit is None:
+        return None
+    on_span: Final = len(span.attributes or ()) if isinstance(span, ReadableSpan) else 0
+    return limit - on_span - reserved
 
 
 def stamp_error(
@@ -138,7 +147,6 @@ class SpanEmitter:
         self._tracer = tracer
         self._config = config
         self._event_recorder = event_recorder
-        self._span_attribute_limit: int | None = span_attribute_limit(tracer)
         # The mapper chain is the sole source of span attributes. When not
         # passed in, resolve it from the config so there's one source of truth.
         self._mappers: list[AttributeMapper] = (
@@ -276,7 +284,7 @@ class SpanEmitter:
         )
         stamped_later: Final = error_attributes(error) if error else _NO_ATTRIBUTES
         reserved: Final = len(stamped_later.keys() - mapped.keys())
-        for key, value in fit_indexed_messages(mapped, self._attribute_budget(span, reserved)).items():
+        for key, value in fit_indexed_messages(mapped, attribute_budget(span, reserved)).items():
             span.set_attribute(key, value)
         if error:
             stamped: Final = stamp_error(span, error)
@@ -294,10 +302,3 @@ class SpanEmitter:
         # span-level health signal litellm doesn't actually evaluate. Only a
         # genuine error sets a status.
         span.end(end_time=end_time_ns)
-
-    def _attribute_budget(self, span: Span, reserved: int) -> int | None:
-        """How many mapped attributes fit on ``span`` next to what it already carries and ``reserved`` more."""
-        if self._span_attribute_limit is None:
-            return None
-        on_span: Final = len(span.attributes or ()) if isinstance(span, ReadableSpan) else 0
-        return self._span_attribute_limit - on_span - reserved

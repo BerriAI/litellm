@@ -10,7 +10,7 @@ pytest.importorskip("opentelemetry")
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider  # noqa: E402
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
-from opentelemetry.trace import NoOpTracer, SpanKind  # noqa: E402
+from opentelemetry.trace import INVALID_SPAN, SpanKind  # noqa: E402
 from opentelemetry.trace.status import StatusCode  # noqa: E402
 
 from litellm.integrations.otel import (  # noqa: E402
@@ -662,9 +662,29 @@ def test_indexed_messages_follow_the_providers_own_span_limits(monkeypatch):
     assert _indexed_messages(unbounded.attributes, "llm.input_messages") == list(range(60))
 
 
-def test_span_attribute_limit_falls_back_to_the_environment_for_tracers_outside_the_sdk(monkeypatch):
+def test_indexed_messages_follow_the_span_limits_of_a_per_request_tracer_override(monkeypatch):
+    """A routed ``tracer`` builds the span, so its provider's limits set the budget, not the bound tracer's."""
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "1000")
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory", mapper_names=["genai", "openinference"], capture_message_content="span_only"
+    )
+    bound_provider, _ = _provider_with_limits(SpanLimits(max_span_attributes=1000))
+    routed_provider, routed_exporter = _provider_with_limits(SpanLimits(max_span_attributes=40))
+    engine = SpanEmitter(providers.get_tracer(bound_provider, "litellm-test"), cfg)
+    engine.emit(
+        SpanRole.LLM_CALL,
+        LLMCallSpanData.from_standard_logging_payload(_conversation_payload(60), capture_content=True),
+        tracer=providers.get_tracer(routed_provider, "litellm-routed"),
+    )
+    (span,) = routed_exporter.get_finished_spans()
+    _assert_core_intact(span)
+    assert 39 <= len(span.attributes) <= 40
+    assert span.attributes["llm.output_messages.0.message.content"] == "reply 0"
+
+
+def test_span_attribute_limit_falls_back_to_the_environment_for_spans_outside_the_sdk(monkeypatch):
     monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "48")
-    assert span_attribute_limit(NoOpTracer()) == 48
+    assert span_attribute_limit(INVALID_SPAN) == 48
 
 
 def test_fully_populated_span_with_every_vocabulary_stays_within_the_attribute_limit():
