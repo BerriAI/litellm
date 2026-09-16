@@ -1,3 +1,5 @@
+# pyright: reportOptionalMemberAccess=false
+# pyright: reportUnnecessaryIsInstance=false
 """
 Test that _update_llm_router and _delete_deployment are resilient to
 config loading failures (e.g. database timeouts).
@@ -8,8 +10,9 @@ router, because the exception propagated up and was caught by the
 catch-all handler in _update_llm_router.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from litellm.proxy.proxy_server import ProxyConfig
 
@@ -290,3 +293,146 @@ class TestDeleteDeploymentKeepsPluginConfigModels:
         entry = {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}}
         pin_complexity_router_model_id(entry)
         assert "model_info" not in entry
+
+    @pytest.mark.asyncio
+    async def test_config_model_updated_params_reconciles_successfully(self, tmp_path):
+        import yaml
+
+        from litellm.router import Router
+
+        initial_config = {
+            "model_list": [
+                {
+                    "model_name": "gpt-4-test",
+                    "litellm_params": {
+                        "model": "openai/gpt-4",
+                        "api_key": "sk-1234",
+                        "timeout": 30,
+                    },
+                }
+            ]
+        }
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(yaml.safe_dump(initial_config))
+
+        router = Router(model_list=initial_config["model_list"])
+        assert "gpt-4-test" in router.model_names
+        initial_deployments = [d for d in router.model_list if d.get("model_name") == "gpt-4-test"]
+        assert len(initial_deployments) == 1
+        assert initial_deployments[0]["litellm_params"]["timeout"] == 30
+
+        updated_config = {
+            "model_list": [
+                {
+                    "model_name": "gpt-4-test",
+                    "litellm_params": {
+                        "model": "openai/gpt-4",
+                        "api_key": "sk-1234",
+                        "timeout": 60,
+                    },
+                }
+            ]
+        }
+        cfg_file.write_text(yaml.safe_dump(updated_config))
+
+        proxy_config = ProxyConfig()
+        proxy_config.update_config_state(config=updated_config)
+
+        with (
+            patch.object(proxy_config, "get_config", new_callable=AsyncMock, return_value=updated_config),
+            patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: proxy router test mock  # pyright: ignore[reportOptionalMemberAccess, reportUnnecessaryIsInstance]
+            patch("litellm.proxy.proxy_server.user_config_file_path", str(cfg_file)),  # test-quality-ok: proxy router test mock  # pyright: ignore[reportOptionalMemberAccess, reportUnnecessaryIsInstance]
+            patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: proxy router test mock  # pyright: ignore[reportOptionalMemberAccess, reportUnnecessaryIsInstance]
+            patch("litellm.proxy.proxy_server.premium_user", False),  # test-quality-ok: proxy router test mock  # pyright: ignore[reportOptionalMemberAccess, reportUnnecessaryIsInstance]
+        ):
+            await proxy_config._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+
+        assert "gpt-4-test" in router.model_names
+        reconciled_deployments = [d for d in router.model_list if d.get("model_name") == "gpt-4-test"]
+        assert len(reconciled_deployments) == 1
+        assert reconciled_deployments[0]["litellm_params"]["timeout"] == 60
+
+
+class TestAddConfigModels:
+    """Test _add_config_models directly: the config_models=None fallback path
+    (config_state -> user_config_file_path -> give up) and the pre-set
+    model_info.id branch. The resilience tests above never exercise these,
+    because they either mock _add_deployment entirely or always pass
+    config_models pre-populated with no id."""
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_user_config_file_when_config_state_has_no_models(self, tmp_path):
+        import yaml
+
+        proxy_config = ProxyConfig()
+
+        config_file_path = tmp_path / "config.yaml"
+        config_file_path.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [
+                        {
+                            "model_name": "file-fallback-model",
+                            "litellm_params": {"model": "gpt-4o-mini"},
+                        }
+                    ]
+                }
+            )
+        )
+
+        mock_router = MagicMock()
+        mock_router.generate_model_id.return_value = "generated-id"
+        mock_router.upsert_deployment.return_value = True
+
+        with (
+            patch.object(proxy_config, "get_config_state", return_value={}),
+            patch("litellm.proxy.proxy_server.user_config_file_path", str(config_file_path)),  # test-quality-ok: proxy router test mock
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),  # test-quality-ok: proxy router test mock
+        ):
+            result = proxy_config._add_config_models(config_models=None)
+
+        assert result == 1
+        mock_router.generate_model_id.assert_called_once()
+        mock_router.upsert_deployment.assert_called_once()
+
+    def test_returns_zero_when_router_missing_or_no_models_found(self, tmp_path):
+        proxy_config = ProxyConfig()
+
+        # No config_state models and no readable config file -> config_models stays empty
+        with (
+            patch.object(proxy_config, "get_config_state", return_value={}),
+            patch("litellm.proxy.proxy_server.user_config_file_path", str(tmp_path / "missing.yaml")),  # test-quality-ok: proxy router test mock
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: proxy router test mock
+        ):
+            assert proxy_config._add_config_models(config_models=None) == 0
+
+        # Models are present but llm_router hasn't been initialized yet
+        with patch("litellm.proxy.proxy_server.llm_router", None):  # test-quality-ok: proxy router test mock
+            assert (
+                proxy_config._add_config_models(
+                    config_models=[{"model_name": "m", "litellm_params": {"model": "gpt-4o-mini"}}]
+                )
+                == 0
+            )
+
+    def test_respects_a_preexisting_model_info_id(self):
+        proxy_config = ProxyConfig()
+
+        mock_router = MagicMock()
+        mock_router.upsert_deployment.return_value = True
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router):  # test-quality-ok: proxy router test mock
+            result = proxy_config._add_config_models(
+                config_models=[
+                    {
+                        "model_name": "pinned-model",
+                        "litellm_params": {"model": "gpt-4o-mini"},
+                        "model_info": {"id": "operator-pinned-id"},
+                    }
+                ]
+            )
+
+        assert result == 1
+        mock_router.generate_model_id.assert_not_called()
+        upserted_deployment = mock_router.upsert_deployment.call_args.kwargs["deployment"]
+        assert upserted_deployment.model_info.id == "operator-pinned-id"
