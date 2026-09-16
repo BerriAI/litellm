@@ -4,7 +4,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 
-import { renderWithProviders } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
 import type { ToolRow } from "@/components/networking";
 import { ToolPoliciesTable } from "./ToolPoliciesTable";
 
@@ -43,6 +43,10 @@ const TOOLS: ToolRow[] = [
   },
 ];
 
+const SHUFFLED_TOOLS: ToolRow[] = [TOOLS[1], TOOLS[2], TOOLS[0]];
+
+const SAME_TIME_TOOLS: ToolRow[] = SHUFFLED_TOOLS.map((tool) => ({ ...tool, created_at: "2026-07-20T10:00:00Z" }));
+
 const renderTable = (
   overrides: Partial<React.ComponentProps<typeof ToolPoliciesTable>> = {},
   urlOptions: Parameters<typeof renderWithProviders>[1] = {},
@@ -77,7 +81,7 @@ const pickFilter = async (
 
 describe("ToolPoliciesTable sorting", () => {
   it("should default to newest discovered first", () => {
-    renderTable();
+    renderTable({ data: SHUFFLED_TOOLS });
 
     expect(rowIds()).toEqual(["tool-1", "tool-2", "tool-3"]);
   });
@@ -278,14 +282,25 @@ describe("ToolPoliciesTable URL state", () => {
     expect(rowIds()).toEqual(["tool-1", "tool-2", "tool-3"]);
   });
 
-  it("orders rows by the sort in the URL", () => {
-    renderWithUrl("?sort_by=call_count&sort_order=desc");
+  it("orders rows by the sort column and direction in the URL", () => {
+    renderWithUrl("?sort_by=call_count&sort_order=asc");
 
-    expect(rowIds()).toEqual(["tool-3", "tool-1", "tool-2"]);
+    expect(rowIds()).toEqual(["tool-2", "tool-1", "tool-3"]);
+  });
+
+  it.each([
+    ["input_policy", "asc", ["tool-3", "tool-2", "tool-1"]],
+    ["output_policy", "desc", ["tool-3", "tool-1", "tool-2"]],
+    ["team_id", "asc", ["tool-3", "tool-1", "tool-2"]],
+    ["key_alias", "asc", ["tool-3", "tool-2", "tool-1"]],
+  ])("orders rows by ?sort_by=%s&sort_order=%s", (column, order, expected) => {
+    renderWithUrl(`?sort_by=${column}&sort_order=${order}`, SAME_TIME_TOOLS);
+
+    expect(rowIds()).toEqual(expected);
   });
 
   it("falls back to newest first for an unknown sort column", () => {
-    renderWithUrl("?sort_by=user_agent&sort_order=desc");
+    renderWithUrl("?sort_by=user_agent&sort_order=desc", SHUFFLED_TOOLS);
 
     expect(rowIds()).toEqual(["tool-1", "tool-2", "tool-3"]);
   });
@@ -298,6 +313,40 @@ describe("ToolPoliciesTable URL state", () => {
 
     await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("sort_by")).toBe("tool_name"));
     expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("sort_order")).toBe("asc");
+  });
+
+  it("drops the page from the URL when the sort changes", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = renderWithUrl("?page=2", MANY_TOOLS);
+
+    await user.click(screen.getByTestId("sort-header-tool_name"));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("sort_by")).toBe("tool_name"));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("page")).toBe(false);
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
+  });
+
+  it("drops the page from the URL when the search changes", async () => {
+    const onUrlUpdate = renderWithUrl("?page=2", MANY_TOOLS);
+
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "bulk_tool" } });
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("search")).toBe("bulk_tool"));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("page")).toBe(false);
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
+  });
+
+  it("drops the page from the URL when a drawer filter is applied", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = renderWithUrl("?page=2", MANY_TOOLS);
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await pickFilter(user, "filter-input-policy", "untrusted");
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("filter_input_policy")).toBe("untrusted"));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("page")).toBe(false);
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
   });
 
   it("opens the page named in the URL", () => {
@@ -315,5 +364,22 @@ describe("ToolPoliciesTable URL state", () => {
 
     await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("page")).toBe("2"));
     expect(rowIds()[0]).toBe("bulk-50");
+  });
+
+  it("uses the page size from the URL", () => {
+    renderWithUrl("?page_size=100", MANY_TOOLS);
+
+    expect(rowIds()).toHaveLength(55);
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 1");
+  });
+
+  it("writes the page size chosen in the pager to the URL", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = renderWithUrl("", MANY_TOOLS);
+
+    await chooseSelectOption(user, screen.getByTestId("pagination-page-size"), "100");
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("page_size")).toBe("100"));
+    expect(rowIds()).toHaveLength(55);
   });
 });

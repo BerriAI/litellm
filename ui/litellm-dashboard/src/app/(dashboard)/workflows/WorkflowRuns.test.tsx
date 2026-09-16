@@ -386,6 +386,42 @@ describe("WorkflowRuns URL table state", () => {
     await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("page")).toBe("2"));
     expect(rowIds()[0]).toBe("run-50");
   });
+
+  it("writes the page size chosen in the pager to the URL", async () => {
+    const user = userEvent.setup();
+    const { onUrlUpdate } = renderRuns(MANY_RUNS);
+    await screen.findByText("Run number 0");
+
+    await chooseSelectOption(user, screen.getByTestId("pagination-page-size"), "100");
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("page_size")).toBe("100"));
+    expect(rowIds()).toHaveLength(60);
+  });
+
+  it("drops the page from the URL when the search changes", async () => {
+    const { onUrlUpdate } = renderRuns(MANY_RUNS, "?page=2");
+    await waitFor(() => expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2"));
+
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "Run number" } });
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("search")).toBe("Run number"));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("page")).toBe(false);
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
+  });
+
+  it("drops the page from the URL when a drawer filter is applied", async () => {
+    const user = userEvent.setup();
+    const { onUrlUpdate } = renderRuns(MANY_RUNS, "?page=2");
+    await waitFor(() => expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2"));
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.type(await screen.findByPlaceholderText("Filter by type…"), "grill");
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("filter_type")).toBe("grill"));
+    expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("page")).toBe(false);
+    expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 2");
+  });
 });
 
 describe("WorkflowRuns ?run= drawer", () => {
@@ -428,6 +464,60 @@ describe("WorkflowRuns ?run= drawer", () => {
     const drawer = await screen.findByRole("dialog");
     expect(await within(drawer).findByText("Workflow run not found.")).toBeInTheDocument();
     expect(detailFetchUrls(fetchSpy)).toEqual([]);
+  });
+
+  it("keeps the drawer closed when the run param is empty", async () => {
+    const { fetchSpy } = renderRuns(RUNS, "?run=");
+
+    await screen.findByText("First run");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(detailFetchUrls(fetchSpy)).toEqual([]);
+  });
+
+  it("shows a spinner rather than not-found while the runs list is still loading", async () => {
+    const listGate = Promise.withResolvers<void>();
+    const fallback = mockFetch(RUNS);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url.includes("/runs?limit")) await listGate.promise;
+        return fallback(url, init);
+      }),
+    );
+    renderWithProviders(<WorkflowRuns accessToken="tok" />, { searchParams: "?run=run-bbbbbbbb-2222" });
+
+    const drawer = await screen.findByRole("dialog");
+    expect(within(drawer).queryByText("Workflow run not found.")).not.toBeInTheDocument();
+    expect(within(drawer).queryByText("Timeline")).not.toBeInTheDocument();
+
+    listGate.resolve();
+
+    await waitFor(() => expect(within(drawer).getByText("Timeline")).toBeInTheDocument());
+    expect(within(drawer).queryByText("Workflow run not found.")).not.toBeInTheDocument();
+  });
+
+  it("removes the run from the URL when the drawer is dismissed with Escape", async () => {
+    const user = userEvent.setup();
+    const { onUrlUpdate } = renderRuns(RUNS, "?run=run-aaaaaaaa-1111");
+    const drawer = await screen.findByRole("dialog");
+    await waitFor(() => expect(within(drawer).getByText("Timeline")).toBeInTheDocument());
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("run")).toBe(false));
+    await waitFor(() => expect(screen.queryAllByRole("dialog")).toHaveLength(0));
+  });
+
+  it("encodes the run id in the detail request paths", async () => {
+    const encodedRun: FakeRun = { ...RUNS[0], run_id: "run/a b", metadata: { title: "Slashed run" } };
+    const { fetchSpy } = renderRuns([encodedRun], "?run=run%2Fa%20b");
+
+    const drawer = await screen.findByRole("dialog");
+    await waitFor(() => expect(within(drawer).getByText("Timeline")).toBeInTheDocument());
+    expect(detailFetchUrls(fetchSpy)).toEqual([
+      "/v1/workflows/runs/run%2Fa%20b/events",
+      "/v1/workflows/runs/run%2Fa%20b/messages",
+    ]);
   });
 });
 

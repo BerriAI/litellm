@@ -419,8 +419,6 @@ const DetailSection: React.FC<{
   </Collapsible>
 );
 
-// ── run detail drawer body ────────────────────────────────────────────────────
-
 const DrawerSpinner: React.FC = () => (
   <div className="flex justify-center py-20">
     <UiLoadingSpinner className="size-8 text-muted-foreground" />
@@ -521,8 +519,9 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
     useUrlTableState(TABLE_STATE_OPTIONS);
   const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("workflow-runs");
   const [runId, setRunId] = useQueryState("run", RUN_PARAM);
+  const drawerOpen = Boolean(runId);
   const [shownRunId, setShownRunId] = useState(runId);
-  if (runId !== null && runId !== shownRunId) {
+  if (runId && runId !== shownRunId) {
     setShownRunId(runId);
   }
   const shownRun = runs.find((run) => run.run_id === shownRunId);
@@ -533,7 +532,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
       accessToken && shownRun !== undefined
         ? ({ signal }) => fetchRunDetail(accessToken, shownRun.run_id, signal)
         : skipToken,
-    enabled: runId !== null,
+    enabled: drawerOpen,
     refetchOnWindowFocus: false,
     retry: false,
   };
@@ -707,7 +706,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
 
       {/* detail drawer */}
       <Sheet
-        open={runId !== null}
+        open={drawerOpen}
         onOpenChange={(open) => {
           if (!open) closeRun();
         }}
