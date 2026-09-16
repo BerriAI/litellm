@@ -37,6 +37,7 @@ const IPV4_HOST_REGEX = /^\d{1,3}(\.\d{1,3}){3}$/;
 const GITHUB_ORG_REGEX = /^[A-Za-z0-9-]+$/;
 const GITHUB_REPO_REGEX = /^[A-Za-z0-9._-]+$/;
 
+const BROWSABLE_URL_REGEX = /^https?:\/\//i;
 const SSH_SCHEME = "ssh://";
 const SSH_SCP_REGEX = /^([a-z0-9._-]+)@([^:/@]+):(?!\/)(.+)$/i;
 
@@ -316,7 +317,7 @@ export const getSourceLink = (source: PluginSource): string | null => {
     return `https://github.com/${source.repo}`;
   }
   const linksToUrl = source.source === "url" || source.source === "git-subdir" || source.source === "archive";
-  return linksToUrl && source.url?.startsWith("https://") ? source.url : null;
+  return linksToUrl && source.url && BROWSABLE_URL_REGEX.test(source.url) ? source.url : null;
 };
 
 /**
