@@ -143,6 +143,7 @@ describe("PricingCalculator", () => {
       renderWithProviders(<PricingCalculator {...DEFAULT_PROPS} />, { searchParams: "?period=week" });
 
       expect(screen.getByText("Requests/Month")).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "Per Month" })).toBeChecked();
     });
 
     it("should write ?period=day when Per Day is selected and drop it when Per Month is selected", async () => {

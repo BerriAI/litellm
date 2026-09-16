@@ -13,7 +13,7 @@ import PromptCompressionTab from "./PromptCompressionTab";
 import PromptCachingTab from "./PromptCachingTab";
 import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
 import { useDailyActivityRange, useUrlActivityDateRange } from "./useDailyActivityRange";
-import { useVisitedTabs } from "./useVisitedTabs";
+import { useVisitedUrlTabs } from "./useVisitedUrlTabs";
 
 const ALL_TABS = ["usage", "compression", "caching", "autorouter-usage"] as const;
 type CostOptimizationTab = (typeof ALL_TABS)[number];
@@ -31,7 +31,7 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
   const activity = useDailyActivityRange(accessToken, userId, userRole, dateRange);
   const canViewProxyWideCostData = useCan("viewProxyWideCostData");
   const [tab, setTab] = useUrlTab(canViewProxyWideCostData ? ALL_TABS : UNPRIVILEGED_TABS, "usage");
-  const visitedTabs = useVisitedTabs(tab);
+  const visitedTabs = useVisitedUrlTabs(tab);
 
   return (
     <main className="w-full p-8">

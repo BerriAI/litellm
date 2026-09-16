@@ -41,13 +41,13 @@ describe("useDailyActivityRange", () => {
   });
 
   it("queries every user's activity for an admin", () => {
-    renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin"));
+    renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin", useActivityDateRange()));
 
     expect(argsOfLastCall()).toEqual(["test-token", expect.any(Date), expect.any(Date), null, true, null]);
   });
 
   it("scopes the query to the caller for a non-admin", () => {
-    renderHook(() => useDailyActivityRange("test-token", "u1", "internal_user"));
+    renderHook(() => useDailyActivityRange("test-token", "u1", "internal_user", useActivityDateRange()));
 
     expect(argsOfLastCall()).toEqual(["test-token", expect.any(Date), expect.any(Date), "u1", true, null]);
   });
@@ -55,14 +55,14 @@ describe("useDailyActivityRange", () => {
   it.each(["org_admin", "Org Admin"])(
     "scopes the query to the caller for %s, who has no admin view on this endpoint",
     (role) => {
-      renderHook(() => useDailyActivityRange("test-token", "u1", role));
+      renderHook(() => useDailyActivityRange("test-token", "u1", role, useActivityDateRange()));
 
       expect(argsOfLastCall()).toEqual(["test-token", expect.any(Date), expect.any(Date), "u1", true, null]);
     },
   );
 
   it("fetches through the single-shot aggregated endpoint first so days never fragment across pages", () => {
-    renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin"));
+    renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin", useActivityDateRange()));
 
     expect(mockUsePaginatedDailyActivity).toHaveBeenLastCalledWith(
       expect.objectContaining({ aggregatedFetchFn: userDailyActivityAggregatedCall }),
@@ -70,7 +70,9 @@ describe("useDailyActivityRange", () => {
   });
 
   it("forwards the pagination progress and cancel affordances instead of dropping them", () => {
-    const { result } = renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin"));
+    const { result } = renderHook(() =>
+      useDailyActivityRange("test-token", "u1", "proxy_admin", useActivityDateRange()),
+    );
 
     expect(result.current.progress).toEqual({ currentPage: 4, totalPages: 9 });
     expect(result.current.cancelled).toBe(false);
@@ -78,7 +80,7 @@ describe("useDailyActivityRange", () => {
   });
 
   it("stays disabled until an access token is available", () => {
-    renderHook(() => useDailyActivityRange(null, "u1", "proxy_admin"));
+    renderHook(() => useDailyActivityRange(null, "u1", "proxy_admin", useActivityDateRange()));
 
     expect(mockUsePaginatedDailyActivity).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: false }));
   });
@@ -109,6 +111,7 @@ describe("useUrlActivityDateRange", () => {
     ["a start after the end", "?start_date=2026-03-02&end_date=2026-03-01"],
     ["a missing end", "?start_date=2026-03-01"],
     ["a non-date value", "?start_date=yesterday&end_date=2026-03-01"],
+    ["an unpadded day", "?start_date=2026-01-05&end_date=2026-1-7"],
   ])("falls back to the trailing 30 days for %s", (_label, searchParams) => {
     const before = Date.now();
     const { result } = renderUrlRange(searchParams);

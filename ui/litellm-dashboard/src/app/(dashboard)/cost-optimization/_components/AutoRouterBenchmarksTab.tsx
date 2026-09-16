@@ -37,7 +37,7 @@ import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 import { DailyActivityRange } from "./useDailyActivityRange";
-import { useVisitedTabs } from "./useVisitedTabs";
+import { useVisitedUrlTabs } from "./useVisitedUrlTabs";
 
 const ROUTER_TABS = ["usage", "shadow-evals"] as const;
 const selectedRouterParser = parseAsString.withDefault(ALL_ROUTERS);
@@ -384,7 +384,7 @@ export const AutoRouterUsageView: React.FC<AutoRouterUsageViewProps> = ({
 
 const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity }) => {
   const [tab, setTab] = useUrlTab(ROUTER_TABS, "usage", "router_tab");
-  const visitedTabs = useVisitedTabs(tab);
+  const visitedTabs = useVisitedUrlTabs(tab);
   const [selectedRouter, setSelectedRouter] = useQueryState("router", selectedRouterParser);
 
   return (

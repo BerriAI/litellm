@@ -1,5 +1,5 @@
 import { useQueryStates } from "nuqs";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { userDailyActivityAggregatedCall, userDailyActivityCall } from "@/components/networking";
 import { DailyData } from "@/components/UsagePage/types";
@@ -42,10 +42,13 @@ export interface DailyActivityScope {
 
 export type ActivityDateRange = Pick<DailyActivityRange, "dateValue" | "onDateChange">;
 
+const trailingThirtyDays = (): DateRange => {
+  const now = Date.now();
+  return { from: new Date(now - THIRTY_DAYS_MS), to: new Date(now) };
+};
+
 export const useActivityDateRange = (): ActivityDateRange => {
-  const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
-  const initialTo = useMemo(() => new Date(), []);
-  const [dateValue, setDateValue] = useState<DateRange>({ from: initialFrom, to: initialTo });
+  const [dateValue, setDateValue] = useState<DateRange>(trailingThirtyDays);
   return { dateValue, onDateChange: setDateValue };
 };
 
@@ -57,7 +60,7 @@ export interface ActivityDateRangeUrlKeys {
 const ACTIVITY_DAY_PARSERS = { start: parseAsLocalDay, end: parseAsLocalDay };
 
 export const useUrlActivityDateRange = (urlKeys: ActivityDateRangeUrlKeys): ActivityDateRange => {
-  const { dateValue: defaultRange } = useActivityDateRange();
+  const [defaultRange] = useState(trailingThirtyDays);
   const [days, setDays] = useQueryStates(ACTIVITY_DAY_PARSERS, { urlKeys });
   return useUrlDayRange(days, setDays, defaultRange);
 };
@@ -100,12 +103,6 @@ export const useDailyActivityRange = (
   accessToken: string | null,
   userId: string | null,
   userRole: string,
-  dateRange?: ActivityDateRange,
-): DailyActivityRange => {
-  const localDateRange = useActivityDateRange();
-  return useScopedDailyActivityRange(
-    accessToken,
-    { userId: spendScopeUserId(userRole, userId) },
-    dateRange ?? localDateRange,
-  );
-};
+  dateRange: ActivityDateRange,
+): DailyActivityRange =>
+  useScopedDailyActivityRange(accessToken, { userId: spendScopeUserId(userRole, userId) }, dateRange);

@@ -17,6 +17,7 @@ import {
   SAVINGS_COLORS,
   SAVINGS_DRIVERS,
   SAVINGS_SERIES,
+  SavingsAccumulation,
   SavingsPoint,
   savingsSeriesOf,
   shortDate,
@@ -43,7 +44,7 @@ const EMPTY_TOOL_SPEND: ToolSpendResponse = {
 
 const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
 
-const SAVINGS_VIEWS = ["cumulative", "per-day"] as const;
+const SAVINGS_VIEWS: readonly SavingsAccumulation[] = ["cumulative", "per-interval"];
 const savingsViewParser = parseAsStringLiteral(SAVINGS_VIEWS).withDefault("cumulative");
 
 const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
@@ -148,11 +149,13 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
               <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
               <Tabs
                 value={accumulation}
-                onValueChange={(value) => void setAccumulation(value === "per-day" ? "per-day" : "cumulative")}
+                onValueChange={(value) =>
+                  void setAccumulation(value === "per-interval" ? "per-interval" : "cumulative")
+                }
               >
                 <TabsList>
                   <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
-                  <TabsTrigger value="per-day">{intervalLabel}</TabsTrigger>
+                  <TabsTrigger value="per-interval">{intervalLabel}</TabsTrigger>
                 </TabsList>
               </Tabs>
             </CardAction>

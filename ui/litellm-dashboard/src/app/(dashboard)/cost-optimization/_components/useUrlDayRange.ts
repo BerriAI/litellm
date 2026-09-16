@@ -9,7 +9,7 @@ const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 const parseLocalDay = (day: string): Date => parse(day, DAY_FORMAT, new Date());
 
-export const formatLocalDay = (date: Date): string => format(date, DAY_FORMAT);
+const formatLocalDay = (date: Date): string => format(date, DAY_FORMAT);
 
 export const parseAsLocalDay = createParser({
   parse: (value: string) => (DAY_PATTERN.test(value) && isValid(parseLocalDay(value)) ? value : null),

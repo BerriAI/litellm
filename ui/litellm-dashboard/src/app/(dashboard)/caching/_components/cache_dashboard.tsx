@@ -23,11 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RefreshCw } from "lucide-react";
 import { cachingHealthCheckCall } from "@/components/networking";
 import { useCacheActivity, type CacheActivityGroup } from "@/app/(dashboard)/hooks/caching/useCacheActivity";
-import {
-  formatLocalDay,
-  parseAsLocalDay,
-  useUrlDayRange,
-} from "@/app/(dashboard)/cost-optimization/_components/useUrlDayRange";
+import { parseAsLocalDay, useUrlDayRange } from "@/app/(dashboard)/cost-optimization/_components/useUrlDayRange";
 import { useUrlTab } from "@/hooks/useUrlTab";
 
 // Import the new component
@@ -68,7 +64,7 @@ const toChartDatum = (group: CacheActivityGroup) => ({
   "Generated Completion Tokens": group.generated_completion_tokens,
 });
 
-const formatDateWithoutTZ = (date: Date | undefined) => (date ? formatLocalDay(date) : undefined);
+const formatDateWithoutTZ = (date: Date | undefined) => (date ? date.toISOString().split("T")[0] : undefined);
 
 const resolveDrilldownCallType = (selected: string | null, groups: readonly CacheActivityGroup[]): string | null =>
   selected !== null && groups.some((group) => group.call_type === selected && group.failed_requests > 0)

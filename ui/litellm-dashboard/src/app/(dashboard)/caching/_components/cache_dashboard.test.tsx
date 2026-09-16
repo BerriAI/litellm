@@ -1,7 +1,8 @@
 import React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { endOfDay } from "date-fns";
 import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
@@ -85,6 +86,8 @@ const failedBarOf = (card: HTMLElement) => {
   expect(redBar).toBeDefined();
   return redBar!.querySelectorAll("path.recharts-rectangle")[0];
 };
+
+const utcDayOf = (date: Date) => date.toISOString().slice(0, 10);
 
 const REQUESTS_CHART_TITLE = "Cache Hits vs API Requests";
 const TOKENS_CHART_TITLE = "Cached Completion Tokens vs Generated Completion Tokens";
@@ -351,8 +354,8 @@ describe("CacheDashboard URL state", () => {
     });
 
     const expectedQuery = {
-      startDate: "2026-01-05",
-      endDate: "2026-01-07",
+      startDate: utcDayOf(new Date(2026, 0, 5)),
+      endDate: utcDayOf(endOfDay(new Date(2026, 0, 7))),
       keyAliases: ["my-key"],
       models: ["gpt-5.1", "text-embedding-3-large"],
     };
@@ -380,8 +383,27 @@ describe("CacheDashboard URL state", () => {
     await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("start_date")).toBe("2026-08-01"));
     expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("end_date")).toBe("2026-08-05");
     expect(useCacheActivity).toHaveBeenLastCalledWith(
-      expect.objectContaining({ startDate: "2026-08-01", endDate: "2026-08-05" }),
+      expect.objectContaining({
+        startDate: utcDayOf(new Date(2026, 7, 1)),
+        endDate: utcDayOf(endOfDay(new Date(2026, 7, 5))),
+      }),
     );
+  });
+
+  describe("outside UTC", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it.each([
+      ["west of UTC, keeping the last hours of the end day", "America/Los_Angeles", "2026-01-05", "2026-01-08"],
+      ["east of UTC, keeping the first hours of the start day", "Asia/Tokyo", "2026-01-04", "2026-01-07"],
+    ])("queries the UTC days that cover the local URL days %s", (_label, timeZone, startDate, endDate) => {
+      vi.stubEnv("TZ", timeZone);
+      renderDashboard({ searchParams: "?start_date=2026-01-05&end_date=2026-01-07" });
+
+      expect(useCacheActivity).toHaveBeenLastCalledWith(expect.objectContaining({ startDate, endDate }));
+    });
   });
 
   it("writes a chosen virtual key to ?keys= and removes it again", async () => {

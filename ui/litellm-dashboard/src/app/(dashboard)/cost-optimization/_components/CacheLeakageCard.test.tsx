@@ -192,6 +192,13 @@ describe("CacheLeakageCard", () => {
     expect(screen.getByText("claude-sonnet-5")).toBeInTheDocument();
   });
 
+  it("keeps the key view for an unknown ?leak_by= value", () => {
+    renderWith(twoKeys(), {}, { searchParams: "?leak_by=team" });
+
+    expect(screen.getByRole("tab", { name: "By virtual key" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+  });
+
   it("writes ?leak_by=model for the model view and drops it for the key view", async () => {
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
     renderWith(twoKeys(), {}, { onUrlUpdate });
