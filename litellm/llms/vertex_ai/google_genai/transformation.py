@@ -2,6 +2,8 @@
 Transformation for Calling Google models in their native format.
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final, Literal
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
@@ -19,6 +21,9 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
     @property
     def custom_llm_provider(self) -> Literal["gemini", "vertex_ai"]:
         return "vertex_ai"
+
+    def get_generate_content_logging_params(self, litellm_params: GenericLiteLLMParams) -> Mapping[str, object]:
+        return MappingProxyType({"vertex_location": self.explicit_vertex_ai_location(litellm_params.model_dump())})
 
     def validate_environment(
         self,
