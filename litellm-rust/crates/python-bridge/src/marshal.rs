@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
-use litellm_core::auth::InputSource;
+use litellm_auth::InputSource;
 use litellm_python_interop::from_py_preserving_errors as from_py;
 
 pub(crate) struct RouteOptions {

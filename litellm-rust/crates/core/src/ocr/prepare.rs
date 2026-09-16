@@ -119,7 +119,7 @@ pub(crate) fn build_http_request<B: Serialize>(
         .timeout(request.connection.timeout);
     crate::http_utils::with_headers(builder, headers, crate::http_utils::HeaderPolicy::All)
         .build()
-        .map_err(crate::error::TransportError::from)
+        .map_err(crate::transport::Error::from)
         .map_err(OcrError::from)
 }
 

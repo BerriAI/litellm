@@ -1,6 +1,5 @@
-use crate::AuthError;
-use crate::auth::error::AuthConfigurationError;
-use crate::auth::{
+use litellm_auth::Error;
+use litellm_auth::{
     CredentialFileRef, CredentialLookup, CredentialRef, InputSource, ResolvedCredential,
     SecretValue, Sourced, TokenProviderHandle,
 };
@@ -37,7 +36,7 @@ pub(crate) enum AzureCredentialPlan {
 }
 
 /// Rust counterpart to Python's `get_azure_ad_token`, not `BaseAzureLLM`.
-pub(crate) struct AzureAuthService {
+pub struct AzureAuthService {
     native: Arc<dyn AzureTokenAcquirer>,
 }
 
@@ -45,14 +44,14 @@ trait AzureTokenAcquirer: Send + Sync {
     fn acquire(
         &self,
         request: ValidatedAzureRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ResolvedCredential, AuthError>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = Result<ResolvedCredential, Error>> + Send + '_>>;
 }
 
 impl AzureTokenAcquirer for NativeAzureTokenAcquirer {
     fn acquire(
         &self,
         request: ValidatedAzureRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ResolvedCredential, AuthError>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<ResolvedCredential, Error>> + Send + '_>> {
         Box::pin(NativeAzureTokenAcquirer::acquire(self, request))
     }
 }
@@ -71,17 +70,17 @@ impl AzureAuthService {
         Self { native }
     }
 
-    pub(crate) async fn get_azure_ad_token(
+    pub async fn get_azure_ad_token(
         &self,
         inputs: &AzureAuthInputs,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-    ) -> Result<Option<Sourced<ResolvedCredential>>, AuthError> {
+    ) -> Result<Option<Sourced<ResolvedCredential>>, Error> {
         match select_auth_plan(inputs, env_lookup)? {
             AzureCredentialPlan::Supplied(credential) => Ok(Some(credential)),
             AzureCredentialPlan::Caller(caller) => {
                 let credential = caller.acquire().await?;
                 if credential.secret().expose().is_empty() {
-                    return Err(AuthError::EmptyAzureToken);
+                    return Err(Error::EmptyAzureToken);
                 }
                 Ok(Some(Sourced::new(credential, InputSource::Deployment)))
             }
@@ -94,7 +93,7 @@ impl AzureAuthService {
             } => {
                 let assertion = resolve_reference(inputs, env_lookup, reference.value())
                     .await?
-                    .ok_or(AuthError::UnresolvedOidcReference)?;
+                    .ok_or(Error::UnresolvedOidcReference)?;
                 let request = ValidatedAzureRequest::new(NativeAzureRequest::ClientAssertion {
                     tenant_id,
                     client_id,
@@ -126,7 +125,7 @@ impl AzureAuthService {
                         Err(error) => failures.push(error),
                     }
                 }
-                Err(AuthError::CredentialChain(failures))
+                Err(Error::CredentialChain(failures))
             }
             AzureCredentialPlan::Missing => Ok(None),
         }
@@ -136,7 +135,7 @@ impl AzureAuthService {
 pub(crate) fn select_auth_plan(
     inputs: &AzureAuthInputs,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<AzureCredentialPlan, AuthError> {
+) -> Result<AzureCredentialPlan, Error> {
     let token = configured_secret(&inputs.azure_ad_token, AZURE_AD_TOKEN_ENV, env_lookup);
     let tenant_id = configured_string(&inputs.tenant_id, AZURE_TENANT_ID_ENV, env_lookup);
     let client_id = configured_string(&inputs.client_id, AZURE_CLIENT_ID_ENV, env_lookup);
@@ -157,7 +156,7 @@ pub(crate) fn select_auth_plan(
                 .map(|selector| Sourced::new(selector, value.source()))
         })
         .transpose()
-        .map_err(|_| AuthError::Configuration(AuthConfigurationError::InvalidAzureSelector))?;
+        .map_err(|_| Error::InvalidAzureSelector)?;
     let federated_token_file = configured_string(
         &inputs.federated_token_file,
         AZURE_FEDERATED_TOKEN_FILE_ENV,
@@ -229,7 +228,7 @@ fn select_native_plan(
     scope: Sourced<String>,
     authority: Option<Sourced<String>>,
     refresh_source: InputSource,
-) -> Result<AzureCredentialPlan, AuthError> {
+) -> Result<AzureCredentialPlan, Error> {
     let selected = selector.unwrap_or_else(|| {
         Sourced::new(
             {
@@ -247,9 +246,7 @@ fn select_native_plan(
     let selection_source = selected.source();
 
     match selected.into_value() {
-        AzureCredentialType::ClientSecretCredential => Err(AuthError::Configuration(
-            AuthConfigurationError::MissingClientSecretFields,
-        )),
+        AzureCredentialType::ClientSecretCredential => Err(Error::MissingClientSecretFields),
         AzureCredentialType::WorkloadIdentityCredential => {
             Ok(AzureCredentialPlan::Native(ValidatedAzureRequest::new(
                 workload_request(tenant_id, client_id, federated_token_file, scope, authority)?,
@@ -331,17 +328,11 @@ fn workload_request(
     token_file_path: Option<Sourced<String>>,
     scope: Sourced<String>,
     authority: Option<Sourced<String>>,
-) -> Result<NativeAzureRequest, AuthError> {
+) -> Result<NativeAzureRequest, Error> {
     Ok(NativeAzureRequest::WorkloadIdentity {
-        tenant_id: tenant_id.ok_or(AuthError::Configuration(
-            AuthConfigurationError::MissingWorkloadTenant,
-        ))?,
-        client_id: client_id.ok_or(AuthError::Configuration(
-            AuthConfigurationError::MissingWorkloadClient,
-        ))?,
-        token_file_path: token_file_path.ok_or(AuthError::Configuration(
-            AuthConfigurationError::MissingWorkloadTokenFile,
-        ))?,
+        tenant_id: tenant_id.ok_or(Error::MissingWorkloadTenant)?,
+        client_id: client_id.ok_or(Error::MissingWorkloadClient)?,
+        token_file_path: token_file_path.ok_or(Error::MissingWorkloadTokenFile)?,
         scope,
         authority,
     })
@@ -383,7 +374,7 @@ async fn resolve_reference(
     inputs: &AzureAuthInputs,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     reference: &CredentialRef,
-) -> Result<Option<SecretValue>, AuthError> {
+) -> Result<Option<SecretValue>, Error> {
     let lookup = match reference {
         CredentialRef::Explicit(secret) => return Ok(Some(secret.clone())),
         CredentialRef::Env(name) => env_lookup(name)
@@ -395,9 +386,7 @@ async fn resolve_reference(
             let resolver = inputs
                 .credential_resolver
                 .as_ref()
-                .ok_or(AuthError::Configuration(
-                    AuthConfigurationError::MissingHostResolver,
-                ))?;
+                .ok_or(Error::MissingHostResolver)?;
             resolver.resolve(reference).await?
         }
     };
@@ -409,15 +398,13 @@ async fn resolve_reference(
 
 fn oidc_reference(
     token: &Option<Sourced<SecretValue>>,
-) -> Result<Option<Sourced<CredentialRef>>, AuthError> {
+) -> Result<Option<Sourced<CredentialRef>>, Error> {
     let Some(token) = token.as_ref() else {
         return Ok(None);
     };
     let value = token.value().expose();
     if token.source() == InputSource::Request && value.starts_with("oidc/") {
-        return Err(AuthError::Configuration(
-            AuthConfigurationError::RequestAzureCredentialReference,
-        ));
+        return Err(Error::RequestAzureCredentialReference);
     }
     if let Some(name) = value.strip_prefix("oidc/env/") {
         return non_empty_reference(name, "OIDC environment reference")
@@ -439,18 +426,14 @@ fn oidc_reference(
         )));
     }
     if value.starts_with("oidc/") {
-        return Err(AuthError::Configuration(
-            AuthConfigurationError::UnsupportedOidcReference,
-        ));
+        return Err(Error::UnsupportedOidcReference);
     }
     Ok(None)
 }
 
-fn non_empty_reference(value: &str, kind: &str) -> Result<String, AuthError> {
+fn non_empty_reference(value: &str, kind: &str) -> Result<String, Error> {
     if value.is_empty() {
-        return Err(AuthError::Configuration(
-            AuthConfigurationError::EmptyReference(kind.to_string()),
-        ));
+        return Err(Error::EmptyReference(kind.to_string()));
     }
     Ok(value.to_string())
 }
@@ -466,14 +449,14 @@ mod tests {
         AzureAuthService, AzureCredentialPlan, AzureTokenAcquirer, oidc_reference,
         resolve_reference, select_auth_plan,
     };
-    use crate::AuthError;
-    use crate::auth::ResolvedCredential;
-    use crate::auth::{
+    use crate::native::ValidatedAzureRequest;
+    use crate::types::AzureAuthInputs;
+    use litellm_auth::Error;
+    use litellm_auth::ResolvedCredential;
+    use litellm_auth::{
         CredentialFileRef, CredentialLookup, CredentialLookupFuture, CredentialRef,
         CredentialResolver, CredentialResolverHandle, InputSource, SecretValue, Sourced,
     };
-    use crate::providers::azure_ai::auth::native::ValidatedAzureRequest;
-    use crate::providers::azure_ai::auth::types::AzureAuthInputs;
 
     #[derive(Debug)]
     struct FileResolver;
@@ -487,9 +470,8 @@ mod tests {
         fn acquire(
             &self,
             request: ValidatedAzureRequest,
-        ) -> std::pin::Pin<
-            Box<dyn Future<Output = Result<ResolvedCredential, AuthError>> + Send + '_>,
-        > {
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<ResolvedCredential, Error>> + Send + '_>>
+        {
             let kind = request.kind();
             self.requests.lock().unwrap().push(kind);
             Box::pin(async move {
@@ -499,7 +481,7 @@ mod tests {
                         expires_on: None,
                     })
                 } else {
-                    Err(AuthError::AzureTokenAcquisition(format!("{kind} failed")))
+                    Err(Error::AzureTokenAcquisition(format!("{kind} failed")))
                 }
             })
         }
@@ -612,12 +594,7 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(matches!(
-            error,
-            AuthError::Configuration(
-                crate::auth::error::AuthConfigurationError::RequestAzureCredentialReference
-            )
-        ));
+        assert!(matches!(error, Error::RequestAzureCredentialReference));
     }
 
     #[tokio::test]
@@ -678,6 +655,6 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, AuthError::CredentialChain(errors) if errors.len() == 2));
+        assert!(matches!(error, Error::CredentialChain(errors) if errors.len() == 2));
     }
 }

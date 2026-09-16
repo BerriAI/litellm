@@ -4,7 +4,7 @@ use std::sync::Arc;
 use azure_core::credentials::TokenCredential;
 use moka::future::Cache;
 
-use crate::AuthError;
+use litellm_auth::Error;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct AzureCredentialProviderCacheKey {
@@ -31,9 +31,9 @@ impl AzureCredentialProviderCache {
         &self,
         key: AzureCredentialProviderCacheKey,
         create: F,
-    ) -> Result<Arc<dyn TokenCredential>, AuthError>
+    ) -> Result<Arc<dyn TokenCredential>, Error>
     where
-        F: Future<Output = Result<Arc<dyn TokenCredential>, AuthError>>,
+        F: Future<Output = Result<Arc<dyn TokenCredential>, Error>>,
     {
         self.entries
             .try_get_with(key, create)

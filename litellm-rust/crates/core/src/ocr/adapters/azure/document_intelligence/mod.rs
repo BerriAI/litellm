@@ -1,7 +1,6 @@
 use super::super::OcrAdapter;
-use crate::Error;
-use crate::auth::{InputSource, Sourced};
 use crate::constants::{AZURE_DI_API_VERSION, AZURE_DI_SUBSCRIPTION_HEADER};
+use crate::ocr::Error;
 use crate::ocr::OcrClient;
 use crate::ocr::codecs::document_intelligence::{
     self, AzureDocumentIntelligenceOperation, DocumentIntelligenceParams,
@@ -10,8 +9,9 @@ use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::registry::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrResponseFormat};
-use crate::providers::azure_ai::auth::AzureAuthInputs;
 use crate::url_utils::ApiUrl;
+use litellm_auth::{InputSource, Sourced};
+use litellm_auth_azure::AzureAuthInputs;
 
 mod polling;
 

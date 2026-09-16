@@ -79,7 +79,7 @@ mod tests {
     use std::ffi::CString;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use litellm_core::error::Error;
+    use litellm_core::messages::Error;
     use pyo3::exceptions::PyLookupError;
     use pyo3::types::{PyDict, PyList};
 
