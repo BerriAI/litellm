@@ -8388,3 +8388,21 @@ async def test_access_group_model_fallback_uses_the_injected_database(channel: s
                 llm_router=None, prisma_client=client,
             ) is True
     reader.assert_awaited_once_with(where={"access_group_id": "group-a"})
+
+
+def test_jwt_team_role_reaches_the_gateway_token_endpoint_by_default():
+    """The RFC 8693 token exchange authorizes the IdP JWT against ``POST /token`` itself, and JWT
+    auth only binds a team from a multi-team claim when that team may call the route, so the
+    default team allowlist has to cover the gateway's token endpoint or the exchange would mint
+    teamless credentials for every ``team_ids_jwt_field`` deployment."""
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    assert allowed_routes_check(
+        user_role=LitellmUserRoles.TEAM, user_route="/token", litellm_proxy_roles=LiteLLM_JWTAuth()
+    )
+    assert not allowed_routes_check(
+        user_role=LitellmUserRoles.TEAM,
+        user_route="/token",
+        litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=[]),
+    )

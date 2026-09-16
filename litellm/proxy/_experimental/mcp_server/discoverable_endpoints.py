@@ -46,6 +46,7 @@ from litellm.proxy._experimental.mcp_server.faults import (
     render_token_fault,
 )
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    TOKEN_EXCHANGE_GRANT_TYPE,
     VendorCredentialState,
     aggregate_authorize,
     aggregate_token,
@@ -59,6 +60,9 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     register_aggregate_client,
     relative_request_url,
     revoke_refresh_token,
+)
+from litellm.proxy._experimental.mcp_server.idp_token_exchange import (
+    exchange_idp_subject_token,
 )
 from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
     RefreshOwnershipProven,
@@ -1980,6 +1984,9 @@ async def token_endpoint(
     refresh_token: str | None = Form(None),
     scope: str | None = Form(None),
     resource: str | None = Form(None),
+    subject_token: str | None = Form(None),
+    subject_token_type: str | None = Form(None),
+    requested_token_type: str | None = Form(None),
     mcp_server_name: str | None = None,
 ):
     """
@@ -2010,6 +2017,10 @@ async def token_endpoint(
             cache=user_api_key_cache,
             resource=resource,
             mint_proxy_credential=mint_proxy_credential,
+            subject_token=subject_token,
+            subject_token_type=subject_token_type,
+            requested_token_type=requested_token_type,
+            exchange_subject_token=exchange_idp_subject_token,
         )
 
     lookup_name: Final = mcp_server_name or client_id
@@ -2638,7 +2649,7 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
         "registration_endpoint": f"{request_base_url}/register",
         "response_types_supported": ["code"],
         "scopes_supported": [],
-        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "grant_types_supported": ("authorization_code", "refresh_token", TOKEN_EXCHANGE_GRANT_TYPE),
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
     }

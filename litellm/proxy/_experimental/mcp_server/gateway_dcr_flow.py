@@ -51,7 +51,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from typing_extensions import ReadOnly, TypedDict, assert_never
+from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
@@ -187,6 +187,41 @@ class MintProxyCredential(Protocol):
     ) -> Awaitable[MintedProxyCredential | ProxyCredentialMintFailure]: ...
 
 
+TOKEN_EXCHANGE_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:token-exchange"
+"""RFC 8693: a native client that already holds a token from the customer's identity
+provider trades it for the proxy-API credential without a browser round trip."""
+
+_IssuedTokenType = Literal["urn:ietf:params:oauth:token-type:access_token"]
+ACCESS_TOKEN_TOKEN_TYPE: Final[_IssuedTokenType] = "urn:ietf:params:oauth:token-type:access_token"
+SUBJECT_TOKEN_TYPES: Final = frozenset(
+    {
+        "urn:ietf:params:oauth:token-type:jwt",
+        "urn:ietf:params:oauth:token-type:id_token",
+        ACCESS_TOKEN_TOKEN_TYPE,
+    }
+)
+
+
+class SubjectIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    user_id: str = Field(min_length=1)
+    team_id: str | None = None
+
+
+class SubjectTokenRefusal(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    error: Literal["unsupported_grant_type", "invalid_request"]
+    description: str = Field(min_length=1)
+
+
+class ExchangeSubjectToken(Protocol):
+    """Injected RFC 8693 subject-token verifier ``(subject_token, request)``: proves the
+    IdP token the way the proxy's own JWT auth does and names the litellm user and team it
+    stands for, or says why this gateway will not take it."""
+
+    def __call__(self, subject_token: str, request: Request, /) -> Awaitable[SubjectIdentity | SubjectTokenRefusal]: ...
+
+
 class ConsentTeam(BaseModel):
     model_config = ConfigDict(frozen=True)
     team_id: str = Field(min_length=1)
@@ -211,6 +246,12 @@ class LookupConsentTeams(Protocol):
 
 async def _refuse_proxy_credential(user_id: str, team_id: str | None) -> ProxyCredentialMintFailure:
     return "unresolvable"
+
+
+async def _refuse_subject_token(subject_token: str, request: Request) -> SubjectTokenRefusal:
+    return SubjectTokenRefusal(
+        error="unsupported_grant_type", description="this gateway is not configured to exchange IdP tokens"
+    )
 
 
 async def _unavailable_vendor_credential(user_id: str, server_id: str) -> VendorCredentialState:
@@ -382,7 +423,7 @@ async def register_aggregate_client(request: Request, request_body: Mapping[str,
             "client_id_issued_at": int(now.timestamp()),
             "redirect_uris": list(raw_uris),
             "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code", "refresh_token"],
+            "grant_types": ["authorization_code", "refresh_token", TOKEN_EXCHANGE_GRANT_TYPE],
             "response_types": ["code"],
         },
     )
@@ -595,7 +636,7 @@ def native_client_auth_contract(request: Request) -> NativeClientAuthContract:
         "revocation_endpoint": f"{base_url}/revoke",
         "resource": base_url,
         "response_types_supported": ("code",),
-        "grant_types_supported": ("authorization_code", "refresh_token"),
+        "grant_types_supported": ("authorization_code", "refresh_token", TOKEN_EXCHANGE_GRANT_TYPE),
         "code_challenge_methods_supported": ("S256",),
         "token_endpoint_auth_methods_supported": ("none",),
         "revocation_endpoint_auth_methods_supported": ("none",),
@@ -1033,20 +1074,26 @@ class _ProxyCredentialTokenResponse(TypedDict):
     refresh_token: ReadOnly[str]
     user_id: ReadOnly[str]
     team_id: ReadOnly[str | None]
+    issued_token_type: NotRequired[ReadOnly[_IssuedTokenType]]
 
 
 def _proxy_credential_response(
-    minted: MintedProxyCredential, principal: SessionPrincipal, keys: SessionSigningKeys, now: datetime
+    minted: MintedProxyCredential,
+    principal: SessionPrincipal,
+    keys: SessionSigningKeys,
+    now: datetime,
+    issued_token_type: _IssuedTokenType | None = None,
 ) -> Response:
     """The proxy-API token response: the access token is the very credential ``lite
     login`` stores (accepted on every proxy route with user and team attribution), and
     the refresh token is a gateway-sealed rotating token bound to the team the credential
-    was minted for, so a renewal keeps the team the user consented to."""
+    was minted for, so a renewal keeps the team the user consented to. A token exchange
+    also states ``issued_token_type``, which RFC 8693 section 2.2.1 requires."""
     bound_principal: Final = principal.model_copy(update=MappingProxyType({"team_id": minted.team_id}))
     refresh: Final = mint_session_refresh_token(bound_principal, keys, now)
     if not isinstance(refresh, MintedSessionToken):
         return _oauth_error(500, "server_error", "failed to mint the session credential")
-    body: Final[_ProxyCredentialTokenResponse] = {
+    credential: Final[_ProxyCredentialTokenResponse] = {
         "access_token": minted.key,
         "token_type": "Bearer",
         "expires_in": minted.expires_in,
@@ -1054,7 +1101,10 @@ def _proxy_credential_response(
         "user_id": minted.user_id,
         "team_id": minted.team_id,
     }
-    return JSONResponse(status_code=200, content=body, headers=TOKEN_NO_CACHE_HEADERS)
+    if issued_token_type is None:
+        return JSONResponse(status_code=200, content=credential, headers=TOKEN_NO_CACHE_HEADERS)
+    exchanged: Final[_ProxyCredentialTokenResponse] = {**credential, "issued_token_type": issued_token_type}
+    return JSONResponse(status_code=200, content=exchanged, headers=TOKEN_NO_CACHE_HEADERS)
 
 
 def _reload_failure_response(failure: ReloadUserFailure) -> Response:
@@ -1116,11 +1166,16 @@ async def aggregate_token(
     cache: DualCache,
     resource: str | None = None,
     mint_proxy_credential: MintProxyCredential = _refuse_proxy_credential,
+    subject_token: str | None = None,
+    subject_token_type: str | None = None,
+    requested_token_type: str | None = None,
+    exchange_subject_token: ExchangeSubjectToken = _refuse_subject_token,
 ) -> Response:
     """The aggregate token verb: authorization_code and refresh_token grants for the
     identity-only session pair, or for the proxy-API credential when the grant was issued
-    with that audience. Every path re-validates the litellm user live before minting, so a
-    deactivated user cannot obtain or renew a session."""
+    with that audience, and the RFC 8693 token exchange that turns an IdP token straight
+    into the proxy-API credential. Every path re-validates the litellm user live before
+    minting, so a deactivated user cannot obtain or renew a session."""
     if master_key is None:
         verbose_logger.error("mcp_gateway_dcr token grant rejected: no master_key configured")
         return _oauth_error(500, "server_error", "the gateway has no master key configured")
@@ -1159,7 +1214,20 @@ async def aggregate_token(
             now=now,
             issue=issue,
         )
-    return _oauth_error(400, "unsupported_grant_type", "grant_type must be authorization_code or refresh_token")
+    if grant_type == TOKEN_EXCHANGE_GRANT_TYPE:
+        return await _token_exchange_grant(
+            subject_token=subject_token,
+            subject_token_type=subject_token_type,
+            requested_token_type=requested_token_type,
+            client_id=client_id,
+            exchange_subject_token=exchange_subject_token,
+            issue=issue,
+        )
+    return _oauth_error(
+        400,
+        "unsupported_grant_type",
+        f"grant_type must be authorization_code, refresh_token, or {TOKEN_EXCHANGE_GRANT_TYPE}",
+    )
 
 
 class _GrantIssuer:
@@ -1211,10 +1279,9 @@ class _GrantIssuer:
     async def _issue_proxy_credential(
         self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
     ) -> Response:
-        if self._resource is not None and not is_proxy_api_resource(self._request, self._resource):
-            return _oauth_error(
-                400, "invalid_target", "resource does not match the proxy API this grant was issued for"
-            )
+        target_refusal: Final = self._proxy_api_target_refusal()
+        if target_refusal is not None:
+            return target_refusal
         minted: Final = await self._mint_proxy_credential(principal.user_id, principal.team_id)
         if not isinstance(minted, MintedProxyCredential):
             return _mint_failure_response(minted)
@@ -1222,6 +1289,33 @@ class _GrantIssuer:
         if refusal is not None:
             return refusal
         return _proxy_credential_response(minted, principal, self._keys, self._now)
+
+    async def exchange(
+        self, subject_token: str, client_id: str, exchange_subject_token: ExchangeSubjectToken
+    ) -> Response:
+        """The RFC 8693 tail: prove the IdP token, then mint. No single-use marker, because
+        the subject token stays a valid proof for as long as the IdP says it is and every
+        exchange mints a fresh credential and refresh token of its own."""
+        target_refusal: Final = self._proxy_api_target_refusal()
+        if target_refusal is not None:
+            return target_refusal
+        identity: Final = await exchange_subject_token(subject_token, self._request)
+        if isinstance(identity, SubjectTokenRefusal):
+            return _oauth_error(400, identity.error, identity.description)
+        principal: Final = SessionPrincipal(
+            user_id=identity.user_id, client_id=client_id, audience=PROXY_API_AUDIENCE, team_id=identity.team_id
+        )
+        minted: Final = await self._mint_proxy_credential(principal.user_id, principal.team_id)
+        if not isinstance(minted, MintedProxyCredential):
+            return _mint_failure_response(minted)
+        return _proxy_credential_response(
+            minted, principal, self._keys, self._now, issued_token_type=ACCESS_TOKEN_TOKEN_TYPE
+        )
+
+    def _proxy_api_target_refusal(self) -> Response | None:
+        if self._resource is None or is_proxy_api_resource(self._request, self._resource):
+            return None
+        return _oauth_error(400, "invalid_target", "resource does not match the proxy API this grant was issued for")
 
     async def _claim_refusal(self, claim_key: str, claim_ttl_seconds: int, replayed: str) -> Response | None:
         return _claim_refusal(
@@ -1295,6 +1389,32 @@ async def _refresh_token_grant(
         claim_ttl_seconds=SESSION_REFRESH_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS,
         replayed="the refresh token was already used",
     )
+
+
+async def _token_exchange_grant(
+    subject_token: str | None,
+    subject_token_type: str | None,
+    requested_token_type: str | None,
+    client_id: str,
+    exchange_subject_token: ExchangeSubjectToken,
+    issue: _GrantIssuer,
+) -> Response:
+    """RFC 8693 token exchange for a registered native client that already holds an IdP
+    token: the gateway proves the token the way its JWT auth does and answers with the
+    proxy-API credential, so a fresh laptop with only an IdP login gets a gateway key
+    without a browser round trip. The client must be registered because the refresh token
+    in the answer is bound to it."""
+    if not is_gateway_dcr_client_id(client_id) or open_gateway_dcr_client(client_id) is None:
+        return _oauth_error(401, "invalid_client", "unknown or malformed client_id")
+    if not subject_token or not subject_token_type:
+        return _oauth_error(400, "invalid_request", "subject_token and subject_token_type are required")
+    if subject_token_type not in SUBJECT_TOKEN_TYPES:
+        return _oauth_error(
+            400, "invalid_request", f"subject_token_type must be one of {', '.join(sorted(SUBJECT_TOKEN_TYPES))}"
+        )
+    if requested_token_type is not None and requested_token_type != ACCESS_TOKEN_TOKEN_TYPE:
+        return _oauth_error(400, "invalid_request", f"requested_token_type must be {ACCESS_TOKEN_TOKEN_TYPE}")
+    return await issue.exchange(subject_token, client_id, exchange_subject_token)
 
 
 async def revoke_refresh_token(token: str, client_id: str, master_key: str | None, cache: DualCache) -> Response:
