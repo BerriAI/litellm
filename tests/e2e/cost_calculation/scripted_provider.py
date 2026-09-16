@@ -38,7 +38,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, model_validator
 
 Wire: TypeAlias = Literal[
     "openai_chat",
@@ -62,6 +62,26 @@ WIRE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
 
 StreamUsage: TypeAlias = Literal["final_chunk", "absent"]
 ServiceTier: TypeAlias = Literal["flex", "priority"]
+TerminalKind: TypeAlias = Literal["completed", "incomplete", "unvalidated", "prompt_blocked"]
+
+# Which terminal variant each wire can represent.
+_TERMINAL_CAPS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+    {
+        "openai_responses": frozenset({"incomplete", "unvalidated"}),
+        "gemini_generate": frozenset({"prompt_blocked"}),
+    }
+)
+
+
+class ScriptedToolCall(BaseModel):
+    """A single function call the scripted output emits instead of text.
+    ``arguments`` is the wire's JSON string (~250 chars), sliced into deltas
+    for streams."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    arguments: str
 
 
 class ScriptedUsage(BaseModel):
@@ -96,6 +116,12 @@ class ScriptedOutput(BaseModel):
     # OpenAI-compatible providers can report a provider-computed cost; emitted as
     # the top-level "cost" field on the together/fireworks wire.
     provider_cost: float | None = None
+    # When set, the response is a tool call only: no text content on any wire.
+    tool_call: ScriptedToolCall | None = None
+    # Terminal shape: "unvalidated" makes the Responses terminal response fail
+    # pydantic validation so the proxy takes its model_construct dict path;
+    # "prompt_blocked" is a Gemini promptFeedback-only body.
+    terminal: TerminalKind = "completed"
 
 
 class Scenario(BaseModel):
@@ -107,6 +133,17 @@ class Scenario(BaseModel):
     output: ScriptedOutput
     stream_usage: StreamUsage = "final_chunk"
     service_tier: ServiceTier | None = None
+
+    @model_validator(mode="after")
+    def _check_terminal_supported(self) -> Scenario:
+        if (
+            self.output.terminal != "completed"
+            and self.output.terminal not in _TERMINAL_CAPS.get(self.wire, frozenset())
+        ):
+            raise ValueError(
+                f"wire {self.wire} cannot emit terminal={self.output.terminal}"
+            )
+        return self
 
     @property
     def mount(self) -> str:
@@ -291,10 +328,38 @@ def _responses_usage(u: ScriptedUsage) -> Mapping[str, object]:
 # ---------- per-wire responses ----------
 
 
+def _split_arguments(arguments: str) -> tuple[str, ...]:
+    """Slice a tool-call arguments JSON string into 2-3 streamed deltas."""
+    third: Final = max(1, len(arguments) // 3)
+    return tuple(
+        slice_
+        for slice_ in (arguments[:third], arguments[third : 2 * third], arguments[2 * third :])
+        if slice_
+    )
+
+
 def _openai_message(scenario: Scenario) -> Mapping[str, object]:
+    tool_call: Final = scenario.output.tool_call
     return _jobj_opt(
         ("role", "assistant"),
-        ("content", scenario.output.text),
+        ("content", None if tool_call is not None else scenario.output.text),
+        (
+            (
+                "tool_calls",
+                (
+                    _jobj(
+                        ("id", f"call_{scenario.scenario_id}"),
+                        ("type", "function"),
+                        (
+                            "function",
+                            _jobj(("name", tool_call.name), ("arguments", tool_call.arguments)),
+                        ),
+                    ),
+                ),
+            )
+            if tool_call is not None
+            else None
+        ),
         (
             (
                 "annotations",
@@ -332,7 +397,12 @@ def _openai_chat_body(scenario: Scenario, requested_model: str) -> Mapping[str, 
                 _jobj(
                     ("index", 0),
                     ("message", _openai_message(scenario)),
-                    ("finish_reason", scenario.output.finish_reason),
+                    (
+                        "finish_reason",
+                        "tool_calls"
+                        if scenario.output.tool_call is not None
+                        else scenario.output.finish_reason,
+                    ),
                 ),
             ),
         ),
@@ -359,6 +429,7 @@ def _openai_chunk(
 
 
 def _openai_chat_sse(scenario: Scenario, requested_model: str) -> bytes:
+    tool_call: Final = scenario.output.tool_call
     delta: Final = _jobj_opt(
         ("role", "assistant"),
         ("content", scenario.output.text),
@@ -367,6 +438,43 @@ def _openai_chat_sse(scenario: Scenario, requested_model: str) -> bytes:
             if scenario.usage.web_search_calls
             else None
         ),
+    )
+    body_deltas: Final[tuple[Mapping[str, object], ...]] = (
+        (
+            _jobj(
+                ("role", "assistant"),
+                (
+                    "tool_calls",
+                    (
+                        _jobj(
+                            ("index", 0),
+                            ("id", f"call_{scenario.scenario_id}"),
+                            ("type", "function"),
+                            (
+                                "function",
+                                _jobj(("name", tool_call.name), ("arguments", "")),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            *(
+                _jobj(
+                    (
+                        "tool_calls",
+                        (
+                            _jobj(
+                                ("index", 0),
+                                ("function", _jobj(("arguments", arguments_slice))),
+                            ),
+                        ),
+                    )
+                )
+                for arguments_slice in _split_arguments(tool_call.arguments)
+            ),
+        )
+        if tool_call is not None
+        else (delta,)
     )
     return _sse(
         (
@@ -378,13 +486,16 @@ def _openai_chat_sse(scenario: Scenario, requested_model: str) -> bytes:
                     choices=(_jobj(("index", 0), ("delta", _jobj(("role", "assistant"))), ("finish_reason", None)),),
                 ),
             ),
-            (
-                None,
-                _openai_chunk(
-                    scenario,
-                    requested_model,
-                    choices=(_jobj(("index", 0), ("delta", delta), ("finish_reason", None)),),
-                ),
+            *(
+                (
+                    None,
+                    _openai_chunk(
+                        scenario,
+                        requested_model,
+                        choices=(_jobj(("index", 0), ("delta", body_delta), ("finish_reason", None)),),
+                    ),
+                )
+                for body_delta in body_deltas
             ),
             (
                 None,
@@ -395,7 +506,12 @@ def _openai_chat_sse(scenario: Scenario, requested_model: str) -> bytes:
                         _jobj(
                             ("index", 0),
                             ("delta", _jobj()),
-                            ("finish_reason", scenario.output.finish_reason),
+                            (
+                                "finish_reason",
+                                "tool_calls"
+                                if tool_call is not None
+                                else scenario.output.finish_reason,
+                            ),
                         ),
                     ),
                 ),
@@ -410,17 +526,34 @@ def _openai_chat_sse(scenario: Scenario, requested_model: str) -> bytes:
     )
 
 
+def _anthropic_content(scenario: Scenario) -> tuple[Mapping[str, object], ...]:
+    tool_call: Final = scenario.output.tool_call
+    if tool_call is not None:
+        return (
+            _jobj(
+                ("type", "tool_use"),
+                ("id", f"toolu_{scenario.scenario_id}"),
+                ("name", tool_call.name),
+                ("input", json.loads(tool_call.arguments)),
+            ),
+        )
+    return (_jobj(("type", "text"), ("text", scenario.output.text)),)
+
+
+def _anthropic_stop_reason(scenario: Scenario) -> str:
+    if scenario.output.tool_call is not None:
+        return "tool_use"
+    return "end_turn" if scenario.output.finish_reason == "stop" else scenario.output.finish_reason
+
+
 def _anthropic_body(scenario: Scenario, requested_model: str) -> Mapping[str, object]:
     return _jobj(
         ("id", f"msg_{scenario.scenario_id}"),
         ("type", "message"),
         ("role", "assistant"),
         ("model", scenario.output.response_model or requested_model),
-        ("content", (_jobj(("type", "text"), ("text", scenario.output.text)),)),
-        (
-            "stop_reason",
-            "end_turn" if scenario.output.finish_reason == "stop" else scenario.output.finish_reason,
-        ),
+        ("content", _anthropic_content(scenario)),
+        ("stop_reason", _anthropic_stop_reason(scenario)),
         ("usage", _anthropic_usage(scenario.usage)),
     )
 
@@ -453,12 +586,7 @@ def _anthropic_sse(scenario: Scenario, requested_model: str) -> bytes:
         ("type", "message_delta"),
         (
             "delta",
-            _jobj(
-                (
-                    "stop_reason",
-                    "end_turn" if scenario.output.finish_reason == "stop" else scenario.output.finish_reason,
-                )
-            ),
+            _jobj(("stop_reason", _anthropic_stop_reason(scenario))),
         ),
         (
             ("usage", _jobj(("output_tokens", scenario.usage.output_tokens)))
@@ -474,16 +602,45 @@ def _anthropic_sse(scenario: Scenario, requested_model: str) -> bytes:
                 _jobj(
                     ("type", "content_block_start"),
                     ("index", 0),
-                    ("content_block", _jobj(("type", "text"), ("text", ""))),
+                    (
+                        "content_block",
+                        _jobj(
+                            ("type", "tool_use"),
+                            ("id", f"toolu_{scenario.scenario_id}"),
+                            ("name", scenario.output.tool_call.name),
+                            ("input", _jobj()),
+                        )
+                        if scenario.output.tool_call is not None
+                        else _jobj(("type", "text"), ("text", "")),
+                    ),
                 ),
             ),
-            (
-                "content_block_delta",
-                _jobj(
-                    ("type", "content_block_delta"),
-                    ("index", 0),
-                    ("delta", _jobj(("type", "text_delta"), ("text", scenario.output.text))),
-                ),
+            *(
+                tuple(
+                    (
+                        "content_block_delta",
+                        _jobj(
+                            ("type", "content_block_delta"),
+                            ("index", 0),
+                            (
+                                "delta",
+                                _jobj(("type", "input_json_delta"), ("partial_json", arguments_slice)),
+                            ),
+                        ),
+                    )
+                    for arguments_slice in _split_arguments(scenario.output.tool_call.arguments)
+                )
+                if scenario.output.tool_call is not None
+                else (
+                    (
+                        "content_block_delta",
+                        _jobj(
+                            ("type", "content_block_delta"),
+                            ("index", 0),
+                            ("delta", _jobj(("type", "text_delta"), ("text", scenario.output.text))),
+                        ),
+                    ),
+                )
             ),
             ("content_block_stop", _jobj(("type", "content_block_stop"), ("index", 0))),
             ("message_delta", message_delta),
@@ -492,7 +649,49 @@ def _anthropic_sse(scenario: Scenario, requested_model: str) -> bytes:
     )
 
 
+def _gemini_prompt_blocked_body(scenario: Scenario, requested_model: str) -> Mapping[str, object]:
+    return _jobj(
+        (
+            "promptFeedback",
+            _jobj(
+                ("blockReason", "SAFETY"),
+                (
+                    "safetyRatings",
+                    (
+                        _jobj(
+                            ("category", "HARM_CATEGORY_HARASSMENT"),
+                            ("probability", "HIGH"),
+                            ("blocked", True),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        ("usageMetadata", _gemini_usage(scenario.usage)),
+        ("modelVersion", scenario.output.response_model or requested_model),
+    )
+
+
+def _gemini_parts(scenario: Scenario) -> tuple[Mapping[str, object], ...]:
+    tool_call: Final = scenario.output.tool_call
+    if tool_call is not None:
+        return (
+            _jobj(
+                (
+                    "functionCall",
+                    _jobj(
+                        ("name", tool_call.name),
+                        ("args", json.loads(tool_call.arguments)),
+                    ),
+                )
+            ),
+        )
+    return (_jobj(("text", scenario.output.text)),)
+
+
 def _gemini_body(scenario: Scenario, requested_model: str) -> Mapping[str, object]:
+    if scenario.output.terminal == "prompt_blocked":
+        return _gemini_prompt_blocked_body(scenario, requested_model)
     return _jobj(
         (
             "candidates",
@@ -501,7 +700,7 @@ def _gemini_body(scenario: Scenario, requested_model: str) -> Mapping[str, objec
                     (
                         "content",
                         _jobj(
-                            ("parts", (_jobj(("text", scenario.output.text)),)),
+                            ("parts", _gemini_parts(scenario)),
                             ("role", "model"),
                         ),
                     ),
@@ -559,67 +758,148 @@ def _gemini_sse(scenario: Scenario, requested_model: str) -> bytes:
     )
 
 
-def _responses_body(scenario: Scenario, requested_model: str) -> Mapping[str, object]:
-    return _jobj(
-        ("id", f"resp_{scenario.scenario_id}"),
-        ("object", "response"),
-        ("created_at", int(time.time())),
-        ("status", "completed"),
-        ("model", scenario.output.response_model or requested_model),
-        (
-            "output",
+def _responses_output(scenario: Scenario) -> tuple[Mapping[str, object], ...]:
+    tool_call: Final = scenario.output.tool_call
+    return (
+        *(
             (
-                *(
-                    _jobj(("type", "web_search_call"), ("id", f"ws_{i}"), ("status", "completed"))
-                    for i in range(scenario.usage.web_search_calls)
-                ),
-                _jobj(
-                    ("type", "message"),
-                    ("id", f"msg_{scenario.scenario_id}"),
-                    ("status", "completed"),
-                    ("role", "assistant"),
-                    (
-                        "content",
-                        (
-                            _jobj(
-                                ("type", "output_text"),
-                                ("text", scenario.output.text),
-                                ("annotations", ()),
-                            ),
-                        ),
+                _jobj(("type", "scripted_future_item"), ("id", f"fut_{scenario.scenario_id}"), ("status", "completed")),
+            )
+            if scenario.output.terminal == "unvalidated"
+            else ()
+        ),
+        *(
+            _jobj(("type", "web_search_call"), ("id", f"ws_{i}"), ("status", "completed"))
+            for i in range(scenario.usage.web_search_calls)
+        ),
+        _jobj(
+            ("type", "function_call"),
+            ("id", f"fc_{scenario.scenario_id}"),
+            ("call_id", f"call_{scenario.scenario_id}"),
+            ("name", tool_call.name),
+            ("arguments", tool_call.arguments),
+            ("status", "completed"),
+        )
+        if tool_call is not None
+        else _jobj(
+            ("type", "message"),
+            ("id", f"msg_{scenario.scenario_id}"),
+            ("status", "completed"),
+            ("role", "assistant"),
+            (
+                "content",
+                (
+                    _jobj(
+                        ("type", "output_text"),
+                        ("text", scenario.output.text),
+                        ("annotations", ()),
                     ),
                 ),
             ),
         ),
+    )
+
+
+def _responses_body(scenario: Scenario, requested_model: str) -> Mapping[str, object]:
+    incomplete: Final = scenario.output.terminal == "incomplete"
+    return _jobj_opt(
+        ("id", f"resp_{scenario.scenario_id}"),
+        ("object", "response"),
+        (
+            "created_at",
+            "not-a-number" if scenario.output.terminal == "unvalidated" else int(time.time()),
+        ),
+        ("status", "incomplete" if incomplete else "completed"),
+        (
+            ("incomplete_details", _jobj(("reason", "max_output_tokens")))
+            if incomplete
+            else None
+        ),
+        ("model", scenario.output.response_model or requested_model),
+        ("output", _responses_output(scenario)),
         ("usage", _responses_usage(scenario.usage)),
     )
 
 
 def _responses_sse(scenario: Scenario, requested_model: str) -> bytes:
-    completed: Final = (
+    tool_call: Final = scenario.output.tool_call
+    terminal: Final = (
         _jobj(*((key, value) for key, value in _responses_body(scenario, requested_model).items() if key != "usage"))
         if scenario.stream_usage == "absent"
         else _responses_body(scenario, requested_model)
     )
     created: Final = _jobj(
-        *((key, value) for key, value in completed.items() if key not in ("status", "usage")),
+        *((key, value) for key, value in terminal.items() if key not in ("status", "usage")),
         ("status", "in_progress"),
         ("usage", None),
     )
-    return _sse(
+    terminal_event: Final = (
+        "response.incomplete" if scenario.output.terminal == "incomplete" else "response.completed"
+    )
+    output_index: Final = (
+        scenario.usage.web_search_calls + (1 if scenario.output.terminal == "unvalidated" else 0)
+    )
+    middle_events: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
         (
-            ("response.created", _jobj(("type", "response.created"), ("response", created))),
+            (
+                "response.output_item.added",
+                _jobj(
+                    ("type", "response.output_item.added"),
+                    ("output_index", output_index),
+                    (
+                        "item",
+                        _jobj(
+                            ("type", "function_call"),
+                            ("id", f"fc_{scenario.scenario_id}"),
+                            ("call_id", f"call_{scenario.scenario_id}"),
+                            ("name", tool_call.name),
+                            ("arguments", ""),
+                            ("status", "in_progress"),
+                        ),
+                    ),
+                ),
+            ),
+            *(
+                (
+                    "response.function_call_arguments.delta",
+                    _jobj(
+                        ("type", "response.function_call_arguments.delta"),
+                        ("item_id", f"fc_{scenario.scenario_id}"),
+                        ("output_index", output_index),
+                        ("delta", arguments_slice),
+                    ),
+                )
+                for arguments_slice in _split_arguments(tool_call.arguments)
+            ),
+            (
+                "response.function_call_arguments.done",
+                _jobj(
+                    ("type", "response.function_call_arguments.done"),
+                    ("item_id", f"fc_{scenario.scenario_id}"),
+                    ("output_index", output_index),
+                    ("arguments", tool_call.arguments),
+                ),
+            ),
+        )
+        if tool_call is not None
+        else (
             (
                 "response.output_text.delta",
                 _jobj(
                     ("type", "response.output_text.delta"),
                     ("item_id", f"msg_{scenario.scenario_id}"),
-                    ("output_index", scenario.usage.web_search_calls),
+                    ("output_index", output_index),
                     ("content_index", 0),
                     ("delta", scenario.output.text),
                 ),
             ),
-            ("response.completed", _jobj(("type", "response.completed"), ("response", completed))),
+        )
+    )
+    return _sse(
+        (
+            ("response.created", _jobj(("type", "response.created"), ("response", created))),
+            *middle_events,
+            (terminal_event, _jobj(("type", terminal_event), ("response", terminal))),
         )
     )
 

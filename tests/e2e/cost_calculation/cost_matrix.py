@@ -17,7 +17,11 @@ creation), the case is absent from the matrix rather than silently zero.
 
 from __future__ import annotations
 
+import base64
 import json
+import random
+import struct
+import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +30,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
-from scripted_provider import Scenario, ScriptedOutput, ScriptedUsage, Wire
+from scripted_provider import Scenario, ScriptedOutput, ScriptedToolCall, ScriptedUsage, Wire
 
 COST_MAP_PATH: Final = Path(__file__).resolve().parent.parent / "cost_map.json"
 
@@ -182,26 +186,37 @@ _WIRE_CAPS: Final[Mapping[str, frozenset[str]]] = MappingProxyType({
     "openai_chat": frozenset(
         {
             "cache_read", "cache_write_5m", "cache_write_1h", "reasoning", "audio",
-            "web_search", "response_model", "absent_usage",
+            "web_search", "response_model", "absent_usage", "tool_call", "image_input",
         }
     ),
-    "openai_responses": frozenset({"cache_read", "reasoning", "web_search", "response_model", "absent_usage"}),
+    "openai_responses": frozenset(
+        {
+            "cache_read", "reasoning", "web_search", "response_model", "absent_usage",
+            "tool_call", "image_input", "responses_terminal",
+        }
+    ),
     "anthropic_messages": frozenset(
-        {"cache_read", "cache_write_5m", "cache_write_1h", "web_search", "response_model", "absent_usage"}
+        {
+            "cache_read", "cache_write_5m", "cache_write_1h", "web_search",
+            "response_model", "absent_usage", "tool_call", "image_input",
+        }
     ),
     "gemini_generate": frozenset(
-        {"cache_read", "reasoning", "audio", "web_search", "response_model", "absent_usage"}
+        {
+            "cache_read", "reasoning", "audio", "web_search", "response_model",
+            "absent_usage", "tool_call", "image_input", "prompt_blocked",
+        }
     ),
     "together_chat": frozenset(
         {
             "cache_read", "cache_write_5m", "cache_write_1h", "reasoning", "audio",
-            "web_search", "response_model", "absent_usage",
+            "web_search", "response_model", "absent_usage", "tool_call", "image_input",
         }
     ),
     "fireworks_chat": frozenset(
         {
             "cache_read", "cache_write_5m", "cache_write_1h", "reasoning", "audio",
-            "web_search", "response_model", "absent_usage",
+            "web_search", "response_model", "absent_usage", "tool_call", "image_input",
         }
     ),
 })
@@ -220,6 +235,15 @@ CaseName: TypeAlias = Literal[
     "stream",
     "stream_no_usage",
     "response_model_override",
+    "stream_response_model_override",
+    "tool_call",
+    "stream_no_usage_tool_call",
+    "stream_no_usage_image_input",
+    "stream_no_usage_incomplete",
+    "stream_unvalidated",
+    "stream_no_usage_unvalidated",
+    "prompt_blocked",
+    "stream_prompt_blocked",
 ]
 
 
@@ -237,6 +261,9 @@ class Case:
     billed_web_search_calls: int = 0
     response_model_override: bool = False
     exact_spend: bool = True
+    tool_call: bool = False
+    image_input: bool = False
+    terminal: Literal["completed", "incomplete", "unvalidated", "prompt_blocked"] = "completed"
 
     def scenario(self, scenario_id: str, model: FrontierModel, text: str) -> Scenario:
         return Scenario(
@@ -246,6 +273,10 @@ class Case:
             output=ScriptedOutput(
                 text=text,
                 response_model=model.override_model if self.response_model_override else None,
+                tool_call=ScriptedToolCall(name="get_weather", arguments=TOOL_CALL_ARGUMENTS)
+                if self.tool_call
+                else None,
+                terminal=self.terminal,
             ),
             stream_usage=self.stream_usage,
             service_tier=self.service_tier,
@@ -253,6 +284,15 @@ class Case:
 
 
 _BASIC_USAGE: Final = ScriptedUsage(fresh_input_tokens=120, output_tokens=40)
+
+TOOL_CALL_ARGUMENTS: Final = json.dumps({
+    "city": "Berlin",
+    "days": 7,
+    "units": "metric",
+    "notes": "filler " * 30,
+})
+
+_PROMPT_BLOCKED_USAGE: Final = ScriptedUsage(fresh_input_tokens=1000, output_tokens=0)
 
 
 def _web_search_case(model: FrontierModel) -> Case:
@@ -362,6 +402,100 @@ def cases_for(model: FrontierModel) -> tuple[Case, ...]:
             if "response_model" in caps
             else None
         ),
+        (
+            Case(
+                name="stream_response_model_override",
+                usage=_BASIC_USAGE,
+                stream=True,
+                response_model_override=True,
+            )
+            if "response_model" in caps
+            else None
+        ),
+        (
+            Case(name="tool_call", usage=_BASIC_USAGE, tool_call=True)
+            if "tool_call" in caps
+            else None
+        ),
+        (
+            Case(
+                name="stream_no_usage_tool_call",
+                usage=_BASIC_USAGE,
+                stream=True,
+                stream_usage="absent",
+                tool_call=True,
+                exact_spend=False,
+            )
+            if "absent_usage" in caps and "tool_call" in caps
+            else None
+        ),
+        (
+            Case(
+                name="stream_no_usage_image_input",
+                usage=_BASIC_USAGE,
+                stream=True,
+                stream_usage="absent",
+                image_input=True,
+                exact_spend=False,
+            )
+            if "absent_usage" in caps and "image_input" in caps
+            else None
+        ),
+        (
+            Case(
+                name="stream_no_usage_incomplete",
+                usage=_BASIC_USAGE,
+                stream=True,
+                stream_usage="absent",
+                terminal="incomplete",
+                exact_spend=False,
+            )
+            if "responses_terminal" in caps
+            else None
+        ),
+        (
+            Case(
+                name="stream_unvalidated",
+                usage=_BASIC_USAGE,
+                stream=True,
+                terminal="unvalidated",
+            )
+            if "responses_terminal" in caps
+            else None
+        ),
+        (
+            Case(
+                name="stream_no_usage_unvalidated",
+                usage=_BASIC_USAGE,
+                stream=True,
+                stream_usage="absent",
+                terminal="unvalidated",
+                exact_spend=False,
+            )
+            if "responses_terminal" in caps
+            else None
+        ),
+        (
+            Case(
+                name="prompt_blocked",
+                usage=_PROMPT_BLOCKED_USAGE,
+                terminal="prompt_blocked",
+                response_model_override=True,
+            )
+            if "prompt_blocked" in caps
+            else None
+        ),
+        (
+            Case(
+                name="stream_prompt_blocked",
+                usage=_PROMPT_BLOCKED_USAGE,
+                stream=True,
+                terminal="prompt_blocked",
+                response_model_override=True,
+            )
+            if "prompt_blocked" in caps
+            else None
+        ),
     )
     return tuple(case for case in candidates if case is not None)
 
@@ -434,6 +568,42 @@ def expected_breakdown(model: FrontierModel, case: Case) -> ExpectedCost:
 
 def expected_cost(model: FrontierModel, case: Case) -> float:
     return expected_breakdown(model, case).total
+
+
+def recount_cost(
+    model: FrontierModel, case: Case, prompt_tokens: int, completion_tokens: int
+) -> float:
+    """What the proxy's own token recount should cost at the case's rates,
+    without pinning the tokenizer's exact counts."""
+    rates: Final = model.override_rates if case.response_model_override else model.rates
+    return prompt_tokens * (rates.input_cost_per_token or 0.0) + completion_tokens * (
+        rates.output_cost_per_token or 0.0
+    )
+
+
+def _png_chunk(tag: bytes, payload: bytes) -> bytes:
+    return struct.pack(">I", len(payload)) + tag + payload + struct.pack(">I", zlib.crc32(tag + payload))
+
+
+def image_input_data_url() -> str:
+    """A deterministic 256x256 RGB noise PNG as a data URL; noise compresses
+    poorly on purpose so the base64 payload stays well above 100 KB and would
+    blow up the prompt recount if the URL were ever tokenized as text."""
+    rng: Final = random.Random(0)
+    side: Final = 256
+    raw: Final = b"".join(
+        b"\x00" + rng.randbytes(side * 3) for _ in range(side)
+    )
+    png: Final = (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", side, side, 8, 2, 0, 0, 0))
+        + _png_chunk(b"IDAT", zlib.compress(raw))
+        + _png_chunk(b"IEND", b"")
+    )
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
+IMAGE_INPUT_DATA_URL: Final = image_input_data_url()
 
 
 def expected_token_columns(model: FrontierModel, case: Case) -> tuple[int, int]:

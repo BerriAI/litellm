@@ -26,7 +26,7 @@ from cost_matrix import (
 )
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, ChatStreamOptions
+from models import ChatBody, ChatMessage, ChatStreamOptions, ChatTool, ChatToolFunction
 from scripted_provider import ScriptedUsage
 
 pytestmark: Final = [pytest.mark.e2e, pytest.mark.cost_map_stack]  # mutable-ok: pytest only accepts a list for pytestmark
@@ -95,6 +95,53 @@ _WIRE_USAGE: Final[Mapping[str, tuple[str, ScriptedUsage]]] = MappingProxyType({
         ScriptedUsage(fresh_input_tokens=80, cache_read_tokens=40, output_tokens=25),
     ),
 })
+
+_SHAPE_USAGE: Final = ScriptedUsage(fresh_input_tokens=80, output_tokens=25)
+
+# Renderer-level shapes the pricing matrix gates per cap, pinned here once per
+# wire so the sidecar emits prove they survive the proxy end to end.
+_SHAPES: Final[tuple[tuple[str, str, Case], ...]] = (
+    *(
+        (
+            f"tool_call_{'stream' if stream else 'sync'}",
+            wire,
+            Case(name="tool_call", usage=_SHAPE_USAGE, stream=stream, tool_call=True),
+        )
+        for wire in _WIRE_USAGE
+        for stream in (False, True)
+    ),
+    (
+        "responses_incomplete",
+        "openai_responses",
+        Case(name="stream_no_usage_incomplete", usage=_SHAPE_USAGE, stream=True, terminal="incomplete"),
+    ),
+    (
+        "responses_unvalidated",
+        "openai_responses",
+        Case(name="stream_unvalidated", usage=_SHAPE_USAGE, stream=True, terminal="unvalidated"),
+    ),
+    (
+        "gemini_prompt_blocked",
+        "gemini_generate",
+        Case(
+            name="prompt_blocked",
+            usage=ScriptedUsage(fresh_input_tokens=1000, output_tokens=0),
+            terminal="prompt_blocked",
+            response_model_override=True,
+        ),
+    ),
+    (
+        "gemini_prompt_blocked_stream",
+        "gemini_generate",
+        Case(
+            name="stream_prompt_blocked",
+            usage=ScriptedUsage(fresh_input_tokens=1000, output_tokens=0),
+            stream=True,
+            terminal="prompt_blocked",
+            response_model_override=True,
+        ),
+    ),
+)
 
 
 class TestWireFormats:
@@ -187,5 +234,67 @@ class TestWireFormats:
         assert row.spend is not None and cost_rows.approx_equal(row.spend, expected.total), (
             f"anthropic stream: spend {row.spend} != expected {expected.total} "
             f"(breakdown {row.breakdown.model_dump()})"
+        )
+        cost_rows.assert_total_is_sum_of_components(row)
+
+    @pytest.mark.parametrize("shape_wire_case", _SHAPES, ids=lambda entry: entry[0])
+    @pytest.mark.covers("quota_management.spend_tracking.scripted_wire.logs_cost")
+    def test_response_shape_bills_reported_usage(
+        self,
+        client: CostCalcClient,
+        resources: ResourceManager,
+        scoped_key: str,
+        shape_wire_case: tuple[str, str, Case],
+    ) -> None:
+        shape, wire, case = shape_wire_case
+        map_key, _usage = _WIRE_USAGE[wire]
+        model: Final = _MODELS[map_key]
+        marker: Final = unique_marker()
+        model_name, _handle = register_scenario_deployment(client, resources, model, case, marker)
+        response: Final = client.proxy.transport.send(
+            "/chat/completions",
+            headers=client.proxy.transport.bearer(scoped_key),
+            json=ChatBody(
+                model=model_name,
+                messages=(ChatMessage(role="user", content=f"{marker} scripted {shape}"),),
+                stream=case.stream,
+                stream_options=ChatStreamOptions(include_usage=True) if case.stream else None,
+                tools=(
+                    (
+                        ChatTool(
+                            function=ChatToolFunction(
+                                name="get_weather",
+                                parameters={"type": "object", "properties": {"city": {"type": "string"}}},
+                            )
+                        ),
+                    )
+                    if case.tool_call
+                    else None
+                ),
+            ),
+            stream=case.stream,
+        )
+        assert response.ok, f"{shape}: proxy returned {response.status_code}: {response.body[:400]}"
+        if case.stream:
+            assert response.stream_done, f"{shape}: stream did not reach its terminal event"
+        assert response.stream_error is None, f"{shape}: stream error: {response.stream_error}"
+
+        expected: Final = expected_breakdown(model, case)
+        row: Final = cost_rows.poll_cost_row_where(
+            client.proxy,
+            scoped_key,
+            lambda r: r.metadata is not None and r.metadata.cost_breakdown is not None,
+        )
+        assert row is not None, f"{shape}: no spend row landed"
+        assert row.spend is not None and cost_rows.approx_equal(row.spend, expected.total), (
+            f"{shape}: spend {row.spend} != expected {expected.total} "
+            f"(breakdown {row.breakdown.model_dump()})"
+        )
+        prompt_tokens, completion_tokens = expected_token_columns(model, case)
+        assert row.prompt_tokens == prompt_tokens, (
+            f"{shape}: prompt_tokens {row.prompt_tokens} != {prompt_tokens}"
+        )
+        assert row.completion_tokens == completion_tokens, (
+            f"{shape}: completion_tokens {row.completion_tokens} != {completion_tokens}"
         )
         cost_rows.assert_total_is_sum_of_components(row)
