@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, ProxyException, UserAPIKeyAuth
@@ -70,7 +71,7 @@ class _MarketplaceEntry(TypedDict, total=False):
     homepage: object
     keywords: object
     category: object
-    installationPreference: str
+    installationPreference: ReadOnly[str]
 
 
 def _get_manifest_string(manifest: Mapping[str, object], key: str) -> str | None:
