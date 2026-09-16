@@ -2237,12 +2237,13 @@ async def update_team(
                 *LiteLLM_ManagementEndpoint_MetadataFields_Premium,
             )
         )
+        incoming_metadata: Final = updated_kv.get("metadata")
         if isinstance(existing_team_row.metadata, dict):
             if "metadata" not in updated_kv and (_team_member_fields_in_request or _writes_metadata_backed_field):
                 updated_kv["metadata"] = copy.deepcopy(existing_team_row.metadata)
-            elif isinstance(updated_kv.get("metadata"), dict):
+            elif isinstance(incoming_metadata, dict):
                 updated_kv["metadata"] = {
-                    **updated_kv["metadata"],
+                    **incoming_metadata,
                     **{
                         key: existing_team_row.metadata[key]
                         for key in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
