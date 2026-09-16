@@ -674,6 +674,26 @@ class TestProxyBaseLLMRequestProcessing:
         assert "guardrail-tag" in exc_info.value.message
 
     @pytest.mark.asyncio
+    async def test_enforce_guardrail_added_tag_budgets_still_checks_when_model_is_unparseable(self, monkeypatch):
+        from litellm.proxy.common_request_processing import _enforce_guardrail_added_tag_budgets
+
+        tag_budget_check = AsyncMock()
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+
+        await _enforce_guardrail_added_tag_budgets(
+            data={"model": 5, "metadata": {"tags": ["guardrail-tag"]}},
+            tags_before_guardrails=frozenset(),
+            route="/v1/chat/completions",
+            llm_router=None,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+        )
+
+        tag_budget_check.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_arms_auto_router_compression_before_guardrails(
         self, monkeypatch
     ):
