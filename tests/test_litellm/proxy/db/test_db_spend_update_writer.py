@@ -16,7 +16,11 @@ from redis.exceptions import DataError
 
 import litellm
 from litellm.proxy._types import Litellm_EntityType
-from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_spend_update_writer import (
+    _TEAM_ADVISORY_LOCK_SQL,
+    _TEAM_MEMBER_SPEND_SQL,
+    DBSpendUpdateWriter,
+)
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
@@ -870,79 +874,117 @@ async def test_commit_spend_updates_to_db_increments_agent_spend():
     assert call_kwargs["data"] == {"spend": {"increment": response_cost}}
 
 
-@pytest.mark.asyncio
-async def test_commit_spend_updates_to_db_increments_team_member_spend_and_total_spend():
-    """
-    Verify that _commit_spend_updates_to_db increments BOTH spend (cycle-scoped)
-    and total_spend (non-resetting) on LiteLLM_TeamMembership in a single
-    update_many call, using the same response_cost.
-    """
-    db_writer = DBSpendUpdateWriter()
-
-    mock_batcher = MagicMock()
-    mock_batcher.litellm_verificationtoken = MagicMock()
-    mock_batcher.litellm_verificationtoken.update_many = MagicMock()
-    mock_batcher.litellm_usertable = MagicMock()
-    mock_batcher.litellm_usertable.update_many = MagicMock()
-    mock_batcher.litellm_teamtable = MagicMock()
-    mock_batcher.litellm_teamtable.update_many = MagicMock()
-    mock_batcher.litellm_teammembership = MagicMock()
-    mock_batcher.litellm_teammembership.update_many = MagicMock()
-    mock_batcher.litellm_organizationtable = MagicMock()
-    mock_batcher.litellm_organizationtable.update_many = MagicMock()
-    mock_batcher.litellm_tagtable = MagicMock()
-    mock_batcher.litellm_tagtable.update_many = MagicMock()
-    mock_batcher.litellm_agentstable = MagicMock()
-    mock_batcher.litellm_agentstable.update_many = MagicMock()
-
+def _team_member_flush_fixtures() -> tuple[AsyncMock, MagicMock]:
+    """A transaction and prisma client that record the raw statement the member spend flush runs."""
     mock_transaction = AsyncMock()
     mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
     mock_transaction.__aexit__ = AsyncMock(return_value=False)
-    mock_transaction.batch_ = MagicMock(
-        return_value=AsyncMock(
-            __aenter__=AsyncMock(return_value=mock_batcher),
-            __aexit__=AsyncMock(return_value=False),
-        )
-    )
+    mock_transaction.execute_raw = AsyncMock(return_value=1)
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = MagicMock()
     mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+    return mock_transaction, mock_prisma_client
 
-    mock_proxy_logging = MagicMock()
-    # Skip team-membership cache invalidation — out of scope for this test.
-    mock_proxy_logging.call_details.get = MagicMock(return_value=None)
 
-    team_id = "team-abc"
-    user_id = "user-xyz"
-    response_cost = 0.75
-    entity_id = f"team_id::{team_id}::user_id::{user_id}"
-    db_spend_update_transactions = {
+def _team_member_only_transactions(spend_by_member_key: dict[str, float]) -> dict[str, dict[str, float]]:
+    return {
         "user_list_transactions": {},
         "end_user_list_transactions": {},
         "key_list_transactions": {},
         "team_list_transactions": {},
-        "team_member_list_transactions": {entity_id: response_cost},
+        "team_member_list_transactions": spend_by_member_key,
         "org_list_transactions": {},
         "tag_list_transactions": {},
         "agent_list_transactions": {},
     }
 
-    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
-        await db_writer._commit_spend_updates_to_db(
-            prisma_client=mock_prisma_client,
-            n_retry_times=0,
-            proxy_logging_obj=mock_proxy_logging,
-            db_spend_update_transactions=db_spend_update_transactions,
-        )
 
-    mock_batcher.litellm_teammembership.update_many.assert_called_once()
-    call_kwargs = mock_batcher.litellm_teammembership.update_many.call_args[1]
-    assert call_kwargs["where"] == {"team_id": team_id, "user_id": user_id}
-    assert call_kwargs["data"] == {
-        "spend": {"increment": response_cost},
-        "total_spend": {"increment": response_cost},
-    }
+@pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_writes_team_member_spend_in_one_roster_checked_upsert():
+    """
+    Regression (LIT-5502): members added without a budget had no membership row, and the
+    previous update_many matched zero rows, so their spend was silently dropped.
+
+    The flush now takes the same per-team advisory lock the team endpoints hold, then runs
+    one INSERT ... ON CONFLICT statement for the whole batch that adds the cost to both spend
+    and total_spend and creates the missing row for a user still on the team roster, so no
+    per-team read can fail or time out ahead of the writes.
+    """
+    db_writer = DBSpendUpdateWriter()
+    team_id = "team-abc"
+    user_id = "user-xyz"
+    response_cost = 0.75
+    mock_transaction, mock_prisma_client = _team_member_flush_fixtures()
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.call_details.get = MagicMock(return_value=None)
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=mock_proxy_logging,
+        db_spend_update_transactions=_team_member_only_transactions(
+            {f"team_id::{team_id}::user_id::{user_id}": response_cost}
+        ),
+    )
+
+    lock_call, spend_call = mock_transaction.execute_raw.await_args_list
+    lock_statement, locked_team_id = lock_call.args
+    assert lock_statement is _TEAM_ADVISORY_LOCK_SQL
+    assert locked_team_id == team_id
+    assert "pg_advisory_xact_lock(hashtext($1))" in lock_statement
+    statement, user_ids, team_ids, costs = spend_call.args
+    assert statement is _TEAM_MEMBER_SPEND_SQL
+    assert (user_ids, team_ids, costs) == ([user_id], [team_id], [response_cost])
+    assert 'INSERT INTO "LiteLLM_TeamMembership"' in statement
+    assert "members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', p.user_id))" in statement
+    assert "ON CONFLICT (user_id, team_id) DO UPDATE" in statement
+    assert 'spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend' in statement
+    assert 'total_spend = "LiteLLM_TeamMembership".total_spend + EXCLUDED.total_spend' in statement
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_orders_team_member_rows_by_team_then_user():
+    """
+    The member spend statement touches rows in the order of its input arrays, so the batch
+    is handed over sorted by (team_id, user_id), with each cost kept next to its member, and
+    each distinct team is locked once, in that same order, so concurrent pods lock in the
+    same order and cannot deadlock.
+    """
+    db_writer = DBSpendUpdateWriter()
+    mock_transaction, mock_prisma_client = _team_member_flush_fixtures()
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.call_details.get = MagicMock(return_value=None)
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=mock_proxy_logging,
+        db_spend_update_transactions=_team_member_only_transactions(
+            {
+                "team_id::team_c::user_id::user_x": 0.1,
+                "team_id::team_a::user_id::user_y": 0.2,
+                "team_id::team_a::user_id::user_x": 0.3,
+                "team_id::team_b::user_id::user_x": 0.4,
+            }
+        ),
+    )
+
+    *lock_calls, spend_call = mock_transaction.execute_raw.await_args_list
+    _statement, user_ids, team_ids, costs = spend_call.args
+    assert [lock_call.args for lock_call in lock_calls] == [
+        (_TEAM_ADVISORY_LOCK_SQL, "team_a"),
+        (_TEAM_ADVISORY_LOCK_SQL, "team_b"),
+        (_TEAM_ADVISORY_LOCK_SQL, "team_c"),
+    ]
+    assert list(zip(team_ids, user_ids, costs)) == [
+        ("team_a", "user_x", 0.3),
+        ("team_a", "user_y", 0.2),
+        ("team_b", "user_x", 0.4),
+        ("team_c", "user_x", 0.1),
+    ]
 
 
 @pytest.mark.asyncio
@@ -2118,19 +2160,6 @@ async def test_commit_daily_tag_spend_no_requeue_on_success():
             id="team",
         ),
         pytest.param(
-            "team_member_list_transactions",
-            {
-                "team_id::team_c::user_id::user_x": 0.1,
-                "team_id::team_a::user_id::user_x": 0.2,
-                "team_id::team_b::user_id::user_x": 0.3,
-            },
-            "litellm_teammembership",
-            "update_many",
-            "team_id",
-            ["team_a", "team_b", "team_c"],
-            id="team_member",
-        ),
-        pytest.param(
             "org_list_transactions",
             {"org_c": 0.1, "org_a": 0.2, "org_b": 0.3},
             "litellm_organizationtable",
@@ -2200,6 +2229,8 @@ async def test_commit_spend_updates_iterates_in_sorted_order(
             __aexit__=AsyncMock(return_value=False),
         )
     )
+
+    mock_transaction.query_raw = AsyncMock(return_value=[])
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db = MagicMock()
@@ -2960,6 +2991,7 @@ def _good_tx(mock_batcher):
     tx = AsyncMock()
     tx.__aenter__ = AsyncMock(return_value=tx)
     tx.__aexit__ = AsyncMock(return_value=False)
+    tx.query_raw = AsyncMock(return_value=[])
     tx.batch_ = MagicMock(
         return_value=AsyncMock(
             __aenter__=AsyncMock(return_value=mock_batcher),

@@ -18,6 +18,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 from urllib.parse import quote, unquote
 
+from typing_extensions import LiteralString
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -130,6 +132,8 @@ class _SpendBatchManager(Protocol):
 class _SpendTransaction(Protocol):
     def batch_(self) -> _SpendBatchManager: ...
 
+    async def execute_raw(self, query: LiteralString, *args: object) -> int: ...
+
 
 class _SpendTransactionManager(Protocol):
     async def __aenter__(self) -> _SpendTransaction: ...
@@ -153,6 +157,45 @@ def _timed_request_duration_ms(
 def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
     tx: Final[_SpendTransactionManager] = prisma_client.db.tx(timeout=timedelta(seconds=60))
     return tx
+
+
+# The per-team advisory lock the team endpoints hold while changing a roster (TEAM_ADVISORY_LOCK_SQL),
+# so the roster check below cannot interleave with their writes. A row lock would deadlock with the
+# access-group endpoints, which lock a team row after an access-group lock.
+_TEAM_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
+
+# One statement adds every member's cost to their membership row. A missing row is created only
+# while the user is still on the team's roster, so a spend flush landing after a removal never
+# recreates the member.
+_TEAM_MEMBER_SPEND_SQL: Final = """
+INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id, spend, total_spend)
+SELECT p.user_id, p.team_id, p.cost, p.cost
+FROM unnest($1::text[], $2::text[], $3::float8[]) AS p(user_id, team_id, cost)
+WHERE EXISTS (
+    SELECT 1 FROM "LiteLLM_TeamTable" t
+    WHERE t.team_id = p.team_id
+      AND t.members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', p.user_id))
+)
+   OR EXISTS (SELECT 1 FROM "LiteLLM_TeamMembership" m WHERE m.user_id = p.user_id AND m.team_id = p.team_id)
+ON CONFLICT (user_id, team_id) DO UPDATE
+SET spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend,
+    total_spend = "LiteLLM_TeamMembership".total_spend + EXCLUDED.total_spend
+"""
+
+
+async def _write_team_member_spend(transaction: _SpendTransaction, spend_by_member_key: Mapping[str, float]) -> None:
+    # key is "team_id::<value>::user_id::<value>"; the string sort orders rows by (team_id, user_id),
+    # keeping lock order consistent across pods to prevent deadlocks
+    keys: Final = tuple(sorted(spend_by_member_key))
+    team_ids: Final = [key.split("::")[1] for key in keys]
+    for team_id in dict.fromkeys(team_ids):
+        _ = await transaction.execute_raw(_TEAM_ADVISORY_LOCK_SQL, team_id)
+    _ = await transaction.execute_raw(
+        _TEAM_MEMBER_SPEND_SQL,
+        [key.split("::")[3] for key in keys],
+        team_ids,
+        [spend_by_member_key[key] for key in keys],
+    )
 
 
 def get_llm_router():
@@ -1676,21 +1719,7 @@ class DBSpendUpdateWriter:
                 start_time = time.time()
                 try:
                     async with _spend_update_tx(prisma_client) as transaction:
-                        async with transaction.batch_() as batcher:
-                            # Sort by composite key for consistent lock ordering across pods to prevent deadlocks.
-                            # Key format "team_id::<v>::user_id::<v>" makes the string sort equivalent to sorting by (team_id, user_id).
-                            for key, response_cost in sorted(team_member_list_transactions.items()):
-                                # key is "team_id::<value>::user_id::<value>"
-                                team_id = key.split("::")[1]
-                                user_id = key.split("::")[3]
-
-                                batcher.litellm_teammembership.update_many(  # 'update_many' prevents error from being raised if no row exists
-                                    where={"team_id": team_id, "user_id": user_id},
-                                    data={
-                                        "spend": {"increment": response_cost},
-                                        "total_spend": {"increment": response_cost},
-                                    },
-                                )
+                        await _write_team_member_spend(transaction, team_member_list_transactions)
                     # Transaction succeeded, break out of retry loop
                     break
                 except Exception as e:
