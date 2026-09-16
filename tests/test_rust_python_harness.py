@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -8,10 +9,9 @@ import pytest
 models = importlib.import_module("tests.rust-python-harness.shared.reporting.models")
 strategy_module = importlib.import_module("tests.rust-python-harness.shared.reporting.strategy")
 ui = importlib.import_module("tests.rust-python-harness.shared.reporting.ui")
-contracts = importlib.import_module("tests.rust-python-harness.shared.unit_runners.contracts")
 cli = importlib.import_module("tests.rust-python-harness.cli")
 
-UNIT_TEST_CONTRACTS = contracts.UNIT_TEST_CONTRACTS
+REPO_ROOT = Path(__file__).resolve().parents[1]
 CaseResult = models.CaseResult
 Coverage = models.Coverage
 HarnessCase = models.HarnessCase
@@ -37,10 +37,6 @@ def _case(module: str = "tests.example") -> HarnessCase:
     "module",
     [
         "tests.rust-python-harness.strategies.e2e_parity.sdk.ocr.test_sdk_parity",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.ocr.case",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.messages.case",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.chat_completions.case",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.transcription.case",
     ],
 )
 def test_implemented_namespace_case_modules_remain_importable(module: str) -> None:
@@ -108,14 +104,10 @@ def test_should_format_developer_facing_run_context() -> None:
     assert _format_duration(1.25) == "1.2s"
 
 
-def test_should_leave_functions_without_unit_test_contracts_unimplemented() -> None:
-    assert "messages" not in UNIT_TEST_CONTRACTS
-
-
 def test_strategy_subcommand_accepts_function_filter(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code: Final = cli.main(["run", "unit_tests_rust", "--function", "messages"])
+    exit_code: Final = cli.main(["run", "unit_tests_parity", "--function", "messages"])
 
     captured: Final = capsys.readouterr()
     assert exit_code == 0
     assert "- messages: not_implemented" in captured.out
-    assert "unit_tests_rust:messages: not_implemented" not in captured.out
+    assert "unit_tests_parity:messages: not_implemented" not in captured.out

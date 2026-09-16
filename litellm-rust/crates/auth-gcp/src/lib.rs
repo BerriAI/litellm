@@ -105,7 +105,6 @@ impl VertexAuth {
         }
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     pub async fn validate_environment(
         &self,
         headers: Vec<(String, String)>,

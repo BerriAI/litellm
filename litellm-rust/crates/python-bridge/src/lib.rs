@@ -122,6 +122,8 @@ mod tests {
                 .filter(|name| !name.starts_with('_'))
                 .collect();
             assert_eq!(public_names, expected);
+
+            assert!(!module.hasattr("_trace").expect("module lookup should work"));
         });
     }
 

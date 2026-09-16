@@ -212,7 +212,6 @@ fn normalize_features(features: Option<&Value>) -> Result<Option<String>, crate:
     Ok(Some(normalized.join(",")))
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn build_request(document: OcrDocument) -> Result<DocumentIntelligenceRequest, crate::ocr::Error> {
     let source = document.source();
     if source.is_empty() {

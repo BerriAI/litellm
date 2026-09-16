@@ -1890,31 +1890,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
-name = "litellm-ai-gateway"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64 0.22.1",
- "futures-channel",
- "futures-util",
- "litellm-auth",
- "litellm-config",
- "litellm-core",
- "reqwest 0.12.28",
- "rustls 0.23.42",
- "rustls-native-certs",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.19",
- "tokio",
- "tokio-tungstenite",
- "tower",
- "tracing",
-]
-
-[[package]]
 name = "litellm-auth"
 version = "0.1.0"
 dependencies = [
@@ -1994,16 +1969,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-config"
-version = "0.1.0"
-dependencies = [
- "litellm-core",
- "pyo3",
- "serde_json",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
@@ -2032,6 +1997,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
+ "tracing",
  "url",
  "veil",
 ]

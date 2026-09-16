@@ -158,9 +158,7 @@ fn route_input_validation_preserves_left_to_right_order() {
             PyModule::new(py, "invalid_payload").expect("invalid payload should be created");
         let error = module
             .getattr("transcription")
-            .and_then(|function| {
-                function.call(("model", &invalid_payload), Some(&headers_kwargs))
-            })
+            .and_then(|function| function.call(("model", &invalid_payload), Some(&headers_kwargs)))
             .expect_err("payload should be validated before headers");
         assert!(!error.to_string().contains("extra_headers"));
     });
@@ -238,29 +236,6 @@ fn chat_completions_decline_keeps_existing_reasons() {
         assert_eq!(
             unreadable_reason.as_deref(),
             Some("unreadable message list")
-        );
-    });
-}
-
-#[cfg(feature = "trace-parity")]
-#[test]
-fn trace_routes_preserve_the_direct_route_signatures() {
-    Python::initialize();
-    Python::attach(|py| {
-        let parent = PyModule::new(py, "routes").expect("module should be created");
-        let module = PyModule::new(py, "_trace").expect("trace module should be created");
-        ocr::register_trace(&module).expect("trace OCR route should register");
-        parent
-            .add_submodule(&module)
-            .expect("trace module should be attached");
-        let signature: String = module
-            .getattr("ocr")
-            .and_then(|function| function.getattr("__text_signature__"))
-            .and_then(|signature| signature.extract())
-            .expect("trace signature should be available");
-        assert_eq!(
-            signature,
-            "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, input_sources=None, timeout_seconds=None)"
         );
     });
 }

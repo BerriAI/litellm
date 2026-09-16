@@ -18,16 +18,8 @@ from ...shared.unit_runners.suite_runner import run_suites
 from .reporting import render_rust_unit_results
 from .runner import RustSuite, run_suite
 
-
 RUST_SUITES: Final[Mapping[SdkFunction, RustSuite]] = MappingProxyType(
-    {
-        sdk_function: RustSuite(
-            cargo_manifest=contract.rust.cargo_manifest,
-            cargo_filter=contract.rust.cargo_filter,
-            cargo_package=contract.rust.cargo_package,
-        )
-        for sdk_function, contract in UNIT_TEST_CONTRACTS.items()
-    }
+    {"ocr": RustSuite(cargo_manifest="litellm-rust/Cargo.toml", cargo_filter="ocr")}
 )
 
 

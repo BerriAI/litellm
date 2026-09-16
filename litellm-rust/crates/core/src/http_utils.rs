@@ -51,7 +51,6 @@ pub async fn http_request(
     request.send().await
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn execute_http_request(
     client: &reqwest::Client,
     request: reqwest::Request,
