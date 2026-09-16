@@ -43,6 +43,8 @@ _METRIC_COLUMNS: Final = (
     "api_requests",
     "successful_requests",
     "failed_requests",
+    "total_response_time_ms",
+    "timed_requests",
     "compression_savings_spend",
     "prompt_caching_savings_spend",
     "gateway_injected_caching_savings_spend",

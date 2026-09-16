@@ -767,6 +767,8 @@ _KEY_FREE_SOURCE_COLUMNS: Final = (
     "api_requests",
     "successful_requests",
     "failed_requests",
+    "total_response_time_ms",
+    "timed_requests",
 )
 
 

@@ -336,6 +336,8 @@ _DAILY_USER_SPEND_DDL: Final = """
         api_requests BIGINT DEFAULT 0,
         successful_requests BIGINT DEFAULT 0,
         failed_requests BIGINT DEFAULT 0,
+        total_response_time_ms BIGINT DEFAULT 0,
+        timed_requests BIGINT DEFAULT 0,
         created_at TIMESTAMP DEFAULT now(),
         updated_at TIMESTAMP,
         UNIQUE (user_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint)
@@ -345,12 +347,14 @@ _DAILY_USER_SPEND_DDL: Final = """
 _PER_KEY_SUMS_SQL: Final = """
     SELECT COALESCE(model, '') AS model, COALESCE(model_group, '') AS model_group,
            COALESCE(custom_llm_provider, '') AS custom_llm_provider,
-           SUM(spend) AS spend, SUM(prompt_tokens) AS prompt_tokens, SUM(api_requests) AS api_requests
+           SUM(spend) AS spend, SUM(prompt_tokens) AS prompt_tokens, SUM(api_requests) AS api_requests,
+           SUM(total_response_time_ms) AS total_response_time_ms, SUM(timed_requests) AS timed_requests
     FROM "LiteLLM_DailyUserSpend" WHERE date = %s
     GROUP BY 1, 2, 3 ORDER BY 1, 2, 3
 """
 _GLOBAL_ROWS_SQL: Final = """
-    SELECT model, model_group, custom_llm_provider, spend, prompt_tokens, api_requests
+    SELECT model, model_group, custom_llm_provider, spend, prompt_tokens, api_requests,
+           total_response_time_ms, timed_requests
     FROM "LiteLLM_DailyGlobalSpend" WHERE date = %s ORDER BY 1, 2, 3
 """
 
@@ -380,6 +384,8 @@ def _user_txn(**overrides):
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
+        "total_response_time_ms": 800,
+        "timed_requests": 1,
         **overrides,
     }
 
@@ -393,6 +399,8 @@ def _normalized(rows: list[dict[str, object]]) -> list[tuple[object, ...]]:
             float(r["spend"]),
             int(r["prompt_tokens"]),
             int(r["api_requests"]),
+            int(r["total_response_time_ms"]),
+            int(r["timed_requests"]),
         )  # pyright: ignore[reportArgumentType]  # dict_row values are untyped
         for r in rows
     ]
@@ -436,5 +444,6 @@ def test_reconcile_day_sql_makes_the_global_day_equal_the_per_key_sums(_rollup_p
 
     assert _normalized(global_rows) == _normalized(per_key)
     assert sum(float(r["spend"]) for r in global_rows) == pytest.approx(15.0)  # pyright: ignore[reportArgumentType]  # dict_row values are untyped
+    assert sum(int(r["total_response_time_ms"]) for r in global_rows) == 1600  # pyright: ignore[reportArgumentType]  # dict_row values are untyped
     assert [(r["model"], r["model_group"]) for r in global_rows] == [("gpt-5", ""), ("gpt-5", "gpt-5")]
     assert untouched == []
