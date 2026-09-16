@@ -153,6 +153,28 @@ async def test_mint_reads_the_users_teams_from_the_database_not_a_stale_cached_r
 
 
 @pytest.mark.asyncio
+async def test_mint_refuses_a_user_scim_deactivated_after_the_cache_last_saw_them_active(fetch_teams, monkeypatch):
+    """SCIM deactivation writes the user row without evicting the cached copy, so a mint off the cache would
+    keep issuing credentials for the management-object TTL. The mint reads the database row, so the
+    deactivated user is refused on the first refresh after the deactivation."""
+    from litellm.proxy import proxy_server
+
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="deactivated-user", value=_user(user_id="deactivated-user", teams=["team-a"]), model_type=LiteLLM_UserTable
+    )
+    prisma = MagicMock()
+    prisma.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=_user(user_id="deactivated-user", teams=["team-a"], metadata={"scim_active": False})
+    )
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    assert await mint_proxy_credential("deactivated-user", "team-a") == "no_active_key"
+    fetch_teams.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_mint_refuses_a_team_the_user_is_not_on(load_user, fetch_teams):
     assert await mint_proxy_credential("u1", "team-c") == "not_a_member"
     fetch_teams.assert_not_awaited()
