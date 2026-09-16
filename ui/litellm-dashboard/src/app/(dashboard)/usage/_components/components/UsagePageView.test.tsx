@@ -1371,12 +1371,10 @@ describe("UsagePage", () => {
   });
 
   describe("selected-user budget wiring", () => {
-    const userSelectCombobox = (): HTMLElement => {
-      let node: HTMLElement | null = screen.getByText("Filter by user");
-      while (node && !node.querySelector('[role="combobox"]')) {
-        node = node.parentElement;
-      }
-      return node!.querySelector('[role="combobox"]') as HTMLElement;
+    const selectAlice = async () => {
+      const user = userEvent.setup();
+      await user.click(screen.getByPlaceholderText("Search users by email…"));
+      await user.click(await screen.findByText("Alice (user-001)"));
     };
 
     it("feeds the tile the selected user's budget and duration, not the admin's", async () => {
@@ -1394,8 +1392,7 @@ describe("UsagePage", () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
       await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled());
 
-      await userEvent.setup().click(userSelectCombobox());
-      await userEvent.setup().click(screen.getByText("Alice (user-001)"));
+      await selectAlice();
 
       await waitFor(() => {
         expect(screen.getByTestId("view-user-spend")).toHaveAttribute("data-max-budget", "600");
@@ -1415,8 +1412,7 @@ describe("UsagePage", () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
       await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled());
 
-      await userEvent.setup().click(userSelectCombobox());
-      await userEvent.setup().click(screen.getByText("Alice (user-001)"));
+      await selectAlice();
 
       await waitFor(() => {
         expect(screen.getByTestId("view-user-spend")).toHaveAttribute("data-budget-loading", "true");
