@@ -1668,3 +1668,38 @@ def test_calculate_usage_keeps_a_litellm_usage_chunk() -> None:
     assert usage.completion_tokens == 20
     assert usage.prompt_tokens_details is not None
     assert usage.prompt_tokens_details.cached_tokens == 64
+
+
+def _usage_from_details(details: object) -> Usage:
+    usage: Final = Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120)
+    usage.prompt_tokens_details = details  # type: ignore[assignment]
+    return usage
+
+
+def _calculate_usage_for(usage_block: Usage) -> Usage:
+    usage_chunk: Final = ModelResponseStream(model="gpt-5.4-mini", choices=[])
+    usage_chunk.usage = usage_block  # type: ignore[attr-defined]
+    chunks: Final = (
+        _openai_chunk(choices=({"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None},)),
+        _openai_chunk(choices=({"index": 0, "delta": {}, "finish_reason": "stop"},)),
+        usage_chunk,
+    )
+    return ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="ok",
+        count_prompt_tokens=_fail_prompt_token_count,
+    )
+
+
+def test_calculate_usage_keeps_token_details_given_as_a_plain_dict() -> None:
+    usage: Final = _calculate_usage_for(_usage_from_details({"cached_tokens": 64}))
+
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 64
+
+
+def test_calculate_usage_drops_token_details_it_cannot_read() -> None:
+    usage: Final = _calculate_usage_for(_usage_from_details(object()))
+
+    assert usage.prompt_tokens_details is None
