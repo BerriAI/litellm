@@ -192,6 +192,29 @@ def test_concurrent_requests_publish_atomically(store: RedisResponseStore, provi
     assert len(provider.hits) == 1
 
 
+@pytest.mark.parametrize("age_past_expiry_ms", [0, 1])
+def test_expired_response_is_rejected_without_physical_eviction(
+    store: RedisResponseStore, age_past_expiry_ms: int,
+) -> None:
+    response_key: Final = store.keys("expired")[0]
+    retained: Final = store.client.eval(
+        """
+local clock = redis.call('TIME')
+local expires = clock[1] * 1000 + math.floor(clock[2] / 1000) - tonumber(ARGV[1])
+redis.call('HSET', KEYS[1], 'captured', expires - 86400000, 'expires', expires, 'payload', 'old-response')
+return redis.call('PTTL', KEYS[1])
+""",
+        1, response_key, age_past_expiry_ms,
+    )
+    assert retained == -1
+    replacement: Final = store.lookup("expired")
+    assert isinstance(replacement, CaptureLease)
+    assert replacement.expires_at_ms - replacement.captured_at_ms == 86_400_000
+    assert store.publish("expired", replacement, b"fresh-response")
+    hit: Final = store.lookup("expired")
+    assert isinstance(hit, CacheHit) and hit.payload == b"fresh-response"
+
+
 @pytest.mark.parametrize("truncated", [False, True])
 def test_stream_completion_controls_publication(store: RedisResponseStore, provider: Provider, truncated: bool) -> None:
     provider.stream = True
