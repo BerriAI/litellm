@@ -986,6 +986,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "publicai",
     "synthetic",
     "tensormesh",
+    "tiyuvta",
     "apertis",
     "nano-gpt",
     "poe",
