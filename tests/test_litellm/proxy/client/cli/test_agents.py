@@ -9,8 +9,6 @@ import pytest
 import requests
 from click.testing import CliRunner
 
-
-
 from litellm.proxy.client.cli.commands.agents import (
     AgentRunError,
     ModelSyncSkipped,
@@ -544,8 +542,146 @@ class TestRunAgent:
         assert args[-2:] == ("exec", "do a thing")
         assert 'model_provider="litellm"' in args
         assert 'model_providers.litellm.base_url="http://localhost:4000/v1"' in args
-        # overrides must precede the codex subcommand so codex parses them
         assert args.index('model_provider="litellm"') < args.index("exec")
+
+    @pytest.mark.parametrize(
+        "subcommand",
+        [
+            ("exec",),
+            ("e",),
+            ("resume", "--last"),
+            ("review",),
+            ("fork", "--last"),
+            ("exec", "resume", "--last"),
+            ("exec", "review"),
+            ("exec", "fork", "--last"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "config_args",
+        [
+            ("-c", "model_reasoning_effort=low"),
+            ("--config", "model_reasoning_effort=low"),
+            ("--config=model_reasoning_effort=low",),
+            ("-cmodel_reasoning_effort=low",),
+            ("-c=model_reasoning_effort=low",),
+        ],
+    )
+    def test_codex_injects_proxy_overrides_at_subcommand_config_scope(self, subcommand, config_args):
+        launcher = _Recorder()
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ("/usr/local/bin/codex", *subcommand, *config_args, "hello"),
+            skip_verify=True,
+            base_env={},
+            which=lambda name: name,
+            launcher=launcher,
+        )
+
+        binary, args, env = launcher.calls[0]
+        assert binary == "/usr/local/bin/codex"
+        assert args == [
+            "/usr/local/bin/codex",
+            *subcommand,
+            *agent_launch_args("codex", "http://localhost:4000"),
+            *config_args,
+            "hello",
+        ]
+        assert env["OPENAI_API_KEY"] == "sk-key"
+
+    @pytest.mark.parametrize("first_scope", [(), ("exec",)])
+    def test_codex_replays_user_overrides_after_proxy_defaults(self, first_scope):
+        launcher = _Recorder()
+        provider = ("-c", 'model_provider="custom"')
+        base_url = ("--config", 'model_providers.litellm.base_url="http://other/v1"')
+        last_config = ("-c", "model_reasoning_effort=low")
+        child_scope = () if first_scope else ("exec",)
+        prefix = (*first_scope, *provider, *child_scope, *base_url)
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ("codex", *prefix, *last_config, "hello"),
+            skip_verify=True,
+            base_env={},
+            which=lambda name: name,
+            launcher=launcher,
+        )
+        assert launcher.calls[0][1] == [
+            "codex",
+            *prefix,
+            *agent_launch_args("codex", "http://localhost:4000"),
+            *provider,
+            *base_url,
+            *last_config,
+            "hello",
+        ]
+
+    @pytest.mark.parametrize(
+        "user_args",
+        [
+            ("exec", "--", "--config=model_provider=custom"),
+            ("exec", "--", "-c"),
+            ("exec", "explain --config and -c"),
+            ("exec", "-c"),
+            ("exec", "--config"),
+            ("exec", "-c", "--", "--config=literal"),
+            ("exec", "--config", "--help"),
+            ("exec", "-mcustom-model"),
+            ("exec", "--configurations=literal"),
+        ],
+    )
+    def test_codex_preserves_literals_and_missing_config_values(self, user_args):
+        launcher = _Recorder()
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ("codex", *user_args),
+            skip_verify=True,
+            base_env={},
+            which=lambda name: name,
+            launcher=launcher,
+        )
+        assert launcher.calls[0][1] == [
+            "codex",
+            *agent_launch_args("codex", "http://localhost:4000"),
+            *user_args,
+        ]
+
+    def test_codex_keeps_config_flag_after_option_with_missing_operand(self):
+        launcher = _Recorder()
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ("codex", "exec", "--output-schema", "-c", "model_reasoning_effort=low", "hello"),
+            skip_verify=True,
+            base_env={},
+            which=lambda name: name,
+            launcher=launcher,
+        )
+        assert launcher.calls[0][1] == [
+            "codex",
+            "exec",
+            "--output-schema",
+            *agent_launch_args("codex", "http://localhost:4000"),
+            "-c",
+            "model_reasoning_effort=low",
+            "hello",
+        ]
+
+    def test_other_agents_keep_config_arguments_in_place(self):
+        launcher = _Recorder()
+        command = ("mytool", "exec", "-c", "model=test", "--", "--config=prompt")
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            command,
+            skip_verify=True,
+            base_env={},
+            which=lambda name: name,
+            launcher=launcher,
+        )
+        assert launcher.calls[0][1] == list(command)
 
     def test_pi_preparer_runs_after_verify_and_before_launch(self):
         order = []
