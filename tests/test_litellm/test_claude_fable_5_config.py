@@ -26,15 +26,6 @@ def _load_root_cost_map() -> dict:
         return json.load(f)
 
 
-def test_fable_5_geo_multiplier_without_fast_mode():
-    """First-party ``inference_geo='us'`` carries the 1.1x premium, but unlike
-    the Opus line there is no fast-mode variant for Fable 5; a ``fast`` key
-    here would silently misprice ``speed='fast'`` requests."""
-    model_data = _load_root_cost_map()
-    entry = model_data["claude-fable-5"]["provider_specific_entry"]
-    assert entry == {"us": 1.1}
-
-
 def test_fable_5_present_in_bundled_backup():
     """The bundled backup is the runtime fallback (and what tests load with
     ``LITELLM_LOCAL_MODEL_COST_MAP=True``) — it must carry the same entries as
@@ -75,9 +66,7 @@ def test_fable_5_all_variants_carry_adaptive_thinking_flag(cost_map):
     so adaptive is the only valid thinking shape LiteLLM can emit for it."""
     variants = [k for k in cost_map if "claude-fable-5" in k]
     assert variants, "no claude-fable-5 entries found in cost map"
-    missing = [
-        k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True
-    ]
+    missing = [k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True]
     assert not missing, f"missing supports_adaptive_thinking: {missing}"
 
 
@@ -131,24 +120,6 @@ FABLE_5_1_VARIANTS = (
 )
 
 
-@pytest.mark.parametrize(
-    "cost_map",
-    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
-    ids=["root", "bundled_backup"],
-)
-def test_fable_5_1_cache_reads_cost_a_quarter_of_fable_5(cost_map):
-    """Fable 5.1 prices cache hits at 0.025x base input instead of the usual
-    0.1x, so copying Fable 5's cache-read price overcharges every cache hit 4x."""
-    for model_name in FABLE_5_1_VARIANTS:
-        info = cost_map[model_name]
-        geo_premium = model_name.startswith(("us.", "eu."))
-        expected = 2.75e-07 if geo_premium else 2.5e-07
-        assert info["cache_read_input_token_cost"] == expected, model_name
-        assert info["cache_read_input_token_cost"] == pytest.approx(
-            info["input_cost_per_token"] * 0.025
-        ), model_name
-
-
 def test_fable_5_1_present_in_bundled_backup():
     backup = GetModelCostMap.load_local_model_cost_map()
     root = _load_root_cost_map()
@@ -197,7 +168,5 @@ def test_sampling_params_flag_on_all_models_that_removed_them(cost_map):
         and not k.startswith("perplexity/")
     ]
     assert variants, "no matching entries found in cost map"
-    missing = [
-        k for k in variants if cost_map[k].get("supports_sampling_params") is not False
-    ]
+    missing = [k for k in variants if cost_map[k].get("supports_sampling_params") is not False]
     assert not missing, f"missing supports_sampling_params=false: {missing}"

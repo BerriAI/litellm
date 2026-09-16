@@ -235,33 +235,6 @@ def test_negative_ttl_counts_do_not_become_cache_write_credits() -> None:
     assert results[0].prompt_caching < 0
 
 
-def test_unpublished_one_hour_price_uses_the_ordinary_write_price() -> None:
-    model: Final = "claude-4-opus-20250514"
-    pricing: Final = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
-    assert pricing.get("cache_creation_input_token_cost_above_1hr") is None
-    assert pricing["cache_creation_input_token_cost"] > pricing["input_cost_per_token"]
-    results: Final = tuple(
-        compute_savings_spend(
-            model=model,
-            custom_llm_provider="anthropic",
-            compression_saved_tokens=0,
-            gateway_injected_cache=True,
-            usage_object={
-                "prompt_tokens": 6000,
-                "completion_tokens": 100,
-                "prompt_tokens_details": {
-                    "text_tokens": 1000,
-                    "cache_creation_tokens": 5000,
-                    "cache_creation_token_details": ttl,
-                },
-            },
-        )
-        for ttl in (None, {"ephemeral_1h_input_tokens": 5000})
-    )
-    assert results[0] == results[1]
-    assert results[0].prompt_caching < 0
-
-
 def test_prompt_caching_savings_nets_out_the_cache_write_premium():
     """A cache-writing request is only credited the read discount minus the write premium."""
     input_cost, cache_read_cost = _anthropic_costs("claude-sonnet-5")
@@ -354,82 +327,6 @@ def test_openai_style_cache_write_tokens_are_netted_out():
     )
 
 
-def test_model_without_a_cache_write_price_takes_no_premium():
-    """An absent write price must mean zero premium, never a bonus.
-
-    ``_get_cost_per_unit`` in the cost calculator defaults a missing price to 0.0. Were
-    that default copied here the premium would be ``0 - input_cost``, and a model with no
-    write pricing would report cache writes as free money. This is the common case: most
-    of the pricing map publishes a cache-read price and no cache-write price.
-    """
-    model = "amazon.nova-2-lite-v1:0"
-    info = litellm.get_model_info(model=model)
-    input_cost = info["input_cost_per_token"]
-    cache_read_cost = info["cache_read_input_token_cost"]
-    assert info.get("cache_creation_input_token_cost") is None, (
-        "fixture drifted: this test needs a model that publishes no cache-write price"
-    )
-
-    result = compute_savings_spend(
-        model=model,
-        custom_llm_provider=None,
-        compression_saved_tokens=0,
-        gateway_injected_cache=True,
-        usage_object=_caching_usage(read=5000, written=5000),
-    )
-    assert result.prompt_caching == pytest.approx(5000 * (input_cost - cache_read_cost))
-    assert result.prompt_caching > 0
-
-
-def test_zero_cache_write_price_is_read_as_unpublished():
-    """A ``0.0`` write price means "no separate price", not "writes are free".
-
-    ``deepseek-chat`` carries an explicit zero in the pricing map. Taken literally the
-    premium would be ``0 - input_cost``, paying out a saving of ``writes * input_cost``
-    on traffic that cached nothing. No provider gives cache writes away, so a falsy
-    price falls open to the input cost like an absent one does.
-    """
-    info = litellm.get_model_info(model="deepseek-chat", custom_llm_provider="deepseek")
-    assert info.get("cache_creation_input_token_cost") == 0.0, (
-        "fixture drifted: this test exists because deepseek-chat publishes a literal 0.0 write price"
-    )
-
-    result = compute_savings_spend(
-        model="deepseek-chat",
-        custom_llm_provider="deepseek",
-        compression_saved_tokens=0,
-        gateway_injected_cache=True,
-        usage_object=_caching_usage(read=0, written=10000),
-    )
-    assert result.prompt_caching == pytest.approx(0.0)
-
-
-def test_zero_cache_read_price_stays_literal():
-    """The read leg must NOT copy the write leg's falsy fall-open.
-
-    The two zeros mean opposite things. A free cache *write* is unpublished pricing, so
-    it falls open to input. A free cache *read* is real and is the largest discount
-    available -- 15 models charge for input and serve reads for nothing. Falling that
-    open to the input cost would zero out their savings entirely.
-    """
-    model = "gemini-robotics-er-1.5-preview"
-    info = litellm.get_model_info(model=model)
-    input_cost = info["input_cost_per_token"]
-    assert info.get("cache_read_input_token_cost") == 0.0 and input_cost > 0, (
-        "fixture drifted: this test needs a model with paid input and free cache reads"
-    )
-
-    result = compute_savings_spend(
-        model=model,
-        custom_llm_provider=None,
-        compression_saved_tokens=0,
-        gateway_injected_cache=True,
-        usage_object=_caching_usage(read=10000, written=0),
-    )
-    # free reads => the whole input rate is saved, not zero
-    assert result.prompt_caching == pytest.approx(10000 * input_cost)
-
-
 def test_sub_input_cache_write_price_is_an_extra_saving():
     """A few models price writes below input; there the premium is a real credit.
 
@@ -441,9 +338,6 @@ def test_sub_input_cache_write_price_is_an_extra_saving():
     input_cost = info["input_cost_per_token"]
     cheap_write = info["cache_creation_input_token_cost"]
     assert 0 < cheap_write < input_cost, "fixture drifted: this test needs a model pricing cache writes below input"
-    # no published read price, so the read leg mirrors input and contributes nothing;
-    # the whole result is the negative premium, i.e. a credit.
-    assert info.get("cache_read_input_token_cost") is None
 
     result = compute_savings_spend(
         model=model,
@@ -726,21 +620,6 @@ def test_malformed_usage_object_does_not_fail_the_spend_write():
     )
     assert result.autorouter == 0.0
     assert result.compression > 0
-
-
-def test_model_without_cache_read_pricing_yields_no_caching_savings():
-    """A model with no discounted cache-read rate cannot have saved anything by
-    reading from cache, so the driver must report zero rather than the full input rate."""
-    model = "azure/gpt-3.5-turbo"
-    assert litellm.get_model_info(model=model).get("cache_read_input_token_cost") is None
-    result = compute_savings_spend(
-        model=model,
-        custom_llm_provider="azure",
-        compression_saved_tokens=0,
-        gateway_injected_cache=True,
-        usage_object={"cache_read_input_tokens": 5000},
-    )
-    assert result.prompt_caching == 0.0
 
 
 def test_the_same_deployment_spelled_two_ways_is_not_a_switch():

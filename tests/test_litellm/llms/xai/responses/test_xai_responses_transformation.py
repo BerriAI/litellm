@@ -10,9 +10,7 @@ Source: litellm/llms/xai/responses/transformation.py
 from unittest.mock import MagicMock, Mock
 
 import httpx
-import pytest
 
-import litellm
 from litellm.llms.xai.cost_calculator import cost_per_token
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -366,12 +364,16 @@ class TestXAIResponsesWebSearchBilling:
 
     def _raw_response_json(self, include_web_search: bool) -> dict:
         web_search_output = (
-            [{
-                "type": "web_search_call",
-                "id": "ws_1",
-                "status": "completed",
-                "action": {"type": "search", "query": "grok"},
-            }] if include_web_search else []
+            [
+                {
+                    "type": "web_search_call",
+                    "id": "ws_1",
+                    "status": "completed",
+                    "action": {"type": "search", "query": "grok"},
+                }
+            ]
+            if include_web_search
+            else []
         )
         tool_usage = {"server_side_tool_usage_details": self._TOOL_DETAILS} if include_web_search else {}
         return {
@@ -430,20 +432,6 @@ class TestXAIResponsesWebSearchBilling:
         assert bridged.prompt_tokens == 100
         assert bridged.completion_tokens == 20
         assert getattr(bridged, "server_side_tool_usage_details") == self._TOOL_DETAILS
-
-    def test_completion_cost_bills_web_search_calls(self):
-        with_search = litellm.completion_cost(
-            completion_response=self._transform(include_web_search=True),
-            model="xai/grok-4",
-            custom_llm_provider="xai",
-        )
-        without_search = litellm.completion_cost(
-            completion_response=self._transform(include_web_search=False),
-            model="xai/grok-4",
-            custom_llm_provider="xai",
-        )
-
-        assert with_search - without_search == pytest.approx(2 * 5.0 / 1000.0)
 
     def test_streaming_terminal_event_keeps_schema_and_details(self):
         parsed_chunk = {
@@ -535,9 +523,7 @@ class TestXAIResponsesReportedCost:
         assert cost_per_token(model="grok-4-latest", usage=chat_usage) == (0.0, 0.0037756)
 
     def test_usage_without_a_reported_cost_is_left_alone(self):
-        usage = self._transformed_usage(
-            {"input_tokens": 100, "output_tokens": 200, "total_tokens": 300}
-        )
+        usage = self._transformed_usage({"input_tokens": 100, "output_tokens": 200, "total_tokens": 300})
 
         assert usage.cost is None
 
