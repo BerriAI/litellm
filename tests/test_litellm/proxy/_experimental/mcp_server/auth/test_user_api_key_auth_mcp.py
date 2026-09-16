@@ -1,13 +1,16 @@
 import contextlib
 import json
 import os
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
+from starlette.types import Scope
 
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -6801,47 +6804,148 @@ class TestMCPDcrBridgeDelegateAdmission:
         assert exc_info.value.status_code == 403
         assert not exc_info.value.headers
 
-    async def test_explicit_litellm_key_wins_over_envelope_arm(self):
-        """An explicit x-litellm-api-key is always a LiteLLM credential and its arm precedes the
-        envelope arm: user_api_key_auth validates the key and NO inner token is injected, even
-        though the Authorization header carries a valid envelope."""
-        envelope = self._mint_bridge_envelope()
-        scope = {
+    @staticmethod
+    def _dual_credential_scope(envelope: str) -> Scope:
+        return {
             "type": "http",
             "method": "POST",
             "path": "/mcp/bridge_delegate_server",
             "headers": [
                 (b"x-litellm-api-key", b"sk-explicit-litellm-key"),
                 (b"authorization", f"Bearer {envelope}".encode("latin-1")),
+                (b"x-mcp-bridge_alias-authorization", b"Bearer caller-supplied-token"),
             ],
         }
 
-        async def mock_user_api_key_auth(api_key, request):
-            return UserAPIKeyAuth(api_key=api_key, user_id="litellm-key-user")
-
+    @pytest.fixture
+    def dual_credential_gateway(self) -> Iterator[AsyncMock]:
         with (
-            patch(
+            patch(  # test-quality-ok: supply the explicit key's authenticated gateway identity
                 "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-                side_effect=mock_user_api_key_auth,
+                new_callable=AsyncMock,
+                return_value=self._reloaded_key(rpm_limit=7),
             ) as mock_auth,
-            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
-            patch("litellm.proxy.proxy_server.master_key", self._MASTER_KEY),
+            patch(  # test-quality-ok: isolate registry lookup for the request's single bridge target
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+            patch(  # test-quality-ok: use a synthetic signing key with real envelope cryptography
+                "litellm.proxy.proxy_server.master_key", self._MASTER_KEY
+            ),
         ):
-            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server(alias="bridge_alias")
+            yield mock_auth
+
+    @pytest.mark.parametrize("user_subject", [False, True], ids=["key-bound", "user-bound"])
+    async def test_explicit_key_retains_permissions_and_opens_matching_envelope(
+        self, dual_credential_gateway: AsyncMock, user_subject: bool
+    ) -> None:
+        envelope: Final = self._mint_bridge_envelope(user_id="envelope-user-42" if user_subject else None)
+        with (
+            self._patch_key_reload(return_value=self._reloaded_key()),
+            self._patch_user_reload(
+                return_value=MagicMock(
+                    user_id="envelope-user-42",
+                    organization_id=None,
+                    metadata={"scim_active": True},
+                    user_role=None,
+                    object_permission=None,
+                    object_permission_id=None,
+                )
+            ),
+        ):
             (
                 auth_result,
                 _mcp_auth_header,
                 _mcp_servers,
                 mcp_server_auth_headers,
-                _oauth2_headers,
-                _raw_headers,
-            ) = await MCPRequestHandler.process_mcp_request(scope)
+                oauth2_headers,
+                raw_headers,
+            ) = await MCPRequestHandler.process_mcp_request(self._dual_credential_scope(envelope))
 
-        mock_auth.assert_called_once()
-        assert mock_auth.call_args.kwargs["api_key"] == "Bearer sk-explicit-litellm-key"
-        # The explicit-key arm admitted; the envelope arm never ran, so no inner token is injected.
-        assert auth_result.user_id == "litellm-key-user"
-        assert mcp_server_auth_headers == {}
+        dual_credential_gateway.assert_awaited_once()
+        assert dual_credential_gateway.await_args.kwargs["api_key"] == "Bearer sk-explicit-litellm-key"
+        assert auth_result is dual_credential_gateway.return_value
+        assert auth_result.rpm_limit == 7
+        assert auth_result.object_permission is not None
+        assert auth_result.object_permission.mcp_servers == ["only-this-server"]
+        assert not _is_mcp_admitted_user_subject(auth_result)
+        assert mcp_server_auth_headers == {"bridge_alias": {"Authorization": "Bearer inner-upstream-access-token"}}
+        assert oauth2_headers is None
+        assert raw_headers is not None
+        assert "authorization" not in raw_headers
+
+    @pytest.mark.parametrize(
+        "key_hash,user_id,key_owner",
+        [
+            ("another-key-hash", None, "envelope-user-42"),
+            (None, "another-user", "envelope-user-42"),
+            (None, "envelope-user-42", None),
+        ],
+        ids=["different-key-same-owner", "different-user", "key-without-owner"],
+    )
+    async def test_explicit_key_rejects_envelope_for_another_principal(
+        self, dual_credential_gateway: AsyncMock, key_hash: str | None, user_id: str | None, key_owner: str | None
+    ) -> None:
+        dual_credential_gateway.return_value = self._reloaded_key(user_id=key_owner)
+        envelope: Final = self._mint_bridge_envelope(key_hash=key_hash, user_id=user_id)
+        with pytest.raises(HTTPException) as exc_info:
+            await MCPRequestHandler.process_mcp_request(self._dual_credential_scope(envelope))
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Bridge credential does not match the LiteLLM key"
+
+    @pytest.mark.parametrize("key_status", [401, 403])
+    async def test_explicit_key_failure_cannot_fall_back_to_valid_envelope(
+        self, dual_credential_gateway: AsyncMock, key_status: int
+    ) -> None:
+        dual_credential_gateway.side_effect = HTTPException(status_code=key_status, detail="Explicit key rejected")
+        with pytest.raises(HTTPException) as exc_info:
+            await MCPRequestHandler.process_mcp_request(self._dual_credential_scope(self._mint_bridge_envelope()))
+        assert exc_info.value.status_code == key_status
+        assert exc_info.value.detail == "Explicit key rejected"
+
+    @pytest.mark.parametrize("invalid_case", ["malformed", "expired", "wrong-server", "wrong-signing-key"])
+    async def test_explicit_key_does_not_mask_invalid_envelope(
+        self, dual_credential_gateway: AsyncMock, invalid_case: str
+    ) -> None:
+        envelope: Final = (
+            "llm_env_invalid"
+            if invalid_case == "malformed"
+            else self._mint_bridge_envelope(
+                minted_at=datetime.now(timezone.utc) - timedelta(hours=2) if invalid_case == "expired" else None,
+                server_id="another-server" if invalid_case == "wrong-server" else "bridge-server-id",
+                master_key="sk-another-master-key" if invalid_case == "wrong-signing-key" else None,
+            )
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await MCPRequestHandler.process_mcp_request(self._dual_credential_scope(envelope))
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.headers is not None
+        assert "invalid_token" in exc_info.value.headers["www-authenticate"]
+        assert "resource_metadata=" in exc_info.value.headers["www-authenticate"]
+        dual_credential_gateway.assert_awaited_once()
+
+    @pytest.mark.parametrize("team_blocked", [False, True], ids=["revoked-key", "blocked-team"])
+    async def test_explicit_key_does_not_skip_envelope_live_policy(
+        self, dual_credential_gateway: AsyncMock, team_blocked: bool
+    ) -> None:
+        with (
+            self._patch_key_reload(
+                return_value=self._reloaded_key(),
+                side_effect=None
+                if team_blocked
+                else ProxyException(
+                    message="Authentication Error, Invalid proxy server token passed.",
+                    type="token_not_found_in_db",
+                    param="key",
+                    code=401,
+                ),
+                team_blocked=team_blocked,
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await MCPRequestHandler.process_mcp_request(self._dual_credential_scope(self._mint_bridge_envelope()))
+        assert exc_info.value.status_code == 401
+        dual_credential_gateway.assert_awaited_once()
 
     async def test_non_bridge_oauth_delegate_server_does_not_take_envelope_arm(self):
         """An oauth_delegate server that is NOT a DCR bridge (``dcr_bridge`` unset) must not take the

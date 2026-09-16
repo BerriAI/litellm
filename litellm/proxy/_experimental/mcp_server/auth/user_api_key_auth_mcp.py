@@ -463,6 +463,32 @@ class MCPRequestHandler:
                 api_key=f"Bearer {_get_bearer_token_or_received_api_key(litellm_api_key)}",
                 request=request,
             )
+            if (
+                oauth2_headers
+                and is_bridge_envelope_shaped(oauth2_headers["Authorization"])
+                and (
+                    explicit_bridge_target := MCPRequestHandler._single_dcr_bridge_delegate_target(
+                        path=request_route,
+                        mcp_servers=mcp_servers,
+                        client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                    )
+                )
+                is not None
+            ):
+                # Keep the explicit key's permissions and audit identity while opening
+                # the same principal's server-bound upstream credential.
+                (
+                    _,
+                    mcp_server_auth_headers,  # rebind-ok: feed verified headers into the existing egress scrub
+                ) = await MCPRequestHandler._admit_dcr_bridge_delegate(
+                    server=explicit_bridge_target.server,
+                    requested_name=explicit_bridge_target.requested_name,
+                    authorization_value=oauth2_headers["Authorization"],
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    request=request,
+                    route=request_route,
+                    explicit_key_auth=validated_user_api_key_auth,
+                )
         elif MCPRequestHandler._target_servers_are_true_passthrough(
             path=request_route,
             mcp_servers=mcp_servers,
@@ -737,6 +763,7 @@ class MCPRequestHandler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         request: Request,
         route: str,
+        explicit_key_auth: UserAPIKeyAuth | None = None,
     ) -> tuple[UserAPIKeyAuth, dict[str, dict[str, str]] | None]:
         """Open the bridge envelope and admit the caller under the live key it references.
 
@@ -771,6 +798,15 @@ class MCPRequestHandler:
         result: Final = resolve_bridge_envelope(authorization_value, keys, datetime.now(timezone.utc), server.server_id)
         match result:
             case BridgeEnvelopeAdmitted():
+                if explicit_key_auth is not None:
+                    # Browser envelopes bind a user; scripted envelopes bind one exact key.
+                    expected_subject: Final = (
+                        explicit_key_auth.api_key
+                        if result.identity.subject_type == "key_hash"
+                        else explicit_key_auth.user_id
+                    )
+                    if not expected_subject or result.identity.subject != expected_subject:
+                        raise HTTPException(status_code=403, detail="Bridge credential does not match the LiteLLM key")
                 header_key: Final = server.alias or server.server_name
                 if header_key is None:
                     raise HTTPException(status_code=500, detail="Server misconfigured: MCP server has no routable name")
