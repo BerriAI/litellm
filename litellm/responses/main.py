@@ -1,9 +1,10 @@
 import asyncio
 import contextvars
-from collections.abc import Coroutine, Generator, Iterable, Mapping
+from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast
 
 import httpx
@@ -15,7 +16,7 @@ from litellm._logging import verbose_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
-from litellm.constants import request_timeout
+from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, request_timeout
 from litellm.integrations.anthropic_cache_control_hook import CARRY_UNMATCHED_MESSAGE_POINTS
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
@@ -53,6 +54,7 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -407,6 +409,25 @@ def _bridges_to_chat_completions(
 ) -> bool:
     """Whether the request reaches its provider as a chat completion, not a Responses call."""
     return responses_api_provider_config is None or use_chat_completions_api is True
+
+
+def _bridge_kwargs(
+    kwargs: Mapping[str, object],
+    responses_api_provider_config: BaseResponsesAPIConfig | None,
+    allowed_openai_params: Sequence[str] | None,
+) -> Mapping[str, object]:
+    if responses_api_provider_config is None:
+        return kwargs
+    forwarded_keys: Final = frozenset(
+        (
+            *litellm.OPENAI_CHAT_COMPLETION_PARAMS,
+            *DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
+            *all_litellm_params,
+            *GenericLiteLLMParams.model_fields,
+            *(allowed_openai_params or ()),
+        )
+    )
+    return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
 
 
 _ResponsesCompatibilityFailure: TypeAlias = Literal["encrypted_task_unsupported"]
@@ -1290,6 +1311,7 @@ def responses(
             return _file_search_dispatch
 
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
+            bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,
@@ -1301,7 +1323,7 @@ def responses(
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
-                **kwargs,
+                **bridge_kwargs,
             )
 
         # Get optional parameters for the responses API

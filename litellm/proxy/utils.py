@@ -4,6 +4,7 @@ import copy
 import hashlib
 import inspect
 import json
+import math
 import os
 import smtplib
 import ssl
@@ -84,7 +85,11 @@ from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.exceptions import RejectedRequestError, SensitiveDataRouteException
+from litellm.exceptions import (
+    GuardrailRaisedException,
+    RejectedRequestError,
+    SensitiveDataRouteException,
+)
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
@@ -427,6 +432,14 @@ def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: 
     event_hook: Final[object] = getattr(callback, "event_hook", None)
     if event_hook:
         detail.setdefault("guardrail_mode", event_hook)
+
+
+def _is_client_error_exception(exc: Exception) -> bool:
+    if isinstance(exc, HTTPException):
+        return exc.status_code < 500
+    if isinstance(exc, ProxyException):
+        return not (exc.code.isdigit() and int(exc.code) >= 500)
+    return False
 
 
 def _exception_changes_request_flow(exc: BaseException) -> bool:
@@ -892,6 +905,9 @@ def _call_type_for_route(route: str | None) -> str | None:
     return call_types[0].value if len(operations) == 1 else None
 
 
+_PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
+
+
 def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
@@ -1253,7 +1269,12 @@ class ProxyLogging:
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
             "incoming_bearer_token": kwargs.get("incoming_bearer_token"),
-            "metadata": {"headers": kwargs.get("headers") or {}},
+            "metadata": {
+                "headers": kwargs.get("headers") or {},
+                "user_api_key_user_id": kwargs.get("user_api_key_user_id"),
+                "user_api_key_team_id": kwargs.get("user_api_key_team_id"),
+                "user_api_key_end_user_id": kwargs.get("user_api_key_end_user_id"),
+            },
         }
         user_api_key_auth: Final = kwargs.get("user_api_key_auth")
         if isinstance(user_api_key_auth, UserAPIKeyAuth):
@@ -2885,9 +2906,7 @@ class ProxyLogging:
 
         ### ALERTING ###
         await self.update_request_status(litellm_call_id=request_data.get("litellm_call_id", ""), status="fail")
-        if AlertType.llm_exceptions in self.alert_types and not isinstance(
-            original_exception, (HTTPException, ProxyException)
-        ):
+        if AlertType.llm_exceptions in self.alert_types and not _is_client_error_exception(original_exception):
             """
             Just alert on LLM API exceptions. Do not alert on user errors
 
@@ -2984,6 +3003,7 @@ class ProxyLogging:
             - Authentication Errors from user_api_key_auth
             - HTTP HTTPException (rate limit errors)
             - ProxyException (guardrail blocks, budget / rate-limit errors)
+            - GuardrailRaisedException (guardrail blocks / guardrail failures)
         """
 
         #########################################################
@@ -2998,9 +3018,7 @@ class ProxyLogging:
         if not (RouteChecks.is_llm_api_route(route) or RouteChecks.is_info_route(route)):
             return False
 
-        return isinstance(original_exception, (HTTPException, ProxyException)) or (
-            error_type == ProxyErrorTypes.auth_error
-        )
+        return isinstance(original_exception, _PROXY_ONLY_LLM_API_ERRORS) or (error_type == ProxyErrorTypes.auth_error)
 
     async def _handle_logging_proxy_only_error(
         self,
@@ -3556,8 +3574,9 @@ class ProxyLogging:
                     yield chunk
             except (GeneratorExit, asyncio.CancelledError):
                 raise
-            except Exception:
-                ProxyLogging._fire_deferred_stream_logging(request_data)
+            except Exception as e:
+                if not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
+                    ProxyLogging._fire_deferred_stream_logging(request_data)
                 raise
             ProxyLogging._fire_deferred_stream_logging(request_data)
             return
@@ -3631,8 +3650,9 @@ class ProxyLogging:
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
             raise
-        except Exception:
-            ProxyLogging._fire_deferred_stream_logging(request_data)
+        except Exception as e:
+            if not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
+                ProxyLogging._fire_deferred_stream_logging(request_data)
             raise
 
         # Fire deferred logging AFTER all guardrail end-of-stream blocks
@@ -3728,6 +3748,23 @@ class ProxyLogging:
             logging_obj._deferred_stream_complete_args = None
             asyncio.create_task(_deferred_cb(*_args))
 
+    @staticmethod
+    def _discard_deferred_stream_logging_for_failure(request_data: Mapping[str, object], error: Exception) -> bool:
+        """Drop the parked success dispatch for an assembled chat stream that ends in an error
+        ``post_call_failure_hook`` logs as a failure, billing its usage on the failure row instead.
+        Returns False when the parked dispatch should still be flushed by the caller."""
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if not isinstance(logging_obj, Logging):
+            return False
+        _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        assembled: Final = _args[0] if _args else None
+        if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS) or not isinstance(assembled, ModelResponse):
+            return False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj._deferred_stream_complete_args = None
+        logging_obj.record_assembled_response_for_failure(assembled)
+        return True
+
     async def _arelease_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -3792,6 +3829,7 @@ def jsonify_object(data: dict) -> dict:
 # Bounded to prevent memory leaks from accumulated rotations.
 _deprecated_key_cache: Final[LimitedSizeOrderedDict] = LimitedSizeOrderedDict(max_size=1000)
 _DEPRECATED_KEY_CACHE_TTL_SECONDS: Final = 60
+_PRISMA_DEFAULT_TX_TIMEOUT: Final = timedelta(seconds=5)
 
 
 async def _lookup_deprecated_key(
@@ -4170,13 +4208,13 @@ class PrismaClient:
             return self.db.read_target
         return self.db
 
-    def tx(self) -> "TransactionManager":
+    def tx(self, *, timeout: timedelta = _PRISMA_DEFAULT_TX_TIMEOUT) -> "TransactionManager":
         """Open an interactive transaction on the writer.
 
         Callers go through this instead of reaching into ``self.db`` so writer
         selection and read-replica routing stay encapsulated in the wrapper.
         """
-        return cast("TransactionManager", self.db.tx())  # cast-ok: wrappers delegate tx via __getattr__ (untyped)
+        return cast("TransactionManager", self.db.tx(timeout=timeout))  # cast-ok: untyped __getattr__ delegate
 
     def get_request_status(self, payload: dict | SpendLogsPayload) -> Literal["success", "failure"]:
         """
@@ -4287,7 +4325,8 @@ class PrismaClient:
                             t.spend AS team_spend,
                             t.max_budget AS team_max_budget,
                             t.tpm_limit AS team_tpm_limit,
-                            t.rpm_limit AS team_rpm_limit
+                            t.rpm_limit AS team_rpm_limit,
+                            t.tpd_limit AS team_tpd_limit
                             FROM "LiteLLM_VerificationToken" v
                             LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
                         """,
@@ -4726,6 +4765,7 @@ class PrismaClient:
                             t.soft_budget AS team_soft_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
+                            t.tpd_limit AS team_tpd_limit,
                             t.models AS team_models,
                             t.metadata AS team_metadata,
                             t.blocked AS team_blocked,
@@ -4743,6 +4783,7 @@ class PrismaClient:
                             b.max_budget AS litellm_budget_table_max_budget,
                             b.tpm_limit AS litellm_budget_table_tpm_limit,
                             b.rpm_limit AS litellm_budget_table_rpm_limit,
+                            b.tpd_limit AS litellm_budget_table_tpd_limit,
                             b.model_max_budget as litellm_budget_table_model_max_budget,
                             b.soft_budget as litellm_budget_table_soft_budget,
                             o.metadata as organization_metadata,
@@ -6404,7 +6445,7 @@ class PrismaClient:
             return None
         try:
             value: Final = float(response_time_ms)
-            return value if value == value and value not in (float("inf"), float("-inf")) else None
+            return value if math.isfinite(value) else None
         except (ValueError, TypeError):
             verbose_proxy_logger.warning("Invalid response_time_ms value: %s", response_time_ms)
             return None

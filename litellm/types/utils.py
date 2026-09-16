@@ -48,6 +48,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
+    CachedTokensDetails,
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
@@ -252,6 +253,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
+    cache_read_input_audio_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -281,8 +283,11 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_video_token: float | None  # for gemini omni models with video input
     input_cost_per_audio_per_second: float | None  # only for vertex ai models
     input_cost_per_video_per_second: float | None  # only for vertex ai models
+    input_cost_per_audio_token_batches: ReadOnly[float | None]
+    input_cost_per_image_token_batches: ReadOnly[float | None]
     input_cost_per_second: float | None  # for OpenAI Speech models
     input_cost_per_token_batches: float | None
+    input_cost_per_video_token_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
@@ -1710,6 +1715,9 @@ class PromptTokensDetailsWrapper(
     cache_creation_token_details: CacheCreationTokenDetails | None = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
 
+    cached_tokens_details: CachedTokensDetails | None = None
+    """Details of cached (cache-hit) tokens sent to the model. OpenAI realtime naming; carries the per-modality cache-read split."""
+
     def __setattr__(self, name: str, value: object) -> None:
         super().__setattr__(name, value)
         if name == "cache_write_tokens":
@@ -1756,6 +1764,8 @@ class PromptTokensDetailsWrapper(
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
             del self.cache_creation_token_details
+        if self.cached_tokens_details is None:
+            del self.cached_tokens_details
 
 
 class ServerToolUse(BaseModel):
@@ -2881,6 +2891,9 @@ RoutingDecisionCause = Literal[
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
+    "capability_classifier",
+    "llm_v2_classifier",
+    "llm_v2_fallback",
     # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
     # or below heuristic_first_max_tier, so it decided the tier and the LLM classifier was never
     # called. Distinct from "heuristic_scorer", which is a router whose only classifier IS the
@@ -2893,6 +2906,9 @@ RoutingDecisionCause = Literal[
     # The LLM classifier or classifier plugin failed on a router with an operator-defined
     # tier set, so the request routed to the configured fallback_tier without being classified.
     "classifier_fallback",
+    # The capability judge failed or returned an invalid verdict, so its fail-closed policy
+    # routed to capable_tier without consulting the unrelated complexity heuristic.
+    "capability_classifier_fallback",
     # The LLM classifier or classifier plugin failed and classifier_fallback is
     # 'default_model', so the request went to default_model without being classified.
     # Distinct from "default_fallback",
@@ -2968,6 +2984,19 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalation_keyword: str
     classifier_model: str
     classifier_cost: float
+    classifier_crux: str  # writable-ok: added only when a capability verdict is available
+    classifier_primary_rule: str  # writable-ok: added only when a capability verdict is available
+    classifier_capability_boundary: str  # writable-ok: added only when a capability verdict is available
+    classifier_p_solve: float  # writable-ok: added only when a capability verdict is available
+    classifier_calibrated_p_solve: ReadOnly[float]
+    classifier_calibration_version: ReadOnly[str]
+    classifier_efficient_p_solve: ReadOnly[float]
+    classifier_capable_p_solve: ReadOnly[float]
+    classifier_calibrated_efficient_p_solve: ReadOnly[float]
+    classifier_calibrated_capable_p_solve: ReadOnly[float]
+    classifier_max_quality_gap: ReadOnly[float]
+    classifier_prompt_version: ReadOnly[str]
+    classifier_threshold: float  # writable-ok: added only when a capability verdict is available
     escalated: bool
     context_escalated: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     context_escalation_original_tier: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
@@ -2983,7 +3012,9 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
 # logging off. Every other field aggregates the prompt without reproducing it and is kept,
 # so a redacted row stays explainable. `test_every_routing_decision_field_is_classified`
 # fails if a field is added to the record without being placed in one set or the other.
-PROMPT_QUOTING_ROUTING_DECISION_FIELDS: frozenset[str] = frozenset({"signals", "matched_keyword", "escalation_keyword"})
+PROMPT_QUOTING_ROUTING_DECISION_FIELDS: frozenset[str] = frozenset(
+    {"signals", "matched_keyword", "escalation_keyword", "classifier_crux"}
+)
 DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "router_model_name",
@@ -2996,6 +3027,18 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "score",
         "classifier_model",
         "classifier_cost",
+        "classifier_primary_rule",
+        "classifier_capability_boundary",
+        "classifier_p_solve",
+        "classifier_calibrated_p_solve",
+        "classifier_calibration_version",
+        "classifier_efficient_p_solve",
+        "classifier_capable_p_solve",
+        "classifier_calibrated_efficient_p_solve",
+        "classifier_calibrated_capable_p_solve",
+        "classifier_max_quality_gap",
+        "classifier_prompt_version",
+        "classifier_threshold",
         "escalated",
         "context_escalated",
         "context_escalation_original_tier",
@@ -3576,7 +3619,10 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_video_per_second_above_128k_tokens: float | None = None
     input_cost_per_video_per_second_above_15s_interval: float | None = None
     input_cost_per_video_per_second_above_8s_interval: float | None = None
+    input_cost_per_audio_token_batches: float | None = None
+    input_cost_per_image_token_batches: float | None = None
     input_cost_per_token_batches: float | None = None
+    input_cost_per_video_token_batches: float | None = None
     output_cost_per_token_batches: float | None = None
     output_cost_per_token_flex: float | None = None
     output_cost_per_token_priority: float | None = None
@@ -3754,11 +3800,22 @@ all_litellm_params = (
         "model_file_id_mapping",
         "litellm_logging_obj",
         "litellm_call_id",
+        "completion_call_id",
+        "model_alias_map",
+        "custom_prompt_dict",
+        "stream_response",
+        "cost_per_query",
+        "ssl_verify",
+        "data_residency",
+        "async_call",
+        "aembedding",
+        "allm_passthrough_route",
         "_litellm_strip_stream_usage",
         "use_client",
         "id",
         "fallbacks",
         "routing_strategy",
+        "_router_weights",
         "azure",
         "headers",
         "model_list",
@@ -4219,6 +4276,7 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     # rate_limits.updated), blocks the event loop, and discards the session usage.
     results: SkipValidation[OpenAIRealtimeStreamList]
     usage: Usage
+    service_tier: str | None = None
     _hidden_params: dict = {}
 
     @field_serializer("results")

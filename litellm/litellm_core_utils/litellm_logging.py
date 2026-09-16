@@ -560,7 +560,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # ids leaking into a different, later request on the same thread. Sync
         # support is deferred to a follow-up PR with its own safe-restore
         # mechanism; async calls (the proxy's only call path) are unaffected.
-        if supports_correlation_logging:
+        if supports_correlation_logging and litellm.request_correlation_in_logs:
             set_trace_id(self.litellm_trace_id)
             set_session_id(self.litellm_session_id)
         # set_trace_id()/set_session_id() sanitize (strip control chars, bound
@@ -647,6 +647,24 @@ class Logging(LiteLLMLoggingBaseClass):
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
         self.response_timing_metrics = dict(timing_metrics)  # mutable-ok: kept deep-copyable
+
+    def add_dynamic_callback(self, callback: CustomLogger) -> None:
+        self.dynamic_input_callbacks = self._with_dynamic_callback(self.dynamic_input_callbacks, callback)
+        self.dynamic_success_callbacks = self._with_dynamic_callback(self.dynamic_success_callbacks, callback)
+        self.dynamic_async_success_callbacks = self._with_dynamic_callback(
+            self.dynamic_async_success_callbacks, callback
+        )
+        self.dynamic_failure_callbacks = self._with_dynamic_callback(self.dynamic_failure_callbacks, callback)
+        self.dynamic_async_failure_callbacks = self._with_dynamic_callback(
+            self.dynamic_async_failure_callbacks, callback
+        )
+
+    @staticmethod
+    def _with_dynamic_callback(
+        callbacks: Sequence[str | Callable | CustomLogger] | None, callback: CustomLogger
+    ) -> list[str | Callable | CustomLogger]:
+        existing: Final = tuple(callbacks or ())
+        return [*existing, *(() if callback in existing else (callback,))]
 
     def process_dynamic_callbacks(self):
         """
@@ -2056,6 +2074,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
+    def record_assembled_response_for_failure(self, assembled: ModelResponse) -> None:
+        """Bill a fully streamed response on the failure log when a post-call hook rejects it."""
+        usage: Final = getattr(assembled, "usage", None)
+        if isinstance(usage, Usage):
+            self.record_partial_usage_for_failure(usage, self._response_cost_calculator(result=assembled) or 0.0)
+
     async def dispatch_failure_handlers(
         self,
         exception: Exception,
@@ -2160,9 +2184,14 @@ class Logging(LiteLLMLoggingBaseClass):
                     results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
                 )
             )
+            ws_tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(
+                results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+            )
+            ws_service_tier: Final = next(iter(ws_tier_partition)) if len(ws_tier_partition) == 1 else None
             logging_result = LiteLLMRealtimeStreamLoggingObject(
                 usage=combined_ws_usage,
                 results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                service_tier=ws_service_tier,
             )
 
         elif (
@@ -2525,7 +2554,7 @@ class Logging(LiteLLMLoggingBaseClass):
         call) would leave the outer request's subsequent log lines stamped with
         the nested call's trace_id/session_id instead of its own.
 
-        Uses a plain set() of the captured pre-call value rather than
+        Uses a plain contextvar set() of the captured pre-call value rather than
         contextvars.Token-based reset(), since this can end up called from a
         different asyncio Task/context than __init__ ran in (e.g. the request
         task's own wrapper() finally block, plus async_success_handler
@@ -2536,8 +2565,8 @@ class Logging(LiteLLMLoggingBaseClass):
         that Task's view of the contextvars, so calling it multiple times
         (once per Task involved in this attempt) is required, not just safe.
         """
-        set_trace_id(self._pre_call_trace_id)
-        set_session_id(self._pre_call_session_id)
+        trace_id_var.set(self._pre_call_trace_id)
+        session_id_var.set(self._pre_call_session_id)
 
     def _restore_correlation_context_if_unclaimed(self) -> None:
         """Guarded variant for __del__-triggered cleanup only.

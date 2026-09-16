@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Final, TypeAlias
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.types.llms.anthropic import AppliedEdit
 
 from .constants import CLEAR_TOOL_USES_EDIT_TYPE, COMPACT_EDIT_TYPE
@@ -82,9 +83,9 @@ async def apply_context_management(
     """Run edits in order; return a single ``PolyfillResult``.
 
     The dispatcher is async so async editors (``compact_20260112``) can
-    ``await`` the configured summarization model. Sync editors are called
-    inline — ``inspect.iscoroutinefunction`` decides how each editor is
-    invoked.
+    ``await`` the configured summarization model. Sync editors run in a
+    worker thread so their token counts stay off the event loop;
+    ``inspect.iscoroutinefunction`` decides how each editor is invoked.
     """
     edits: Final = _normalize_spec(context_management_spec)
     if not edits:
@@ -121,7 +122,7 @@ async def apply_context_management(
                 user_api_key_auth=user_api_key_auth,
             )
             if editor_is_async
-            else editor(
+            else await asyncify(editor)(
                 model=model,
                 messages=current_messages,
                 tools=tools,
