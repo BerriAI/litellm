@@ -1501,6 +1501,34 @@ def check_team_key_rpm_tpm_limits(
     )
 
 
+_KEY_TEAM_LIMIT_WARNING_FIELDS: Final[tuple[str, ...]] = (
+    "rpm_limit",
+    "tpm_limit",
+    "max_parallel_requests",
+    "max_budget",
+)
+
+
+def _update_request_with_retained_team_limits(
+    data: UpdateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+) -> UpdateKeyRequest:
+    """Fill omitted limit fields from the existing key for team-cap warnings.
+
+    /key/update often changes only team_id (or a subset of limits). Retained
+    rpm/tpm/concurrency/budget must still be compared against the effective
+    team caps so reassignment cannot silently keep an over-cap value.
+    """
+    retained: dict[str, object] = {}
+    for field_name in _KEY_TEAM_LIMIT_WARNING_FIELDS:
+        if field_name in data.model_fields_set:
+            continue
+        retained[field_name] = getattr(existing_key_row, field_name, None)
+    if not retained:
+        return data
+    return data.model_copy(update=retained)
+
+
 def _collect_key_team_limit_warnings(
     data: GenerateKeyRequest | UpdateKeyRequest,
     team_table: LiteLLM_TeamTable | LiteLLM_TeamTableCachedObj,
@@ -3006,7 +3034,10 @@ async def _validate_update_key_data(
 
     if team_obj is None:
         return ()
-    return _collect_key_team_limit_warnings(data=data, team_table=team_obj)
+    return _collect_key_team_limit_warnings(
+        data=_update_request_with_retained_team_limits(data=data, existing_key_row=existing_key_row),
+        team_table=team_obj,
+    )
 
 
 @router.post("/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
