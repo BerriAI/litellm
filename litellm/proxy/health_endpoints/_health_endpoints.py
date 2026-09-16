@@ -2265,10 +2265,16 @@ async def test_model_connection(
             or _string_mode_or_bad_request(raw_params_mode)
             or resolve_health_check_mode(probe_model_info, _OBJECT_MAPPING.validate_python(litellm_params))
         )
+        # A connection test needs no prices, and ``completion`` registers any
+        # request pricing under the shared ``{provider}/{model}`` cost-map key
+        # (a probe carries no router deployment id), which would re-price every
+        # sibling deployment of the same backend model. Probe without them,
+        # whether they came from the request or from the configuration.
+        probe_params: Final = CustomPricingLiteLLMParams.strip_custom_pricing_fields(litellm_params)
 
         result: Final = await run_with_timeout(
             litellm.ahealth_check(
-                model_params=litellm_params,
+                model_params=probe_params,
                 mode=probe_mode,
                 prompt="test from litellm",
                 input=["test from litellm"],
