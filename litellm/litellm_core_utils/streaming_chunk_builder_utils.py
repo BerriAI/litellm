@@ -212,7 +212,7 @@ def apply_grounding_request_counts(
 _TokenDetails = TypeVar("_TokenDetails", CompletionTokensDetails, PromptTokensDetailsWrapper)
 
 
-def _as_token_details(value: Any, wrapper: type[_TokenDetails]) -> _TokenDetails | None:
+def _as_token_details(value: object, wrapper: type[_TokenDetails]) -> _TokenDetails | None:
     """Coerce a token-details object of any shape into litellm's own model.
 
     A streamed usage block does not always arrive as a litellm ``Usage``. When the
