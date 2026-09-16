@@ -4,12 +4,16 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { ReactNode } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "@/../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import type { Organization } from "@/components/networking";
 import * as networking from "@/components/networking";
+import type { TagListResponse } from "@/components/tag_management/types";
 import UsagePage from "./UsagePageView";
 
 // Polyfill ResizeObserver for test environment
@@ -44,7 +48,13 @@ vi.mock("@/components/view_user_spend", () => ({
 }));
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
-  default: () => <div>Top Keys</div>,
+  default: ({ topKeysLimit, setTopKeysLimit }: { topKeysLimit: number; setTopKeysLimit: (limit: number) => void }) => (
+    <div>
+      <span>Top Keys</span>
+      <span>{`top-keys-limit:${topKeysLimit}`}</span>
+      <button onClick={() => setTopKeysLimit(25)}>set-top-keys-limit</button>
+    </div>
+  ),
 }));
 
 vi.mock("./EntityUsage/EntityUsage", () => ({
@@ -64,7 +74,8 @@ vi.mock("./EndpointUsage/EndpointUsage", () => ({
   default: () => <div>Endpoint Usage</div>,
 }));
 
-vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
+vi.mock("./UsageViewSelect/UsageViewSelect", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./UsageViewSelect/UsageViewSelect")>();
   const React = await import("react");
   const UsageViewSelect = ({ value, onChange, canViewTagUsage = false }: any) => {
     const tagOption = canViewTagUsage ? React.createElement("option", { value: "tag" }, "Tag Usage") : null;
@@ -75,6 +86,7 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
         onChange: (e: any) => onChange?.(e.target.value),
         role: "combobox",
         "data-testid": "usage-view-select",
+        "data-value": value,
       },
       React.createElement("option", { value: "global" }, "Global Usage"),
       React.createElement("option", { value: "team" }, "Team Usage"),
@@ -87,7 +99,7 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
     );
   };
   UsageViewSelect.displayName = "UsageViewSelect";
-  return { UsageViewSelect };
+  return { ...actual, UsageViewSelect };
 });
 
 vi.mock("@/components/shared/advanced_date_picker", async () => {
@@ -103,8 +115,7 @@ vi.mock("@/components/shared/advanced_date_picker", async () => {
         "button",
         {
           "data-testid": "pick-a-different-range",
-          onClick: () =>
-            onValueChange?.({ from: new Date("2024-01-01T00:00:00Z"), to: new Date("2024-01-08T00:00:00Z") }),
+          onClick: () => onValueChange?.({ from: new Date(2024, 0, 1), to: new Date(2024, 0, 8, 23, 59, 59, 999) }),
         },
         "pick",
       ),
@@ -320,6 +331,12 @@ describe("UsagePage", () => {
     disabledPersonalKeyCreation: false,
     showSSOBanner: false,
   };
+  const adminSession = { ...nonAdminSession, userRole: "Admin", userRoleLabel: "Admin" };
+
+  const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+    new URLSearchParams(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams);
+  const tab = (name: string): HTMLElement => screen.getByRole("tab", { name });
+  const selectedView = (): string | null => screen.getByTestId("usage-view-select").getAttribute("data-value");
 
   // Counts deliberately unlike anything in mockSpendData: the gateway tile must be
   // readable as coming from /gateway/daily/activity and from nothing else.
@@ -353,18 +370,7 @@ describe("UsagePage", () => {
   };
 
   beforeEach(() => {
-    mockUseAuthorized.mockReturnValue({
-      isLoading: false,
-      isAuthorized: true,
-      token: "mock-token",
-      accessToken: "test-token",
-      userId: "user-123",
-      userEmail: "test@example.com",
-      userRole: "Admin",
-      premiumUser: true,
-      disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
-    });
+    mockUseAuthorized.mockReturnValue(adminSession);
     mockUseCurrentUser.mockReturnValue({
       data: {
         user_id: "user-123",
@@ -587,7 +593,7 @@ describe("UsagePage", () => {
   });
 
   it("should withhold the tag list until it resolves so no empty state is shown while loading", async () => {
-    let resolveTagList: (tags: Record<string, unknown>) => void = () => {};
+    let resolveTagList: (tags: TagListResponse) => void = () => {};
     mockTagListCall.mockReturnValue(
       new Promise((resolve) => {
         resolveTagList = resolve;
@@ -626,7 +632,7 @@ describe("UsagePage", () => {
       );
     });
 
-    let resolveNewRange: (tags: Record<string, unknown>) => void = () => {};
+    let resolveNewRange: (tags: TagListResponse) => void = () => {};
     mockTagListCall.mockReturnValue(
       new Promise((resolve) => {
         resolveNewRange = resolve;
@@ -647,18 +653,7 @@ describe("UsagePage", () => {
   });
 
   it("should show tag usage selector option for internal users", async () => {
-    mockUseAuthorized.mockReturnValue({
-      isLoading: false,
-      isAuthorized: true,
-      token: "mock-token",
-      accessToken: "test-token",
-      userId: "user-123",
-      userEmail: "test@example.com",
-      userRole: "internal_user",
-      premiumUser: true,
-      disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
-    });
+    mockUseAuthorized.mockReturnValue({ ...nonAdminSession, userRole: "internal_user" });
 
     renderWithProviders(<UsagePage {...defaultProps} />);
 
@@ -930,6 +925,49 @@ describe("UsagePage", () => {
         null,
       );
     });
+
+    it("should filter by the user named in ?user=", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?user=user-002" });
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          "user-002",
+        );
+      });
+      expect(mockUserDailyActivityAggregatedCall).not.toHaveBeenCalledWith(
+        "test-token",
+        expect.any(Date),
+        expect.any(Date),
+        null,
+      );
+    });
+
+    it("should write the picked user to ?user=", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UsagePage {...defaultProps} />, { onUrlUpdate });
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      await openUserSelect();
+      await userEvent.setup().click(screen.getByText("Alice (user-001)"));
+
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate).get("user")).toBe("user-001");
+      });
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          "user-001",
+        );
+      });
+    });
   });
 
   describe("user usage view", () => {
@@ -974,18 +1012,7 @@ describe("UsagePage", () => {
 
   describe("non-admin user behavior", () => {
     it("should not render user selector for non-admin users", async () => {
-      mockUseAuthorized.mockReturnValue({
-        isLoading: false,
-        isAuthorized: true,
-        token: "mock-token",
-        accessToken: "test-token",
-        userId: "user-123",
-        userEmail: "test@example.com",
-        userRole: "Internal User",
-        premiumUser: false,
-        disabledPersonalKeyCreation: false,
-        showSSOBanner: false,
-      });
+      mockUseAuthorized.mockReturnValue({ ...nonAdminSession, premiumUser: false });
 
       renderWithProviders(<UsagePage {...defaultProps} />);
 
@@ -999,18 +1026,7 @@ describe("UsagePage", () => {
     });
 
     it("should always pass own userId for non-admin users", async () => {
-      mockUseAuthorized.mockReturnValue({
-        isLoading: false,
-        isAuthorized: true,
-        token: "mock-token",
-        accessToken: "test-token",
-        userId: "user-123",
-        userEmail: "test@example.com",
-        userRole: "Internal User",
-        premiumUser: false,
-        disabledPersonalKeyCreation: false,
-        showSSOBanner: false,
-      });
+      mockUseAuthorized.mockReturnValue({ ...nonAdminSession, premiumUser: false });
 
       renderWithProviders(<UsagePage {...defaultProps} />);
 
@@ -1242,7 +1258,8 @@ describe("UsagePage", () => {
     });
 
     it("should switch back to Public Model Name view", async () => {
-      renderWithProviders(<UsagePage {...defaultProps} />);
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UsagePage {...defaultProps} />, { onUrlUpdate });
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
@@ -1256,6 +1273,9 @@ describe("UsagePage", () => {
 
       await waitFor(() => {
         expect(screen.getByText("Top Litellm Models")).toBeInTheDocument();
+      });
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate).get("model_view")).toBe("individual");
       });
 
       // Switch back to groups
@@ -1363,6 +1383,287 @@ describe("UsagePage", () => {
       expect(screen.getByText("Key Activity")).toBeInTheDocument();
       expect(screen.getByText("MCP Server Activity")).toBeInTheDocument();
       expect(screen.getByText("Endpoint Activity")).toBeInTheDocument();
+    });
+  });
+
+  describe("URL state", () => {
+    const renderKeepingMountWrites = (ui: ReactNode, searchParams: string, onUrlUpdate: OnUrlUpdateFunction) =>
+      render(ui, {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <NuqsTestingAdapter
+            searchParams={searchParams}
+            onUrlUpdate={onUrlUpdate}
+            hasMemory
+            resetUrlUpdateQueueOnMount={false}
+          >
+            <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+          </NuqsTestingAdapter>
+        ),
+      });
+
+    it("opens the view named by ?view=", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?view=team" });
+
+      const entityUsage = await screen.findByTestId("entity-usage");
+      expect(entityUsage).toHaveAttribute("data-entity-type", "team");
+      expect(selectedView()).toBe("team");
+      expect(screen.queryByText("Daily Spend")).not.toBeInTheDocument();
+    });
+
+    it("writes the picked view to the URL and drops the previous view's entity filter", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?view=team&filter=team-1", onUrlUpdate });
+      await screen.findByTestId("entity-usage");
+
+      act(() => {
+        fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "tag" } });
+      });
+
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate).get("view")).toBe("tag");
+      });
+      expect(lastUrl(onUrlUpdate).has("filter")).toBe(false);
+      expect(screen.getByTestId("entity-usage")).toHaveAttribute("data-entity-type", "tag");
+    });
+
+    it.each(["organization", "customer", "agent", "user", "user-agent-activity", "my-usage", "nope"])(
+      "falls back to global usage when ?view=%s names a view this session cannot open",
+      async (view) => {
+        mockUseAuthorized.mockReturnValue(nonAdminSession);
+
+        renderWithProviders(<UsagePage {...defaultProps} organizations={mockOrganizations} />, {
+          searchParams: `?view=${view}`,
+        });
+
+        await waitFor(() => {
+          expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+            "test-token",
+            expect.any(Date),
+            expect.any(Date),
+            "user-123",
+          );
+        });
+        expect(screen.queryByTestId("entity-usage")).not.toBeInTheDocument();
+        expect(screen.queryByText("User Agent Activity", { selector: "div" })).not.toBeInTheDocument();
+        expect(screen.getByText("Daily Spend")).toBeInTheDocument();
+        expect(selectedView()).toBe("global");
+      },
+    );
+
+    it("opens ?view=tag for an internal user, who may see tag usage", async () => {
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?view=tag" });
+
+      expect(await screen.findByTestId("entity-usage")).toHaveAttribute("data-entity-type", "tag");
+      expect(selectedView()).toBe("tag");
+    });
+
+    it("keeps ?view=organization for an org admin whose membership resolves after the first render", async () => {
+      const mockUseIsOrgAdmin = vi.mocked(useIsOrgAdmin);
+      mockUseIsOrgAdmin.mockReturnValue(false);
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+
+      const { rerender } = renderKeepingMountWrites(
+        <UsagePage {...defaultProps} organizations={mockOrganizations} />,
+        "?view=organization&tab=keys",
+        onUrlUpdate,
+      );
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      expect(screen.queryByTestId("entity-usage")).not.toBeInTheDocument();
+
+      try {
+        mockUseIsOrgAdmin.mockReturnValue(true);
+        act(() => {
+          rerender(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
+        });
+
+        expect(await screen.findByTestId("entity-usage")).toHaveAttribute("data-entity-type", "organization");
+        expect(selectedView()).toBe("organization");
+        expect(onUrlUpdate).not.toHaveBeenCalled();
+      } finally {
+        mockUseIsOrgAdmin.mockReturnValue(false);
+      }
+    });
+
+    it("requests the range named by ?from= and ?to= as whole local days", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?from=2025-03-01&to=2025-03-05" });
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          "test-token",
+          new Date(2025, 2, 1),
+          new Date(2025, 2, 5, 23, 59, 59, 999),
+          null,
+        );
+      });
+    });
+
+    it("writes a picked range to the URL as calendar days in one update", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UsagePage {...defaultProps} />, { onUrlUpdate });
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("pick-a-different-range"));
+      });
+
+      await waitFor(() => {
+        expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+      });
+      expect(lastUrl(onUrlUpdate).get("from")).toBe("2024-01-01");
+      expect(lastUrl(onUrlUpdate).get("to")).toBe("2024-01-08");
+    });
+
+    it("selects the tab named by ?tab= and writes tab changes back", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?tab=keys", onUrlUpdate });
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      expect(tab("Key Activity")).toHaveAttribute("aria-selected", "true");
+      expect(tab("Cost")).toHaveAttribute("aria-selected", "false");
+
+      act(() => {
+        fireEvent.click(tab("MCP Server Activity"));
+      });
+
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate).get("tab")).toBe("mcp");
+      });
+      expect(tab("MCP Server Activity")).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("falls back to the cost tab and clears ?tab= when it names a tab the global view does not render", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderKeepingMountWrites(<UsagePage {...defaultProps} />, "?tab=agents&top_models=10", onUrlUpdate);
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      expect(tab("Cost")).toHaveAttribute("aria-selected", "true");
+      await waitFor(() => {
+        expect(onUrlUpdate).toHaveBeenCalled();
+      });
+      expect(lastUrl(onUrlUpdate).has("tab")).toBe(false);
+      expect(lastUrl(onUrlUpdate).get("top_models")).toBe("10");
+    });
+
+    it("drops ?tab=agents from the URL when leaving an entity view for global usage", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?view=team&tab=agents", onUrlUpdate });
+      await screen.findByTestId("entity-usage");
+
+      act(() => {
+        fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "global" } });
+      });
+
+      await waitFor(() => {
+        expect(onUrlUpdate).toHaveBeenCalled();
+      });
+      expect(lastUrl(onUrlUpdate).has("view")).toBe(false);
+      expect(lastUrl(onUrlUpdate).has("tab")).toBe(false);
+      expect(tab("Cost")).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("leaves ?tab=agents alone for an entity view, whose panel does render that tab", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderKeepingMountWrites(<UsagePage {...defaultProps} />, "?view=team&tab=agents", onUrlUpdate);
+      await screen.findByTestId("entity-usage");
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("pick-a-different-range"));
+      });
+
+      await waitFor(() => {
+        expect(onUrlUpdate).toHaveBeenCalled();
+      });
+      expect(onUrlUpdate.mock.calls.map(([update]) => update.searchParams.get("tab"))).toEqual(
+        onUrlUpdate.mock.calls.map(() => "agents"),
+      );
+      expect(lastUrl(onUrlUpdate).get("view")).toBe("team");
+      expect(lastUrl(onUrlUpdate).get("from")).toBe("2024-01-01");
+    });
+
+    it("shows litellm model names when ?model_view=individual", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?model_view=individual" });
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      expect(screen.getByText("Top Litellm Models")).toBeInTheDocument();
+      expect(screen.getByText("activity-source:models")).toBeInTheDocument();
+      expect(screen.queryByText("activity-source:model_groups")).not.toBeInTheDocument();
+    });
+
+    it("writes the model view toggle to ?model_view= and clears it on the default", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UsagePage {...defaultProps} />, { onUrlUpdate });
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      act(() => {
+        fireEvent.click(screen.getAllByText("Litellm Model Name")[0]);
+      });
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate).get("model_view")).toBe("individual");
+      });
+
+      act(() => {
+        fireEvent.click(screen.getAllByText("Public Model Name")[0]);
+      });
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate).has("model_view")).toBe(false);
+      });
+      expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
+    });
+
+    it("reads the top-models limit from ?top_models= and writes a picked limit back", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?top_models=25", onUrlUpdate });
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      expect(tab("25")).toHaveAttribute("aria-selected", "true");
+
+      act(() => {
+        fireEvent.click(tab("10"));
+      });
+
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate).get("top_models")).toBe("10");
+      });
+      expect(tab("10")).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("falls back to the default top-models limit when ?top_models= is not an offered size", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?top_models=7" });
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      expect(tab("5")).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("hands the top-keys table the limit from ?top_keys= and writes its picks back", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?top_keys=10", onUrlUpdate });
+      expect(await screen.findByText("top-keys-limit:10")).toBeInTheDocument();
+
+      act(() => {
+        fireEvent.click(screen.getByText("set-top-keys-limit"));
+      });
+
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate).get("top_keys")).toBe("25");
+      });
+      expect(screen.getByText("top-keys-limit:25")).toBeInTheDocument();
     });
   });
 });

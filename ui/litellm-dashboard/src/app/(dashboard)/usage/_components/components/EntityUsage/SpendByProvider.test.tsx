@@ -1,5 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { renderWithProviders } from "@/../tests/test-utils";
 import SpendByProvider from "./SpendByProvider";
 
 vi.mock("@/components/shared/chart_loader", () => ({
@@ -53,29 +55,29 @@ describe("SpendByProvider", () => {
   });
 
   it("should render", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={[]} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={[]} />);
     expect(screen.getByText("Spend by Provider")).toBeInTheDocument();
   });
 
   it("should display the title", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={[]} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={[]} />);
     expect(screen.getByText("Spend by Provider")).toBeInTheDocument();
   });
 
   it("should display Show Zero Spend toggle", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={[]} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={[]} />);
     expect(screen.getByText("Show Zero Spend")).toBeInTheDocument();
     expect(screen.getAllByRole("switch")[0]).toBeInTheDocument();
   });
 
   it("should display Show Unknown toggle", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={[]} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={[]} />);
     expect(screen.getByText("Show Unknown")).toBeInTheDocument();
     expect(screen.getAllByRole("switch")[1]).toBeInTheDocument();
   });
 
   it("should display table headers", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
     expect(screen.getByText("Provider")).toBeInTheDocument();
     expect(screen.getByText("Spend")).toBeInTheDocument();
     expect(screen.getByText("Successful")).toBeInTheDocument();
@@ -84,7 +86,7 @@ describe("SpendByProvider", () => {
   });
 
   it("should display provider data in table", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
     expect(screen.getAllByText("openai").length).toBeGreaterThan(0);
     expect(screen.getAllByText("anthropic").length).toBeGreaterThan(0);
     expect(screen.getByText("$150.50")).toBeInTheDocument();
@@ -92,65 +94,65 @@ describe("SpendByProvider", () => {
   });
 
   it("should display formatted spend values with two decimal places", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
     expect(screen.getByText("$150.50")).toBeInTheDocument();
     expect(screen.getByText("$200.75")).toBeInTheDocument();
   });
 
   it("should display successful requests with locale formatting", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
     expect(screen.getByText("95")).toBeInTheDocument();
     expect(screen.getByText("115")).toBeInTheDocument();
   });
 
   it("should display failed requests with locale formatting", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
     expect(screen.getAllByText("5").length).toBeGreaterThan(0);
   });
 
   it("should display tokens with locale formatting", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
     expect(screen.getByText("50,000")).toBeInTheDocument();
     expect(screen.getByText("75,000")).toBeInTheDocument();
   });
 
   it("should display provider logos", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
     expect(screen.getByTestId("provider-logo-openai")).toBeInTheDocument();
     expect(screen.getByTestId("provider-logo-anthropic")).toBeInTheDocument();
   });
 
   it("should filter out providers with zero spend by default", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
     expect(screen.getAllByText("openai").length).toBeGreaterThan(0);
     expect(screen.getAllByText("anthropic").length).toBeGreaterThan(0);
     expect(screen.queryByText("google")).not.toBeInTheDocument();
   });
 
   it("should filter out unknown provider by default", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
     expect(screen.queryByText("unknown")).not.toBeInTheDocument();
   });
 
   it("should display ChartLoader when loading is true", () => {
-    render(<SpendByProvider loading={true} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={true} isDateChanging={false} providerSpend={mockProviderSpend} />);
     expect(screen.getByTestId("chart-loader")).toBeInTheDocument();
     expect(screen.getByText("Loading chart data...")).toBeInTheDocument();
   });
 
   it("should display ChartLoader with date changing message when isDateChanging is true", () => {
-    render(<SpendByProvider loading={true} isDateChanging={true} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={true} isDateChanging={true} providerSpend={mockProviderSpend} />);
     expect(screen.getByTestId("chart-loader")).toBeInTheDocument();
     expect(screen.getByText("Processing date selection...")).toBeInTheDocument();
   });
 
   it("should not display table when loading is true", () => {
-    render(<SpendByProvider loading={true} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={true} isDateChanging={false} providerSpend={mockProviderSpend} />);
     expect(screen.queryByText("Provider")).not.toBeInTheDocument();
   });
 
   it("should handle empty provider spend array", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={[]} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={[]} />);
     expect(screen.getByText("Provider")).toBeInTheDocument();
     expect(screen.getByText("Spend")).toBeInTheDocument();
   });
@@ -166,7 +168,9 @@ describe("SpendByProvider", () => {
         tokens: 25000,
       },
     ];
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithNull} />);
+    renderWithProviders(
+      <SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithNull} />,
+    );
     expect(screen.getAllByText("$100.00").length).toBeGreaterThan(0);
   });
 
@@ -181,7 +185,9 @@ describe("SpendByProvider", () => {
         tokens: 25000,
       },
     ];
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithEmpty} />);
+    renderWithProviders(
+      <SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithEmpty} />,
+    );
     expect(screen.getAllByText("$100.00").length).toBeGreaterThan(0);
   });
 
@@ -196,12 +202,14 @@ describe("SpendByProvider", () => {
         tokens: 1234567,
       },
     ];
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithLargeTokens} />);
+    renderWithProviders(
+      <SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithLargeTokens} />,
+    );
     expect(screen.getByText("1,234,567")).toBeInTheDocument();
   });
 
   it("should render zero spend as a dash when Show Zero Spend is on", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
     fireEvent.click(screen.getAllByRole("switch")[0]);
     expect(screen.getAllByText("google").length).toBeGreaterThan(0);
     expect(screen.getByText("-")).toBeInTheDocument();
@@ -209,7 +217,7 @@ describe("SpendByProvider", () => {
   });
 
   it("should filter data correctly when both toggles are off", () => {
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
+    renderWithProviders(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
     expect(screen.getAllByText("openai").length).toBeGreaterThan(0);
     expect(screen.getAllByText("anthropic").length).toBeGreaterThan(0);
     expect(screen.queryByText("google")).not.toBeInTheDocument();
@@ -217,7 +225,7 @@ describe("SpendByProvider", () => {
   });
 
   it("renders one cyan donut sector per visible provider with the $ total as center label", () => {
-    const { container } = render(
+    const { container } = renderWithProviders(
       <SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />,
     );
 
@@ -249,7 +257,7 @@ describe("SpendByProvider", () => {
         tokens: 1000,
       },
     ];
-    const { container } = render(
+    const { container } = renderWithProviders(
       <SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithUnknown} />,
     );
 
@@ -281,8 +289,72 @@ describe("SpendByProvider", () => {
         tokens: 0,
       },
     ];
-    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithMixed} />);
+    renderWithProviders(
+      <SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithMixed} />,
+    );
     expect(screen.getAllByText("provider1").length).toBeGreaterThan(0);
     expect(screen.queryByText("provider2")).not.toBeInTheDocument();
+  });
+
+  describe("URL state", () => {
+    const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+      new URLSearchParams(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams);
+    const switches = () => screen.getAllByRole("switch");
+
+    it("shows zero-spend providers when ?zero_spend=true", () => {
+      renderWithProviders(
+        <SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />,
+        {
+          searchParams: "?zero_spend=true",
+        },
+      );
+
+      expect(switches()[0]).toHaveAttribute("aria-checked", "true");
+      expect(switches()[1]).toHaveAttribute("aria-checked", "false");
+      expect(screen.getAllByText("google").length).toBeGreaterThan(0);
+      expect(screen.queryByText("unknown")).not.toBeInTheDocument();
+    });
+
+    it("shows the unknown provider when ?unknown=true", () => {
+      renderWithProviders(
+        <SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />,
+        {
+          searchParams: "?unknown=true",
+        },
+      );
+
+      expect(switches()[0]).toHaveAttribute("aria-checked", "false");
+      expect(switches()[1]).toHaveAttribute("aria-checked", "true");
+      expect(screen.getAllByText("unknown").length).toBeGreaterThan(0);
+      expect(screen.queryByText("google")).not.toBeInTheDocument();
+    });
+
+    it("writes each toggle under its own key and drops it when switched back off", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(
+        <SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />,
+        {
+          onUrlUpdate,
+        },
+      );
+
+      fireEvent.click(switches()[0]);
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate).get("zero_spend")).toBe("true");
+      });
+      expect(lastUrl(onUrlUpdate).has("unknown")).toBe(false);
+
+      fireEvent.click(switches()[1]);
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate).get("unknown")).toBe("true");
+      });
+      expect(lastUrl(onUrlUpdate).get("zero_spend")).toBe("true");
+
+      fireEvent.click(switches()[0]);
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate).has("zero_spend")).toBe(false);
+      });
+      expect(lastUrl(onUrlUpdate).get("unknown")).toBe("true");
+    });
   });
 });

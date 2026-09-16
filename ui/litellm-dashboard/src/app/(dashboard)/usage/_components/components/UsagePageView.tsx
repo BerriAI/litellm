@@ -23,6 +23,7 @@ import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
@@ -46,6 +47,7 @@ import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
+import { GLOBAL_USAGE_TABS, USAGE_TABS, USAGE_TOP_LIMITS, useUsageUrlState } from "../hooks/useUsageUrlState";
 import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
@@ -60,12 +62,11 @@ import {
 } from "./gatewayActivity";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
-import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
+import ModelViewToggle from "./ModelViewToggle";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
-import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import UsageAIChatPanel from "./UsageAIChatPanel";
-import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import { UsageOption, UsageViewSelect, visibleUsageOptions } from "./UsageViewSelect/UsageViewSelect";
 
 interface UsagePageProps {
   teams: Team[];
@@ -89,15 +90,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // Separate loading states for better UX
   const [isDateChanging, setIsDateChanging] = useState(false);
 
-  // Create initial dates outside of state to prevent recreation
-  const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
-  const initialToDate = useMemo(() => new Date(), []);
-
-  // Single date state that directly triggers data fetching
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: initialFromDate,
-    to: initialToDate,
-  });
+  const {
+    view: selectedUsageView,
+    dateValue,
+    user: selectedUserId,
+    modelView: modelViewType,
+    topKeys: topKeysLimit,
+    topModels: topModelsLimit,
+    setView: setUsageView,
+    setDateValue,
+    setUser: setSelectedUserId,
+    setModelView: setModelViewType,
+    setTopKeys: setTopKeysLimit,
+    setTopModels: setTopModelsLimit,
+  } = useUsageUrlState();
 
   const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
   // No [] default: an unresolved query must stay undefined so the customer
@@ -111,31 +117,18 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
 
-  // For admins: null means global view (all users), a string means filter by that user
-  // For non-admins: always set to their own user ID
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(isAdmin ? null : userID || null);
-  const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
-  const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
-  // Org-admin membership is read from the server, so unlike the other usage
-  // views this one can be revoked while the page is open. Derive the view in
-  // render rather than storing it, so the fallback lands on the same paint and
-  // the selector never holds a value it no longer offers.
-  const usageView: UsageOption =
-    selectedUsageView === "organization" && !canViewOrganizationUsage ? "global" : selectedUsageView;
+  // Derived in render and never written back: org-admin membership loads async
+  // and can be revoked mid-session, and a URL write would lose the deep link.
+  const visibleViews = visibleUsageOptions(userRole, canViewTagUsage, isOrgAdmin);
+  const usageView: UsageOption = visibleViews.includes(selectedUsageView) ? selectedUsageView : "global";
+  const showsGlobalPanel = usageView === "global" || usageView === "my-usage";
+  const [activeTab, setActiveTab] = useUrlTab(showsGlobalPanel ? GLOBAL_USAGE_TABS : USAGE_TABS, "cost");
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
-  const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
-  const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
-  // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
-  useEffect(() => {
-    if (!isAdmin && userID) {
-      setSelectedUserId(userID);
-    }
-  }, [isAdmin, userID]);
 
   // For non-admins or "my-usage" view, always pass their own user_id
   const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : selectedUserId;
@@ -267,13 +260,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   }, [aggregatedFailed, paginatedResult.loading, paginatedResult.data.results.length]);
 
   // Super responsive date change handler
-  const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
-    // Instant visual feedback
-    setIsDateChanging(true);
+  const handleDateChange = useCallback(
+    (newValue: DateRangePickerValue) => {
+      // Instant visual feedback
+      setIsDateChanging(true);
 
-    // Update date immediately for UI responsiveness
-    setDateValue(newValue);
-  }, []);
+      // Update date immediately for UI responsiveness
+      setDateValue(newValue);
+    },
+    [setDateValue],
+  );
 
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
@@ -489,7 +485,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           <div className="flex items-end justify-between gap-6 mb-4 w-full">
             <UsageViewSelect
               value={usageView}
-              onChange={(value) => setUsageView(value)}
+              onChange={setUsageView}
               userRole={userRole}
               canViewTagUsage={canViewTagUsage}
               isOrgAdmin={isOrgAdmin}
@@ -504,7 +500,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             cancel={paginatedResult.cancel}
           />
           {/* Your Usage / Global Usage Panel */}
-          {(usageView === "global" || usageView === "my-usage") && (
+          {showsGlobalPanel && (
             <>
               {isAdmin && usageView === "global" && (
                 <div className="mb-4">
@@ -512,7 +508,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <UserDropdown value={selectedUserId} onChange={setSelectedUserId} />
                 </div>
               )}
-              <Tabs defaultValue="cost">
+              <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <div className="flex justify-between items-center">
                   <TabsList className="mt-1">
                     <TabsTrigger value="cost" className="flex-none px-3">
@@ -825,7 +821,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               onValueChange={(value: string) => setTopModelsLimit(Number(value))}
                             >
                               <TabsList>
-                                {TOP_MODEL_LIMITS.map((limit) => (
+                                {USAGE_TOP_LIMITS.map((limit) => (
                                   <TabsTrigger key={limit} value={String(limit)} className="flex-none px-3">
                                     {limit}
                                   </TabsTrigger>
