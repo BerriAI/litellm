@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   Combobox,
   ComboboxChip,
+  ComboboxClear,
   ComboboxChips,
   ComboboxChipsInput,
   ComboboxContent,
@@ -11,15 +12,18 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 
 export interface MultiSelectOption {
   label: string;
   value: string;
   description?: string;
+  disabled?: boolean;
 }
 
 interface MultiSelectProps {
+  id?: string;
   options: MultiSelectOption[];
   value?: string[];
   onValueChange: (value: string[]) => void;
@@ -30,6 +34,12 @@ interface MultiSelectProps {
   allowCustomValues?: boolean;
   className?: string;
 }
+
+const splitOnCommas = (raw: string): string[] =>
+  raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
 
 const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
   const normalizedQuery = query.trim().toLowerCase();
@@ -42,6 +52,7 @@ const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
 };
 
 export function MultiSelect({
+  id,
   options,
   value = [],
   onValueChange,
@@ -52,6 +63,7 @@ export function MultiSelect({
   allowCustomValues = false,
   className,
 }: MultiSelectProps) {
+  const anchor = useComboboxAnchor();
   const [query, setQuery] = useState("");
   const safeOptions = options.filter(
     (option): option is MultiSelectOption =>
@@ -73,15 +85,22 @@ export function MultiSelect({
       ? [...safeOptions, { label: `Create "${customOption}"`, value: customOption }]
       : safeOptions;
 
+  const canClear = (selected: MultiSelectOption[]) => selected.length > 0 && !disabled && !loading;
+
+  const handleValueChange = (selected: MultiSelectOption[]) => {
+    const next = allowCustomValues
+      ? selected.flatMap((option) => (value.includes(option.value) ? [option.value] : splitOnCommas(option.value)))
+      : selected.map((option) => option.value);
+    onValueChange(Array.from(new Set(next)));
+    setQuery("");
+  };
+
   return (
     <Combobox
       multiple
       items={items}
       value={selectedOptions}
-      onValueChange={(selected: MultiSelectOption[]) => {
-        onValueChange(selected.map((option) => option.value));
-        setQuery("");
-      }}
+      onValueChange={handleValueChange}
       inputValue={query}
       onInputValueChange={setQuery}
       isItemEqualToValue={(option: MultiSelectOption, selected: MultiSelectOption) => option.value === selected.value}
@@ -89,27 +108,31 @@ export function MultiSelect({
       filter={matchesQuery}
       disabled={disabled || loading}
     >
-      <ComboboxChips className={`min-h-8 py-1 text-sm ${className ?? ""}`}>
+      <ComboboxChips render={<div ref={anchor} />} className={`min-h-8 py-1 text-sm ${className ?? ""}`}>
         <ComboboxValue>
-          {(selected: MultiSelectOption[]) =>
-            selected.map((option) => (
-              <ComboboxChip key={option.value} aria-label={option.label}>
-                {option.label}
-              </ComboboxChip>
-            ))
-          }
+          {(selected: MultiSelectOption[]) => (
+            <>
+              {selected.map((option) => (
+                <ComboboxChip key={option.value} aria-label={option.label}>
+                  {option.label}
+                </ComboboxChip>
+              ))}
+              <ComboboxChipsInput
+                id={id}
+                placeholder={loading ? "Loading..." : placeholder}
+                className="min-w-24"
+                aria-label={placeholder || undefined}
+              />
+              {canClear(selected) && <ComboboxClear className="ml-auto self-center" aria-label="Clear all" />}
+            </>
+          )}
         </ComboboxValue>
-        <ComboboxChipsInput
-          placeholder={loading ? "Loading..." : placeholder}
-          className="h-5 min-w-24 flex-1 border-0 bg-transparent py-0 text-sm"
-          aria-label={placeholder}
-        />
       </ComboboxChips>
-      <ComboboxContent>
+      <ComboboxContent anchor={anchor}>
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>
           {(option: MultiSelectOption) => (
-            <ComboboxItem key={option.value} value={option}>
+            <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
               <span className="min-w-0">
                 <span className="block truncate">{option.label}</span>
                 {option.description && (

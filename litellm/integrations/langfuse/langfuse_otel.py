@@ -10,6 +10,7 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
 )
@@ -196,15 +197,17 @@ class LangfuseOtelLogger(OpenTelemetry):
                             }
                         )
                     elif item_type in ("function_call", "custom_tool_call"):
-                        # A custom (freeform) tool carries its payload as a raw string under `input`,
-                        # where a function call carries a JSON string under `arguments`.
                         if item_type == "custom_tool_call":
                             payload_key, payload_value = "input", getattr(item, "input", "")
                         else:
-                            arguments_str = getattr(item, "arguments", "{}")
-                            payload_key = "arguments"
-                            payload_value = (
-                                json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
+                            tool_arguments: Final = getattr(item, "arguments", "{}")
+                            payload_key, payload_value = (
+                                "arguments",
+                                (
+                                    safe_json_loads(tool_arguments, default={})
+                                    if isinstance(tool_arguments, str)
+                                    else tool_arguments
+                                ),
                             )
                         langfuse_tool_call = {
                             "id": getattr(item, "id", ""),
@@ -234,7 +237,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         from litellm.integrations.arize._utils import safe_set_attribute
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        langfuse_environment: Final = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
+        dynamic_params: Final = kwargs.get("standard_callback_dynamic_params")
+        langfuse_environment: Final = (
+            dynamic_params.get("langfuse_environment") if dynamic_params else None
+        ) or os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
         if langfuse_environment:
             safe_set_attribute(
                 span,

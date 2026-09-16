@@ -28,7 +28,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cva.config";
 
-import NotificationsManager from "./molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   cancelModelCostMapReload,
   getModelCostMapReloadStatus,
@@ -49,8 +49,15 @@ interface CostMapSourceInfo {
   url: string | null;
   is_env_forced: boolean;
   fallback_reason: string | null;
+  loaded_at: string | null;
+  source_revision: string | null;
+  etag: string | null;
   model_count: number;
 }
+
+const SHORT_REVISION_LENGTH = 12;
+
+const shortRevision = (revision: string) => revision.slice(0, SHORT_REVISION_LENGTH);
 
 const EMPTY_RELOAD_STATUS: ReloadStatus = {
   scheduled: false,
@@ -88,6 +95,55 @@ const isValidReloadInterval = (value: number) => {
   if (!Number.isInteger(value)) return false;
   return value >= 1 && value <= 168;
 };
+
+const formatDateTime = (dateTimeString: string | null) => {
+  if (!dateTimeString) return "Never";
+  const parsed = new Date(dateTimeString);
+  return Number.isNaN(parsed.getTime()) ? dateTimeString : parsed.toLocaleString();
+};
+
+const CostMapProvenanceRows: React.FC<{ sourceInfo: CostMapSourceInfo }> = ({ sourceInfo }) => (
+  <>
+    {sourceInfo.source_revision && (
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="text-muted-foreground">Source revision:</span>
+        <Tooltip>
+          <TooltipTrigger render={<code className="font-mono" />}>
+            {shortRevision(sourceInfo.source_revision)}
+          </TooltipTrigger>
+          <TooltipContent>{sourceInfo.source_revision}</TooltipContent>
+        </Tooltip>
+      </div>
+    )}
+
+    {sourceInfo.etag && (
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="text-muted-foreground">ETag:</span>
+        <Tooltip>
+          <TooltipTrigger render={<code className="max-w-60 truncate font-mono" />}>{sourceInfo.etag}</TooltipTrigger>
+          <TooltipContent>{sourceInfo.etag}</TooltipContent>
+        </Tooltip>
+      </div>
+    )}
+
+    {sourceInfo.loaded_at && (
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted-foreground">Loaded at:</span>
+        <span className="font-medium">{formatDateTime(sourceInfo.loaded_at)}</span>
+      </div>
+    )}
+
+    {sourceInfo.loaded_at && (
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Info className="size-3.5 shrink-0" />
+        <span>
+          Reported by the worker that answered this request. Other workers pick up a reload on their next poll, and the
+          Last run time is the latest reload any worker recorded
+        </span>
+      </div>
+    )}
+  </>
+);
 
 const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   accessToken,
@@ -148,7 +204,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
   const handleHardRefresh = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError("No access token available");
       return;
     }
 
@@ -157,16 +213,16 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       const response = await reloadModelCostMap(accessToken);
 
       if (response.status === "success") {
-        NotificationsManager.success(`Price data reloaded successfully! ${response.models_count || 0} models updated.`);
+        toast.success(`Price data reloaded successfully! ${response.models_count || 0} models updated.`);
         onReloadSuccess?.();
         await fetchReloadStatus();
         await fetchSourceInfo();
       } else {
-        NotificationsManager.fromBackend("Failed to reload price data");
+        toast.fromError("Failed to reload price data");
       }
     } catch (error) {
       console.error("Error reloading price data:", error);
-      NotificationsManager.fromBackend("Failed to reload price data. Please try again.");
+      toast.fromError("Failed to reload price data. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -174,13 +230,13 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
   const handleScheduleReload = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError("No access token available");
       return;
     }
 
     const intervalHours = Number(hours);
     if (!isValidReloadInterval(intervalHours)) {
-      NotificationsManager.fromBackend("Hours must be a whole number between 1 and 168");
+      toast.fromError("Hours must be a whole number between 1 and 168");
       return;
     }
 
@@ -189,15 +245,15 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       const response = await scheduleModelCostMapReload(accessToken, intervalHours);
 
       if (response.status === "success") {
-        NotificationsManager.success(`Periodic reload scheduled for every ${intervalHours} hours`);
+        toast.success(`Periodic reload scheduled for every ${intervalHours} hours`);
         setShowScheduleModal(false);
         await fetchReloadStatus();
       } else {
-        NotificationsManager.fromBackend("Failed to schedule periodic reload");
+        toast.fromError("Failed to schedule periodic reload");
       }
     } catch (error) {
       console.error("Error scheduling reload:", error);
-      NotificationsManager.fromBackend("Failed to schedule periodic reload. Please try again.");
+      toast.fromError("Failed to schedule periodic reload. Please try again.");
     } finally {
       setIsScheduling(false);
     }
@@ -205,7 +261,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
   const handleCancelReload = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
+      toast.fromError("No access token available");
       return;
     }
 
@@ -214,25 +270,16 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       const response = await cancelModelCostMapReload(accessToken);
 
       if (response.status === "success") {
-        NotificationsManager.success("Periodic reload cancelled successfully");
+        toast.success("Periodic reload cancelled successfully");
         await fetchReloadStatus();
       } else {
-        NotificationsManager.fromBackend("Failed to cancel periodic reload");
+        toast.fromError("Failed to cancel periodic reload");
       }
     } catch (error) {
       console.error("Error cancelling reload:", error);
-      NotificationsManager.fromBackend("Failed to cancel periodic reload. Please try again.");
+      toast.fromError("Failed to cancel periodic reload. Please try again.");
     } finally {
       setIsCancelling(false);
-    }
-  };
-
-  const formatDateTime = (dateTimeString: string | null) => {
-    if (!dateTimeString) return "Never";
-    try {
-      return new Date(dateTimeString).toLocaleString();
-    } catch {
-      return dateTimeString;
     }
   };
 
@@ -333,6 +380,8 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
                   </Tooltip>
                 </div>
               )}
+
+              <CostMapProvenanceRows sourceInfo={sourceInfo} />
 
               {sourceInfo.is_env_forced && (
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">

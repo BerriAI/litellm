@@ -14,16 +14,14 @@ These tests ensure the polling handler correctly manages response state
 following the OpenAI Response API format.
 """
 
+import asyncio
 import json
-import os
-import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-
-sys.path.insert(0, os.path.abspath("../.."))
+from fastapi import Request
 
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 
@@ -1417,7 +1415,7 @@ def _make_background_streaming_kwargs(
         polling_id=polling_id,
         data={"model": "gpt-4o", "stream": False, "background": True},
         polling_handler=polling_handler,
-        request=Mock(),
+        request=Request({"type": "http", "method": "POST", "path": "/v1/responses", "headers": []}),
         fastapi_response=Mock(),
         user_api_key_dict=Mock(),
         general_settings={},
@@ -1665,6 +1663,63 @@ class TestBackgroundStreamingTerminalEvents:
 
         final_call = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_polling_client_disconnect_does_not_cancel_upstream_call(self):
+        """The polling client hangs up right after getting its polling id. The detached task
+        must still stream the upstream response through the client-disconnect guards."""
+        from litellm.proxy.common_request_processing import create_response
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        async def client_already_left():
+            return {"type": "http.disconnect"}
+
+        async def slow_upstream_stream():
+            await asyncio.sleep(0.05)
+            for event in (
+                {"type": "response.in_progress"},
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_123",
+                        "status": "completed",
+                        "usage": {"input_tokens": 13, "output_tokens": 10},
+                        "model": "gpt-4o",
+                        "output": [{"id": "item_1", "type": "message"}],
+                    },
+                },
+            ):
+                yield f"data: {json.dumps(event)}\n\n"
+
+        async def upstream_call_behind_disconnect_guard(**kwargs):
+            return await create_response(
+                slow_upstream_stream(), "text/event-stream", {}, request=kwargs["request"]
+            )
+
+        handler = AsyncMock(spec=ResponsePollingHandler)
+        kwargs = _make_background_streaming_kwargs("poll_7", handler)
+        kwargs["request"] = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/responses",
+                "headers": [(b"x-litellm-call-id", b"call-123")],
+                "query_string": b"",
+            },
+            client_already_left,
+        )
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = upstream_call_behind_disconnect_guard
+            await background_streaming_task(**kwargs)
+
+        final_call = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "completed"
+        assert final_call.kwargs["usage"] == {"input_tokens": 13, "output_tokens": 10}
 
 
 class TestEdgeCases:

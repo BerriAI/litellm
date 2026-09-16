@@ -10,11 +10,21 @@ import {
   StoreRequestInSpendLogsParams,
   useStoreRequestInSpendLogs,
 } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { ClockCircleOutlined } from "@ant-design/icons";
-import { Button, Card, Form, Input, InputNumber, Skeleton, Space, Switch, Typography } from "antd";
+import { FieldGroup } from "@/components/ui/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CircleHelp, Clock } from "lucide-react";
 import React, { useCallback, useMemo } from "react";
+import { useForm } from "react-hook-form";
 
 const STORE_PROMPTS_FIELD_NAME = "store_prompts_in_spend_logs";
 
@@ -68,39 +78,51 @@ const OPTIONAL_FIELDS: readonly OptionalField[] = [
   },
 ];
 
+const MINIMUM_COUNT = 1;
+
 interface LoggingSettingsFormValues {
   store_prompts_in_spend_logs: boolean;
-  maximum_spend_logs_retention_period?: string | null;
-  maximum_spend_logs_cleanup_batch_size?: number | null;
-  maximum_spend_logs_cleanup_max_batches?: number | null;
-  maximum_spend_logs_cleanup_run_budget?: string | null;
-  maximum_spend_logs_cleanup_batch_timeout?: string | null;
+  maximum_spend_logs_retention_period: string;
+  maximum_spend_logs_cleanup_batch_size: string;
+  maximum_spend_logs_cleanup_max_batches: string;
+  maximum_spend_logs_cleanup_run_budget: string;
+  maximum_spend_logs_cleanup_batch_timeout: string;
 }
 
-const hasDuration = (value: string | null | undefined): value is string =>
-  typeof value === "string" && value.trim() !== "";
+const duration = (value: string): string | undefined => (value.trim() === "" ? undefined : value);
 
-const hasCount = (value: number | null | undefined): value is number =>
-  typeof value === "number" && Number.isFinite(value);
+// antd InputNumber applied `min` and `precision` to the committed value rather
+// than only to the display, and it did so on blur, so the raw keystrokes have
+// to survive until then or "12.34" commits as 124 instead of 12.
+const count = (raw: string): number | undefined => {
+  const parsed = Number(raw);
+  if (raw.trim() === "" || !Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return Math.max(MINIMUM_COUNT, Math.round(parsed));
+};
 
-const buildUpdateParams = (formValues: LoggingSettingsFormValues): StoreRequestInSpendLogsParams => ({
-  store_prompts_in_spend_logs: formValues.store_prompts_in_spend_logs,
-  ...(hasDuration(formValues.maximum_spend_logs_retention_period) && {
-    maximum_spend_logs_retention_period: formValues.maximum_spend_logs_retention_period,
-  }),
-  ...(hasCount(formValues.maximum_spend_logs_cleanup_batch_size) && {
-    maximum_spend_logs_cleanup_batch_size: formValues.maximum_spend_logs_cleanup_batch_size,
-  }),
-  ...(hasCount(formValues.maximum_spend_logs_cleanup_max_batches) && {
-    maximum_spend_logs_cleanup_max_batches: formValues.maximum_spend_logs_cleanup_max_batches,
-  }),
-  ...(hasDuration(formValues.maximum_spend_logs_cleanup_run_budget) && {
-    maximum_spend_logs_cleanup_run_budget: formValues.maximum_spend_logs_cleanup_run_budget,
-  }),
-  ...(hasDuration(formValues.maximum_spend_logs_cleanup_batch_timeout) && {
-    maximum_spend_logs_cleanup_batch_timeout: formValues.maximum_spend_logs_cleanup_batch_timeout,
-  }),
-});
+const countDisplay = (raw: string): string => {
+  const normalized = count(raw);
+  return normalized === undefined ? "" : String(normalized);
+};
+
+const buildUpdateParams = (formValues: LoggingSettingsFormValues): StoreRequestInSpendLogsParams => {
+  const retentionPeriod = duration(formValues.maximum_spend_logs_retention_period);
+  const batchSize = count(formValues.maximum_spend_logs_cleanup_batch_size);
+  const maxBatches = count(formValues.maximum_spend_logs_cleanup_max_batches);
+  const runBudget = duration(formValues.maximum_spend_logs_cleanup_run_budget);
+  const batchTimeout = duration(formValues.maximum_spend_logs_cleanup_batch_timeout);
+
+  return {
+    store_prompts_in_spend_logs: formValues.store_prompts_in_spend_logs,
+    ...(retentionPeriod !== undefined && { maximum_spend_logs_retention_period: retentionPeriod }),
+    ...(batchSize !== undefined && { maximum_spend_logs_cleanup_batch_size: batchSize }),
+    ...(maxBatches !== undefined && { maximum_spend_logs_cleanup_max_batches: maxBatches }),
+    ...(runBudget !== undefined && { maximum_spend_logs_cleanup_run_budget: runBudget }),
+    ...(batchTimeout !== undefined && { maximum_spend_logs_cleanup_batch_timeout: batchTimeout }),
+  };
+};
 
 // A blank field only needs clearing when something is actually stored for it.
 // Asking the proxy to clear a field it has no value for is a 400 whenever no
@@ -113,8 +135,100 @@ const omittedFieldNames = (
 ): readonly GeneralSettingsFieldName[] =>
   OPTIONAL_FIELDS.map((field) => field.name).filter((name) => !(name in updateParams) && isStored(name));
 
+const labelWithHint = (label: string, hint: string): React.ReactNode => (
+  <>
+    {label}
+    <Tooltip>
+      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  </>
+);
+
+interface LoggingSettingsFormProps {
+  initialValues: LoggingSettingsFormValues;
+  describeField: (name: string, fallback: string) => string;
+  isSaving: boolean;
+  onSubmit: (formValues: LoggingSettingsFormValues) => void;
+}
+
+const LoggingSettingsForm: React.FC<LoggingSettingsFormProps> = ({
+  initialValues,
+  describeField,
+  isSaving,
+  onSubmit,
+}) => {
+  const form = useForm<LoggingSettingsFormValues>({ defaultValues: initialValues });
+
+  return (
+    <TooltipProvider>
+      <form onSubmit={form.handleSubmit(onSubmit)} noValidate>
+        <FieldGroup>
+          <FormField
+            control={form.control}
+            name={STORE_PROMPTS_FIELD_NAME}
+            label={labelWithHint(
+              "Store Prompts in Spend Logs",
+              describeField(
+                STORE_PROMPTS_FIELD_NAME,
+                "When enabled, prompts will be stored in spend logs for tracking and analysis purposes.",
+              ),
+            )}
+          >
+            {({ id, value, onChange, onBlur }) => (
+              <Switch id={id} checked={Boolean(value)} onCheckedChange={onChange} onBlur={onBlur} className="w-fit" />
+            )}
+          </FormField>
+
+          {OPTIONAL_FIELDS.map((field) => (
+            <FormField
+              key={field.name}
+              control={form.control}
+              name={field.name}
+              label={labelWithHint(field.label, describeField(field.name, field.fallbackTooltip))}
+            >
+              {({ ref, onChange, onBlur, ...control }) =>
+                field.kind === "duration" ? (
+                  <InputGroup>
+                    <InputGroupInput
+                      {...control}
+                      ref={ref}
+                      onChange={(event) => onChange(event.target.value)}
+                      onBlur={onBlur}
+                      placeholder={field.placeholder}
+                    />
+                    <InputGroupAddon>
+                      <Clock />
+                    </InputGroupAddon>
+                  </InputGroup>
+                ) : (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    onChange={(event) => onChange(event.target.value)}
+                    onBlur={(event) => {
+                      onChange(countDisplay(event.target.value));
+                      onBlur();
+                    }}
+                    placeholder={field.placeholder}
+                  />
+                )
+              }
+            </FormField>
+          ))}
+        </FieldGroup>
+
+        <Button type="submit" className="mt-6" disabled={isSaving}>
+          {isSaving && <UiLoadingSpinner role="img" aria-label="loading" className="size-4" />}
+          {isSaving ? "Saving..." : "Save Settings"}
+        </Button>
+      </form>
+    </TooltipProvider>
+  );
+};
+
 const LoggingSettings: React.FC = () => {
-  const [form] = Form.useForm<LoggingSettingsFormValues>();
   const { mutate, isPending } = useStoreRequestInSpendLogs();
   const { mutate: deleteField, isPending: isDeletingField } = useDeleteProxyConfigField();
   const { data: proxyConfigData, isLoading: isLoadingConfig } = useProxyConfig(ConfigType.GENERAL_SETTINGS);
@@ -132,12 +246,19 @@ const LoggingSettings: React.FC = () => {
     return value !== null && value !== undefined;
   };
 
-  const initialValues = useMemo(() => {
-    return {
-      store_prompts_in_spend_logs: storedValue(STORE_PROMPTS_FIELD_NAME) ?? false,
-      ...Object.fromEntries(OPTIONAL_FIELDS.map((field) => [field.name, storedValue(field.name)])),
-    };
-  }, [storedValue]);
+  const initialValues = useMemo(
+    () =>
+      ({
+        store_prompts_in_spend_logs: storedValue(STORE_PROMPTS_FIELD_NAME) ?? false,
+        ...Object.fromEntries(
+          OPTIONAL_FIELDS.map((field) => {
+            const stored = storedValue(field.name);
+            return [field.name, stored === null || stored === undefined ? "" : String(stored)];
+          }),
+        ),
+      }) as LoggingSettingsFormValues,
+    [storedValue],
+  );
 
   // Resolves to the field name when clearing it failed, or null when it worked.
   const clearStoredField = (fieldName: GeneralSettingsFieldName) =>
@@ -174,9 +295,8 @@ const LoggingSettings: React.FC = () => {
     const updateParams = buildUpdateParams(formValues);
     const submitUpdate = () =>
       mutate(updateParams, {
-        onSuccess: () => NotificationsManager.success("Spend logs settings updated successfully"),
-        onError: (error) =>
-          NotificationsManager.fromBackend("Failed to save spend logs settings: " + parseErrorMessage(error)),
+        onSuccess: () => toast.success("Spend logs settings updated successfully"),
+        onError: (error) => toast.fromError("Failed to save spend logs settings: " + parseErrorMessage(error)),
       });
 
     const fieldsToClear = omittedFieldNames(updateParams, isStored);
@@ -189,7 +309,7 @@ const LoggingSettings: React.FC = () => {
       if (failed.length > 0) {
         // Reporting an unqualified success here would tell the admin a setting
         // was reset to its default while the old value is still in force.
-        NotificationsManager.fromBackend(`Failed to clear saved value for: ${failed.join(", ")}`);
+        toast.fromError(`Failed to clear saved value for: ${failed.join(", ")}`);
         return;
       }
       submitUpdate();
@@ -197,51 +317,34 @@ const LoggingSettings: React.FC = () => {
   };
 
   return (
-    <Card title="Logging Settings">
-      <Space direction="vertical" size="large" style={{ width: "100%" }}>
-        <Typography.Paragraph style={{ marginBottom: 0 }} type="secondary">
-          Proxy-wide settings that control how request and response data are written to spend logs.
-        </Typography.Paragraph>
+    <Card>
+      <CardHeader className="border-b">
+        <CardTitle>Logging Settings</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex w-full flex-col gap-6">
+          <p className="mb-0 text-muted-foreground">
+            Proxy-wide settings that control how request and response data are written to spend logs.
+          </p>
 
-        {isLoadingConfig ? (
-          <Skeleton active paragraph={{ rows: 4 }} />
-        ) : (
-          <Form form={form} layout="vertical" onFinish={handleFormSubmit} initialValues={initialValues}>
-            <Form.Item
-              label="Store Prompts in Spend Logs"
-              name={STORE_PROMPTS_FIELD_NAME}
-              tooltip={describeField(
-                STORE_PROMPTS_FIELD_NAME,
-                "When enabled, prompts will be stored in spend logs for tracking and analysis purposes.",
-              )}
-              valuePropName="checked"
-            >
-              <Switch />
-            </Form.Item>
-
-            {OPTIONAL_FIELDS.map((field) => (
-              <Form.Item
-                key={field.name}
-                label={field.label}
-                name={field.name}
-                tooltip={describeField(field.name, field.fallbackTooltip)}
-              >
-                {field.kind === "duration" ? (
-                  <Input placeholder={field.placeholder} prefix={<ClockCircleOutlined />} />
-                ) : (
-                  <InputNumber min={1} precision={0} placeholder={field.placeholder} style={{ width: "100%" }} />
-                )}
-              </Form.Item>
-            ))}
-
-            <Form.Item>
-              <Button type="primary" htmlType="submit" loading={isPending || isDeletingField}>
-                {isPending || isDeletingField ? "Saving..." : "Save Settings"}
-              </Button>
-            </Form.Item>
-          </Form>
-        )}
-      </Space>
+          {isLoadingConfig ? (
+            <div className="flex flex-col gap-3">
+              <Skeleton className="h-4 w-2/5" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-3/5" />
+            </div>
+          ) : (
+            <LoggingSettingsForm
+              initialValues={initialValues}
+              describeField={describeField}
+              isSaving={isPending || isDeletingField}
+              onSubmit={handleFormSubmit}
+            />
+          )}
+        </div>
+      </CardContent>
     </Card>
   );
 };

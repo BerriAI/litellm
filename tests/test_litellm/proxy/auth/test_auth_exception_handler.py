@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -11,6 +9,7 @@ from prisma import errors as prisma_errors
 from prisma.engine.errors import (
     BinaryNotFoundError,
     EngineConnectionError,
+    EngineRequestError,
     MismatchedVersionsError,
 )
 from prisma.errors import (
@@ -26,13 +25,18 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
+from litellm.exceptions import BudgetExceededError
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+
+
+class _EngineHttp500:
+    """The response half of an EngineRequestError: the query engine answered a request with HTTP 500."""
+
+    status = 500
 
 
 @pytest.mark.asyncio
@@ -114,6 +118,90 @@ async def test_handle_authentication_error_permanent_fault_gets_no_fallback_iden
 
     assert exc_info.value.type == ProxyErrorTypes.no_db_connection
     assert exc_info.value.code == str(status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prisma_error",
+    [
+        pytest.param(BinaryNotFoundError("query engine binary not found"), id="BinaryNotFoundError"),
+        pytest.param(MismatchedVersionsError(expected="1", got="2"), id="MismatchedVersionsError"),
+        pytest.param(EngineRequestError(_EngineHttp500(), "query engine crashed"), id="EngineRequestError"),
+        pytest.param(PrismaError(), id="bare_PrismaError"),
+    ],
+)
+async def test_handle_authentication_error_permanent_fault_503_is_not_worded_as_transient(prisma_error):
+    """The 503 for a fault that never heals must not say the database is
+    "temporarily unreachable" and ask the caller to retry. The status is right
+    (the service is at fault) but that wording sends the operator to wait out an
+    outage that is not one, so the message has to say retrying will not help and
+    name the engine fault."""
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with patch(  # test-quality-ok: the handler reads general_settings off the proxy module, no injection seam
+        "litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(prisma_error, MagicMock(), {}, "/test", None, "test-key")
+
+    assert exc_info.value.code == str(status.HTTP_503_SERVICE_UNAVAILABLE)
+    assert exc_info.value.type == ProxyErrorTypes.no_db_connection
+    assert "temporarily unreachable" not in exc_info.value.message
+    assert "retry shortly" not in exc_info.value.message.lower()
+    assert "will not clear by retrying" in exc_info.value.message
+    assert type(prisma_error).__name__ in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_handle_authentication_error_transport_error_raised_over_a_permanent_fault_names_the_fault():
+    """A reconnect attempt that fails because the engine binary is missing surfaces as a transport
+    error with the BinaryNotFoundError as __context__. The response must describe the binary, which is
+    what keeps the database down, rather than promise the connection will come back."""
+    try:
+        raise BinaryNotFoundError("query engine binary not found")
+    except BinaryNotFoundError:
+        try:
+            raise httpx.ConnectError("All connection attempts failed")
+        except httpx.ConnectError as surfaced:
+            transport_over_fault = surfaced
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with patch(  # test-quality-ok: the handler reads general_settings off the proxy module, no injection seam
+        "litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(transport_over_fault, MagicMock(), {}, "/test", None, "k")
+
+    assert exc_info.value.code == str(status.HTTP_503_SERVICE_UNAVAILABLE)
+    assert "temporarily unreachable" not in exc_info.value.message
+    assert "BinaryNotFoundError" in exc_info.value.message
+    assert "will not clear by retrying" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "db_error",
+    [
+        pytest.param(httpx.ConnectError("All connection attempts failed"), id="ConnectError"),
+        pytest.param(EngineConnectionError(), id="EngineConnectionError"),
+        pytest.param(PrismaError("can't reach database server"), id="P1001_text"),
+    ],
+)
+async def test_handle_authentication_error_transient_outage_503_keeps_retry_wording(db_error):
+    """A genuine outage is expected to come back, so its 503 keeps telling the
+    caller the database is temporarily unreachable and to retry."""
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with patch(  # test-quality-ok: the handler reads general_settings off the proxy module, no injection seam
+        "litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": False}
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(db_error, MagicMock(), {}, "/test", None, "test-key")
+
+    assert exc_info.value.code == str(status.HTTP_503_SERVICE_UNAVAILABLE)
+    assert exc_info.value.message == (
+        "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
+    )
 
 
 @pytest.mark.asyncio
@@ -337,12 +425,13 @@ async def test_handle_authentication_error_budget_exceeded():
     mock_api_key = "test-key"
 
     # Test with budget exceeded error
-    with pytest.raises(ProxyException) as exc_info:
-        from litellm.exceptions import BudgetExceededError
+    from litellm.exceptions import BudgetExceededError
 
-        budget_error = BudgetExceededError(
-            message="Budget exceeded", current_cost=100, max_budget=100
-        )
+    budget_error = BudgetExceededError(
+        message="Budget exceeded", current_cost=100, max_budget=100
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
         await handler._handle_authentication_error(
             budget_error,
             mock_request,
@@ -511,3 +600,274 @@ async def test_auth_failure_without_resolved_identity_still_logs():
     assert logged.api_key != "sk-unknown"
     assert logged.api_key == UserAPIKeyAuth(api_key="sk-unknown").api_key
     assert logged.request_route == "/v1/chat/completions"
+
+
+def _http_request(client_host: str | None = "10.1.2.3", headers: dict[str, str] | None = None) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/v1/chat/completions",
+            "raw_path": b"/v1/chat/completions",
+            "query_string": b"",
+            "root_path": "",
+            "server": ("testserver", 80),
+            "client": (client_host, 51234) if client_host is not None else None,
+            "headers": [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()],
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_error, general_settings, request_kwargs, expected_ip",
+    [
+        pytest.param(
+            ProxyException(
+                message="Invalid API key",
+                type=ProxyErrorTypes.auth_error,
+                param=None,
+                code=status.HTTP_401_UNAUTHORIZED,
+            ),
+            {"allow_requests_on_db_unavailable": False},
+            {},
+            "10.1.2.3",
+            id="401_socket_peer",
+        ),
+        pytest.param(
+            ProxyException(
+                message="Invalid API key",
+                type=ProxyErrorTypes.auth_error,
+                param=None,
+                code=status.HTTP_401_UNAUTHORIZED,
+            ),
+            {"allow_requests_on_db_unavailable": False, "use_x_forwarded_for": True},
+            {"headers": {"x-forwarded-for": "203.0.113.9"}},
+            "203.0.113.9",
+            id="401_x_forwarded_for",
+        ),
+        pytest.param(
+            BudgetExceededError(message="Budget exceeded", current_cost=100, max_budget=100),
+            {"allow_requests_on_db_unavailable": False},
+            {},
+            "10.1.2.3",
+            id="429_budget_exceeded",
+        ),
+    ],
+)
+async def test_auth_failure_logs_requester_ip_address(
+    auth_error: Exception,
+    general_settings: dict[str, bool],
+    request_kwargs: dict[str, dict[str, str]],
+    expected_ip: str,
+) -> None:
+    """401s and budget 429s are rejected before `add_litellm_data_to_request` stamps
+    the caller IP, so without this the failure logs (spend logs, prometheus client_ip)
+    had no IP, and a 401 rarely carries a key or user identity either."""
+    with (
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_hook,
+        patch("litellm.proxy.proxy_server.general_settings", general_settings),
+    ):
+        with pytest.raises(ProxyException):
+            await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                auth_error,
+                _http_request(**request_kwargs),
+                {"model": "gpt-4o"},
+                "/v1/chat/completions",
+                None,
+                "sk-bad-key",
+            )
+
+    logged_request_data = mock_hook.call_args[1]["request_data"]
+    assert logged_request_data["metadata"]["requester_ip_address"] == expected_ip
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_keeps_existing_requester_ip_address():
+    """An IP already recorded upstream (e.g. a trusted-proxy resolved value) wins over
+    the socket peer."""
+    with (
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_hook,
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException):
+            await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                ProxyException(
+                    message="Invalid API key",
+                    type=ProxyErrorTypes.auth_error,
+                    param=None,
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ),
+                _http_request(),
+                {"metadata": {"requester_ip_address": "198.51.100.4"}},
+                "/v1/chat/completions",
+                None,
+                "sk-bad-key",
+            )
+
+    logged_request_data = mock_hook.call_args[1]["request_data"]
+    assert logged_request_data["metadata"]["requester_ip_address"] == "198.51.100.4"
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_ip_uses_litellm_metadata_when_present():
+    """Routes that keep proxy metadata under `litellm_metadata` (e.g. /responses) must
+    get the IP there, since that is the dict the logging layer reads for them."""
+    with (
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_hook,
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException):
+            await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                ProxyException(
+                    message="Invalid API key",
+                    type=ProxyErrorTypes.auth_error,
+                    param=None,
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ),
+                _http_request(),
+                {"litellm_metadata": {}, "metadata": {"user_supplied": "keep-me"}},
+                "/v1/responses",
+                None,
+                "sk-bad-key",
+            )
+
+    logged_request_data = mock_hook.call_args[1]["request_data"]
+    assert logged_request_data["litellm_metadata"]["requester_ip_address"] == "10.1.2.3"
+    assert logged_request_data["metadata"] == {"user_supplied": "keep-me"}
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_ip_stamp_does_not_mutate_callers_request_data():
+    """The handler must not rewrite the caller's dict; the IP is for the failure log only."""
+    request_data = {"model": "gpt-4o"}
+
+    with (
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException):
+            await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                ProxyException(
+                    message="Invalid API key",
+                    type=ProxyErrorTypes.auth_error,
+                    param=None,
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ),
+                _http_request(),
+                request_data,
+                "/v1/chat/completions",
+                None,
+                "sk-bad-key",
+            )
+
+    assert request_data == {"model": "gpt-4o"}
+
+
+def _marked_malformed_key_error() -> HTTPException:
+    """Build the malformed-key 401 as its raise site does: marker stamped on it."""
+    error = HTTPException(status_code=401, detail="LiteLLM Virtual Key expected. Received=test")
+    setattr(error, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
+    return error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_error,expect_traceback,expect_level",
+    [
+        pytest.param(
+            ProxyException(
+                message="Authentication Error", type=ProxyErrorTypes.auth_error, param=None, code=401
+            ),
+            False,
+            "ERROR",
+            id="expected_401_no_traceback",
+        ),
+        pytest.param(ValueError("unexpected internal error"), True, "ERROR", id="unexpected_error_keeps_traceback"),
+        pytest.param(
+            _marked_malformed_key_error(),
+            False,
+            "WARNING",
+            id="malformed_virtual_key_warning_no_traceback",
+        ),
+        pytest.param(
+            HTTPException(status_code=401, detail="LiteLLM Virtual Key expected. Received=test"),
+            False,
+            "ERROR",
+            id="phrase_without_marker_stays_loud",
+        ),
+    ],
+)
+async def test_handle_authentication_error_traceback_only_for_unexpected_errors(auth_error, expect_traceback, expect_level, caplog):
+    """Regression for LIT-6043: expected 4xx auth rejections must not format a
+    traceback via logger.exception; malformed virtual keys log at WARNING."""
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        verbose_proxy_logger.propagate = True
+        try:
+            try:
+                raise auth_error
+            except (ProxyException, ValueError, HTTPException) as caught:
+                with caplog.at_level(expect_level, logger="LiteLLM Proxy"), pytest.raises((ProxyException, HTTPException)):
+                    await handler._handle_authentication_error(
+                        caught,
+                        MagicMock(),
+                        {},
+                        "/v1/chat/completions",
+                        None,
+                        "sk-bad-key",
+                    )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+    assert len(records) == 1
+    assert (records[0].exc_info is not None) is expect_traceback
+    assert records[0].levelname == expect_level
+    expected_logger_name = "LiteLLM Proxy.stdout" if expect_level == "WARNING" else "LiteLLM Proxy"
+    assert records[0].name == expected_logger_name

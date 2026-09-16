@@ -1,9 +1,9 @@
 import datetime
-import os
+import json
 import sys
 import types
 import unittest
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,8 +12,6 @@ import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
-sys.path.insert(0, os.path.abspath("../.."))
-from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
 # Import LangfuseUsageDetails directly from the module where it's defined
 from litellm.types.integrations.langfuse import *
@@ -1162,7 +1160,7 @@ def test_max_langfuse_clients_limit():
         assert litellm.initialized_langfuse_clients == 2
 
         # Third client should fail with exception
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Max langfuse clients reached') as exc_info:
             logger3 = LangFuseLogger(
                 langfuse_public_key="test_key_3",
                 langfuse_secret="test_secret_3",
@@ -1181,6 +1179,14 @@ def test_max_langfuse_clients_limit():
 class _RecordingLangfuse:
     last_parameters: Optional[dict] = None
 
+    def __init__(self, environment=None, **parameters):
+        type(self).last_parameters = {"environment": environment, **parameters}
+        self.client = MagicMock()
+
+
+class _RecordingLangfuseWithoutEnvironment:
+    last_parameters: Optional[dict] = None
+
     def __init__(self, **parameters):
         type(self).last_parameters = parameters
         self.client = MagicMock()
@@ -1195,6 +1201,62 @@ def _build_langfuse_logger(monkeypatch) -> LangFuseLogger:
             langfuse_secret="sk-lit5228",
             langfuse_host="https://test.langfuse.com",
         )
+
+
+def test_langfuse_environment_is_passed_to_sdk_client(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment="staging",
+        )
+    assert logger.langfuse_environment == "staging"
+    assert _RecordingLangfuse.last_parameters["environment"] == "staging"
+
+
+def test_langfuse_environment_falls_back_to_deployment_env_var(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "deployment-wide")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+        )
+    assert logger.langfuse_environment == "deployment-wide"
+    assert _RecordingLangfuse.last_parameters["environment"] == "deployment-wide"
+
+
+def test_langfuse_environment_omitted_for_old_sdk_versions(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuseWithoutEnvironment):
+        LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment="staging",
+        )
+    assert "environment" not in _RecordingLangfuseWithoutEnvironment.last_parameters
+
+
+def test_dynamic_langfuse_environment_triggers_dynamic_logger():
+    from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    params = StandardCallbackDynamicParams(langfuse_environment="team-a-env")
+
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params) is True
+
+    config = LangFuseHandler.get_dynamic_langfuse_logging_config(
+        standard_callback_dynamic_params=params
+    )
+    assert config["langfuse_environment"] == "team-a-env"
 
 
 def test_langfuse_sdk_client_survives_httpx_cache_eviction(monkeypatch):
@@ -1279,6 +1341,257 @@ def _emit(logger: LangFuseLogger, *, metadata=None, headers=None):
     )
 
 
+@pytest.mark.parametrize("level", ["DEFAULT", "ERROR"])
+@pytest.mark.parametrize(
+    "headers,metadata,expected_id",
+    [
+        ({"x-litellm-session-id": "session-7125"}, {}, "call"),
+        ({"X-Claude-Code-Session-Id": "session-7125"}, {}, "call"),
+        ({"x-session-id": "session-7125"}, {}, "call"),
+        ({"session-id": "session-7125", "user-agent": "codex_cli_rs/1.0"}, {}, "call"),
+        ({"thread-id": "session-7125", "user-agent": "codex-tui"}, {}, "call"),
+        ({"session_id": "session-7125", "user-agent": "Codex 1.0"}, {}, "call"),
+        ({"conversation_id": "session-7125", "user-agent": "codex_vscode/1.0"}, {}, "call"),
+        ({"x-litellm-session-id": "short"}, {}, "call"),
+        ({"x-litellm-trace-id": "session-7125"}, {}, "session-7125"),
+        (
+            {"X-LiteLLM-Trace-Id": "session-7125", "x-litellm-session-id": "session-7125"},
+            {},
+            "session-7125",
+        ),
+        (
+            {"x-litellm-session-id": "session-7125", "langfuse_trace_id": "session-7125"},
+            {},
+            "session-7125",
+        ),
+        (
+            {"x-litellm-session-id": "session-7125", "langfuse_trace_id": "explicit-trace"},
+            {},
+            "explicit-trace",
+        ),
+        (
+            {"x-litellm-session-id": "session-7125", "langfuse_existing_trace_id": "existing-trace"},
+            {},
+            "existing-trace",
+        ),
+        (
+            {"x-litellm-session-id": "session-7125", "langfuse_session_id": "custom-session"},
+            {},
+            "call",
+        ),
+        (
+            {"x-litellm-session-id": "short", "langfuse_session_id": "custom-session"},
+            {},
+            "call",
+        ),
+        (
+            {"X-Claude-Code-Session-Id": "session-7125", "langfuse_session_id": "custom-session"},
+            {},
+            "call",
+        ),
+        (
+            {"x-session-id": "session-7125", "langfuse_session_id": "custom-session"},
+            {},
+            "call",
+        ),
+        (
+            {
+                "session-id": "session-7125",
+                "user-agent": "codex_cli_rs/1.0",
+                "langfuse_session_id": "custom-session",
+            },
+            {},
+            "call",
+        ),
+        (
+            {
+                "x-litellm-session-id": "session-7125",
+                "langfuse_session_id": "custom-session",
+                "x-litellm-trace-id": "explicit-trace",
+            },
+            {},
+            "explicit-trace",
+        ),
+        (
+            {
+                "x-litellm-session-id": "session-7125",
+                "langfuse_session_id": "custom-session",
+                "langfuse_trace_id": "explicit-trace",
+            },
+            {},
+            "explicit-trace",
+        ),
+        (
+            {
+                "x-litellm-session-id": "session-7125",
+                "langfuse_session_id": "custom-session",
+                "langfuse_existing_trace_id": "existing-trace",
+            },
+            {},
+            "existing-trace",
+        ),
+        ({}, {"trace_id": "session-7125", "session_id": "session-7125"}, "session-7125"),
+        ({}, {"trace_id": "explicit-trace", "session_id": "session-7125"}, "explicit-trace"),
+        (
+            {"x-vendor-session-id": "short"},
+            {"trace_id": "short", "session_id": "short"},
+            "short",
+        ),
+        (
+            {"x-session-id": "invalid value"},
+            {"trace_id": "invalid value", "session_id": "invalid value"},
+            "invalid value",
+        ),
+        (
+            {"session-id": "session-7125", "user-agent": "codexfoo/1.0"},
+            {"trace_id": "session-7125", "session_id": "session-7125"},
+            "session-7125",
+        ),
+        (
+            {"x-vendor-session-id": "short"},
+            {"trace_id": "session-7125", "session_id": "session-7125"},
+            "session-7125",
+        ),
+        ({}, {}, "call"),
+    ],
+)
+def test_session_header_trace_provenance(headers, metadata, expected_id, level):
+    from starlette.datastructures import Headers
+
+    from litellm.proxy.litellm_pre_call_utils import (
+        LiteLLMProxyRequestSetup,
+        clean_headers,
+        redact_credential_headers,
+    )
+
+    logger: Final = _steering_logger()
+    for turn in range(2):
+        call_id = f"call-{turn}"
+        request_headers = Headers(headers)
+        data = LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=request_headers, data={"metadata": dict(metadata)}, _metadata_variable_name="metadata"
+        )
+        original_metadata = dict(data["metadata"])
+        now = datetime.datetime.now()
+        result = logger.log_event_on_langfuse(
+            kwargs={
+                "call_type": "completion",
+                "litellm_call_id": call_id,
+                "litellm_trace_id": data.get("litellm_trace_id"),
+                "litellm_params": {
+                    "metadata": data["metadata"],
+                    "proxy_server_request": {"headers": redact_credential_headers(clean_headers(request_headers))},
+                },
+                "messages": [{"role": "user", "content": f"turn {turn}"}],
+                "optional_params": {},
+            },
+            response_obj=(
+                None
+                if level == "ERROR"
+                else litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "OK"}}])
+            ),
+            start_time=now,
+            end_time=now,
+            level=level,
+            status_message="provider error" if level == "ERROR" else None,
+        )
+        trace_params = logger.Langfuse.trace.call_args.kwargs
+        assert trace_params["id"] == (call_id if expected_id == "call" else expected_id)
+        assert result["trace_id"] == trace_params["id"]
+        if expected_id != "existing-trace":
+            assert trace_params["session_id"] == headers.get("langfuse_session_id", original_metadata.get("session_id"))
+        steering = {key[len("langfuse_") :]: value for key, value in headers.items() if key.startswith("langfuse_")}
+        assert data["metadata"] == {**original_metadata, **steering}
+
+
+def test_session_header_trace_without_call_id_keeps_session_alias():
+    logger: Final = _steering_logger()
+    now: Final = datetime.datetime.now()
+
+    result: Final = logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_call_id": "",
+            "litellm_params": {
+                "metadata": {"trace_id": "session-7125", "session_id": "session-7125"},
+                "proxy_server_request": {"headers": {"x-litellm-session-id": "session-7125"}},
+            },
+            "messages": [{"role": "user", "content": "no call id"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "OK"}}]),
+        start_time=now,
+        end_time=now,
+    )
+
+    assert logger.Langfuse.trace.call_args.kwargs["id"] == "session-7125"
+    assert result["trace_id"] == "session-7125"
+
+
+def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
+    """The classifier must cover every header shape the proxy turns into a chain id."""
+    from litellm.integrations.langfuse.langfuse import _is_session_header_trace
+    from litellm.proxy.litellm_pre_call_utils import (
+        _CODEX_SESSION_ID_HEADERS,
+        get_chain_id_from_headers,
+    )
+
+    session: Final = "session-7125-abcdef"
+    session_shapes: Final = (
+        {"x-litellm-session-id": session},
+        {"X-Claude-Code-Session-Id": session},
+        {"x-session-id": session},
+        *({header: session, "user-agent": "codex_cli_rs/1.0"} for header in _CODEX_SESSION_ID_HEADERS),
+    )
+    for headers in session_shapes:
+        assert get_chain_id_from_headers(dict(headers)) == session, headers
+        assert _is_session_header_trace(session, session, {"headers": headers}) is True, headers
+
+    explicit_trace: Final = {"x-litellm-trace-id": session, "x-litellm-session-id": session}
+    assert get_chain_id_from_headers(dict(explicit_trace)) == session
+    assert _is_session_header_trace(session, session, {"headers": explicit_trace}) is False
+
+
+@pytest.mark.parametrize(
+    "proxy_server_request",
+    [None, {}, {"headers": None}],
+    ids=["no-proxy-request", "no-headers-key", "null-headers"],
+)
+def test_sdk_caller_without_request_headers_keeps_its_trace(proxy_server_request):
+    """A direct SDK caller has no request headers, so a session-shaped trace id stays the caller's."""
+    logger: Final = _steering_logger()
+    now: Final = datetime.datetime.now()
+
+    result: Final = logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_call_id": "call-0",
+            "litellm_params": {
+                "metadata": {"trace_id": "session-7125", "session_id": "session-7125"},
+                "proxy_server_request": proxy_server_request,
+            },
+            "messages": [{"role": "user", "content": "sdk turn"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "OK"}}]),
+        start_time=now,
+        end_time=now,
+    )
+
+    assert logger.Langfuse.trace.call_args.kwargs["id"] == "session-7125"
+    assert result["trace_id"] == "session-7125"
+
+
+def test_session_header_classifier_survives_non_string_header_keys():
+    """A non-string header key must not cost the caller its whole trace."""
+    from litellm.integrations.langfuse.langfuse import _is_session_header_trace
+
+    session: Final = "session-7125-abcdef"
+    headers: Final = {7: "numeric key", "x-litellm-session-id": session}
+    assert _is_session_header_trace(session, session, {"headers": headers}) is True
+    assert _is_session_header_trace(session, session, {"headers": {7: "numeric key"}}) is False
+
+
 def test_mask_input_header_false_keeps_the_prompt():
     logger = _steering_logger()
 
@@ -1332,34 +1645,71 @@ def test_mask_input_from_the_request_body_is_unchanged(mask_input, expect_redact
     assert (trace_params["input"] == _LANGFUSE_REDACTED) is expect_redacted
 
 
-def test_update_trace_keys_header_applies_every_key():
+@pytest.mark.parametrize("flag", [True, "true"])
+def test_update_trace_keys_header_applies_every_key_when_enabled(flag):
     logger = _steering_logger()
 
-    trace_params, _ = _emit(
-        logger,
-        headers={
-            "langfuse_existing_trace_id": "trace-1",
-            "langfuse_update_trace_keys": "trace_release, trace_tail",
-            "langfuse_trace_release": "v1.2.3",
-            "langfuse_trace_tail": "last",
-        },
-    )
+    with patch.object(litellm, "langfuse_enable_update_trace_keys", flag):
+        trace_params, _ = _emit(
+            logger,
+            headers={
+                "langfuse_existing_trace_id": "trace-1",
+                "langfuse_update_trace_keys": "trace_release, trace_tail",
+                "langfuse_trace_release": "v1.2.3",
+                "langfuse_trace_tail": "last",
+            },
+        )
 
     assert trace_params["release"] == "v1.2.3"
     assert trace_params["tail"] == "last"
 
 
-def test_update_trace_keys_from_the_request_body_list_is_unchanged():
+def test_update_trace_keys_is_off_by_default():
+    """
+    The caller picks the key name, so while the feature is on they can name
+    user_api_key_auth and have the resolved auth object, including team callback
+    credentials, serialized onto the trace. It stays inert until an operator opts in.
+    """
     logger = _steering_logger()
 
     trace_params, _ = _emit(
         logger,
         metadata={
             "existing_trace_id": "trace-1",
-            "update_trace_keys": ["trace_release"],
+            "update_trace_keys": ["user_api_key_auth", "trace_release"],
+            "user_api_key_auth": {"team_metadata": {"logging": [{"callback_vars": {"secret": "sk-canary"}}]}},
             "trace_release": "v1.2.3",
         },
     )
+
+    assert "user_api_key_auth" not in trace_params
+    assert "release" not in trace_params
+    assert "sk-canary" not in json.dumps(trace_params, default=repr)
+
+
+def test_update_trace_keys_input_and_output_are_gated_too():
+    logger = _steering_logger()
+
+    off, _ = _emit(logger, metadata={"existing_trace_id": "trace-1", "update_trace_keys": ["input", "output"]})
+    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
+        on, _ = _emit(logger, metadata={"existing_trace_id": "trace-1", "update_trace_keys": ["input", "output"]})
+
+    assert "input" not in off and "output" not in off
+    assert "input" in on and "output" in on
+
+
+def test_update_trace_keys_from_the_request_body_list_applies_when_enabled():
+    logger = _steering_logger()
+
+    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
+        trace_params, _ = _emit(
+            logger,
+            metadata={
+                "existing_trace_id": "trace-1",
+                "update_trace_keys": ["trace_release"],
+                "trace_release": "v1.2.3",
+            },
+        )
 
     assert trace_params["release"] == "v1.2.3"
 
@@ -1373,3 +1723,85 @@ def test_update_trace_keys_matches_whole_keys_not_substrings():
     )
 
     assert "input" not in trace_params
+
+
+def test_langfuse_environment_is_coerced_and_validated(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment=123,  # non-string: must coerce, not crash
+        )
+    assert logger.langfuse_environment == "123"
+
+    with pytest.raises(ValueError, match="langfuse_environment"):
+        LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment="Production",
+        )
+
+
+def test_langfuse_empty_environment_falls_back_and_is_not_dynamic(monkeypatch):
+    from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "production")
+
+    # '' falls back to the deployment env var at init
+    monkeypatch.setenv("LANGFUSE_MOCK", "false")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    with patch("langfuse.Langfuse", _RecordingLangfuse):
+        logger = LangFuseLogger(
+            langfuse_public_key="pk-env",
+            langfuse_secret="sk-env",
+            langfuse_host="https://test.langfuse.com",
+            langfuse_environment="",
+        )
+    assert logger.langfuse_environment == "production"
+
+    # env-only params that add nothing do not select a dynamic logger
+    for redundant in ["", "  ", "production"]:
+        params = StandardCallbackDynamicParams(langfuse_environment=redundant)
+        assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params) is False
+
+    params = StandardCallbackDynamicParams(langfuse_environment="team-a-prod")
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(params) is True
+
+    # a dynamic value equal to the logger's effective (stripped) environment is redundant
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "production ")
+    stripped_redundant_params: Final = StandardCallbackDynamicParams(langfuse_environment="production")
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(stripped_redundant_params) is False
+
+    # a dynamic value repeating the raw (even invalid) deployment value is redundant, not an override
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "Production")
+    raw_redundant_params: Final = StandardCallbackDynamicParams(langfuse_environment="Production")
+    assert LangFuseHandler._dynamic_langfuse_credentials_are_passed(raw_redundant_params) is False
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    (
+        ("Production", "default"),
+        ("EU-Prod", "default"),
+        ("langfuse-prod", "default"),
+        ("   ", "default"),
+        ("production ", "production"),
+        ("prod", "prod"),
+    ),
+)
+def test_langfuse_deployment_environment_fallback_never_raises(monkeypatch, env_value, expected):
+    monkeypatch.setenv("LANGFUSE_MOCK", "true")
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", env_value)
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    logger: Final = LangFuseLogger(
+        langfuse_public_key="pk-env",
+        langfuse_secret="sk-env",
+        langfuse_host="https://test.langfuse.com",
+    )
+    assert logger.langfuse_environment == expected

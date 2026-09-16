@@ -471,7 +471,7 @@ def test_validate_mcp_server_name_direct():
     validate_mcp_server_name("valid name")
 
     # Test that invalid names with hyphens raise exceptions
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="Server name cannot contain '-'\\. Use an alternative") as exc_info:
         validate_mcp_server_name("invalid-name")
     assert "cannot contain" in str(exc_info.value)
 

@@ -1,17 +1,13 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Info } from "lucide-react";
 
 import { AreaChart, BarChart, CustomLegend, DonutChart, SEQUENTIAL_COLOR_RAMP } from "@/components/shared/charts";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { getToolSpend, ToolSpendResponse } from "@/components/networking";
-import { SpendMetrics } from "@/components/UsagePage/types";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
 import {
   buildDailyToolSeries,
   formatRangeLabel,
@@ -22,11 +18,15 @@ import {
   SAVINGS_SERIES,
   SavingsAccumulation,
   SavingsPoint,
+  savingsSeriesOf,
+  shortDate,
+  sumOverDays,
   toCumulative,
   topToolsBySpend,
   usd,
   withStartAnchor,
 } from "./costOptimizationUtils";
+import SavingsTiles from "@/components/shared/SavingsTiles";
 import { DailyActivityRange } from "./useDailyActivityRange";
 
 interface UsageTabProps {
@@ -41,41 +41,7 @@ const EMPTY_TOOL_SPEND: ToolSpendResponse = {
   end_date: null,
 };
 
-const shortDate = (iso: string): string =>
-  new Date(`${iso}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-
 const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
-
-const compressionOf = (m: SpendMetrics): number => m.compression_savings_spend ?? 0;
-const cachingOf = (m: SpendMetrics): number => m.prompt_caching_savings_spend ?? 0;
-const autorouterOf = (m: SpendMetrics): number => m.autorouter_savings_spend ?? 0;
-const savedTokensOf = (m: SpendMetrics): number => m.compression_saved_tokens ?? 0;
-
-const SummaryCard = ({ label, value, hint, info }: { label: string; value: string; hint?: string; info?: string }) => (
-  <Card>
-    <CardHeader className="flex flex-row items-center justify-between space-y-0">
-      <CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle>
-      {info && (
-        <Popover>
-          <PopoverTrigger
-            aria-label={`How ${label.toLowerCase()} is calculated`}
-            data-testid={`summary-card-info-${label.toLowerCase().replace(/\s+/g, "-")}`}
-            className="cursor-pointer text-muted-foreground hover:text-foreground"
-          >
-            <Info className="size-3.5" />
-          </PopoverTrigger>
-          <PopoverContent align="end" className="w-64 text-sm text-muted-foreground">
-            {info}
-          </PopoverContent>
-        </Popover>
-      )}
-    </CardHeader>
-    <CardContent>
-      <p className="text-2xl font-semibold text-foreground">{value}</p>
-      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
-    </CardContent>
-  </Card>
-);
 
 const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
@@ -106,30 +72,9 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const toolSpend = toolSpendState?.key === rangeKey ? toolSpendState.data : null;
   const toolSpendLoading = toolSpendEnabled && toolSpend === null;
 
-  const compressionTotal = useMemo(() => results.reduce((sum, d) => sum + compressionOf(d.metrics), 0), [results]);
-  const cachingTotal = useMemo(() => results.reduce((sum, d) => sum + cachingOf(d.metrics), 0), [results]);
-  const autorouterTotal = useMemo(() => results.reduce((sum, d) => sum + autorouterOf(d.metrics), 0), [results]);
-  const savedTokensTotal = useMemo(() => results.reduce((sum, d) => sum + savedTokensOf(d.metrics), 0), [results]);
-  const totalSaved = compressionTotal + cachingTotal + autorouterTotal;
-
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
 
-  // The daily rollup arrives newest first; sort on the raw ISO date so the axis
-  // reads oldest to newest and the running total accumulates forward in time
-  // rather than backward. Sort here, before shortDate() drops the year and makes
-  // the labels unsortable.
-  const perInterval = useMemo<SavingsPoint[]>(
-    () =>
-      [...results]
-        .sort((a, b) => a.date.localeCompare(b.date))
-        .map((d) => ({
-          date: shortDate(d.date),
-          Compression: compressionOf(d.metrics),
-          "Prompt caching": cachingOf(d.metrics),
-          "Auto-router": autorouterOf(d.metrics),
-        })),
-    [results],
-  );
+  const perInterval = useMemo<SavingsPoint[]>(() => savingsSeriesOf(results), [results]);
 
   // Cumulative anchors on a synthetic $0 point at the range start so a short
   // range (down to a single day) rises from zero instead of floating as one dot.
@@ -153,12 +98,12 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   // that actually saved are plotted; the range total keeps the signed truth.
   const byDriver = useMemo(
     () =>
-      SAVINGS_DRIVERS.map(({ name, color }) => ({
+      SAVINGS_DRIVERS.map(({ name, color, of }) => ({
         driver: name,
         color,
-        usd: { Compression: compressionTotal, "Prompt caching": cachingTotal, "Auto-router": autorouterTotal }[name],
+        usd: sumOverDays(results, of),
       })).filter((d) => d.usd > 0),
-    [compressionTotal, cachingTotal, autorouterTotal],
+    [results],
   );
   const plottedDriverTotal = useMemo(() => byDriver.reduce((sum, d) => sum + d.usd, 0), [byDriver]);
 
@@ -185,31 +130,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        <SummaryCard
-          label="Total saved"
-          value={usd(totalSaved)}
-          hint={loading || isFetchingMore ? "Loading..." : "Compression + prompt caching + auto-router"}
-        />
-        <SummaryCard
-          label="Compression savings"
-          value={usd(compressionTotal)}
-          hint={`${formatNumberWithCommas(savedTokensTotal)} tokens compressed`}
-          info="Tokens Headroom removed before the call, priced at the model's input rate."
-        />
-        <SummaryCard
-          label="Prompt caching savings"
-          value={usd(cachingTotal)}
-          hint="Cache reads, net of write premium"
-          info="What caching saved against paying the input rate for every token: the discount on tokens served from cache, less the premium providers charge to write a cache entry. Can be negative on traffic that writes more cache than it reuses."
-        />
-        <SummaryCard
-          label="Auto-router savings"
-          value={usd(autorouterTotal)}
-          hint="vs. the priciest model it could pick"
-          info="What this traffic would have cost had every request gone to the most expensive model the auto-router can route to, minus what it actually cost. Switching leaves the new model with a cold cache, so it pays to write the prompt again while the baseline is priced as already warm; a route that thrashes the cache can total below zero, and a genuine first turn, where neither side had anything cached, is undercounted."
-        />
-      </div>
+      <SavingsTiles results={results} isLoading={loading || isFetchingMore} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
