@@ -66,6 +66,7 @@ from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
+SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
 
 
 WORD_NUMBER_MAP: Final = {
@@ -123,6 +124,13 @@ class _StreamedChoiceState:
     yielded_masked_text_len: int = 0
     committed_detections: tuple[ContentFilterDetection, ...] = ()
     latest_detections: tuple[ContentFilterDetection, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamedScanPlan:
+    context_chars: int
+    exception_phrases: tuple[str, ...]
+    conditional_words: tuple[str, ...]
 
 
 class CategoryFileData(TypedDict, total=False):
@@ -989,7 +997,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         # Split text into sentences for more precise matching
         # Simple sentence splitting on common terminators
-        sentences: Final = re.split(r"[.!?]+", text)
+        sentences: Final = SENTENCE_TERMINATORS.split(text)
 
         for category_name, config in self.conditional_categories.items():
             identifier_words = config["identifier_words"]
@@ -1963,31 +1971,58 @@ class ContentFilterGuardrail(CustomGuardrail):
                 exception_str=exception_str,
             )
 
-    def _streamed_scan_context_chars(self) -> int:
-        """Retained tail length: the default context, widened to the longest configured keyword."""
+    def _streamed_scan_plan(self) -> _StreamedScanPlan:
+        """
+        Per-stream inputs for buffer trimming: the retained tail length (the default
+        context, widened to the longest configured keyword), the category exception
+        phrases, which suppress matches anywhere in the scanned text, and the conditional
+        category words, which only match when paired inside one sentence.
+        """
         longest_keyword: Final = max(
             map(len, (*self.blocked_words, *self.category_keywords, *self.always_block_category_keywords)),
             default=0,
         )
-        return max(CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS, longest_keyword)
+        return _StreamedScanPlan(
+            context_chars=max(CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS, longest_keyword),
+            exception_phrases=tuple(
+                phrase for category in self.loaded_categories.values() for phrase in category.exceptions
+            ),
+            conditional_words=tuple(
+                word
+                for config in self.conditional_categories.values()
+                for word in (*config["identifier_words"], *config["block_words"])
+            ),
+        )
+
+    @staticmethod
+    def _cut_breaks_wider_context(buffered_text: str, head: str, tail: str, plan: _StreamedScanPlan) -> bool:
+        buffered_lower: Final = buffered_text.lower()
+        tail_lower: Final = tail.lower()
+        if any(phrase in buffered_lower and phrase not in tail_lower for phrase in plan.exception_phrases):
+            return True
+        open_sentence: Final = SENTENCE_TERMINATORS.split(head.lower())[-1]
+        return any(word in open_sentence for word in plan.conditional_words)
 
     def _trim_streamed_choice_buffer(
-        self, state: _StreamedChoiceState, masked_text: str, scan_context_chars: int
+        self, state: _StreamedChoiceState, masked_text: str, plan: _StreamedScanPlan
     ) -> _StreamedChoiceState:
         """
         Bound the per-choice buffer rescanned on every streamed chunk.
 
         Once the buffer exceeds twice the scan context, drop everything but the last
-        context-sized tail, provided the two halves mask to the same output as the whole
-        (so no match, phrase or exception straddles the cut) and the dropped prefix has
-        already been yielded. Otherwise keep the buffer and retry on the next chunk.
+        context-sized tail, provided no exception phrase or unfinished conditional sentence
+        would leave the buffer, the two halves mask to the same output as the whole (so no
+        match or phrase straddles the cut), and the dropped prefix has already been yielded.
+        Otherwise keep the buffer and retry on the next chunk.
 
         Detections found in the dropped prefix move to the state's committed detections.
         """
-        if len(state.buffered_text) <= 2 * scan_context_chars:
+        if len(state.buffered_text) <= 2 * plan.context_chars:
             return state
-        head: Final = state.buffered_text[:-scan_context_chars]
-        tail: Final = state.buffered_text[-scan_context_chars:]
+        head: Final = state.buffered_text[: -plan.context_chars]
+        tail: Final = state.buffered_text[-plan.context_chars :]
+        if self._cut_breaks_wider_context(state.buffered_text, head, tail, plan):
+            return state
         head_detections: Final[list[ContentFilterDetection]] = []  # mutable-ok: filled by _filter_single_text
         try:
             masked_head: Final = self._filter_single_text(head, detections=head_detections)
@@ -2026,7 +2061,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         contract.
         """
         state_by_choice: Final[dict[int, _StreamedChoiceState]] = {}
-        scan_context_chars: Final = self._streamed_scan_context_chars()
+        plan: Final = self._streamed_scan_plan()
 
         start_time: Final = datetime.now()
         scan_seconds: float = 0.0  # rebind-ok: accumulates per-chunk scan time across the stream
@@ -2096,9 +2131,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                             continue
 
                         trim_started = time.perf_counter()
-                        state_by_choice[choice_index] = self._trim_streamed_choice_buffer(
-                            next_state, masked_text, scan_context_chars
-                        )
+                        state_by_choice[choice_index] = self._trim_streamed_choice_buffer(next_state, masked_text, plan)
                         scan_seconds += time.perf_counter() - trim_started
 
                     yield item

@@ -1037,6 +1037,60 @@ class TestContentFilterGuardrail:
         assert entry["guardrail_status"] == "guardrail_intervened"
 
     @pytest.mark.asyncio
+    async def test_streaming_hook_keeps_early_exception_phrase_suppressing_later_keyword(self):
+        """
+        Category exception phrases suppress category matches anywhere in the
+        scanned text. An exception phrase at the start of a long response must keep
+        suppressing a category keyword that arrives long after the buffer would
+        otherwise have been trimmed, exactly as one scan of the full text does.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-exception-context",
+            categories=[{"category": "harmful_self_harm", "enabled": True, "action": "BLOCK"}],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        exception_phrase = guardrail.loaded_categories["harmful_self_harm"].exceptions[0]
+        keyword = next(iter(guardrail.category_keywords))
+        filler = "plain filler sentence. " * (3 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS // 23)
+        text = f"Resources on {exception_phrase} matter. {filler}Someone said {keyword} in a novel."
+        chunks = [text[i : i + 16] for i in range(0, len(text), 16)]
+        request_data = {"messages": [], "model": "gpt-4o", "metadata": {}}
+
+        streamed = await self._collect_streamed_text(guardrail, chunks, request_data)
+
+        full_scan = await guardrail.apply_guardrail(inputs={"texts": [text]}, request_data={}, input_type="response")
+        assert streamed == full_scan["texts"][0] == text
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_blocks_conditional_pair_split_by_long_sentence(self):
+        """
+        Conditional categories block an identifier word and a block word that
+        share one sentence. When the sentence runs longer than the retained
+        context, the identifier at its start must still be in the buffer when the
+        block word arrives, so the stream is blocked like a scan of the full text.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-conditional-context",
+            categories=[{"category": "harmful_child_safety", "enabled": True, "action": "BLOCK"}],
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        conditional = guardrail.conditional_categories["harmful_child_safety"]
+        identifier, block_word = conditional["identifier_words"][0], conditional["block_words"][-1]
+        filler = "and then more plain words " * (3 * CONTENT_FILTER_STREAMING_SCAN_CONTEXT_CHARS // 26)
+        text = f"In this chapter the {identifier} {filler}shared an {block_word} moment. The end."
+        chunks = [text[i : i + 16] for i in range(0, len(text), 16)]
+        request_data = {"messages": [], "model": "gpt-4o", "metadata": {}}
+
+        with pytest.raises(HTTPException):
+            await guardrail.apply_guardrail(inputs={"texts": [text]}, request_data={}, input_type="response")
+        with pytest.raises(HTTPException) as exc_info:
+            await self._collect_streamed_text(guardrail, chunks, request_data)
+
+        assert "harmful_child_safety" in str(exc_info.value.detail)
+        entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert entry["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.asyncio
     async def test_streaming_hook_masks_every_email_in_long_stream_and_logs_once(
         self,
     ):
