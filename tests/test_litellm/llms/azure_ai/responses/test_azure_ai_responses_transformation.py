@@ -192,21 +192,54 @@ def test_validate_environment_raises_without_credentials():
         )
 
 
+NATIVE_RESPONSES_CASES = [
+    ("azure_ai/gpt-5.6-luna-20260710154139", FOUNDRY_PROJECT_BASE, FOUNDRY_RESPONSES_URL, "gpt-5.6-luna-20260710154139"),
+    (
+        "azure_ai/gpt-5.6-luna",
+        "https://res.services.ai.azure.com/models",
+        "https://res.services.ai.azure.com/openai/v1/responses",
+        "gpt-5.6-luna",
+    ),
+    (
+        "azure_ai/gpt-5.6-sol",
+        "https://res.services.ai.azure.com",
+        "https://res.services.ai.azure.com/openai/v1/responses",
+        "gpt-5.6-sol",
+    ),
+    (
+        "azure_ai/gpt-5.6-luna-20260710154139",
+        "https://res.openai.azure.com",
+        "https://res.openai.azure.com/openai/v1/responses",
+        "gpt-5.6-luna-20260710154139",
+    ),
+    (
+        "azure_ai/gpt-5.6-sol",
+        "https://res.openai.azure.com",
+        "https://res.openai.azure.com/openai/v1/responses",
+        "gpt-5.6-sol",
+    ),
+]
+
+
+def _assert_native_responses_request(route, expected_url, expected_model):
+    request = route.calls.last.request
+    body = json.loads(request.content)
+    assert f"{request.url.scheme}://{request.url.host}{request.url.path}" == expected_url
+    assert request.headers["api-key"] == "fake-key"
+    assert body["model"] == expected_model
+    assert body["input"] == "What is the weather in SF?"
+    assert "messages" not in body
+    assert body["reasoning"] == {"effort": "high"}
+    assert body["tools"] == [WEATHER_TOOL]
+
+
 @pytest.mark.asyncio
 @respx.mock
-@pytest.mark.parametrize(
-    "model,api_base,expected_url",
-    [
-        ("azure_ai/gpt-5.6-luna-20260710154139", FOUNDRY_PROJECT_BASE, FOUNDRY_RESPONSES_URL),
-        (
-            "azure_ai/gpt-5.6-luna",
-            "https://res.services.ai.azure.com/models",
-            "https://res.services.ai.azure.com/openai/v1/responses",
-        ),
-    ],
-)
-async def test_aresponses_sends_reasoning_and_tools_to_native_endpoint(model, api_base, expected_url):
-    route = respx.post(expected_url).mock(return_value=httpx.Response(200, json=_responses_payload("gpt-5.6-luna")))
+@pytest.mark.parametrize("model,api_base,expected_url,expected_model", NATIVE_RESPONSES_CASES)
+async def test_aresponses_sends_reasoning_and_tools_to_native_endpoint(model, api_base, expected_url, expected_model):
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload(expected_model))
+    )
 
     await litellm.aresponses(
         model=model,
@@ -217,13 +250,26 @@ async def test_aresponses_sends_reasoning_and_tools_to_native_endpoint(model, ap
         api_key="fake-key",
     )
 
-    request = route.calls.last.request
-    body = json.loads(request.content)
-    assert request.headers["api-key"] == "fake-key"
-    assert body["input"] == "What is the weather in SF?"
-    assert "messages" not in body
-    assert body["reasoning"] == {"effort": "high"}
-    assert body["tools"] == [WEATHER_TOOL]
+    _assert_native_responses_request(route, expected_url, expected_model)
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("model,api_base,expected_url,expected_model", NATIVE_RESPONSES_CASES)
+async def test_router_aresponses_sends_bare_deployment_name(model, api_base, expected_url, expected_model):
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload(expected_model))
+    )
+    router = litellm.Router(
+        model_list=[{"model_name": "gpt-5.6", "litellm_params": {"model": model, "api_base": api_base, "api_key": "fake-key"}}],
+        num_retries=0,
+    )
+
+    await router.aresponses(
+        model="gpt-5.6", input="What is the weather in SF?", reasoning={"effort": "high"}, tools=[WEATHER_TOOL]
+    )
+
+    _assert_native_responses_request(route, expected_url, expected_model)
 
 
 @pytest.mark.asyncio
