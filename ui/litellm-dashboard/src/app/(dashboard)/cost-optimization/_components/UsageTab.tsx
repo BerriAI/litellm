@@ -10,14 +10,15 @@ import useCan from "@/app/(dashboard)/hooks/useCan";
 import { getToolSpend, ToolSpendResponse } from "@/components/networking";
 import {
   buildDailyToolSeries,
+  CachingSavingsScope,
   formatRangeLabel,
   localIsoDay,
   MAX_POINTS_WITH_DOTS,
   SAVINGS_COLORS,
-  SAVINGS_DRIVERS,
   SAVINGS_SERIES,
   SavingsAccumulation,
   SavingsPoint,
+  savingsDriversFor,
   savingsSeriesOf,
   shortDate,
   sumOverDays,
@@ -73,8 +74,10 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   const toolSpendLoading = toolSpendEnabled && toolSpend === null;
 
   const [accumulation, setAccumulation] = useState<SavingsAccumulation>("cumulative");
+  const [cachingScope, setCachingScope] = useState<CachingSavingsScope>("litellm-injected");
+  const savingsDrivers = useMemo(() => savingsDriversFor(cachingScope), [cachingScope]);
 
-  const perInterval = useMemo<SavingsPoint[]>(() => savingsSeriesOf(results), [results]);
+  const perInterval = useMemo<SavingsPoint[]>(() => savingsSeriesOf(results, cachingScope), [results, cachingScope]);
 
   // Cumulative anchors on a synthetic $0 point at the range start so a short
   // range (down to a single day) rises from zero instead of floating as one dot.
@@ -98,12 +101,14 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   // that actually saved are plotted; the range total keeps the signed truth.
   const byDriver = useMemo(
     () =>
-      SAVINGS_DRIVERS.map(({ name, color, of }) => ({
-        driver: name,
-        color,
-        usd: sumOverDays(results, of),
-      })).filter((d) => d.usd > 0),
-    [results],
+      savingsDrivers
+        .map(({ name, color, of }) => ({
+          driver: name,
+          color,
+          usd: sumOverDays(results, of),
+        }))
+        .filter((d) => d.usd > 0),
+    [results, savingsDrivers],
   );
   const plottedDriverTotal = useMemo(() => byDriver.reduce((sum, d) => sum + d.usd, 0), [byDriver]);
 
@@ -126,11 +131,18 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
   return (
     <div className="w-full space-y-6">
       <div className="flex flex-wrap items-center justify-end gap-4">
+        <span className="text-sm text-muted-foreground">Prompt caching scope</span>
+        <Tabs value={cachingScope} onValueChange={(value) => setCachingScope(value as CachingSavingsScope)}>
+          <TabsList aria-label="Prompt caching savings scope">
+            <TabsTrigger value="litellm-injected">LiteLLM injected</TabsTrigger>
+            <TabsTrigger value="all">All caching</TabsTrigger>
+          </TabsList>
+        </Tabs>
         <span className="text-sm text-muted-foreground">Spend is bucketed by UTC day</span>
         <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
       </div>
 
-      <SavingsTiles results={results} isLoading={loading || isFetchingMore} />
+      <SavingsTiles results={results} isLoading={loading || isFetchingMore} cachingScope={cachingScope} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -144,7 +156,7 @@ const UsageTab: React.FC<UsageTabProps> = ({ accessToken, activity }) => {
             <CardAction className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
               <CustomLegend categories={SAVINGS_SERIES} colors={SAVINGS_COLORS} />
               <Tabs value={accumulation} onValueChange={(value) => setAccumulation(value as SavingsAccumulation)}>
-                <TabsList>
+                <TabsList aria-label="Savings accumulation">
                   <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
                   <TabsTrigger value="per-interval">{intervalLabel}</TabsTrigger>
                 </TabsList>
