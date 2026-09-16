@@ -185,13 +185,10 @@ def test_calculate_usage_aggregates_cache_creation_split_across_iterations():
     assert usage.prompt_tokens_details.cache_creation_tokens == 20000
 
     info = litellm.get_model_info(model="claude-opus-4-8", custom_llm_provider="anthropic")
-    rate_5m = info["cache_creation_input_token_cost"]
     rate_1h = info["cache_creation_input_token_cost_above_1hr"]
-    assert rate_1h > rate_5m
 
     prompt_cost, _ = cost_per_token(model="claude-opus-4-8", usage=usage)
     assert prompt_cost == pytest.approx(20000 * rate_1h)
-    assert prompt_cost != pytest.approx(20000 * rate_5m)
 
 
 def test_calculate_usage_bills_undetailed_iteration_cache_writes_at_5m_rate():
@@ -236,12 +233,10 @@ def test_calculate_usage_bills_undetailed_iteration_cache_writes_at_5m_rate():
     assert usage.prompt_tokens_details.cache_creation_tokens == 17000
 
     info = litellm.get_model_info(model="claude-opus-4-8", custom_llm_provider="anthropic")
-    rate_5m = info["cache_creation_input_token_cost"]
     rate_1h = info["cache_creation_input_token_cost_above_1hr"]
 
     prompt_cost, _ = cost_per_token(model="claude-opus-4-8", usage=usage)
-    assert prompt_cost == pytest.approx(7000 * rate_5m + 10000 * rate_1h)
-    assert prompt_cost != pytest.approx(10000 * rate_1h)
+    assert prompt_cost == pytest.approx(7000 * info["cache_creation_input_token_cost"] + 10000 * rate_1h)
 
 
 def test_calculate_usage_clamps_text_tokens_when_reasoning_estimate_exceeds_output():

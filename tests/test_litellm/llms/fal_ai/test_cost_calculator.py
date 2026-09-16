@@ -19,13 +19,17 @@ def _image_response(num_images: int = 1) -> ImageResponse:
     return ImageResponse(data=[ImageObject(url="https://example.com/img.png") for _ in range(num_images)])
 
 
+def _price(key: str) -> float:
+    return float(litellm.model_cost[key]["output_cost_per_image"])
+
+
 def test_high_quality_1024x1024_uses_keyed_price():
     cost = cost_calculator(
         model="openai/gpt-image-2",
         image_response=_image_response(),
         optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
     )
-    assert cost == pytest.approx(0.211)
+    assert cost == pytest.approx(_price("fal_ai/high/1024-x-1024/openai/gpt-image-2"))
 
 
 def test_alias_model_uses_keyed_price():
@@ -34,7 +38,7 @@ def test_alias_model_uses_keyed_price():
         image_response=_image_response(),
         optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
     )
-    assert cost == pytest.approx(0.211)
+    assert cost == pytest.approx(_price("fal_ai/high/1024-x-1024/openai/gpt-image-2"))
 
 
 def test_provider_prefixed_model_uses_keyed_price():
@@ -43,7 +47,7 @@ def test_provider_prefixed_model_uses_keyed_price():
         image_response=_image_response(),
         optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
     )
-    assert cost == pytest.approx(0.211)
+    assert cost == pytest.approx(_price("fal_ai/high/1024-x-1024/openai/gpt-image-2"))
 
 
 def test_provider_prefixed_edit_model_uses_keyed_edit_price():
@@ -52,7 +56,7 @@ def test_provider_prefixed_edit_model_uses_keyed_edit_price():
         image_response=_image_response(),
         optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
     )
-    assert cost == pytest.approx(0.219)
+    assert cost == pytest.approx(_price("fal_ai/high/1024-x-1024/openai/gpt-image-2/edit"))
 
 
 def test_default_request_priced_at_default_size_and_quality():
@@ -61,7 +65,7 @@ def test_default_request_priced_at_default_size_and_quality():
         image_response=_image_response(),
         optional_params={},
     )
-    assert cost == pytest.approx(0.145)
+    assert cost == pytest.approx(_price("fal_ai/openai/gpt-image-2"))
 
 
 def test_auto_quality_priced_as_high():
@@ -70,7 +74,7 @@ def test_auto_quality_priced_as_high():
         image_response=_image_response(),
         optional_params={"quality": "auto", "image_size": {"width": 1024, "height": 1024}},
     )
-    assert cost == pytest.approx(0.211)
+    assert cost == pytest.approx(_price("fal_ai/high/1024-x-1024/openai/gpt-image-2"))
 
 
 def test_low_quality_4k_uses_keyed_price():
@@ -79,7 +83,7 @@ def test_low_quality_4k_uses_keyed_price():
         image_response=_image_response(),
         optional_params={"quality": "low", "image_size": {"width": 3840, "height": 2160}},
     )
-    assert cost == pytest.approx(0.012)
+    assert cost == pytest.approx(_price("fal_ai/low/3840-x-2160/openai/gpt-image-2"))
 
 
 def test_named_fal_size_uses_keyed_price():
@@ -88,7 +92,7 @@ def test_named_fal_size_uses_keyed_price():
         image_response=_image_response(),
         optional_params={"quality": "high", "image_size": "square_hd"},
     )
-    assert cost == pytest.approx(0.211)
+    assert cost == pytest.approx(_price("fal_ai/high/1024-x-1024/openai/gpt-image-2"))
 
 
 def test_edit_model_uses_keyed_edit_price():
@@ -97,7 +101,7 @@ def test_edit_model_uses_keyed_edit_price():
         image_response=_image_response(),
         optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
     )
-    assert cost == pytest.approx(0.219)
+    assert cost == pytest.approx(_price("fal_ai/high/1024-x-1024/openai/gpt-image-2/edit"))
 
 
 def test_edit_model_without_size_falls_back_to_flat_price():
@@ -106,7 +110,7 @@ def test_edit_model_without_size_falls_back_to_flat_price():
         image_response=_image_response(),
         optional_params={"quality": "high"},
     )
-    assert cost == pytest.approx(0.151)
+    assert cost == pytest.approx(_price("fal_ai/openai/gpt-image-2/edit"))
 
 
 def test_missing_optional_params_falls_back_to_flat_price():
@@ -115,7 +119,7 @@ def test_missing_optional_params_falls_back_to_flat_price():
         image_response=_image_response(),
         optional_params=None,
     )
-    assert cost == pytest.approx(0.145)
+    assert cost == pytest.approx(_price("fal_ai/openai/gpt-image-2"))
 
 
 def test_unlisted_size_falls_back_to_flat_price():
@@ -124,7 +128,7 @@ def test_unlisted_size_falls_back_to_flat_price():
         image_response=_image_response(),
         optional_params={"quality": "high", "image_size": {"width": 999, "height": 999}},
     )
-    assert cost == pytest.approx(0.145)
+    assert cost == pytest.approx(_price("fal_ai/openai/gpt-image-2"))
 
 
 def test_keyed_price_multiplies_per_image():
@@ -133,7 +137,7 @@ def test_keyed_price_multiplies_per_image():
         image_response=_image_response(num_images=2),
         optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
     )
-    assert cost == pytest.approx(0.422)
+    assert cost == pytest.approx(2 * _price("fal_ai/high/1024-x-1024/openai/gpt-image-2"))
 
 
 def test_route_image_generation_passes_optional_params_to_fal():
@@ -143,7 +147,7 @@ def test_route_image_generation_passes_optional_params_to_fal():
         custom_llm_provider="fal_ai",
         optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
     )
-    assert cost == pytest.approx(0.211)
+    assert cost == pytest.approx(_price("fal_ai/high/1024-x-1024/openai/gpt-image-2"))
 
 
 def test_route_image_generation_with_provider_prefixed_model_uses_keyed_price():
@@ -153,4 +157,4 @@ def test_route_image_generation_with_provider_prefixed_model_uses_keyed_price():
         custom_llm_provider="fal_ai",
         optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
     )
-    assert cost == pytest.approx(0.211)
+    assert cost == pytest.approx(_price("fal_ai/high/1024-x-1024/openai/gpt-image-2"))

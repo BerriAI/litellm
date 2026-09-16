@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import MagicMock
 
 import httpx
@@ -1094,6 +1094,6 @@ class TestSpendTracking:
             model="soniox/stt-async-v4",
             call_type="transcription",
         )
-        # 10 minutes of audio billed at Soniox's ~$0.10/hour async rate.
         assert cost > 0
-        assert cost == pytest.approx((0.10 / 3600) * 600.0, rel=1e-3)
+        model_info: Final = litellm.get_model_info(model="soniox/stt-async-v4")
+        assert cost == pytest.approx(600.0 * model_info["output_cost_per_second"], rel=1e-3)

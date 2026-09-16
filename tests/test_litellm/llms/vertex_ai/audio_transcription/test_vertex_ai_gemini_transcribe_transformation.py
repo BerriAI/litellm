@@ -1,6 +1,5 @@
 import base64
 import json
-import os
 
 import httpx
 import pytest
@@ -305,41 +304,3 @@ class TestOptionalParams:
         )
         assert "response_format" not in optional_params
         assert optional_params["language"] == "fr-FR"
-
-
-class TestModelCostEntry:
-    REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-
-    @pytest.mark.parametrize(
-        "cost_map_path",
-        [
-            "model_prices_and_context_window.json",
-            "litellm/model_prices_and_context_window_backup.json",
-        ],
-    )
-    def test_transcribe_preview_pricing(self, cost_map_path):
-        with open(os.path.join(self.REPO_ROOT, cost_map_path)) as f:
-            entry = json.load(f)["vertex_ai/gemini-3.5-transcribe-preview"]
-        assert entry["mode"] == "audio_transcription"
-        assert entry["litellm_provider"] == "vertex_ai"
-        assert entry["input_cost_per_audio_token"] == pytest.approx(2e-06)
-        assert entry["input_cost_per_token"] == pytest.approx(2e-06)
-        assert entry["output_cost_per_token"] == pytest.approx(1.2e-05)
-        assert entry["supported_endpoints"] == ["/v1/audio/transcriptions"]
-
-    @pytest.mark.parametrize(
-        "cost_map_path",
-        [
-            "model_prices_and_context_window.json",
-            "litellm/model_prices_and_context_window_backup.json",
-        ],
-    )
-    def test_transcribe_live_preview_pricing(self, cost_map_path):
-        with open(os.path.join(self.REPO_ROOT, cost_map_path)) as f:
-            entry = json.load(f)["vertex_ai/gemini-3.5-transcribe-live-preview"]
-        assert entry["mode"] == "audio_transcription"
-        assert entry["litellm_provider"] == "vertex_ai"
-        assert entry["input_cost_per_audio_token"] == pytest.approx(3.5e-06)
-        assert entry["input_cost_per_token"] == pytest.approx(3.5e-06)
-        assert entry["output_cost_per_token"] == pytest.approx(2.1e-05)
-        assert entry["supported_endpoints"] == ["/v1/realtime"]

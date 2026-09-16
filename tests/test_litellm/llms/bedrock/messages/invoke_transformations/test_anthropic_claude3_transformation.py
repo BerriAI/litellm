@@ -4,30 +4,30 @@ import json
 import os
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import Mock
 
 import pytest
 
-# Ensure the project root is on the import path so `litellm` can be imported when
-# tests are executed from any working directory.
-
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.bedrock.common_utils import (
-    ensure_bedrock_anthropic_messages_tool_names,
-    normalize_custom_field_on_tools,
-    normalize_tool_input_schema_types_for_bedrock_invoke,
-)
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+
+# Ensure the project root is on the import path so `litellm` can be imported when
+# tests are executed from any working directory.
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.bedrock.common_utils import (
+    ensure_bedrock_anthropic_messages_tool_names,
+    normalize_custom_field_on_tools,
+    normalize_tool_input_schema_types_for_bedrock_invoke,
+)
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
 )
-
 
 
 @pytest.mark.asyncio
@@ -1814,7 +1814,7 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
     message_delta/message_stop), final reconstructed usage + cost must still
     be consistent and non-negative.
     """
-    from litellm import completion_cost
+    from litellm import completion_cost, get_model_info
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
     )
@@ -1899,8 +1899,16 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         custom_llm_provider="bedrock",
     )
+    model_info: Final = get_model_info(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", custom_llm_provider="bedrock"
+    )
+    expected_cost: Final = (
+        10 * model_info["input_cost_per_token"]
+        + 22167 * model_info["cache_read_input_token_cost"]
+        + 181 * model_info["output_cost_per_token"]
+    )
     assert cost > 0
-    assert cost == pytest.approx(0.0093951, rel=0, abs=1e-9)
+    assert cost == pytest.approx(expected_cost, rel=0, abs=1e-9)
 
 
 @pytest.mark.asyncio
@@ -1911,7 +1919,7 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
     same logging reconstruction as Anthropic /messages. Ensures token counts and
     completion_cost match model_prices for us.anthropic.claude-sonnet-4-6.
     """
-    from litellm import completion_cost
+    from litellm import completion_cost, get_model_info
     from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
         AnthropicPassthroughLoggingHandler,
     )
@@ -1969,7 +1977,14 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
         model="bedrock/us.anthropic.claude-sonnet-4-6",
         custom_llm_provider="bedrock",
     )
-    assert cost == pytest.approx(0.052150725, rel=0, abs=1e-9)
+    model_info: Final = get_model_info(model="us.anthropic.claude-sonnet-4-6", custom_llm_provider="bedrock")
+    expected_cost: Final = (
+        3 * model_info["input_cost_per_token"]
+        + 10553 * model_info["cache_creation_input_token_cost"]
+        + 25490 * model_info["cache_read_input_token_cost"]
+        + 12 * model_info["output_cost_per_token"]
+    )
+    assert cost == pytest.approx(expected_cost, rel=0, abs=1e-9)
 
 
 @pytest.mark.parametrize(
@@ -2916,7 +2931,6 @@ def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
     forced ``thinking.type='adaptive'`` even with ``supports_adaptive_thinking``
     explicitly set to ``false`` on the entry."""
     import litellm
-
     from litellm.types.router import GenericLiteLLMParams
 
     model = "global.anthropic.claude-opus-4-8"

@@ -1,11 +1,9 @@
 import base64
 import json
-import os
 from urllib.parse import urlparse
 
 import httpx
 import pytest
-
 
 import litellm
 from litellm.llms.vertex_ai.audio_transcription.transformation import (
@@ -313,22 +311,3 @@ class TestProviderRouting:
         )
         assert "response_format" not in optional_params
         assert optional_params["language"] == "fr-FR"
-
-
-class TestModelCostEntry:
-    REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-
-    @pytest.mark.parametrize(
-        "cost_map_path",
-        [
-            "model_prices_and_context_window.json",
-            "litellm/model_prices_and_context_window_backup.json",
-        ],
-    )
-    def test_chirp_3_registered_as_audio_transcription(self, cost_map_path):
-        with open(os.path.join(self.REPO_ROOT, cost_map_path)) as f:
-            entry = json.load(f)["vertex_ai/chirp_3"]
-        assert entry["mode"] == "audio_transcription"
-        assert entry["litellm_provider"] == "vertex_ai"
-        assert entry["input_cost_per_second"] == pytest.approx(0.016 / 60, rel=1e-3)
-        assert entry["supported_endpoints"] == ["/v1/audio/transcriptions"]

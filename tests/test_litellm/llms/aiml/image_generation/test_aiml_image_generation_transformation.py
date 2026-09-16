@@ -142,4 +142,4 @@ def test_cost_calculator_uses_aiml_pricing_for_gpt_image_2():
     )
     assert aiml_cost_calculator(
         model="openai/gpt-image-2", image_response=response
-    ) == pytest.approx(0.054 * 2)
+    ) == pytest.approx(2 * litellm.model_cost["aiml/openai/gpt-image-2"]["output_cost_per_image"])
