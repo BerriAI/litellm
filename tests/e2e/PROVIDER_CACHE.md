@@ -16,6 +16,8 @@ Requests that differ only by their markers therefore share a canonical identity,
 
 Two different tests never share a recording, and a provider call made outside any test (fixtures, session setup) is never cached, because the identity has no test node id to bind to
 
+A client that varies its own request between runs defeats that identity without breaking any rule, and the Claude Code compat cells did. The CLI sends a device id and a session id in `metadata.user_id`, and its system prompt names both its memory directory and its working directory, adding the branch and recent commits when that directory is a git repository. Driven with a fresh HOME and the checkout as its working directory, every cell sent different bytes every build. The fix belongs in the driver rather than here: `claude_code/cli_driver.py` pins the config directory, the working directory and both identifiers, which is why the cache needs no rule for any of it. Normalizing them instead would have hidden a real defect class, since a rule cannot tell a client's own churn from a value a test means to assert on
+
 Provider `Set-Cookie` headers are dropped before validation and never recorded: the edge already withholds them from the proxy, and OpenAI responses always carry Cloudflare bot-management cookies
 
 An eligible miss calls the provider. A complete successful response is stored immediately even if a later test assertion fails. Provider errors, malformed responses, truncated streams and cancelled captures are not stored. Cache reads, writes and lease failures fall through to normal provider behavior; they introduce no provider retry. An already-started response cannot be restarted after a delivery failure
