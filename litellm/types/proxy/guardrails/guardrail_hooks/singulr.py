@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -33,27 +33,27 @@ class SingulrGuardrailPayload(BaseModel):
     model_name: str | None = None
     model_provider_name: str | None = None
     guardrail_scope: str | None = None
-    messages: Sequence[Any] | None = None
+    messages: Sequence[Mapping[str, object]] | None = None
     images: Sequence[str] | None = None
-    tools: Sequence[Any] | None = None  # pyright: ignore[reportExplicitAny]  # forwards caller-supplied OpenAI tool defs verbatim
-    response: Any = None  # pyright: ignore[reportExplicitAny]  # logging_only reports raw litellm callback results (ModelResponse, EmbeddingResponse, etc.)
-    metadata: Mapping[str, Any] | None = None
+    tools: Sequence[Mapping[str, object]] | None = None
+    response: AssistantMessage | None = None
+    metadata: Mapping[str, str] | None = None
 
 
 class SingulrMcpGuardrailPayload(BaseModel):
     model_name: str | None = None
     guardrail_scope: str | None = None
     tool_name: str | None = None
-    tool_arguments: Mapping[str, Any] | None = None
+    tool_arguments: object = None
     mcp_server_name: str | None = None
     tool_result: Sequence[str] | None = None
-    metadata: Mapping[str, Any] | None = None
+    metadata: Mapping[str, str] | None = None
 
 
 class SingulrGuardrailResponse(BaseModel):
     """Response returned by the Singulr guardrail API."""
 
-    should_block: bool | None = None
+    should_block: bool = False
     blocking_due_to: str | None = None
 
 

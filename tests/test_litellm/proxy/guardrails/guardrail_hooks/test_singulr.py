@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+import litellm
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.singulr.singulr import SingulrGuardrail
@@ -14,12 +15,8 @@ from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
 from litellm.types.utils import ModelResponse
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 @pytest.fixture
 def singulr_guardrail():
-    """Create a SingulrGuardrail instance with test credentials."""
     return SingulrGuardrail(
         singulr_api_base="https://api.test.singulr.ai",
         singulr_api_key="test_token_1234",
@@ -31,18 +28,31 @@ def singulr_guardrail():
     )
 
 
+@pytest.fixture
+def logging_only_guardrail():
+    return SingulrGuardrail(
+        singulr_api_base="https://api.test.singulr.ai",
+        singulr_api_key="test_token_1234",
+        singulr_guardrail_id="test_guardrail_id",
+        singulr_application_id="test_enforcement_entity",
+        guardrail_name="test-singulr",
+        event_hook="logging_only",
+        default_on=True,
+    )
+
+
+def _logging_obj(call_type: str) -> MagicMock:
+    logging_obj = MagicMock()
+    logging_obj.call_type = call_type
+    return logging_obj
+
+
 def _make_response(body: dict) -> MagicMock:
-    """Build a mock httpx response with the given JSON body."""
     mock = MagicMock()
     mock.json.return_value = body
     mock.raise_for_status = MagicMock()
     mock.status_code = 200
     return mock
-
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
 
 class TestSingulrConfiguration:
@@ -59,10 +69,6 @@ class TestSingulrConfiguration:
         assert guardrail.singulr_application_id == "entity123"
 
     def test_api_base_strips_surrounding_whitespace(self):
-        """Regression: a UI-saved api_base with a trailing space
-        (e.g. "https://custom.api.local ") broke urlparse's port parsing and
-        made every guardrail call fail with a connection error, even though
-        the configured host was reachable."""
         guardrail = SingulrGuardrail(
             singulr_api_key="test_key",
             singulr_api_base=" https://custom.api.local ",
@@ -74,8 +80,6 @@ class TestSingulrConfiguration:
         assert guardrail.singulr_api_base == "https://custom.api.local"
 
     def test_non_local_http_api_base_raises(self):
-        """Guardrail payloads carry the API token and full conversation
-        content, so a non-local endpoint must use HTTPS."""
         with pytest.raises(ValueError, match="HTTPS"):
             SingulrGuardrail(singulr_api_key="test_key", singulr_api_base="http://guardrails.singulr.ai")
 
@@ -106,11 +110,6 @@ class TestSingulrConfiguration:
         ]
 
 
-# ---------------------------------------------------------------------------
-# Payload construction for real proxy requests (request_data present)
-# ---------------------------------------------------------------------------
-
-
 class TestSingulrRequestPayload:
     @pytest.mark.asyncio
     async def test_model_and_messages_are_forwarded(self, singulr_guardrail):
@@ -130,9 +129,6 @@ class TestSingulrRequestPayload:
 
     @pytest.mark.asyncio
     async def test_structured_messages_are_forwarded_verbatim(self, singulr_guardrail):
-        """When structured_messages are provided (e.g. system + user turns),
-        they must be sent as-is instead of being flattened into single
-        user-role messages built from texts."""
         resp = _make_response({"should_block": False})
         structured_messages = [
             {"role": "system", "content": "Be concise."},
@@ -180,8 +176,6 @@ class TestSingulrRequestPayload:
         ids=["tools_alone", "images_alone"],
     )
     async def test_tools_or_images_alone_still_trigger_the_api_call(self, singulr_guardrail, extra_inputs):
-        """Regression: a request with only tool definitions or only images and
-        no text must still be checked, not skipped for lack of a message."""
         resp = _make_response({"should_block": False})
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await singulr_guardrail.apply_guardrail(
@@ -195,9 +189,6 @@ class TestSingulrRequestPayload:
 
     @pytest.mark.asyncio
     async def test_tools_are_forwarded(self, singulr_guardrail):
-        """Regression: tool/function definitions are client-controlled and can
-        carry prompt-injection content, so they must reach Singulr for
-        inspection instead of only messages and images."""
         resp = _make_response({"should_block": False})
         tools = [
             {
@@ -216,10 +207,6 @@ class TestSingulrRequestPayload:
 
     @pytest.mark.asyncio
     async def test_responses_api_mcp_tools_are_forwarded(self, singulr_guardrail):
-        """Regression: Responses API tools (e.g. {"type": "mcp", "server_label": ...})
-        have no "function" key, unlike Chat Completions tools. SingulrGuardrailPayload
-        rejected them with a pydantic ValidationError, turning every Responses API
-        request carrying an MCP tool into a 500."""
         resp = _make_response({"should_block": False})
         tools = [
             {
@@ -240,8 +227,6 @@ class TestSingulrRequestPayload:
 
     @pytest.mark.asyncio
     async def test_user_api_key_alias_is_forwarded_in_metadata(self, singulr_guardrail):
-        """Regression: the alias must be sent as {"user_api_key_alias": <alias>},
-        not as a dict whose key is the alias value itself."""
         resp = _make_response({"should_block": False})
         request_data = {"litellm_metadata": {"user_api_key_alias": "my-key-alias"}}
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
@@ -420,8 +405,6 @@ class TestSingulrRequestPayload:
 
     @pytest.mark.asyncio
     async def test_no_key_alias_available_sends_no_metadata(self, singulr_guardrail):
-        """Regression: with no alias found, metadata must be omitted (None),
-        not a {None: None} dict that fails payload validation."""
         resp = _make_response({"should_block": False})
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
             await singulr_guardrail.apply_guardrail(
@@ -431,11 +414,6 @@ class TestSingulrRequestPayload:
             )
         sent_payload = mock_post.call_args.kwargs["json"]
         assert sent_payload["metadata"] is None
-
-
-# ---------------------------------------------------------------------------
-# Payload construction for responses
-# ---------------------------------------------------------------------------
 
 
 class TestSingulrResponsePayload:
@@ -506,9 +484,6 @@ class TestSingulrResponsePayload:
     async def test_tool_call_type_other_than_function_is_still_scanned(
         self, singulr_guardrail, raw_type, expected_type
     ):
-        """Regression: a tool call whose type is absent or isn't "function" used
-        to raise a pydantic ValidationError while building the payload, which
-        escaped apply_guardrail as a 500 instead of reaching the scan at all."""
         resp = _make_response({"should_block": False})
         tool_call = {"id": "call_1", "function": {"name": "get_current_time", "arguments": "{}"}}
         inputs = {
@@ -523,8 +498,6 @@ class TestSingulrResponsePayload:
 
     @pytest.mark.asyncio
     async def test_non_string_tool_call_arguments_are_serialized(self, singulr_guardrail):
-        """Some providers hand back already-parsed arguments; they must be
-        scanned as JSON text rather than crashing the payload build."""
         resp = _make_response({"should_block": False})
         inputs = {
             "texts": [],
@@ -539,7 +512,6 @@ class TestSingulrResponsePayload:
 
     @pytest.mark.asyncio
     async def test_block_verdict_still_raises_for_a_non_function_tool_call(self, singulr_guardrail):
-        """The point of scanning these calls: the verdict must still be enforced."""
         resp = _make_response({"should_block": True, "blocking_due_to": "dangerous_tool"})
         inputs = {
             "texts": [],
@@ -551,11 +523,6 @@ class TestSingulrResponsePayload:
         assert "dangerous_tool" in str(exc_info.value)
 
 
-# ---------------------------------------------------------------------------
-# Allow / block decisions
-# ---------------------------------------------------------------------------
-
-
 class TestSingulrAllowAction:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -564,8 +531,6 @@ class TestSingulrAllowAction:
         ids=["should_block_false", "should_block_omitted"],
     )
     async def test_should_block_falsy_returns_inputs_unchanged_on_request(self, singulr_guardrail, guard_response):
-        """should_block is optional on the wire; a response that omits it
-        entirely must be treated as allow, not block."""
         resp = _make_response(guard_response)
         inputs = {"texts": ["How do I reset my password?"]}
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
@@ -605,6 +570,34 @@ class TestSingulrAllowAction:
             )
             assert result is inputs
 
+    @pytest.mark.asyncio
+    async def test_explicit_null_verdict_fails_closed_by_default(self, singulr_guardrail):
+        resp = _make_response({"should_block": None})
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
+            with pytest.raises(GuardrailRaisedException, match="invalid response"):
+                await singulr_guardrail.apply_guardrail(
+                    inputs={"texts": ["hi"]},
+                    request_data={"model": "gpt-4o"},
+                    input_type="request",
+                )
+
+    @pytest.mark.asyncio
+    async def test_explicit_null_verdict_fails_open_when_block_on_error_false(self):
+        guardrail = SingulrGuardrail(
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
+            guardrail_name="test-singulr",
+            block_on_error=False,
+        )
+        resp = _make_response({"should_block": None})
+        inputs = {"texts": ["hi"]}
+        with patch.object(guardrail.async_handler, "post", return_value=resp):
+            assert await guardrail._call_api({"guardrail_scope": "request"}) is None
+            result = await guardrail.apply_guardrail(
+                inputs=inputs, request_data={"model": "gpt-4o"}, input_type="request"
+            )
+        assert result is inputs
+
 
 class TestSingulrBlockAction:
     @pytest.mark.asyncio
@@ -622,11 +615,6 @@ class TestSingulrBlockAction:
 
     @pytest.mark.asyncio
     async def test_should_block_true_raises_on_response(self, singulr_guardrail):
-        """Regression: apply_guardrail's response path compared
-        should_block (a bool) against the string "block", which is always
-        False, so a should_block=True response never blocked the assistant's
-        reply. It must raise on any truthy should_block, matching the
-        request path."""
         resp = _make_response({"should_block": True, "blocking_due_to": "Toxic content detected"})
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
             with pytest.raises(GuardrailRaisedException) as exc_info:
@@ -648,11 +636,6 @@ class TestSingulrBlockAction:
                     request_data={},
                     input_type="request",
                 )
-
-
-# ---------------------------------------------------------------------------
-# MCP tool call guardrail (pre_mcp_call / post_mcp_call)
-# ---------------------------------------------------------------------------
 
 
 class TestSingulrMcpRequest:
@@ -707,6 +690,97 @@ class TestSingulrMcpRequest:
             )
         assert result == {"texts": []}
 
+    @pytest.mark.asyncio
+    async def test_mcp_rest_body_shape_routes_to_mcp_request_payload(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"name": "echo", "arguments": {"text": "my ssn is 123-45-6789"}, "server_id": "srv-1"}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["my ssn is 123-45-6789"], "tools": [{"type": "function"}]},
+                request_data=request_data,
+                input_type="request",
+                logging_obj=_logging_obj("call_mcp_tool"),
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["guardrail_scope"] == "mcp_request"
+        assert sent_payload["tool_name"] == "echo"
+        assert sent_payload["tool_arguments"] == {"text": "my ssn is 123-45-6789"}
+        assert "messages" not in sent_payload
+
+    @pytest.mark.asyncio
+    async def test_mcp_rest_body_without_arguments_still_routes_to_mcp_request(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": [], "tools": [{"type": "function"}]},
+                request_data={"name": "echo", "server_id": "srv-1"},
+                input_type="request",
+                logging_obj=_logging_obj("call_mcp_tool"),
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["guardrail_scope"] == "mcp_request"
+        assert sent_payload["tool_name"] == "echo"
+        assert sent_payload["tool_arguments"] is None
+
+    @pytest.mark.asyncio
+    async def test_non_mapping_tool_arguments_are_forwarded_verbatim(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["raw text"], "tools": [{"type": "function"}]},
+                request_data={"name": "echo", "arguments": "raw text", "server_id": "srv-1"},
+                input_type="request",
+                logging_obj=_logging_obj("call_mcp_tool"),
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["guardrail_scope"] == "mcp_request"
+        assert sent_payload["tool_arguments"] == "raw text"
+
+    @pytest.mark.asyncio
+    async def test_llm_request_body_keys_cannot_reroute_the_scan_to_mcp(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+            "name": "x",
+            "arguments": {},
+            "mcp_tool_name": "x",
+            "call_type": "call_mcp_tool",
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["my ssn is 123-45-6789"],
+                    "structured_messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+                },
+                request_data=request_data,
+                input_type="request",
+                logging_obj=_logging_obj("acompletion"),
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["guardrail_scope"] == "request"
+        assert [m["content"] for m in sent_payload["messages"]] == ["my ssn is 123-45-6789"]
+
+    @pytest.mark.asyncio
+    async def test_llm_response_with_spoofed_mcp_keys_still_scans_the_tool_calls(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"model": "gpt-4o", "messages": [], "name": "x", "arguments": {}, "mcp_tool_name": "x"}
+        tool_call = {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "transfer_funds", "arguments": '{"amount": 5000}'},
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": [], "tool_calls": [tool_call]},
+                request_data=request_data,
+                input_type="response",
+                logging_obj=_logging_obj("acompletion"),
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["guardrail_scope"] == "response"
+        assert sent_payload["response"]["tool_calls"][0]["function"]["name"] == "transfer_funds"
+
 
 class TestSingulrMcpResponse:
     @pytest.mark.asyncio
@@ -756,8 +830,6 @@ class TestSingulrMcpResponse:
 
     @pytest.mark.asyncio
     async def test_mcp_response_resolves_metadata_from_nested_litellm_params(self, singulr_guardrail):
-        """post_mcp_call hands apply_guardrail litellm_logging_obj.model_call_details,
-        which nests metadata under litellm_params instead of at the top level."""
         resp = _make_response({"should_block": False})
         auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
         request_data = {
@@ -830,10 +902,26 @@ class TestSingulrMcpResponse:
             )
         assert result is inputs
 
-
-# ---------------------------------------------------------------------------
-# apply_guardrail dispatch (request vs response vs unknown input_type)
-# ---------------------------------------------------------------------------
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("request_data", "logging_obj"),
+        [
+            ({"call_type": "call_mcp_tool", "model": "MCP: echo"}, None),
+            ({"model": "MCP: echo"}, None),
+            ({"name": "echo", "arguments": {"text": "hi"}}, _logging_obj("call_mcp_tool")),
+        ],
+        ids=["post_mcp_call_model_call_details", "logging_only_scratch_request", "rest_pre_call_logger"],
+    )
+    async def test_mcp_response_is_detected_from_each_producer(self, singulr_guardrail, request_data, logging_obj):
+        resp = _make_response({"should_block": False})
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["tool output"]},
+                request_data=request_data,
+                input_type="response",
+                logging_obj=logging_obj,
+            )
+        assert mock_post.call_args.kwargs["json"]["guardrail_scope"] == "mcp_response"
 
 
 class TestSingulrApplyGuardrailDispatch:
@@ -850,289 +938,109 @@ class TestSingulrApplyGuardrailDispatch:
         assert result is inputs
 
 
-# ---------------------------------------------------------------------------
-# logging_only hook
-# ---------------------------------------------------------------------------
-
-
 class TestSingulrLoggingHook:
-    @pytest.mark.asyncio
-    async def test_forwards_request_messages_and_response_text(self, singulr_guardrail):
-        resp = _make_response({"should_block": False})
-        kwargs = {"messages": [{"role": "user", "content": "hi"}], "model": "gpt-4o", "litellm_call_id": "call-1"}
-        result = {"choices": [{"finish_reason": "stop", "message": {"content": "hello there"}}]}
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
-            await singulr_guardrail.async_logging_hook(kwargs=kwargs, result=result, call_type="acompletion")
-
-        request_payload = mock_post.call_args_list[0].kwargs["json"]
-        response_payload = mock_post.call_args_list[1].kwargs["json"]
-        assert request_payload["guardrail_scope"] == "request"
-        assert request_payload["messages"] == kwargs["messages"]
-        assert response_payload["guardrail_scope"] == "response"
-        assert response_payload["response"] == result
-
-    @pytest.mark.asyncio
-    async def test_forwards_user_metadata_in_both_request_and_response_payloads(self, singulr_guardrail):
-        resp = _make_response({"should_block": False})
+    @staticmethod
+    def _logged_call(**overrides):
         kwargs = {
-            "messages": [{"role": "user", "content": "hi"}],
             "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
             "litellm_call_id": "call-1",
-            "litellm_metadata": {"user_api_key_alias": "my-key-alias", "user_api_key_org_id": "org-123"},
+            "litellm_params": {"metadata": {"user_api_key_alias": "my-key-alias", "user_api_key_org_id": "org-123"}},
+            "standard_logging_object": {"guardrail_information": []},
         }
-        result = {"choices": [{"finish_reason": "stop", "message": {"content": "hello there"}}]}
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
-            await singulr_guardrail.async_logging_hook(kwargs=kwargs, result=result, call_type="acompletion")
-
-        request_payload = mock_post.call_args_list[0].kwargs["json"]
-        response_payload = mock_post.call_args_list[1].kwargs["json"]
-        expected_metadata = {"user_api_key_alias": "my-key-alias", "user_api_key_org_id": "org-123"}
-        assert request_payload["metadata"] == expected_metadata
-        assert response_payload["metadata"] == expected_metadata
+        return {**kwargs, **overrides}
 
     @pytest.mark.asyncio
-    async def test_forwards_a_real_model_response_without_swallowing_it(self, singulr_guardrail):
-        """Regression: a normal completion callback passes a ModelResponse, not a
-        dict. The response payload must carry its actual serialized content instead
-        of silently dropping it because ModelResponse isn't a Mapping."""
+    async def test_scans_request_then_response_as_an_assistant_message(self, logging_only_guardrail):
         resp = _make_response({"should_block": False})
         result = ModelResponse(
             choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hello there"}}]
         )
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
-            await singulr_guardrail.async_logging_hook(kwargs={}, result=result, call_type="acompletion")
-
-        response_payload = mock_post.call_args.kwargs["json"]
-        assert response_payload["guardrail_scope"] == "response"
-        assert response_payload["response"]["choices"][0]["message"]["content"] == "hello there"
-
-    @pytest.mark.asyncio
-    async def test_non_serializable_result_falls_back_to_string_report(self, singulr_guardrail):
-        """A result that pydantic can't serialize to JSON must still get reported,
-        as a stringified fallback, instead of raising out of the logging_only hook."""
-        resp = _make_response({"should_block": False})
-
-        class Unserializable:
-            def __repr__(self) -> str:
-                return "<Unserializable>"
-
-        kwargs = {"litellm_metadata": {"user_api_key_alias": "my-key-alias"}}
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
-            await singulr_guardrail.async_logging_hook(kwargs=kwargs, result=Unserializable(), call_type="acompletion")
-
-        response_payload = mock_post.call_args.kwargs["json"]
-        assert response_payload["response"] == "<Unserializable>"
-        assert response_payload["metadata"] == {"user_api_key_alias": "my-key-alias"}
-
-    @pytest.mark.asyncio
-    async def test_no_messages_and_no_result_skips_both_api_calls(self, singulr_guardrail):
-        with patch.object(singulr_guardrail.async_handler, "post") as mock_post:
-            returned_kwargs, returned_result = await singulr_guardrail.async_logging_hook(
-                kwargs={}, result=None, call_type="acompletion"
+        with patch.object(logging_only_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            updated_kwargs, returned = await logging_only_guardrail.async_logging_hook(
+                kwargs=self._logged_call(), result=result, call_type="acompletion"
             )
-        mock_post.assert_not_called()
-        assert returned_result is None
-        guardrail_information = returned_kwargs["standard_logging_object"]["guardrail_information"]
-        assert guardrail_information[0]["guardrail_status"] == "success"
+
+        assert returned is result
+        scopes = [call.kwargs["json"]["guardrail_scope"] for call in mock_post.call_args_list]
+        assert scopes == ["request", "response"]
+        request_payload = mock_post.call_args_list[0].kwargs["json"]
+        response_payload = mock_post.call_args_list[1].kwargs["json"]
+        assert request_payload["messages"] == [{"role": "user", "content": "hi"}]
+        assert request_payload["correlation_id"] == "call-1"
+        assert response_payload["response"] == {"role": "assistant", "content": "hello there", "tool_calls": []}
+        expected_metadata = {"user_api_key_alias": "my-key-alias", "user_api_key_org_id": "org-123"}
+        assert request_payload["metadata"] == expected_metadata
+        assert response_payload["metadata"] == expected_metadata
+        statuses = [
+            entry["guardrail_status"] for entry in updated_kwargs["standard_logging_object"]["guardrail_information"]
+        ]
+        assert statuses == ["success", "success"]
 
     @pytest.mark.asyncio
-    async def test_mcp_tool_call_is_not_reported(self, singulr_guardrail):
-        """MCP traffic is already covered by the pre/post_mcp_call hooks, which send
-        the richer mcp_request/mcp_response payloads. The logging_only hook sees the
-        same call again with model="MCP: <tool_name>" and must skip it so Singulr
-        doesn't get a duplicate, lower-fidelity report of every tool call."""
-        kwargs = {"model": "MCP: get_weather", "messages": [{"role": "user", "content": "hi"}]}
-        with patch.object(singulr_guardrail.async_handler, "post") as mock_post:
-            updated_kwargs, result = await singulr_guardrail.async_logging_hook(
-                kwargs=kwargs, result={"choices": []}, call_type="acompletion"
-            )
-        mock_post.assert_not_called()
-        assert "standard_logging_object" not in updated_kwargs
-        assert result == {"choices": []}
-
-    @pytest.mark.asyncio
-    async def test_mcp_list_tools_call_is_not_reported(self, singulr_guardrail):
-        kwargs = {"model": "MCP: list_tools", "messages": [{"role": "user", "content": "hi"}]}
-        with patch.object(singulr_guardrail.async_handler, "post") as mock_post:
-            await singulr_guardrail.async_logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
-        mock_post.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_non_mcp_model_is_still_reported(self, singulr_guardrail):
-        """Guard against the skip being too broad: a normal LLM call whose model
-        merely mentions MCP later in the name must still be reported."""
-        resp = _make_response({"should_block": False})
-        kwargs = {"model": "gpt-4o-mcp", "messages": [{"role": "user", "content": "hi"}]}
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
-            updated_kwargs, _ = await singulr_guardrail.async_logging_hook(
-                kwargs=kwargs, result=None, call_type="acompletion"
-            )
-        mock_post.assert_called_once()
-        assert updated_kwargs["standard_logging_object"]["guardrail_information"][0]["guardrail_status"] == "success"
-
-    @pytest.mark.asyncio
-    async def test_records_standard_logging_guardrail_information(self, singulr_guardrail):
-        resp = _make_response({"should_block": False})
-        kwargs = {"messages": [{"role": "user", "content": "hi"}]}
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
-            updated_kwargs, _ = await singulr_guardrail.async_logging_hook(
-                kwargs=kwargs, result=None, call_type="acompletion"
-            )
-        guardrail_information = updated_kwargs["standard_logging_object"]["guardrail_information"]
-        assert len(guardrail_information) == 1
-        assert guardrail_information[0]["guardrail_name"] == "test-singulr"
-        assert guardrail_information[0]["guardrail_status"] == "success"
-
-    @pytest.mark.asyncio
-    async def test_request_block_verdict_marks_guardrail_status_intervened(self, singulr_guardrail):
-        """Regression: a successful HTTP call whose body says should_block is a
-        real intervention. logging_only can't fail the request, so the verdict
-        only ever surfaces through guardrail_status, and it used to be recorded
-        as a plain success."""
+    async def test_block_verdict_is_recorded_as_intervened_without_failing_the_call(self, logging_only_guardrail):
         resp = _make_response({"should_block": True, "blocking_due_to": "pii"})
-        kwargs = {"messages": [{"role": "user", "content": "my ssn is 123-45-6789"}]}
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
-            updated_kwargs, result = await singulr_guardrail.async_logging_hook(
-                kwargs=kwargs, result=None, call_type="acompletion"
+        with patch.object(logging_only_guardrail.async_handler, "post", return_value=resp):
+            updated_kwargs, returned = await logging_only_guardrail.async_logging_hook(
+                kwargs=self._logged_call(messages=[{"role": "user", "content": "my ssn is 123-45-6789"}]),
+                result=None,
+                call_type="acompletion",
             )
-        assert result is None
-        guardrail_information = updated_kwargs["standard_logging_object"]["guardrail_information"]
-        assert guardrail_information[0]["guardrail_status"] == "guardrail_intervened"
+        assert returned is None
+        entries = updated_kwargs["standard_logging_object"]["guardrail_information"]
+        assert entries[0]["guardrail_status"] == "guardrail_intervened"
+        assert entries[0]["guardrail_mode"] == "logging_only"
+        assert "Blocking due to pii" in str(entries[0]["guardrail_response"])
 
     @pytest.mark.asyncio
-    async def test_response_block_verdict_marks_guardrail_status_intervened(self, singulr_guardrail):
-        """Only the response leg blocks here, so a request verdict of False must
-        not mask it."""
-        responses = [_make_response({"should_block": False}), _make_response({"should_block": True})]
-        kwargs = {"messages": [{"role": "user", "content": "hi"}]}
-        with patch.object(singulr_guardrail.async_handler, "post", side_effect=responses):
-            updated_kwargs, _ = await singulr_guardrail.async_logging_hook(
-                kwargs=kwargs, result={"choices": []}, call_type="acompletion"
+    async def test_vendor_timeout_is_recorded_as_failed_to_respond(self, logging_only_guardrail):
+        timeout = litellm.Timeout("Singulr timed out", model="gpt-4o", llm_provider="singulr")
+        with patch.object(logging_only_guardrail.async_handler, "post", side_effect=timeout):
+            updated_kwargs, returned = await logging_only_guardrail.async_logging_hook(
+                kwargs=self._logged_call(), result=None, call_type="acompletion"
             )
-        guardrail_information = updated_kwargs["standard_logging_object"]["guardrail_information"]
-        assert guardrail_information[0]["guardrail_status"] == "guardrail_intervened"
+        assert returned is None
+        entries = updated_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"]
+        assert "timed out" in str(entries[0]["guardrail_response"])
 
     @pytest.mark.asyncio
-    async def test_block_verdict_still_reports_both_legs_and_returns_result(self, singulr_guardrail):
-        """A block verdict on the request leg is logging-only: it must not
-        short-circuit the response report or alter what the hook returns."""
-        resp = _make_response({"should_block": True})
-        kwargs = {"messages": [{"role": "user", "content": "hi"}]}
-        result = {"choices": [{"finish_reason": "stop", "message": {"content": "hello"}}]}
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
-            returned_kwargs, returned_result = await singulr_guardrail.async_logging_hook(
-                kwargs=kwargs, result=result, call_type="acompletion"
-            )
-        assert [call.kwargs["json"]["guardrail_scope"] for call in mock_post.call_args_list] == ["request", "response"]
-        assert returned_result is result
-        assert returned_kwargs is kwargs
+    async def test_mcp_tool_result_is_scanned_as_mcp_response(self, logging_only_guardrail):
+        from mcp.types import CallToolResult, TextContent
 
-    @pytest.mark.asyncio
-    async def test_api_error_marks_guardrail_status_intervened(self, singulr_guardrail):
-        """With block_on_error=True (the default), a transport failure while
-        reporting to Singulr raises internally; async_logging_hook must catch
-        it, mark the status accordingly, and still return (kwargs, result)
-        instead of propagating -- logging_only must never block the call."""
-        kwargs = {"messages": [{"role": "user", "content": "hi"}]}
-        with patch.object(
-            singulr_guardrail.async_handler,
-            "post",
-            side_effect=httpx.TransportError("connection refused"),
-        ):
-            updated_kwargs, result = await singulr_guardrail.async_logging_hook(
-                kwargs=kwargs, result=None, call_type="acompletion"
-            )
-        assert result is None
-        guardrail_information = updated_kwargs["standard_logging_object"]["guardrail_information"]
-        assert guardrail_information[0]["guardrail_status"] == "guardrail_intervened"
-
-    @pytest.mark.asyncio
-    async def test_unexpected_exception_is_swallowed_without_recording_guardrail_information(self, singulr_guardrail):
-        """A non-guardrail exception (e.g. a bug in a downstream integration)
-        must not propagate out of the logging_only hook, and must not record
-        standard_logging_guardrail_information since no verdict was reached."""
-        kwargs = {"messages": [{"role": "user", "content": "hi"}]}
-        with patch.object(singulr_guardrail.async_handler, "post", side_effect=RuntimeError("boom")):
-            updated_kwargs, result = await singulr_guardrail.async_logging_hook(
-                kwargs=kwargs, result=None, call_type="acompletion"
-            )
-        assert result is None
-        assert "standard_logging_object" not in updated_kwargs
-
-    @pytest.mark.asyncio
-    async def test_appends_to_existing_guardrail_information_list(self, singulr_guardrail):
         resp = _make_response({"should_block": False})
-        existing_entry = {"guardrail_name": "other-guardrail"}
-        kwargs = {
-            "messages": [{"role": "user", "content": "hi"}],
-            "standard_logging_object": {"guardrail_information": [existing_entry]},
-        }
-        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
-            updated_kwargs, _ = await singulr_guardrail.async_logging_hook(
-                kwargs=kwargs, result=None, call_type="acompletion"
+        result = CallToolResult(content=[TextContent(type="text", text="ssn 123-45-6789")])
+        with patch.object(logging_only_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await logging_only_guardrail.async_logging_hook(
+                kwargs=self._logged_call(model="MCP: get_customer_record", messages=None),
+                result=result,
+                call_type="call_mcp_tool",
             )
-        guardrail_information = updated_kwargs["standard_logging_object"]["guardrail_information"]
-        assert guardrail_information[0] is existing_entry
-        assert guardrail_information[1]["guardrail_name"] == "test-singulr"
+        payloads = [call.kwargs["json"] for call in mock_post.call_args_list]
+        assert [payload["guardrail_scope"] for payload in payloads] == ["mcp_response"]
+        assert payloads[0]["tool_result"] == ["ssn 123-45-6789"]
+        assert payloads[0]["model_name"] == "MCP: get_customer_record"
 
-    def test_sync_logging_hook_returns_kwargs_and_result_unchanged_when_loop_running(self, singulr_guardrail):
-        """logging_hook is the sync entrypoint used outside an event loop;
-        inside a running loop it must no-op rather than deadlock or raise."""
-        import asyncio
-
-        async def _drive():
-            kwargs = {"messages": [{"role": "user", "content": "hi"}]}
-            return singulr_guardrail.logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
-
-        returned_kwargs, returned_result = asyncio.run(_drive())
-        assert returned_result is None
-        assert returned_kwargs == {"messages": [{"role": "user", "content": "hi"}]}
-
-    def test_sync_logging_hook_creates_a_new_event_loop_when_none_is_set(self, singulr_guardrail):
-        """A thread with no current event loop must get a fresh one instead
-        of raising RuntimeError out of the sync entrypoint."""
+    def test_sync_logging_hook_never_calls_singulr(self, logging_only_guardrail):
         from concurrent.futures import ThreadPoolExecutor
 
-        resp = _make_response({"should_block": False})
+        kwargs = {"messages": [{"role": "user", "content": "hi"}], "standard_logging_object": {}}
 
         def _run():
-            kwargs = {"messages": [{"role": "user", "content": "hi"}]}
-            with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
-                return singulr_guardrail.logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
+            with patch.object(logging_only_guardrail.async_handler, "post") as mock_post:
+                returned = logging_only_guardrail.logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
+                mock_post.assert_not_called()
+                return returned
 
         with ThreadPoolExecutor(max_workers=1) as pool:
             returned_kwargs, returned_result = pool.submit(_run).result()
         assert returned_result is None
-        guardrail_information = returned_kwargs["standard_logging_object"]["guardrail_information"]
-        assert guardrail_information[0]["guardrail_status"] == "success"
-
-    def test_sync_logging_hook_swallows_unexpected_exception(self, singulr_guardrail):
-        """A bug surfacing from async_logging_hook itself, not just the
-        Singulr API call, must not propagate out of the sync entrypoint."""
-        from concurrent.futures import ThreadPoolExecutor
-
-        def _run():
-            kwargs = {"messages": [{"role": "user", "content": "hi"}]}
-            with patch.object(singulr_guardrail, "async_logging_hook", side_effect=RuntimeError("boom")):
-                return singulr_guardrail.logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
-
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            returned_kwargs, returned_result = pool.submit(_run).result()
-        assert returned_result is None
-        assert returned_kwargs == {"messages": [{"role": "user", "content": "hi"}]}
-
-
-# ---------------------------------------------------------------------------
-# HTTP call wiring (endpoint, timeout, headers)
-# ---------------------------------------------------------------------------
+        assert returned_kwargs == {"messages": [{"role": "user", "content": "hi"}], "standard_logging_object": {}}
 
 
 class TestSingulrRequestWiring:
     @pytest.mark.asyncio
     async def test_sends_configured_timeout_and_calls_the_guard_endpoint(self):
-        """litellm_params.timeout must reach the httpx call so operators can
-        tighten or loosen the latency budget instead of being stuck with a
-        hardcoded 30s regardless of configuration."""
         guardrail = SingulrGuardrail(
             singulr_api_key="test_key",
             singulr_api_base="https://api.test.singulr.ai",
@@ -1166,11 +1074,6 @@ class TestSingulrBuildHeaders:
         assert "X-Singulr-Gateway-Token" not in headers
         assert "X-Singulr-Enforcement-Entity-Id" not in headers
         assert "X-Singulr-Guardrail-Id" not in headers
-
-
-# ---------------------------------------------------------------------------
-# Non-JSON / malformed response handling
-# ---------------------------------------------------------------------------
 
 
 class TestSingulrInvalidResponse:
@@ -1217,9 +1120,6 @@ class TestSingulrInvalidResponse:
 
     @pytest.mark.asyncio
     async def test_response_missing_expected_fields_block_on_error_true_raises(self):
-        """Regression: a response body that fails SingulrGuardrailResponse
-        validation must raise GuardrailRaisedException instead of letting
-        pydantic.ValidationError propagate unhandled."""
         guardrail = SingulrGuardrail(
             singulr_api_base="https://api.test.singulr.ai",
             singulr_api_key="test_token_1234",
@@ -1237,11 +1137,6 @@ class TestSingulrInvalidResponse:
                     request_data={},
                     input_type="request",
                 )
-
-
-# ---------------------------------------------------------------------------
-# Transport error handling
-# ---------------------------------------------------------------------------
 
 
 class TestSingulrTransportError:
@@ -1285,11 +1180,6 @@ class TestSingulrTransportError:
                     request_data={},
                     input_type="request",
                 )
-
-
-# ---------------------------------------------------------------------------
-# HTTP status error handling
-# ---------------------------------------------------------------------------
 
 
 class TestSingulrHttpStatusError:
@@ -1342,22 +1232,12 @@ class TestSingulrHttpStatusError:
         assert result is inputs
 
 
-# ---------------------------------------------------------------------------
-# Config model
-# ---------------------------------------------------------------------------
-
-
 class TestSingulrConfigModel:
     def test_ui_friendly_name(self):
         assert SingulrGuardrailConfigModel.ui_friendly_name() == "Singulr"
 
     def test_get_config_model_returns_singulr_config_model(self):
         assert SingulrGuardrail.get_config_model() is SingulrGuardrailConfigModel
-
-
-# ---------------------------------------------------------------------------
-# Initializer and registry
-# ---------------------------------------------------------------------------
 
 
 class TestSingulrInitializer:
@@ -1369,11 +1249,6 @@ class TestSingulrInitializer:
         assert callable(initialize_guardrail)
 
     def test_initialize_guardrail_reads_singulr_prefixed_fields(self):
-        """Regression: the UI config form (and YAML config) populate the
-        singulr_-prefixed fields declared on SingulrGuardrailConfigModel, not
-        the generic api_base/api_key fields. initialize_guardrail must read
-        those, or a UI-configured singulr_api_base is silently ignored and
-        the guardrail falls back to the localhost default."""
         from litellm.proxy.guardrails.guardrail_hooks.singulr import (
             initialize_guardrail,
         )
@@ -1398,10 +1273,6 @@ class TestSingulrInitializer:
         assert cb.singulr_guardrail_id == "configured_guardrail_id"
 
     def test_initialize_guardrail_wires_timeout(self):
-        """BaseLitellmParams.timeout exists so operators can override the
-        per-request latency budget. initialize_guardrail must forward it to
-        SingulrGuardrail instead of leaving every deployment stuck on the
-        hardcoded default regardless of configuration."""
         from litellm.proxy.guardrails.guardrail_hooks.singulr import (
             initialize_guardrail,
         )
