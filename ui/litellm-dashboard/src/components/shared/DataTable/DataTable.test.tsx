@@ -357,6 +357,79 @@ describe("DataTable pagination", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  type ClientPageHarnessProps = {
+    data: Person[];
+    isLoading?: boolean;
+    initialPageIndex: number;
+    onChange: (next: PaginationState) => void;
+  };
+
+  function ClientPageHarness({ data, isLoading = false, initialPageIndex, onChange }: ClientPageHarnessProps) {
+    const [pagination, setPagination] = useState<PaginationState>({ pageIndex: initialPageIndex, pageSize: 2 });
+    const handleChange: OnChangeFn<PaginationState> = (updater) => {
+      const next = typeof updater === "function" ? updater(pagination) : updater;
+      onChange(next);
+      setPagination(next);
+    };
+    return (
+      <DataTable
+        data={data}
+        columns={nameCellColumns}
+        paginationMode="client"
+        pageSizeOptions={[2]}
+        pagination={pagination}
+        onPaginationChange={handleChange}
+        isLoading={isLoading}
+      />
+    );
+  }
+
+  it("client mode keeps a controlled page when rows arrive after loading and when they are refetched", async () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<ClientPageHarness data={[]} isLoading initialPageIndex={1} onChange={onChange} />);
+
+    rerender(<ClientPageHarness data={fivePeople} initialPageIndex={1} onChange={onChange} />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(names()).toEqual(["P2", "P3"]);
+
+    rerender(<ClientPageHarness data={[...fivePeople]} initialPageIndex={1} onChange={onChange} />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(names()).toEqual(["P2", "P3"]);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("client mode snaps a controlled page past the end back to the last page", async () => {
+    const onChange = vi.fn();
+    render(<ClientPageHarness data={fivePeople} initialPageIndex={5} onChange={onChange} />);
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ pageIndex: 2, pageSize: 2 }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(names()).toEqual(["P4"]);
+  });
+
+  it("client mode leaves a controlled page alone while there are no rows to page through", async () => {
+    const onChange = vi.fn();
+    render(<ClientPageHarness data={[]} initialPageIndex={3} onChange={onChange} />);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("client mode without a controlled page still returns to the first page when the rows change", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <DataTable data={fivePeople} columns={nameCellColumns} paginationMode="client" pageSizeOptions={[2]} />,
+    );
+
+    await user.click(screen.getByTestId("pagination-next"));
+    expect(names()).toEqual(["P2", "P3"]);
+
+    rerender(
+      <DataTable data={[...fivePeople]} columns={nameCellColumns} paginationMode="client" pageSizeOptions={[2]} />,
+    );
+    await waitFor(() => expect(names()).toEqual(["P0", "P1"]));
+  });
+
   it("server mode resumes clamping once the error clears and a real rowCount arrives", async () => {
     const onChange = vi.fn();
     const { rerender } = render(<ServerPageHarness rowCount={0} isError initialPageIndex={2} onChange={onChange} />);
