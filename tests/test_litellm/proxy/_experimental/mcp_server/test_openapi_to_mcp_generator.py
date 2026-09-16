@@ -41,6 +41,35 @@ GET_ASYNC_CLIENT_TARGET = "litellm.proxy._experimental.mcp_server.openapi_to_mcp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("value,accepted", [
+    ("Bearer Bearer", False), ("ApiKey ApiKey", False), ("token token", False),
+    ("bEaReR   BEARER", False), ("aPiKeY\tAPIKEY", False),
+    ("Bearer fixture-key", True), ("ApiKey fixture-key", True), ("token fixture-key", True),
+])
+async def test_api_key_authorization_validates_payload_before_http(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, value: str, accepted: bool,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    tool: Final = create_tool_function(
+        "/echo", "get", {}, "https://upstream.example", auth_type=MCPAuth.api_key,
+    )
+    destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
+    caller_token: Final = _request_auth_header.set(value)
+    try:
+        if accepted:
+            assert await tool() == "authenticated"
+            assert destination.call_count == 1
+            assert destination.calls.last.request.headers["authorization"] == value
+        else:
+            with pytest.raises(HTTPException, match="requires a usable upstream credential") as exc:
+                await tool()
+            assert exc.value.status_code == 500
+            assert destination.call_count == 0
+    finally:
+        _request_auth_header.reset(caller_token)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("static,forwarded,caller,resolved,expected", [
     ({"Authorization": "Bearer configured"}, {"authorization": "Bearer forwarded"}, None, None, "Bearer configured"),
     ({"Authorization": "Bearer configured"}, None, "Bearer caller", None, "Bearer caller"),
