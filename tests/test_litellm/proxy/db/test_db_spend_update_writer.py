@@ -1659,6 +1659,58 @@ async def test_commit_key_spend_updates_includes_last_active():
 
 
 @pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_increments_key_total_spend_alongside_spend():
+    """
+    The key table write must increment the lifetime total_spend by the same amount as the
+    resettable spend, in the same update so the two cannot drift.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_verificationtoken = MagicMock()
+    mock_batcher.litellm_verificationtoken.update_many = MagicMock()
+
+    mock_transaction = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+
+    db_spend_update_transactions = {
+        "user_list_transactions": {},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {"hashed_token_abc": 0.05, "hashed_token_def": 1.25},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+
+    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
+        await db_writer._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+            db_spend_update_transactions=db_spend_update_transactions,
+        )
+
+    calls = mock_batcher.litellm_verificationtoken.update_many.call_args_list
+    assert [c.kwargs["where"] for c in calls] == [{"token": "hashed_token_abc"}, {"token": "hashed_token_def"}]
+    for call, expected_cost in zip(calls, (0.05, 1.25)):
+        assert call.kwargs["data"]["spend"] == {"increment": expected_cost}
+        assert call.kwargs["data"]["total_spend"] == call.kwargs["data"]["spend"]
+
+
+@pytest.mark.asyncio
 async def test_update_database_creates_single_task():
     """
     Test that update_database() fires exactly 1 asyncio.create_task() call
@@ -2813,7 +2865,7 @@ async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at
     mock_batcher.litellm_verificationtoken.update_many.assert_called_once()
     call_kwargs = mock_batcher.litellm_verificationtoken.update_many.call_args[1]
     assert call_kwargs["where"] == {"token": token}
-    assert set(call_kwargs["data"]) == {"spend", "last_active"}
+    assert set(call_kwargs["data"]) == {"spend", "total_spend", "last_active"}
     assert call_kwargs["data"]["spend"] == {"increment": response_cost}
 
 

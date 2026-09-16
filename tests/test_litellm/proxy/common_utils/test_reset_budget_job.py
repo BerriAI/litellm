@@ -291,6 +291,23 @@ def test_reset_budget_for_key(reset_budget_job, mock_prisma_client):
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
 
 
+def test_reset_budget_for_key_leaves_lifetime_total_spend_alone(reset_budget_job, mock_prisma_client):
+    """A period reset zeroes spend but must neither write nor touch the lifetime total_spend."""
+    now = datetime.now(timezone.utc)
+    key = LiteLLM_VerificationToken(
+        token="tok-key-1", spend=100.0, total_spend=340.0, budget_duration="30d", budget_reset_at=now
+    )
+    mock_prisma_client.data["key"] = [key]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    (write,) = _batch_writes(mock_prisma_client, "key")
+    assert write["data"]["spend"] == {"decrement": 100.0}
+    assert "total_spend" not in write["data"]
+    assert key.spend == 0.0
+    assert key.total_spend == 340.0
+
+
 def test_reset_budget_for_key_honors_injected_reset_time(mock_prisma_client, mock_proxy_logging):
     """Injected BudgetResetSettings drives the written reset time end to end (DI, no globals).
 

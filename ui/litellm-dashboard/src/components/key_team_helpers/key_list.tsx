@@ -39,6 +39,7 @@ export interface KeyResponse {
   key_name: string;
   key_alias: string;
   spend: number;
+  total_spend: number;
   max_budget: number;
   expires: string;
   models: string[];

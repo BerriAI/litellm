@@ -18,6 +18,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     key_name: str | None = None
     key_alias: str | None = None
     spend: float = 0.0
+    total_spend: float = 0.0
     max_budget: float | None = None
     expires: str | datetime | None = None
     models: list = []

@@ -174,6 +174,7 @@ describe("KeyEditView", () => {
     key_name: "sk-...TUuw",
     key_alias: "asdasdas",
     spend: 0,
+    total_spend: 0,
     max_budget: 0,
     expires: "null",
     models: [],
