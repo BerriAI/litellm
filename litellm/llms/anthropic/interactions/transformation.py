@@ -223,16 +223,18 @@ class _Items(_Frozen):
     items: tuple[object, ...]
 
 
+def _dumped(value: object) -> object:
+    return value.model_dump(mode="json", exclude_none=True) if isinstance(value, BaseModel) else value
+
+
 def _plain(value: object) -> object:
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json", exclude_none=True)
-    if isinstance(value, str):
-        return value
+    if isinstance(value, (str, BaseModel)):
+        return _dumped(value)
     try:
         items: Final = _Items.model_validate(MappingProxyType({"items": value})).items
     except ValidationError:
         return value
-    return tuple(_plain(item) for item in items)
+    return tuple(_dumped(item) for item in items)
 
 
 def _input_texts(input: InteractionInput | None) -> tuple[str, ...] | None:
