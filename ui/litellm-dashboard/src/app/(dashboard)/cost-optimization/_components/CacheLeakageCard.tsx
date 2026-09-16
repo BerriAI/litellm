@@ -81,7 +81,7 @@ const SortableHead = ({
 };
 
 const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
-  const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
+  const { dateValue, onDateChange, results, loading, isFetchingMore, apiKeyTruncation } = activity;
   const [dimension, setDimension] = useState<CacheLeakageDimension>("key");
   const [sort, setSort] = useState<SortState>({ column: "potentialSavings", dir: "desc" });
   const leakage = useMemo(() => computeCacheLeakage(results, dimension), [results, dimension]);
@@ -123,6 +123,13 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
           </Tabs>
         </CardHeader>
         <CardContent>
+          {dimension === "key" && apiKeyTruncation !== undefined && (
+            <p className="mb-2 text-sm text-muted-foreground" role="note">
+              Only the {apiKeyTruncation.limit.toLocaleString()} highest-spend keys of{" "}
+              {apiKeyTruncation.total.toLocaleString()} are loaded, so a lower-spend key that leaks more is not listed
+              here. Raise USAGE_TOP_API_KEYS_LIMIT on the proxy to load more keys.
+            </p>
+          )}
           {rows.length > 0 && isFetchingMore && (
             <p className="mb-2 text-sm text-muted-foreground">
               Data is still loading; rows and totals will update as the rest of the range arrives.

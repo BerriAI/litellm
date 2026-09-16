@@ -178,4 +178,28 @@ describe("CacheLeakageCard", () => {
       screen.queryByText("Data is still loading; rows and totals will update as the rest of the range arrives."),
     ).not.toBeInTheDocument();
   });
+
+  it("says which keys are missing from the key ranking when the proxy capped the per-key lists", () => {
+    const day = dayWithKeys("2026-07-12", {
+      "hash-leaky": key("leaky-key", { prompt_tokens: 10000, cache_read_input_tokens: 0 }),
+    });
+    renderWith([day], { apiKeyTruncation: { limit: 100, total: 3000 } });
+
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "Only the 100 highest-spend keys of 3,000 are loaded, so a lower-spend key that leaks more is not listed here.",
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "By model" }));
+
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  it("keeps the key ranking note off when every key was loaded", () => {
+    const day = dayWithKeys("2026-07-12", {
+      "hash-leaky": key("leaky-key", { prompt_tokens: 10000, cache_read_input_tokens: 0 }),
+    });
+    renderWith([day]);
+
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
 });
