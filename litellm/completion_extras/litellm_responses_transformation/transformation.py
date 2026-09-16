@@ -505,7 +505,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     responses_api_request["text"] = self._merge_text(responses_api_request, text_format)
             elif key == "verbosity":
                 responses_api_request["text"] = self._merge_text(
-                    responses_api_request, {"verbosity": cast(object, value)}
+                    responses_api_request,
+                    MappingProxyType({"verbosity": value}),  # pyright: ignore[reportUnknownArgumentType]  # untyped value
                 )
             elif key == "tool_choice":
                 responses_api_request["tool_choice"] = self._normalize_tool_choice_for_responses_api(value)
@@ -526,8 +527,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _merge_text(
         responses_api_request: "ResponsesAPIOptionalRequestParams", update: Mapping[str, object]
     ) -> "ResponseText":
-        existing: Final = cast("dict[str, object]", dict(responses_api_request).get("text") or {})
-        return cast("ResponseText", {**existing, **update})
+        existing: Final = cast(  # cast-ok: text field is a ResponseText | dict[str, Any] | None union
+            "dict[str, object]",
+            dict(responses_api_request).get("text") or {},  # mutable-ok: one-shot merge seed
+        )
+        return cast(  # cast-ok: merged mapping is a valid ResponseText shape
+            "ResponseText", {**existing, **update}  # mutable-ok: one-shot merged payload
+        )
 
     def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
         """Build sanitized litellm_params with merged metadata."""
