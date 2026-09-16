@@ -1,14 +1,13 @@
 use super::*;
-use crate::Error;
 use serde_json::json;
 
 fn messages(value: Value) -> Vec<ChatMessage> {
     serde_json::from_value(value).expect("valid messages")
 }
 
-fn params(value: Value) -> Map<String, Value> {
+fn params(value: Value) -> OpaqueParams {
     match value {
-        Value::Object(map) => map,
+        Value::Object(map) => map.into(),
         other => panic!("params must be an object, got {other}"),
     }
 }
@@ -24,7 +23,9 @@ fn transform(msgs: Value, opts: Value) -> Value {
         .body
 }
 
-fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
+fn transform_response(
+    body: Value,
+) -> Result<ChatCompletionsResponse, crate::chat_completions::Error> {
     BEDROCK_CHAT_COMPLETIONS_CONFIG.transform_response(
         "anthropic.claude-sonnet-4-5-v1:0",
         ProviderChatResponseData { body },
@@ -33,6 +34,24 @@ fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
 
 fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
     BEDROCK_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
+}
+
+#[test]
+fn forwards_native_extension_locations_without_guessing_inference_keys() {
+    let opts = json!({"maxTokens":64, "future":null,
+        "additionalModelRequestFields":{"top_k":40,"new_option":[false,0]},
+        "extra_body":{"requestMetadata":{"key":"value"}}, "aws_secret_access_key":"secret"});
+    let msgs = json!([{"role":"user","content":"hi"}]);
+    assert_eq!(reason(msgs.clone(), opts.clone()), None);
+    let body = transform(msgs, opts);
+    assert_eq!(body["inferenceConfig"], json!({"maxTokens":64}));
+    assert_eq!(
+        body["additionalModelRequestFields"],
+        json!({"top_k":40,"new_option":[false,0]})
+    );
+    assert_eq!(body.get("future"), Some(&Value::Null));
+    assert_eq!(body["requestMetadata"], json!({"key":"value"}));
+    assert!(body.get("aws_secret_access_key").is_none());
 }
 
 #[test]
@@ -123,13 +142,11 @@ fn declines_top_k_because_python_routes_it_by_base_model() {
 }
 
 #[test]
-fn declines_tools_and_other_params_outside_the_allowlist() {
+fn declines_params_requiring_unsupported_behavior() {
     for param in [
         json!({"tools": []}),
         json!({"tool_choice": {"auto": {}}}),
         json!({"thinking": {"type": "enabled"}}),
-        json!({"requestMetadata": {"k": "v"}}),
-        json!({"outputConfig": {}}),
         json!({"_parallel_tool_use_config": {}}),
     ] {
         assert_eq!(
@@ -225,9 +242,12 @@ fn builds_the_converse_url_from_the_region_in_the_model_id() {
     let config = &BEDROCK_CHAT_COMPLETIONS_CONFIG;
     assert_eq!(
         config
-            .complete_url(None, "us-east-1/anthropic.claude-v2", &Map::new(), &|_| {
-                None
-            })
+            .complete_url(
+                None,
+                "us-east-1/anthropic.claude-v2",
+                &OpaqueParams::default(),
+                &|_| { None }
+            )
             .expect("url builds"),
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/converse"
     );
@@ -239,13 +259,23 @@ fn falls_back_to_the_region_env_then_the_default_region() {
     let with_env = |key: &str| (key == "AWS_REGION_NAME").then(|| "eu-west-1".to_string());
     assert_eq!(
         config
-            .complete_url(None, "anthropic.claude-v2", &Map::new(), &with_env)
+            .complete_url(
+                None,
+                "anthropic.claude-v2",
+                &OpaqueParams::default(),
+                &with_env
+            )
             .expect("url builds"),
         "https://bedrock-runtime.eu-west-1.amazonaws.com/model/anthropic.claude-v2/converse"
     );
     assert_eq!(
         config
-            .complete_url(None, "anthropic.claude-v2", &Map::new(), &|_| None)
+            .complete_url(
+                None,
+                "anthropic.claude-v2",
+                &OpaqueParams::default(),
+                &|_| None
+            )
             .expect("url builds"),
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-v2/converse"
     );
@@ -276,7 +306,7 @@ fn signs_with_sigv4_in_the_resolved_region() {
             .auth(
                 None,
                 "eu-central-1/anthropic.claude-v2",
-                &Map::new(),
+                &OpaqueParams::default(),
                 &|_| None
             )
             .expect("auth resolves"),
@@ -300,7 +330,7 @@ fn a_bearer_token_outranks_sigv4_the_way_python_resolves_it() {
             .auth(
                 api_key,
                 "eu-central-1/anthropic.claude-v2",
-                &Map::new(),
+                &OpaqueParams::default(),
                 env,
             )
             .expect("auth resolves")
@@ -479,22 +509,27 @@ fn declines_a_response_carrying_a_tool_use_block() {
         "usage": {"inputTokens": 1, "outputTokens": 1}
     }))
     .expect_err("tool use block");
-    assert_eq!(err, Error::Unsupported("non-text response content block"));
+    assert_eq!(
+        err,
+        crate::chat_completions::Error::Unsupported("non-text response content block")
+    );
 }
 
 #[test]
 fn errors_on_a_response_missing_required_fields() {
     assert_eq!(
         transform_response(json!("nope")).expect_err("not an object"),
-        Error::InvalidResponse("converse response is not an object".to_string())
+        crate::chat_completions::Error::InvalidResponse(
+            "converse response is not an object".to_string()
+        )
     );
     assert_eq!(
         transform_response(json!({"usage": {}})).expect_err("no output"),
-        Error::MissingField("output.message.content")
+        crate::chat_completions::Error::MissingField("output.message.content")
     );
     assert_eq!(
         transform_response(json!({"output": {"message": {"content": []}}})).expect_err("no usage"),
-        Error::MissingField("usage")
+        crate::chat_completions::Error::MissingField("usage")
     );
 }
 
@@ -542,7 +577,7 @@ fn leaves_a_complete_converse_url_untouched() {
             .complete_url(
                 Some(already_built),
                 "anthropic.claude-v2",
-                &Map::new(),
+                &OpaqueParams::default(),
                 &|_| None
             )
             .expect("url builds"),

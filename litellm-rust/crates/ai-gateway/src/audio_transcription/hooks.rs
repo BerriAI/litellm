@@ -1,10 +1,10 @@
+use litellm_core::audio_transcription::Error;
 use litellm_core::audio_transcription::{
     AudioTranscriptionRequest as CoreAudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
     prepare_audio_transcription_provider_call,
 };
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
-use litellm_core::error::Error;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -70,13 +70,13 @@ impl AudioTranscriptionLifecycleHooks {
             Error::InvalidRequest("audio transcription guardrail removed audio".to_string())
         })?;
         let optional_params = match data.remove("optional_params") {
-            Some(Value::Object(value)) => value,
+            Some(Value::Object(value)) => value.into(),
             Some(_) => {
                 return Err(Error::InvalidRequest(
                     "audio transcription optional_params must be an object".to_string(),
                 ));
             }
-            None => Map::new(),
+            None => Default::default(),
         };
         Ok(PreparedAudioTranscriptionRequest {
             audio,
@@ -177,6 +177,7 @@ impl AudioTranscriptionLifecycleHooks {
 impl CallLifecycleHooks<PreparedAudioTranscriptionRequest, ProviderAudioTranscriptionRequest, Value>
     for AudioTranscriptionLifecycleHooks
 {
+    type Error = Error;
     type PreCallFuture<'a> = AudioFuture<'a, PreparedAudioTranscriptionRequest>;
     type DuringCallFuture<'a> = AudioFuture<'a, ProviderAudioTranscriptionRequest>;
     type SuccessFuture<'a> = AudioLogFuture<'a>;
@@ -269,20 +270,14 @@ fn guardrail_error_to_core_error(error: GuardrailError) -> Error {
 
 fn core_error_kind(error: &Error) -> &'static str {
     match error {
-        Error::Auth(_)
-        | Error::MissingApiKey { .. }
-        | Error::MissingAzureAiCredentials
-        | Error::MissingAzureDocumentIntelligenceCredentials
-        | Error::MissingReductoApiKey => "AuthError",
+        Error::Auth(_) | Error::Aws(_) => "AuthError",
         Error::InvalidProvider(_) => "InvalidProvider",
-        Error::InvalidRequest(_) => "InvalidRequest",
+        Error::InvalidRequest(_) | Error::Params(_) | Error::Headers(_) => "InvalidRequest",
         Error::InvalidType { .. } => "InvalidType",
-        Error::MissingField(_) | Error::MissingDocumentUrl => "MissingField",
-        Error::Http { .. } => "HttpError",
+        Error::MissingField(_) => "MissingField",
+        Error::Transport(litellm_core::transport::Error::Http { .. }) => "HttpError",
         Error::InvalidResponse(_) => "InvalidResponse",
-        Error::Network(_) => "NetworkError",
-        Error::Connect(_) => "ConnectError",
-        Error::Routing(_) => "RoutingError",
-        Error::Unsupported(_) => "UnsupportedRequest",
+        Error::Transport(litellm_core::transport::Error::Network(_)) => "NetworkError",
+        Error::Transport(litellm_core::transport::Error::Connect(_)) => "ConnectError",
     }
 }

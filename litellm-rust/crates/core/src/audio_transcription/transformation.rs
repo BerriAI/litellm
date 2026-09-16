@@ -1,7 +1,7 @@
-use crate::Error;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::types::{AudioTranscriptionRequestData, AudioTranscriptionResponseData};
+use crate::params::OpaqueParams;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AudioTranscriptionAuth {
@@ -16,42 +16,35 @@ pub trait AudioTranscriptionProviderConfig: Sync {
     fn supported_transcription_params(&self) -> &'static [&'static str];
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn map_transcription_params(&self, params: &Map<String, Value>) -> Map<String, Value> {
-        params
-            .iter()
-            .filter(|(key, _)| {
-                self.supported_transcription_params()
-                    .contains(&key.as_str())
-            })
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect()
+    fn map_transcription_params(&self, params: &OpaqueParams) -> OpaqueParams {
+        params.provider_params()
     }
 
     fn transform_transcription_request(
         &self,
         model: &str,
         audio: Value,
-        optional_params: Map<String, Value>,
-    ) -> Result<AudioTranscriptionRequestData, Error>;
+        optional_params: OpaqueParams,
+    ) -> Result<AudioTranscriptionRequestData, super::Error>;
 
     fn transform_transcription_response(
         &self,
         model: &str,
         response_json: Value,
-    ) -> Result<AudioTranscriptionResponseData, Error>;
+    ) -> Result<AudioTranscriptionResponseData, super::Error>;
 
     fn complete_url(
         &self,
         api_base: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
+    ) -> Result<String, super::Error>;
 
     fn auth_strategy(
         &self,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<AudioTranscriptionAuth, Error>;
+    ) -> Result<AudioTranscriptionAuth, super::Error>;
 }

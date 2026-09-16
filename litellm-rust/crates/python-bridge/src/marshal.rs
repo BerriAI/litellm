@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
-use litellm_core::auth::InputSource;
+use litellm_auth::InputSource;
 use litellm_python_interop::from_py_preserving_errors as from_py;
 
 pub(crate) struct RouteOptions {
@@ -90,13 +90,19 @@ pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyRe
 
 pub(crate) fn project_optional_fields(
     kwargs: &Bound<'_, PyDict>,
-    names: &[&str],
+    fields: &[litellm_core::call_arguments::ArgumentSpec],
+    bound_fields: &[&str],
 ) -> PyResult<Map<String, Value>> {
-    names
+    kwargs
         .iter()
-        .filter_map(|name| match kwargs.get_item(name) {
-            Ok(Some(value)) => Some(from_py(&value).map(|value| ((*name).to_string(), value))),
-            Ok(None) => None,
+        .map(|(name, value)| Ok((name.extract::<String>()?, value)))
+        .filter_map(|entry: PyResult<_>| match entry {
+            Ok((name, value))
+                if litellm_core::call_arguments::should_project(&name, fields, bound_fields) =>
+            {
+                Some(from_py(&value).map(|value| (name, value)))
+            }
+            Ok(_) => None,
             Err(error) => Some(Err(error)),
         })
         .collect()

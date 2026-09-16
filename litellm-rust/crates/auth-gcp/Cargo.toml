@@ -1,0 +1,17 @@
+[package]
+name = "litellm-auth-gcp"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+litellm-auth.workspace = true
+
+moka.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+gcp_auth = "0.12.7"

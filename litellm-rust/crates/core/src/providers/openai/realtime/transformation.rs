@@ -1,4 +1,3 @@
-use crate::Error;
 use crate::realtime::transformation::RealtimeProviderConfig;
 use crate::realtime::types::{RealtimeEvent, RealtimeTransformResult};
 
@@ -72,30 +71,55 @@ impl RealtimeProviderConfig for OpenAiRealtimeConfig {
         &self,
         event: &RealtimeEvent,
         _model: &str,
-    ) -> Result<RealtimeTransformResult, Error> {
-        Ok(RealtimeTransformResult::passthrough(event.clone()))
+    ) -> Result<RealtimeTransformResult, crate::realtime::Error> {
+        let mut event = event.clone();
+        event.data = event.data.into_provider_body()?.into();
+        Ok(RealtimeTransformResult::passthrough(event))
     }
 
     fn transform_realtime_response(
         &self,
         event: &RealtimeEvent,
         _model: &str,
-    ) -> Result<RealtimeTransformResult, Error> {
+    ) -> Result<RealtimeTransformResult, crate::realtime::Error> {
         Ok(RealtimeTransformResult::passthrough(event.clone()))
+    }
+}
+
+#[cfg(test)]
+mod extension_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_unknown_events_and_nested_extensions() {
+        let event = serde_json::from_value(serde_json::json!({
+            "type":"future.event", "session":{"future":[null,false,0]},
+            "extra_body":{"provider_option":null}
+        }))
+        .unwrap();
+        let result = OPENAI_REALTIME_CONFIG
+            .transform_realtime_request(&event, "resolved")
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&result.events[0]).unwrap(),
+            serde_json::json!({
+                "type":"future.event", "session":{"future":[null,false,0]}, "provider_option":null
+            })
+        );
     }
 }
 
 pub fn transform_realtime_request(
     event: &RealtimeEvent,
     model: &str,
-) -> Result<RealtimeTransformResult, Error> {
+) -> Result<RealtimeTransformResult, crate::realtime::Error> {
     OPENAI_REALTIME_CONFIG.transform_realtime_request(event, model)
 }
 
 pub fn transform_realtime_response(
     event: &RealtimeEvent,
     model: &str,
-) -> Result<RealtimeTransformResult, Error> {
+) -> Result<RealtimeTransformResult, crate::realtime::Error> {
     OPENAI_REALTIME_CONFIG.transform_realtime_response(event, model)
 }
 

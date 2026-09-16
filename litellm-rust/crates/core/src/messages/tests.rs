@@ -4,8 +4,6 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::error::Error;
-
 use super::common_utils::{
     has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
 };
@@ -77,7 +75,14 @@ fn truncate_error_body_caps_long_payloads() {
 fn string_headers_rejects_non_string_values() {
     let headers = json!({"x-count": 3}).as_object().unwrap().clone();
     let err = string_headers(Some(headers)).expect_err("non-string header rejected");
-    assert!(matches!(err, Error::InvalidRequest(_)));
+    assert_eq!(
+        err,
+        super::Error::Headers(crate::http_utils::HeaderError {
+            context: "messages",
+            name: "x-count".to_string(),
+            actual: "number",
+        })
+    );
 }
 
 #[test]
@@ -199,7 +204,9 @@ async fn messages_round_trip_builds_native_anthropic_request() {
         body: json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 1024,
-            "messages": [{"role": "user", "content": "hi"}]
+            "messages": [{"role": "user", "content": "hi", "future_message": null}],
+            "future_option": {"nested": [null, false, 0]},
+            "extra_body": {"max_tokens": 2048, "model": "wrong"}
         }),
         api_key: Some("sk-ant"),
         api_base: Some(&format!("http://{addr}")),
@@ -214,7 +221,16 @@ async fn messages_round_trip_builds_native_anthropic_request() {
     assert_eq!(response.stop_reason.as_deref(), Some("end_turn"));
 
     let request = server.await.expect("server task completes");
-    let (head, _) = request.split_once("\r\n\r\n").expect("has body");
+    let (head, body) = request.split_once("\r\n\r\n").expect("has body");
+    let body: Value = serde_json::from_str(body).unwrap();
+    assert_eq!(body["future_option"], json!({"nested":[null,false,0]}));
+    assert_eq!(
+        body["messages"][0].get("future_message"),
+        Some(&Value::Null)
+    );
+    assert_eq!(body["max_tokens"], 2048);
+    assert_eq!(body["model"], "claude-sonnet-4-5");
+    assert!(body.get("extra_body").is_none());
     assert!(head.starts_with("POST /v1/messages "), "{head}");
     let head_lower = head.to_ascii_lowercase();
     assert!(head_lower.contains("x-api-key: sk-ant"), "{head}");
@@ -341,7 +357,7 @@ async fn messages_requires_auth_when_no_key_and_no_header() {
     .await
     .expect_err("missing auth errors");
 
-    assert!(matches!(err, Error::Auth(_)));
+    assert!(matches!(err, super::Error::Auth(_)));
 }
 
 #[tokio::test]
@@ -420,7 +436,10 @@ async fn messages_maps_provider_error_status_to_http_error() {
     .await
     .expect_err("provider error propagates");
 
-    assert!(matches!(err, Error::Http { status: 401, .. }));
+    assert!(matches!(
+        err,
+        super::Error::Transport(crate::transport::Error::Http { status: 401, .. })
+    ));
 }
 
 #[tokio::test]
@@ -437,5 +456,5 @@ async fn messages_rejects_unsupported_provider() {
     .await
     .expect_err("unsupported provider errors");
 
-    assert!(matches!(err, Error::InvalidProvider(provider) if provider == "openai"));
+    assert!(matches!(err, super::Error::InvalidProvider(provider) if provider == "openai"));
 }

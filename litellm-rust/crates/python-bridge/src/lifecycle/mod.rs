@@ -35,7 +35,8 @@ pub(crate) trait PythonRoute: Send + Sync {
     fn state_mut(&mut self) -> &mut PythonCallState;
     fn classify(operation: &<Self::Call as NativeCall>::Operation) -> OperationClass;
     fn lifecycle_result() -> <Self::Call as NativeCall>::Result;
-    fn map_error(error: litellm_core::Error) -> PyErr;
+    fn map_error(error: <Self::Call as NativeCall>::Error) -> PyErr;
+    fn host_error(message: String) -> <Self::Call as NativeCall>::Error;
     fn invoke(
         &mut self,
         py: Python<'_>,
@@ -46,7 +47,8 @@ pub(crate) trait PythonRoute: Send + Sync {
 }
 
 type NativeStep<C> = NativeCallStep<<C as NativeCall>::Operation, <C as NativeCall>::Complete>;
-type NativeResult<C> = Result<NativeStep<C>, litellm_core::Error>;
+type NativeResult<C> = Result<NativeStep<C>, <C as NativeCall>::Error>;
+type HostResult<C> = Result<<C as NativeCall>::Result, HostFailure<<C as NativeCall>::Error>>;
 type HostResumeStep<R> = HostStep<NativeStep<<R as PythonRoute>::Call>, Py<PyAny>>;
 
 struct NativeCallState<C: NativeCall> {
@@ -102,7 +104,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
     fn resume_core(
         &mut self,
         py: Python<'_>,
-        result: Option<Result<<R::Call as NativeCall>::Result, HostFailure>>,
+        result: Option<HostResult<R::Call>>,
     ) -> PyResult<HostResumeStep<R>> {
         let call = Arc::clone(self.call.as_ref().ok_or_else(missing_state)?);
         let future = async move {
@@ -154,8 +156,8 @@ impl<R: PythonRoute> PythonLifecycle<R> {
         py: Python<'_>,
         error: PyErr,
         phase: Option<HostPhase>,
-    ) -> HostFailure {
-        let native = litellm_core::Error::InvalidRequest(error.to_string());
+    ) -> HostFailure<<R::Call as NativeCall>::Error> {
+        let native = R::host_error(error.to_string());
         let cancelled = !error.is_instance_of::<PyException>(py);
         let failure = if !cancelled {
             HostFailure::Error(native)
@@ -667,6 +669,7 @@ mod tests {
     struct SyntheticCall(bool);
 
     impl NativeCall for SyntheticCall {
+        type Error = litellm_core::messages::Error;
         type Operation = ();
         type Result = ();
         type Complete = ();
@@ -674,7 +677,7 @@ mod tests {
         fn resume(
             &mut self,
             result: Option<Self::Result>,
-        ) -> HostCallFuture<'_, Self::Operation, Self::Complete> {
+        ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
             Box::pin(async move {
                 match (self.0, result) {
                     (false, None) => {
@@ -682,7 +685,7 @@ mod tests {
                         Ok(NativeCallStep::Host(()))
                     }
                     (true, Some(())) => Ok(NativeCallStep::Complete(())),
-                    _ => Err(litellm_core::Error::InvalidRequest(
+                    _ => Err(litellm_core::messages::Error::InvalidRequest(
                         "invalid synthetic lifecycle state".into(),
                     )),
                 }
@@ -691,8 +694,8 @@ mod tests {
 
         fn interrupt(
             &mut self,
-            _: HostFailure,
-        ) -> HostCallFuture<'_, Self::Operation, Self::Complete> {
+            _: HostFailure<Self::Error>,
+        ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
             Box::pin(async { Ok(NativeCallStep::Complete(())) })
         }
     }
@@ -716,7 +719,11 @@ mod tests {
 
         fn lifecycle_result() {}
 
-        fn map_error(error: litellm_core::Error) -> PyErr {
+        fn host_error(message: String) -> litellm_core::messages::Error {
+            litellm_core::messages::Error::InvalidRequest(message)
+        }
+
+        fn map_error(error: litellm_core::messages::Error) -> PyErr {
             crate::errors::core_error_to_pyerr(error)
         }
 

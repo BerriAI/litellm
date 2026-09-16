@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
+use crate::params::OpaqueParams;
 
 /// A `/chat/completions` call as it crosses into the core.
 ///
@@ -14,7 +15,7 @@ use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
 pub struct ChatCompletionsRequest<'a> {
     pub model: &'a str,
     pub messages: Value,
-    pub optional_params: Map<String, Value>,
+    pub optional_params: OpaqueParams,
     pub api_key: Option<&'a str>,
     pub api_base: Option<&'a str>,
     pub custom_llm_provider: Option<&'a str>,
@@ -26,7 +27,7 @@ pub(super) struct ResolvedChatCompletionsRequest<'a> {
     pub(super) model: String,
     pub(super) config: &'static dyn ChatCompletionsProviderConfig,
     pub(super) messages: Vec<ChatMessage>,
-    pub(super) optional_params: Map<String, Value>,
+    pub(super) optional_params: OpaqueParams,
     pub(super) api_key: Option<&'a str>,
     pub(super) api_base: Option<&'a str>,
     pub(super) extra_headers: Option<Map<String, Value>>,
@@ -40,8 +41,7 @@ pub(super) struct ProviderChatCompletionsRequest {
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,
     pub(super) auth: ChatCompletionsAuth,
-    #[cfg_attr(not(feature = "bedrock-auth"), allow(dead_code))]
-    pub(super) optional_params: Map<String, Value>,
+    pub(super) optional_params: OpaqueParams,
     pub(super) timeout: Option<Duration>,
 }
 
@@ -72,7 +72,7 @@ pub struct ChatMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub extra: crate::params::OpaqueParams,
 }
 
 /// OpenAI `usage`, including the `prompt_tokens_details` split LiteLLM's Python

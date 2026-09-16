@@ -10,7 +10,7 @@ use crate::chat_completions::types::{
     ProviderChatRequestData, ProviderChatResponseData,
 };
 use crate::constants::ANTHROPIC_OAUTH_TOKEN_PREFIX;
-use crate::error::Error;
+use crate::params::OpaqueParams;
 use crate::providers::anthropic::messages::transformation::{
     complete_anthropic_url, resolve_anthropic_api_key,
 };
@@ -77,9 +77,9 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
-        _optional_params: &Map<String, Value>,
+        _optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<String, crate::chat_completions::Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
     }
 
@@ -87,9 +87,9 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         &self,
         api_key: Option<&str>,
         _model: &str,
-        _optional_params: &Map<String, Value>,
+        _optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ChatCompletionsAuth, Error> {
+    ) -> Result<ChatCompletionsAuth, crate::chat_completions::Error> {
         Ok(ChatCompletionsAuth::Header {
             name: "x-api-key",
             value: resolve_anthropic_api_key(api_key, env_lookup)?,
@@ -125,9 +125,9 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
     fn unsupported_reason(
         &self,
         messages: &[ChatMessage],
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
     ) -> Option<Unsupported> {
-        unsupported_param(self.supported_openai_params(), &[], optional_params)
+        unsupported_param(optional_params)
             .or_else(|| messages.iter().find_map(unsupported_message))
             // Anthropic rejects a request whose first turn is not a user turn.
             // Python only repairs that under `litellm.modify_params`, which the
@@ -143,10 +143,13 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         &self,
         model: &str,
         messages: Vec<ChatMessage>,
-        optional_params: Map<String, Value>,
-    ) -> Result<ProviderChatRequestData, Error> {
+        optional_params: OpaqueParams,
+    ) -> Result<ProviderChatRequestData, crate::chat_completions::Error> {
         Ok(ProviderChatRequestData {
-            body: anthropic_body(model, &build_conversation(&messages), optional_params),
+            body: crate::params::merge_extra_params(
+                &anthropic_body(model, &build_conversation(&messages), Map::new()),
+                optional_params.without(&["stream"]),
+            )?,
         })
     }
 
@@ -155,16 +158,17 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         &self,
         _model: &str,
         response: ProviderChatResponseData,
-    ) -> Result<ChatCompletionsResponse, Error> {
-        let body = response
-            .body
-            .as_object()
-            .ok_or_else(|| Error::InvalidResponse("messages response is not an object".into()))?;
+    ) -> Result<ChatCompletionsResponse, crate::chat_completions::Error> {
+        let body = response.body.as_object().ok_or_else(|| {
+            crate::chat_completions::Error::InvalidResponse(
+                "messages response is not an object".into(),
+            )
+        })?;
 
         let content = body
             .get("content")
             .and_then(Value::as_array)
-            .ok_or(Error::MissingField("content"))?;
+            .ok_or(crate::chat_completions::Error::MissingField("content"))?;
         // The route declines tool and thinking requests, so a non-text block
         // means the response carries something this path never asked for.
         // Decline rather than silently dropping it; the host falls back.
@@ -172,7 +176,9 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
             .iter()
             .any(|block| block.get("type").and_then(Value::as_str) != Some("text"))
         {
-            return Err(Error::Unsupported("non-text response content block"));
+            return Err(crate::chat_completions::Error::Unsupported(
+                "non-text response content block",
+            ));
         }
         let text: String = content
             .iter()
@@ -182,7 +188,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         let usage = body
             .get("usage")
             .and_then(Value::as_object)
-            .ok_or(Error::MissingField("usage"))?;
+            .ok_or(crate::chat_completions::Error::MissingField("usage"))?;
         let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
 
         Ok(ChatCompletionsResponse {
@@ -190,7 +196,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
             model: body
                 .get("model")
                 .and_then(Value::as_str)
-                .ok_or(Error::MissingField("model"))?
+                .ok_or(crate::chat_completions::Error::MissingField("model"))?
                 .to_string(),
             choices: vec![ChatCompletionsChoice {
                 index: 0,

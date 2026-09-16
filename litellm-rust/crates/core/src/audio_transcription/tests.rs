@@ -22,6 +22,8 @@ async fn bedrock_request_is_signed_and_contains_audio() {
         assert!(request.contains("authorization: AWS4-HMAC-SHA256"));
         assert!(request.contains("x-amz-date:"));
         assert!(request.contains("\"bytes\":\"AQI=\""));
+        assert!(request.contains("\"future_option\":{\"nested\":[null,false,0]}"));
+        assert!(!request.contains("\"aws_secret_access_key\""));
         assert!(request.contains("Transcribe the audio. Respond with only the transcript."));
         let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 53\r\nConnection: close\r\n\r\n{\"output\":{\"message\":{\"content\":[{\"text\":\"hello\"}]}}}";
         stream.write_all(response).expect("response");
@@ -31,6 +33,10 @@ async fn bedrock_request_is_signed_and_contains_audio() {
         ("aws_access_key_id".to_string(), json!("access-key")),
         ("aws_secret_access_key".to_string(), json!("secret-key")),
         ("aws_region_name".to_string(), json!("us-east-1")),
+        (
+            "future_option".to_string(),
+            json!({"nested":[null,false,0]}),
+        ),
     ]);
     let api_base = format!("http://{address}");
     let response = audio_transcription(AudioTranscriptionRequest {
@@ -40,7 +46,7 @@ async fn bedrock_request_is_signed_and_contains_audio() {
         api_base: Some(&api_base),
         custom_llm_provider: Some("bedrock"),
         extra_headers: None,
-        optional_params,
+        optional_params: optional_params.into(),
         timeout: None,
     })
     .await

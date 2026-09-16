@@ -19,8 +19,10 @@ path = "src/bin/trace_parity_gateway.rs"
 required-features = ["trace-parity"]
 
 [dependencies]
+thiserror.workspace = true
+litellm-auth.workspace = true
 tracing.workspace = true
-litellm-core = { workspace = true, features = ["bedrock-auth"] }
+litellm-core.workspace = true
 litellm-config.workspace = true
 # reqwest (rustls + json) is used by io/ocr and ships realtime logs to the
 # Python proxy callbacks API.

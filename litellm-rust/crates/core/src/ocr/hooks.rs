@@ -3,12 +3,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrDocument};
-use crate::Error;
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use serde::Serialize;
 use serde_json::Value;
 
-pub type OcrHookFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
+pub type OcrHookFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, super::Error>> + Send + 'a>>;
 pub type OcrLogFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 #[derive(Clone, Debug, Serialize)]
@@ -62,7 +61,7 @@ pub trait OcrHooks: Send + Sync {
     fn failure<'a>(
         &'a self,
         _context: &'a CallLifecycleContext,
-        _error: &'a Error,
+        _error: &'a super::Error,
         _timing: &'a CallLifecycleTiming,
     ) -> OcrLogFuture<'a> {
         Box::pin(async {})
@@ -80,6 +79,7 @@ pub(crate) struct OcrLifecycleHooks {
 impl CallLifecycleHooks<LiteLLMOcrRequest, LiteLLMOcrRequest, LiteLLMOcrResponse>
     for OcrLifecycleHooks
 {
+    type Error = super::Error;
     type PreCallFuture<'a> = OcrHookFuture<'a, LiteLLMOcrRequest>;
     type DuringCallFuture<'a> = OcrHookFuture<'a, LiteLLMOcrRequest>;
     type SuccessFuture<'a> = OcrLogFuture<'a>;
@@ -100,18 +100,17 @@ impl CallLifecycleHooks<LiteLLMOcrRequest, LiteLLMOcrRequest, LiteLLMOcrResponse
                     model: request.model.clone(),
                     custom_llm_provider: self.provider_name.clone(),
                     document: request.document,
-                    optional_params: Value::Object(request.optional_params),
+                    optional_params: Value::Object(request.optional_params.into()),
                 })
                 .await?;
             let Value::Object(optional_params) = changed.optional_params else {
-                return Err(super::error::OcrRequestError::RequestField {
+                return Err(super::Error::RequestField {
                     path: "guardrail.optional_params".into(),
-                }
-                .into());
+                });
             };
             Ok(LiteLLMOcrRequest {
                 document: changed.document,
-                optional_params,
+                optional_params: optional_params.into(),
                 ..request
             })
         })
@@ -149,7 +148,7 @@ impl CallLifecycleHooks<LiteLLMOcrRequest, LiteLLMOcrRequest, LiteLLMOcrResponse
     fn async_log_failure_event<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
-        error: &'a Error,
+        error: &'a super::Error,
         timing: &'a CallLifecycleTiming,
     ) -> Self::FailureFuture<'a> {
         self.hooks.failure(context, error, timing)

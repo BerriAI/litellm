@@ -1,12 +1,26 @@
-use litellm_core::Error;
+use litellm_core::ocr::Error;
 use std::future::Future;
 
-use litellm_core::ocr::wire::{OcrWireRequest, decode_request};
+use litellm_core::ocr::LiteLLMOcrRequest;
 use pyo3::prelude::*;
 use serde_json::Value;
 
 use super::errors::to_pyerr as ocr_error_to_pyerr;
+use super::request::BridgeOcrRequest;
+use crate::execution::{run_async, run_sync};
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
+
+struct OcrInputs {
+    model: String,
+    document: Value,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Value>,
+    optional_params: Option<Value>,
+    input_sources: Option<Value>,
+    timeout_seconds: Option<f64>,
+}
 
 fn prepare_ocr(
     inputs: OcrInputs,
@@ -37,14 +51,14 @@ fn prepare_ocr(
             extra_headers,
             timeout,
         } = options;
-        let request = decode_request(OcrWireRequest {
+        let request = LiteLLMOcrRequest::try_from(BridgeOcrRequest {
             model,
             document,
             api_key,
             api_base,
             custom_llm_provider,
             extra_headers,
-            optional_params,
+            optional_params: optional_params.into(),
             input_sources,
             timeout_seconds: timeout.map(|value| value.as_secs_f64()),
         })?;
@@ -54,27 +68,151 @@ fn prepare_ocr(
     })
 }
 
-bridge_route! {
-    sync = ocr,
-    asynchronous = aocr,
-    inputs = OcrInputs,
-    required = {
+#[pyfunction]
+#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, input_sources=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn ocr(
+    py: Python<'_>,
+    model: String,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] document: Value,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] input_sources: Option<Value>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Py<PyAny>> {
+    run_sync(
+        py,
+        prepare_ocr(OcrInputs {
+            model,
+            document,
+            api_key,
+            api_base,
+            custom_llm_provider,
+            extra_headers,
+            optional_params,
+            input_sources,
+            timeout_seconds,
+        })?,
+        ocr_error_to_pyerr,
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, input_sources=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn aocr(
+    py: Python<'_>,
+    model: String,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] document: Value,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] input_sources: Option<Value>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Bound<'_, PyAny>> {
+    run_async(
+        py,
+        prepare_ocr(OcrInputs {
+            model,
+            document,
+            api_key,
+            api_base,
+            custom_llm_provider,
+            extra_headers,
+            optional_params,
+            input_sources,
+            timeout_seconds,
+        })?,
+        ocr_error_to_pyerr,
+    )
+}
+
+pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    super::super::add_function(module, wrap_pyfunction!(ocr, module)?)?;
+    super::super::add_function(module, wrap_pyfunction!(aocr, module)?)
+}
+
+#[cfg(feature = "trace-parity")]
+mod trace {
+    use super::{OcrInputs, Value, ocr_error_to_pyerr, prepare_ocr, run_async, run_sync};
+    use pyo3::prelude::*;
+
+    #[pyfunction]
+    #[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, input_sources=None, timeout_seconds=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn ocr(
+        py: Python<'_>,
         model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        document: serde_json::Value,
-    },
-    optional = {
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] document: Value,
         api_key: Option<String>,
         api_base: Option<String>,
         custom_llm_provider: Option<String>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        extra_headers: Option<serde_json::Value>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        optional_params: Option<serde_json::Value>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        input_sources: Option<serde_json::Value>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] input_sources: Option<Value>,
         timeout_seconds: Option<f64>,
-    },
-    prepare = prepare_ocr,
-    errors = ocr_error_to_pyerr,
+    ) -> PyResult<Py<PyAny>> {
+        run_sync(
+            py,
+            crate::function_trace::capture(prepare_ocr(OcrInputs {
+                model,
+                document,
+                api_key,
+                api_base,
+                custom_llm_provider,
+                extra_headers,
+                optional_params,
+                input_sources,
+                timeout_seconds,
+            })?),
+            ocr_error_to_pyerr,
+        )
+    }
+
+    #[pyfunction]
+    #[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, input_sources=None, timeout_seconds=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn aocr(
+        py: Python<'_>,
+        model: String,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] document: Value,
+        api_key: Option<String>,
+        api_base: Option<String>,
+        custom_llm_provider: Option<String>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] input_sources: Option<Value>,
+        timeout_seconds: Option<f64>,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        run_async(
+            py,
+            crate::function_trace::capture(prepare_ocr(OcrInputs {
+                model,
+                document,
+                api_key,
+                api_base,
+                custom_llm_provider,
+                extra_headers,
+                optional_params,
+                input_sources,
+                timeout_seconds,
+            })?),
+            ocr_error_to_pyerr,
+        )
+    }
+
+    pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        super::super::super::add_function(module, wrap_pyfunction!(ocr, module)?)?;
+        super::super::super::add_function(module, wrap_pyfunction!(aocr, module)?)
+    }
+}
+
+#[cfg(feature = "trace-parity")]
+pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    trace::register(module)
 }

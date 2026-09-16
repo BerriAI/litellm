@@ -1,13 +1,6 @@
 [workspace]
-members = [
-    "crates/core",
-    "crates/token-counter",
-    "crates/config",
-    "crates/ai-gateway",
-    "crates/python-interop",
-    "crates/python-bridge",
-]
 resolver = "2"
+members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"
@@ -20,6 +13,12 @@ bytes = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 litellm-core = { path = "crates/core" }
+litellm-auth = { path = "crates/auth" }
+litellm-auth-aws = { path = "crates/auth-aws" }
+litellm-auth-azure = { path = "crates/auth-azure" }
+litellm-auth-gcp = { path = "crates/auth-gcp" }
+litellm-cache = { path = "crates/cache" }
+litellm-cache-memory = { path = "crates/cache-memory" }
 litellm-token-counter = { path = "crates/token-counter" }
 litellm-config = { path = "crates/config" }
 litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }
@@ -35,6 +34,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-native-certs = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
+serde_with = { version = "=3.16.1", default-features = false, features = ["std", "macros"] }
 sha2 = "0.10"
 subtle = "2"
 thiserror = "2.0"
@@ -42,9 +42,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"]
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 base64 = "0.22"
-gcp_auth = "0.12.7"
-azure_core = "1.0.0"
-azure_identity = { version = "1.0.0", features = ["tokio"] }
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"

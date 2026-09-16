@@ -1,4 +1,4 @@
-use litellm_core::Error;
+use litellm_core::audio_transcription::Error;
 use std::future::Future;
 
 use litellm_core::audio_transcription::{
@@ -8,7 +8,19 @@ use pyo3::prelude::*;
 use serde_json::Value;
 
 use crate::errors::core_error_to_pyerr;
+use crate::execution::{run_async, run_sync};
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
+
+struct AudioTranscriptionInputs {
+    model: String,
+    audio: Value,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Value>,
+    optional_params: Option<Value>,
+    timeout_seconds: Option<f64>,
+}
 
 fn prepare_transcription(
     inputs: AudioTranscriptionInputs,
@@ -40,32 +52,153 @@ fn prepare_transcription(
             api_base: api_base.as_deref(),
             custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
-            optional_params,
+            optional_params: optional_params.into(),
             timeout,
         })
         .await
     })
 }
 
-bridge_route! {
-    sync = transcription,
-    asynchronous = atranscription,
-    inputs = AudioTranscriptionInputs,
-    required = {
+#[pyfunction]
+#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn transcription(
+    py: Python<'_>,
+    model: String,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] audio: Value,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Py<PyAny>> {
+    run_sync(
+        py,
+        prepare_transcription(AudioTranscriptionInputs {
+            model,
+            audio,
+            api_key,
+            api_base,
+            custom_llm_provider,
+            extra_headers,
+            optional_params,
+            timeout_seconds,
+        })?,
+        core_error_to_pyerr,
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn atranscription(
+    py: Python<'_>,
+    model: String,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] audio: Value,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Bound<'_, PyAny>> {
+    run_async(
+        py,
+        prepare_transcription(AudioTranscriptionInputs {
+            model,
+            audio,
+            api_key,
+            api_base,
+            custom_llm_provider,
+            extra_headers,
+            optional_params,
+            timeout_seconds,
+        })?,
+        core_error_to_pyerr,
+    )
+}
+
+pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    super::super::add_function(module, wrap_pyfunction!(transcription, module)?)?;
+    super::super::add_function(module, wrap_pyfunction!(atranscription, module)?)
+}
+
+#[cfg(feature = "trace-parity")]
+mod trace {
+    use super::{
+        AudioTranscriptionInputs, Value, core_error_to_pyerr, prepare_transcription, run_async,
+        run_sync,
+    };
+    use pyo3::prelude::*;
+
+    #[pyfunction]
+    #[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn transcription(
+        py: Python<'_>,
         model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        audio: serde_json::Value,
-    },
-    optional = {
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] audio: Value,
         api_key: Option<String>,
         api_base: Option<String>,
         custom_llm_provider: Option<String>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        extra_headers: Option<serde_json::Value>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        optional_params: Option<serde_json::Value>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
         timeout_seconds: Option<f64>,
-    },
-    prepare = prepare_transcription,
-    errors = core_error_to_pyerr,
+    ) -> PyResult<Py<PyAny>> {
+        run_sync(
+            py,
+            crate::function_trace::capture(prepare_transcription(AudioTranscriptionInputs {
+                model,
+                audio,
+                api_key,
+                api_base,
+                custom_llm_provider,
+                extra_headers,
+                optional_params,
+                timeout_seconds,
+            })?),
+            core_error_to_pyerr,
+        )
+    }
+
+    #[pyfunction]
+    #[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn atranscription(
+        py: Python<'_>,
+        model: String,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] audio: Value,
+        api_key: Option<String>,
+        api_base: Option<String>,
+        custom_llm_provider: Option<String>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] extra_headers: Option<Value>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
+        timeout_seconds: Option<f64>,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        run_async(
+            py,
+            crate::function_trace::capture(prepare_transcription(AudioTranscriptionInputs {
+                model,
+                audio,
+                api_key,
+                api_base,
+                custom_llm_provider,
+                extra_headers,
+                optional_params,
+                timeout_seconds,
+            })?),
+            core_error_to_pyerr,
+        )
+    }
+
+    pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        super::super::super::add_function(module, wrap_pyfunction!(transcription, module)?)?;
+        super::super::super::add_function(module, wrap_pyfunction!(atranscription, module)?)
+    }
+}
+
+#[cfg(feature = "trace-parity")]
+pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    trace::register(module)
 }

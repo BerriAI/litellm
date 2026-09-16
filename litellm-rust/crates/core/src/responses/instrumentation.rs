@@ -5,7 +5,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-use crate::Error;
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType};
 
@@ -205,9 +204,11 @@ impl ResponsesWsInstrumentation {
     }
 }
 
-type LifecycleFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
+type LifecycleFuture<'a, T> =
+    Pin<Box<dyn Future<Output = Result<T, crate::responses::Error>> + Send + 'a>>;
 
 impl CallLifecycleHooks<(), (), ()> for ResponsesWsInstrumentation {
+    type Error = crate::responses::Error;
     type PreCallFuture<'a> = LifecycleFuture<'a, ()>;
     type DuringCallFuture<'a> = LifecycleFuture<'a, ()>;
     type SuccessFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
@@ -246,7 +247,7 @@ impl CallLifecycleHooks<(), (), ()> for ResponsesWsInstrumentation {
     fn async_log_failure_event<'a>(
         &'a self,
         _context: &'a CallLifecycleContext,
-        _error: &'a Error,
+        _error: &'a crate::responses::Error,
         _timing: &'a CallLifecycleTiming,
     ) -> Self::FailureFuture<'a> {
         Box::pin(async move {
@@ -342,7 +343,7 @@ mod tests {
                 ),
                 (),
                 &instrumentation,
-                |_| async { Ok::<(), Error>(()) },
+                |_| async { Ok::<(), crate::responses::Error>(()) },
             )
             .await;
 

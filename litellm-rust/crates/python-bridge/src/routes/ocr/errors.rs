@@ -1,13 +1,47 @@
-use litellm_core::error::Error;
+use litellm_core::ocr::Error;
+use litellm_core::transport::Error as TransportError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
 use crate::errors::{RustUpstreamError, core_error_to_pyerr};
 
 pub(super) fn to_pyerr(error: Error) -> PyErr {
-    let status = error.http_status_code();
-    let mapped = match error {
-        Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
-        other => core_error_to_pyerr(other),
+    if let Error::Provider {
+        status,
+        body,
+        headers,
+    } = error
+    {
+        let mapped = attach_status(RustUpstreamError::new_err((status, body)), Some(status));
+        return Python::attach(|py| -> PyResult<PyErr> {
+            let headers =
+                pyo3::types::PyDict::from_sequence(&headers.into_pyobject(py)?.into_any())?;
+            mapped.value(py).setattr("headers", headers)?;
+            Ok(mapped)
+        })
+        .unwrap_or_else(|error| error);
+    }
+    let (mapped, status) = match error {
+        Error::MissingDocumentUrl => (
+            PyValueError::new_err(Error::MissingDocumentUrl.to_string()),
+            Some(500),
+        ),
+        error @ Error::MissingField(_) => (PyValueError::new_err(error.to_string()), None),
+        error if error.is_request() => (
+            PyValueError::new_err(format!("invalid request: {error}")),
+            Some(400),
+        ),
+        error if error.is_response() => (
+            PyRuntimeError::new_err(format!("invalid response: {error}")),
+            None,
+        ),
+        error @ (Error::InvalidRequest(_) | Error::Params(_) | Error::Headers(_)) => {
+            (PyValueError::new_err(error.to_string()), Some(400))
+        }
+        Error::Transport(TransportError::Http { status, body }) => {
+            (RustUpstreamError::new_err((status, body)), Some(status))
+        }
+        other => (core_error_to_pyerr(other), None),
     };
     attach_status(mapped, status)
 }
@@ -29,6 +63,39 @@ mod tests {
     use pyo3::exceptions::PyValueError;
 
     #[test]
+    fn provider_error_retains_headers_at_the_python_boundary() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = to_pyerr(Error::Provider {
+                status: 429,
+                body: "rate limited".into(),
+                headers: vec![("retry-after".into(), "17".into())],
+            });
+            assert!(error.is_instance_of::<RustUpstreamError>(py));
+            assert_eq!(
+                error
+                    .value(py)
+                    .getattr("args")
+                    .unwrap()
+                    .extract::<(u16, String)>()
+                    .unwrap(),
+                (429, "rate limited".into())
+            );
+            assert_eq!(
+                error
+                    .value(py)
+                    .getattr("headers")
+                    .unwrap()
+                    .get_item("retry-after")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "17"
+            );
+        });
+    }
+
+    #[test]
     fn preserves_python_validation_and_provider_details() {
         Python::initialize();
         Python::attach(|py| {
@@ -44,10 +111,10 @@ mod tests {
                     .unwrap(),
                 500
             );
-            let mapped = to_pyerr(Error::Http {
+            let mapped = to_pyerr(Error::Transport(litellm_core::transport::Error::Http {
                 status: 429,
                 body: r#"{"message":"rate limited"}"#.to_string(),
-            });
+            }));
             assert!(mapped.is_instance_of::<RustUpstreamError>(py));
             let args: (u16, String) = mapped
                 .value(py)
@@ -67,6 +134,37 @@ mod tests {
                     .unwrap(),
                 400
             );
+        });
+    }
+
+    #[test]
+    fn typed_request_and_response_failures_keep_python_contracts() {
+        Python::initialize();
+        Python::attach(|py| {
+            let request = to_pyerr(Error::RequestField {
+                path: "document.type".into(),
+            });
+            assert!(request.is_instance_of::<PyValueError>(py));
+            assert_eq!(
+                request
+                    .value(py)
+                    .getattr("status_code")
+                    .unwrap()
+                    .extract::<u16>()
+                    .unwrap(),
+                400
+            );
+            assert_eq!(
+                request.value(py).to_string(),
+                "invalid request: invalid OCR request field: document.type"
+            );
+            let response = to_pyerr(Error::EmptyContent);
+            assert!(response.is_instance_of::<PyRuntimeError>(py));
+            assert_eq!(
+                response.value(py).to_string(),
+                "invalid response: OCR response is missing non-empty content"
+            );
+            assert!(!response.value(py).hasattr("status_code").unwrap());
         });
     }
 }

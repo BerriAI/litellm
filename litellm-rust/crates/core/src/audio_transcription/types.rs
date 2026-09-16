@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderConfig};
+use crate::params::OpaqueParams;
 
 pub struct AudioTranscriptionRequest<'a> {
     pub model: &'a str,
@@ -12,7 +13,7 @@ pub struct AudioTranscriptionRequest<'a> {
     pub api_base: Option<&'a str>,
     pub custom_llm_provider: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
-    pub optional_params: Map<String, Value>,
+    pub optional_params: OpaqueParams,
     pub timeout: Option<Duration>,
 }
 
@@ -25,8 +26,7 @@ pub struct ProviderAudioTranscriptionRequest {
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,
     pub(super) auth: AudioTranscriptionAuth,
-    #[cfg(feature = "bedrock-auth")]
-    pub(super) optional_params: Map<String, Value>,
+    pub(super) optional_params: OpaqueParams,
     pub(super) timeout: Option<Duration>,
 }
 

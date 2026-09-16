@@ -94,6 +94,49 @@ async def test_request_level_custom_pricing_reaches_logging_params_and_bills_the
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_shared_boundary_preserves_provider_fields_and_python_objects(
+    ocr_server: RecordingServer, asynchronous: bool
+) -> None:
+    marker: Final = object()
+    observed: Final = []
+
+    class Observe(Logging):
+        def pre_call(self, input, api_key, additional_args):
+            observed.append(self.model_call_details["litellm_params"]["metadata"]["marker"])
+
+    logger: Final = Observe(
+        model="mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type="aocr" if asynchronous else "ocr",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="shared-boundary",
+        function_id="shared-boundary",
+    )
+    arguments: Final = {
+        "id": "provider-id",
+        "future_option": {"old": True},
+        "explicit_null": None,
+        "metadata": {"marker": marker},
+        "shared_session": marker,
+        "litellm_logging_obj": logger,
+        "extra_body": {"future_option": {"nested": [None, False, 0]}, "metadata": {"provider": True}},
+    }
+    if asynchronous:
+        await call_aocr(ocr_server, **arguments)
+    else:
+        call_ocr(ocr_server, **arguments)
+    body: Final = ocr_server.requests[0].body
+    assert body["id"] == "provider-id"
+    assert body["future_option"] == {"nested": [None, False, 0]}
+    assert "explicit_null" in body and body["explicit_null"] is None
+    assert body["metadata"] == {"provider": True}
+    assert "shared_session" not in body
+    assert observed == [marker] and observed[0] is marker
+
+
+@pytest.mark.asyncio
 async def test_response_replacement_finalized_before_dispatch_in_caller_task(ocr_server: RecordingServer) -> None:
     caller: Final = asyncio.current_task()
     context: Final = ContextVar("lifecycle-test", default="before")
@@ -529,7 +572,7 @@ async def test_retained_argument_aliases_and_body_roots_survive_envelope_replace
 ) -> None:
     pages: Final = [0]
     document: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
-    opaque: Final = object()
+    opaque: Final = {"nested": [None, False, 0]}
     observed: Final = []
 
     class Observe(Logging):
@@ -726,7 +769,7 @@ async def test_reducto_lifecycle_retains_upload_parse_and_post_call_boundaries(
 
 
 @pytest.mark.asyncio
-async def test_document_intelligence_post_call_observes_submission_and_final_result(
+async def test_document_intelligence_post_call_observes_submission_before_polling(
     ocr_server: RecordingServer,
 ) -> None:
     ocr_server.expected_requests = 2
@@ -757,9 +800,8 @@ async def test_document_intelligence_post_call_observes_submission_and_final_res
     response: Final = await call_aocr(
         ocr_server, model="azure_ai/doc-intelligence/prebuilt-read", litellm_logging_obj=logger
     )
-    assert [methods for methods, _ in boundaries] == [("POST",), ("POST", "GET")]
+    assert [methods for methods, _ in boundaries] == [("POST",)]
     assert json.loads(boundaries[0][1])["status"] == "running"
-    assert json.loads(boundaries[1][1])["status"] == "succeeded"
     assert [request.method for request in ocr_server.requests] == ["POST", "GET"]
     assert ocr_server.requests[1].path == "/operations/1"
     assert response.pages == []

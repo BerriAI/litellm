@@ -2,19 +2,28 @@
 
 use std::sync::Arc;
 
+use serde::Serialize;
+use serde_json::Value;
+
 use axum::body::{Body, to_bytes};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{Request, StatusCode};
-use litellm_core::Error;
-use litellm_core::router::{Deployment, LiteLLMParams, Router as ModelRouter};
-use serde::Serialize;
-use serde_json::Value;
 use tower::ServiceExt;
 use tracing::instrument::WithSubscriber;
+
+use litellm_core::router::{Deployment, LiteLLMParams, Router as ModelRouter};
 
 use crate::io::realtime_pool::RealtimePool;
 use crate::routes;
 use crate::state::AppState;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
+    #[error("invalid response: {0}")]
+    InvalidResponse(String),
+}
 
 #[derive(Debug, Serialize)]
 pub struct GatewayResponse {

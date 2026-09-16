@@ -1,6 +1,4 @@
-use crate::error::Error;
 use crate::http_utils::{has_header, string_headers};
-#[cfg(feature = "bedrock-auth")]
 use crate::providers::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
@@ -9,18 +7,16 @@ use super::types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest}
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn provider_config(provider: &str) -> Option<&'static dyn AudioTranscriptionProviderConfig> {
-    #[cfg(feature = "bedrock-auth")]
-    if provider == "bedrock" {
-        return Some(&BEDROCK_AUDIO_TRANSCRIPTION_CONFIG);
+    match provider {
+        "bedrock" => Some(&BEDROCK_AUDIO_TRANSCRIPTION_CONFIG),
+        _ => None,
     }
-    let _ = provider;
-    None
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub fn prepare_audio_transcription_provider_call(
     request: AudioTranscriptionRequest<'_>,
-) -> Result<ProviderAudioTranscriptionRequest, Error> {
+) -> Result<ProviderAudioTranscriptionRequest, super::Error> {
     let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
         .or_else(|| {
             request
@@ -31,13 +27,14 @@ pub fn prepare_audio_transcription_provider_call(
                 })
         })
         .ok_or_else(|| {
-            Error::InvalidProvider(
+            super::Error::InvalidProvider(
                 "unable to resolve custom_llm_provider for audio transcription request".to_string(),
             )
         })?;
     let model = provider_info.model.to_string();
-    let config = provider_config(provider_info.custom_llm_provider)
-        .ok_or_else(|| Error::InvalidProvider(provider_info.custom_llm_provider.to_string()))?;
+    let config = provider_config(provider_info.custom_llm_provider).ok_or_else(|| {
+        super::Error::InvalidProvider(provider_info.custom_llm_provider.to_string())
+    })?;
     let env_lookup = |key: &str| std::env::var(key).ok();
     let mut headers = string_headers("audio transcription", request.extra_headers)?;
     let auth = config.auth_strategy(&model, &request.optional_params, &env_lookup)?;
@@ -67,7 +64,6 @@ pub fn prepare_audio_transcription_provider_call(
         body: transformed.body,
         upstream_headers: headers,
         auth,
-        #[cfg(feature = "bedrock-auth")]
         optional_params: request.optional_params,
         timeout: request.timeout,
     })

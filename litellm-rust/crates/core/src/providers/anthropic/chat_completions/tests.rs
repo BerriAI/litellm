@@ -1,14 +1,13 @@
 use super::*;
-use crate::Error;
 use serde_json::json;
 
 fn messages(value: Value) -> Vec<ChatMessage> {
     serde_json::from_value(value).expect("valid messages")
 }
 
-fn params(value: Value) -> Map<String, Value> {
+fn params(value: Value) -> OpaqueParams {
     match value {
-        Value::Object(map) => map,
+        Value::Object(map) => map.into(),
         other => panic!("params must be an object, got {other}"),
     }
 }
@@ -20,13 +19,40 @@ fn transform(model: &str, msgs: Value, opts: Value) -> Value {
         .body
 }
 
-fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
+fn transform_response(
+    body: Value,
+) -> Result<ChatCompletionsResponse, crate::chat_completions::Error> {
     ANTHROPIC_CHAT_COMPLETIONS_CONFIG
         .transform_response("claude-sonnet-4-5", ProviderChatResponseData { body })
 }
 
 fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
     ANTHROPIC_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
+}
+
+#[test]
+fn forwards_provider_extensions_and_applies_explicit_overrides() {
+    let opts = json!({"metadata":{"user_id":"u1"}, "future":{"nested":[null,false,0]},
+        "temperature":0.1, "extra_body":{"temperature":0.7, "model":"wrong"}});
+    let msgs = json!([{"role":"user","content":"hi"}]);
+    assert_eq!(reason(msgs.clone(), opts.clone()), None);
+    let body = transform("resolved", msgs, opts);
+    assert_eq!(body["future"], json!({"nested":[null,false,0]}));
+    assert_eq!(body["metadata"], json!({"user_id":"u1"}));
+    assert_eq!(body["temperature"], 0.7);
+    assert_eq!(body["model"], "resolved");
+    assert!(body.get("extra_body").is_none());
+}
+
+#[test]
+fn overrides_cannot_hide_unsupported_streaming() {
+    assert_eq!(
+        reason(
+            json!([{"role":"user","content":"hi"}]),
+            json!({"stream":false,"extra_body":{"stream":true}})
+        ),
+        Some(Unsupported("streaming"))
+    );
 }
 
 #[test]
@@ -160,14 +186,11 @@ fn accepts_an_explicit_stream_false() {
 }
 
 #[test]
-fn declines_any_param_outside_the_allowlist() {
+fn declines_params_requiring_unsupported_behavior() {
     for param in [
         json!({"tools": []}),
         json!({"tool_choice": {"type": "auto"}}),
         json!({"thinking": {"type": "enabled"}}),
-        json!({"system": "injected"}),
-        json!({"metadata": {"user_id": "u1"}}),
-        json!({"output_config": {"effort": "high"}}),
     ] {
         assert_eq!(
             reason(json!([{"role": "user", "content": "hi"}]), param.clone()),
@@ -391,26 +414,31 @@ fn declines_a_response_carrying_a_non_text_block() {
         "usage": {"input_tokens": 1, "output_tokens": 1}
     }))
     .expect_err("non-text block");
-    assert_eq!(err, Error::Unsupported("non-text response content block"));
+    assert_eq!(
+        err,
+        crate::chat_completions::Error::Unsupported("non-text response content block")
+    );
 }
 
 #[test]
 fn errors_on_a_response_missing_required_fields() {
     assert_eq!(
         transform_response(json!("nope")).expect_err("not an object"),
-        Error::InvalidResponse("messages response is not an object".to_string())
+        crate::chat_completions::Error::InvalidResponse(
+            "messages response is not an object".to_string()
+        )
     );
     assert_eq!(
         transform_response(json!({"model": "m", "usage": {}})).expect_err("no content"),
-        Error::MissingField("content")
+        crate::chat_completions::Error::MissingField("content")
     );
     assert_eq!(
         transform_response(json!({"model": "m", "content": []})).expect_err("no usage"),
-        Error::MissingField("usage")
+        crate::chat_completions::Error::MissingField("usage")
     );
     assert_eq!(
         transform_response(json!({"content": [], "usage": {}})).expect_err("no model"),
-        Error::MissingField("model")
+        crate::chat_completions::Error::MissingField("model")
     );
 }
 
@@ -419,13 +447,20 @@ fn resolves_the_messages_url_and_x_api_key_auth() {
     let config = &ANTHROPIC_CHAT_COMPLETIONS_CONFIG;
     assert_eq!(
         config
-            .complete_url(None, "claude-sonnet-4-5", &Map::new(), &|_| None)
+            .complete_url(None, "claude-sonnet-4-5", &OpaqueParams::default(), &|_| {
+                None
+            })
             .expect("url builds"),
         "https://api.anthropic.com/v1/messages"
     );
     assert_eq!(
         config
-            .auth(Some("sk-x"), "claude-sonnet-4-5", &Map::new(), &|_| None)
+            .auth(
+                Some("sk-x"),
+                "claude-sonnet-4-5",
+                &OpaqueParams::default(),
+                &|_| None,
+            )
             .expect("auth resolves"),
         ChatCompletionsAuth::Header {
             name: "x-api-key",

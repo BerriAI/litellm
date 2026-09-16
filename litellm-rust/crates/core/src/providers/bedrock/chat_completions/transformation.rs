@@ -11,7 +11,7 @@ use crate::chat_completions::types::{
     ChatCompletionsUsage, ChatMessage, ChatMessageContent, ProviderChatRequestData,
     ProviderChatResponseData,
 };
-use crate::error::Error;
+use crate::params::OpaqueParams;
 
 use super::super::aws_base::{bedrock_model_id_and_region, resolve_bedrock_region};
 use super::super::constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE};
@@ -109,9 +109,9 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         &self,
         api_base: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<String, crate::chat_completions::Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
         let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
         let endpoint = optional_params
@@ -136,9 +136,9 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         &self,
         api_key: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ChatCompletionsAuth, Error> {
+    ) -> Result<ChatCompletionsAuth, crate::chat_completions::Error> {
         // Python reads `api_key` as the Bedrock bearer token and consults the
         // env only when the caller passed none, so a caller-supplied empty key
         // falls through to SigV4 without reaching for the environment. An
@@ -175,48 +175,53 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
     fn unsupported_reason(
         &self,
         messages: &[ChatMessage],
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
     ) -> Option<Unsupported> {
-        unsupported_param(
-            self.supported_openai_params(),
-            CONFIG_PARAMS,
-            optional_params,
-        )
-        .or_else(|| messages.iter().find_map(unsupported_message))
-        // Python's Converse translation drops blank text blocks instead of
-        // substituting the placeholder the shared conversation builder
-        // applies, so decline blank text rather than diverge.
-        .or_else(|| {
-            messages
-                .iter()
-                .any(has_blank_text)
-                .then_some(Unsupported("blank message text"))
-        })
-        // Converse has no assistant prefill: Python inserts a continue turn
-        // when a conversation opens or closes on an assistant message, and
-        // only under `litellm.modify_params`, which the core cannot see.
-        // Declining both ends also keeps the shared builder's final
-        // assistant right-strip (an Anthropic rule) unreachable here.
-        .or_else(|| {
-            let conversation = build_conversation(messages);
-            let ends_on_assistant = conversation
-                .turns
-                .last()
-                .is_some_and(|turn| turn.role == TurnRole::Assistant);
-            (!conversation.opens_on_user_turn() || ends_on_assistant).then_some(Unsupported(
-                "conversation does not run user turn to user turn",
-            ))
-        })
+        unsupported_param(optional_params)
+            .or_else(|| messages.iter().find_map(unsupported_message))
+            // Python's Converse translation drops blank text blocks instead of
+            // substituting the placeholder the shared conversation builder
+            // applies, so decline blank text rather than diverge.
+            .or_else(|| {
+                messages
+                    .iter()
+                    .any(has_blank_text)
+                    .then_some(Unsupported("blank message text"))
+            })
+            // Converse has no assistant prefill: Python inserts a continue turn
+            // when a conversation opens or closes on an assistant message, and
+            // only under `litellm.modify_params`, which the core cannot see.
+            // Declining both ends also keeps the shared builder's final
+            // assistant right-strip (an Anthropic rule) unreachable here.
+            .or_else(|| {
+                let conversation = build_conversation(messages);
+                let ends_on_assistant = conversation
+                    .turns
+                    .last()
+                    .is_some_and(|turn| turn.role == TurnRole::Assistant);
+                (!conversation.opens_on_user_turn() || ends_on_assistant).then_some(Unsupported(
+                    "conversation does not run user turn to user turn",
+                ))
+            })
     }
 
     fn transform_request(
         &self,
         _model: &str,
         messages: Vec<ChatMessage>,
-        optional_params: Map<String, Value>,
-    ) -> Result<ProviderChatRequestData, Error> {
+        optional_params: OpaqueParams,
+    ) -> Result<ProviderChatRequestData, crate::chat_completions::Error> {
         Ok(ProviderChatRequestData {
-            body: converse_body(&build_conversation(&messages), &optional_params),
+            body: crate::params::merge_extra_params(
+                &converse_body(&build_conversation(&messages), &optional_params),
+                optional_params.without(&[
+                    "maxTokens",
+                    "temperature",
+                    "topP",
+                    "stopSequences",
+                    "stream",
+                ]),
+            )?,
         })
     }
 
@@ -224,18 +229,21 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         &self,
         model: &str,
         response: ProviderChatResponseData,
-    ) -> Result<ChatCompletionsResponse, Error> {
-        let body = response
-            .body
-            .as_object()
-            .ok_or_else(|| Error::InvalidResponse("converse response is not an object".into()))?;
+    ) -> Result<ChatCompletionsResponse, crate::chat_completions::Error> {
+        let body = response.body.as_object().ok_or_else(|| {
+            crate::chat_completions::Error::InvalidResponse(
+                "converse response is not an object".into(),
+            )
+        })?;
 
         let content = body
             .get("output")
             .and_then(|output| output.get("message"))
             .and_then(|message| message.get("content"))
             .and_then(Value::as_array)
-            .ok_or(Error::MissingField("output.message.content"))?;
+            .ok_or(crate::chat_completions::Error::MissingField(
+                "output.message.content",
+            ))?;
         // The route declines tool requests, so anything other than a text block
         // is something this path never asked for. Decline; the host falls back.
         if content.iter().any(|block| {
@@ -243,7 +251,9 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
                 .as_object()
                 .is_none_or(|block| block.len() != 1 || !block.contains_key("text"))
         }) {
-            return Err(Error::Unsupported("non-text response content block"));
+            return Err(crate::chat_completions::Error::Unsupported(
+                "non-text response content block",
+            ));
         }
         let text: String = content
             .iter()
@@ -253,7 +263,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         let usage = body
             .get("usage")
             .and_then(Value::as_object)
-            .ok_or(Error::MissingField("usage"))?;
+            .ok_or(crate::chat_completions::Error::MissingField("usage"))?;
         let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
         let computed = usage_from_parts(
             field("inputTokens"),

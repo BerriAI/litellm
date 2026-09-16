@@ -1,4 +1,3 @@
-use crate::Error;
 use crate::realtime::types::{RealtimeEvent, RealtimeTransformResult};
 
 pub trait RealtimeProviderConfig {
@@ -11,12 +10,12 @@ pub trait RealtimeProviderConfig {
         &self,
         event: &RealtimeEvent,
         model: &str,
-    ) -> Result<RealtimeTransformResult, Error>;
+    ) -> Result<RealtimeTransformResult, super::Error>;
 
     /// Transform a backend → client event before it is forwarded downstream.
     fn transform_realtime_response(
         &self,
         event: &RealtimeEvent,
         model: &str,
-    ) -> Result<RealtimeTransformResult, Error>;
+    ) -> Result<RealtimeTransformResult, super::Error>;
 }

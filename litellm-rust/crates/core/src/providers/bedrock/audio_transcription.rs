@@ -6,7 +6,8 @@ use crate::audio_transcription::transformation::{
 use crate::audio_transcription::types::{
     AudioTranscriptionRequestData, AudioTranscriptionResponseData,
 };
-use crate::error::{Error, json_type_name};
+use crate::http_utils::json_type_name;
+use crate::params::OpaqueParams;
 
 pub use super::aws_base::{aws_auth_config, bedrock_model_id_and_region, resolve_bedrock_region};
 use super::constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE};
@@ -18,22 +19,29 @@ pub static BEDROCK_AUDIO_TRANSCRIPTION_CONFIG: BedrockAudioTranscriptionConfig =
 
 pub struct BedrockAudioTranscriptionConfig;
 
-fn audio_fields(audio: Value) -> Result<(String, String), Error> {
-    let object = audio.as_object().ok_or_else(|| Error::InvalidType {
-        expected: "object",
-        actual: json_type_name(&audio),
-    })?;
+fn audio_fields(audio: Value) -> Result<(String, String), crate::audio_transcription::Error> {
+    let object =
+        audio
+            .as_object()
+            .ok_or_else(|| crate::audio_transcription::Error::InvalidType {
+                expected: "object",
+                actual: json_type_name(&audio),
+            })?;
     let data = object
         .get("data")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or(Error::MissingField("audio.data"))?;
+        .ok_or(crate::audio_transcription::Error::MissingField(
+            "audio.data",
+        ))?;
     let format = object
         .get("format")
         .and_then(Value::as_str)
         .filter(|value| matches!(*value, "wav" | "mp3" | "flac" | "ogg"))
         .ok_or_else(|| {
-            Error::InvalidRequest("audio.format must be wav, mp3, flac, or ogg".to_string())
+            crate::audio_transcription::Error::InvalidRequest(
+                "audio.format must be wav, mp3, flac, or ogg".to_string(),
+            )
         })?;
     Ok((data.to_string(), format.to_string()))
 }
@@ -56,8 +64,8 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         &self,
         _model: &str,
         audio: Value,
-        optional_params: Map<String, Value>,
-    ) -> Result<AudioTranscriptionRequestData, Error> {
+        optional_params: OpaqueParams,
+    ) -> Result<AudioTranscriptionRequestData, crate::audio_transcription::Error> {
         let (data, format) = audio_fields(audio)?;
         let mut instruction = "Transcribe the audio. Respond with only the transcript.".to_string();
         if let Some(language) = optional_string(&optional_params, "language") {
@@ -71,17 +79,20 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
             inference_config.insert("temperature".to_string(), temperature.clone());
         }
         Ok(AudioTranscriptionRequestData {
-            body: json!({
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"audio": {"format": format, "source": {"bytes": data}}},
-                        {"text": instruction}
-                    ]
-                }],
-                "system": [{"text": "You are a transcription assistant."}],
-                "inferenceConfig": inference_config,
-            }),
+            body: crate::params::merge_extra_params(
+                &json!({
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"audio": {"format": format, "source": {"bytes": data}}},
+                            {"text": instruction}
+                        ]
+                    }],
+                    "system": [{"text": "You are a transcription assistant."}],
+                    "inferenceConfig": inference_config,
+                }),
+                optional_params.without(SUPPORTED_PARAMS),
+            )?,
         })
     }
 
@@ -90,14 +101,16 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         &self,
         _model: &str,
         response_json: Value,
-    ) -> Result<AudioTranscriptionResponseData, Error> {
+    ) -> Result<AudioTranscriptionResponseData, crate::audio_transcription::Error> {
         let content = response_json
             .get("output")
             .and_then(|value| value.get("message"))
             .and_then(|value| value.get("content"))
             .and_then(Value::as_array)
             .ok_or_else(|| {
-                Error::InvalidResponse("Bedrock response has no output content".to_string())
+                crate::audio_transcription::Error::InvalidResponse(
+                    "Bedrock response has no output content".to_string(),
+                )
             })?;
         let mut text = String::new();
         for block in content {
@@ -112,9 +125,9 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         &self,
         api_base: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<String, crate::audio_transcription::Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
         let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
         let endpoint = optional_params
@@ -134,9 +147,9 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
     fn auth_strategy(
         &self,
         model: &str,
-        optional_params: &Map<String, Value>,
+        optional_params: &OpaqueParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<AudioTranscriptionAuth, Error> {
+    ) -> Result<AudioTranscriptionAuth, crate::audio_transcription::Error> {
         let (_, model_region) = bedrock_model_id_and_region(model);
         Ok(AudioTranscriptionAuth::AwsSigV4 {
             region: resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup),
@@ -155,12 +168,12 @@ mod tests {
 
     #[test]
     fn request_matches_python_shape() {
-        let params = Map::from_iter([
+        let params = OpaqueParams::from(Map::from_iter([
             ("language".to_string(), json!("en")),
             ("prompt".to_string(), json!("Speaker names")),
             ("temperature".to_string(), json!(0)),
             ("timestamp_granularities".to_string(), json!(["word"])),
-        ]);
+        ]));
         let params = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG.map_transcription_params(&params);
         let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
             .transform_transcription_request(
@@ -180,7 +193,8 @@ mod tests {
                     ]
                 }],
                 "system": [{"text": "You are a transcription assistant."}],
-                "inferenceConfig": {"maxTokens": 4096, "temperature": 0}
+                "inferenceConfig": {"maxTokens": 4096, "temperature": 0},
+                "timestamp_granularities": ["word"]
             })
         );
     }
@@ -202,14 +216,17 @@ mod tests {
         let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG.transform_transcription_request(
             "model",
             json!({"data": "AQI="}),
-            Map::new(),
+            OpaqueParams::default(),
         );
         assert!(result.is_err());
     }
 
     #[test]
     fn region_and_url_precedence_match_python() {
-        let params = Map::from_iter([("aws_region_name".to_string(), json!("eu-west-1"))]);
+        let params = OpaqueParams::from(Map::from_iter([(
+            "aws_region_name".to_string(),
+            json!("eu-west-1"),
+        )]));
         let url = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
             .complete_url(
                 None,

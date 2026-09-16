@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+#[cfg(test)]
+use serde_json::Value;
 
 /// A single realtime event exchanged over the WebSocket.
 ///
@@ -13,7 +14,7 @@ pub struct RealtimeEvent {
     #[serde(rename = "type")]
     pub event_type: String,
     #[serde(flatten)]
-    pub data: Map<String, Value>,
+    pub data: crate::params::OpaqueParams,
 }
 
 /// One or more typed events produced by a realtime transform.

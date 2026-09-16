@@ -15,12 +15,13 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRResponse,
     parse_ocr_request_format,
 )
-from litellm.ocr.input import convert_upload_to_url_document, get_max_file_bytes
+from litellm.ocr.legacy import convert_file_document_to_url_document, get_mime_type
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
 router: Final = APIRouter()
+_MAX_FILE_BYTES: Final = 50 * 1024 * 1024
 
 
 def _build_document_from_upload(
@@ -28,7 +29,18 @@ def _build_document_from_upload(
     filename: str | None,
     content_type: str | None,
 ) -> dict[str, str]:
-    return convert_upload_to_url_document(file_content, filename, content_type)
+    mime_type: Final = content_type.split(";")[0].strip() if content_type else None
+    if not mime_type or mime_type == "application/octet-stream":
+        if filename:
+            mime_type = get_mime_type(filename)
+
+    return convert_file_document_to_url_document(
+        {
+            "type": "file",
+            "file": file_content,
+            "mime_type": mime_type or "application/octet-stream",
+        }
+    )
 
 
 def _with_request_format(data: Mapping[str, Any], request: Request) -> Mapping[str, Any]:
@@ -103,9 +115,11 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
 
     # Seek to start in case the file was already partially read by middleware
     await uploaded_file.seek(0)
-    file_content: Final = await uploaded_file.read(get_max_file_bytes() + 1)
+    file_content: Final = await uploaded_file.read(_MAX_FILE_BYTES + 1)
     if not file_content:
         raise ValueError("Uploaded file is empty")
+    if len(file_content) > _MAX_FILE_BYTES:
+        raise ValueError("OCR file exceeds the size limit")
 
     document: Final = _build_document_from_upload(
         file_content=file_content,
