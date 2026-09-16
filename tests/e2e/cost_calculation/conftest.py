@@ -11,6 +11,7 @@ Deselected unless E2E_COST_MAP_STACK is set (marker `cost_map_stack`).
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
 import sys
@@ -21,6 +22,8 @@ from types import ModuleType
 from typing import Final, Protocol, cast
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from cost_matrix import Case, FrontierModel
 from e2e_config import COST_MAP_PROXY_URL, SCRIPTED_PROVIDER_PROXY_BASE
@@ -112,33 +115,25 @@ def client() -> CostCalcClient:
     return CostCalcClient(proxy=proxy)
 
 
-_vertex_key_pem: str | None = None
+@functools.cache
+def _vertex_private_key_pem() -> str:
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
 
 
 def _vertex_service_account_json() -> str:
     """A service-account credential JSON whose token_uri is the sidecar's
     /_oauth/token route: the proxy's google-auth refresh then gets a scripted
-    access token without touching Google. One generated RSA key per process."""
-    global _vertex_key_pem  # mutable-ok: session-scoped key generation cached for reuse
-    if _vertex_key_pem is None:
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
-
-        _vertex_key_pem = (
-            rsa.generate_private_key(public_exponent=65537, key_size=2048)
-            .private_bytes(
-                serialization.Encoding.PEM,
-                serialization.PrivateFormat.PKCS8,
-                serialization.NoEncryption(),
-            )
-            .decode()
-        )
+    access token without touching Google."""
     return json.dumps(
         {
             "type": "service_account",
             "project_id": "cc-scripted-project",
             "private_key_id": "scripted",
-            "private_key": _vertex_key_pem,
+            "private_key": _vertex_private_key_pem(),
             "client_email": "scripted@cc-scripted-project.iam.gserviceaccount.com",
             "client_id": "0",
             "auth_uri": f"{SCRIPTED_PROVIDER_PROXY_BASE}/_oauth/authorize",
@@ -162,20 +157,21 @@ def register_scenario_deployment(
     handle: Final = register_scenario(scenario)
     resources.defer(lambda: delete_scenario(handle))
     model_name: Final = f"{model.model_name}-{marker}"
-    extra_params: Final[dict[str, str]] = dict(model.litellm_params)
-    if model.wire == "vertex_generate":
-        extra_params["vertex_credentials"] = _vertex_service_account_json()
+    params: Final = {
+        "model": model.litellm_model,
+        "api_key": model.api_key,
+        "api_base": handle.api_base(),
+        **model.litellm_params,
+        **(
+            {"vertex_credentials": _vertex_service_account_json()}
+            if model.wire == "vertex_generate"
+            else {}
+        ),
+    }
     model_id: Final = client.proxy.register_model(
         ModelNewBody(
             model_name=model_name,
-            litellm_params=LiteLLMParamsBody.model_validate(
-                {
-                    "model": model.litellm_model,
-                    "api_key": model.api_key,
-                    "api_base": handle.api_base(),
-                    **extra_params,
-                }
-            ),
+            litellm_params=LiteLLMParamsBody.model_validate(params),
             model_info=ModelInfoBody(base_model=model.base_model),
         )
     )

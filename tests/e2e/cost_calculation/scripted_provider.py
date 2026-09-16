@@ -997,36 +997,33 @@ def _bedrock_body(scenario: Scenario) -> Mapping[str, object]:
     )
 
 
+def _aws_str_header(name: str, value: str) -> bytes:
+    """One eventstream header: 1-byte name len + name + type-7 marker + value."""
+    name_b: Final = name.encode()
+    value_b: Final = value.encode()
+    return (
+        struct.pack("!B", len(name_b))
+        + name_b
+        + struct.pack("!B", 7)
+        + struct.pack("!H", len(value_b))
+        + value_b
+    )
+
+
 def _aws_event_frame(event_type: str, payload: Mapping[str, object]) -> bytes:
     """One application/vnd.amazon.eventstream frame: prelude + prelude CRC32 +
     headers + JSON payload + message CRC32, matching botocore EventStreamBuffer."""
-    try:
-        from botocore.eventstream import crc32 as _crc32
-    except ImportError:
-        _crc32 = zlib.crc32
-
-    def _str_header(name: str, value: str) -> bytes:
-        name_b: Final = name.encode()
-        value_b: Final = value.encode()
-        return (
-            struct.pack("!B", len(name_b))
-            + name_b
-            + struct.pack("!B", 7)
-            + struct.pack("!H", len(value_b))
-            + value_b
-        )
-
     payload_bytes: Final = json.dumps(payload, default=dict, separators=(",", ":")).encode()
     headers_bytes: Final = (
-        _str_header(":event-type", event_type)
-        + _str_header(":content-type", "application/json")
-        + _str_header(":message-type", "event")
+        _aws_str_header(":event-type", event_type)
+        + _aws_str_header(":content-type", "application/json")
+        + _aws_str_header(":message-type", "event")
     )
     total_length: Final = 12 + len(headers_bytes) + len(payload_bytes) + 4
     prelude: Final = struct.pack("!II", total_length, len(headers_bytes))
-    prelude_crc: Final = struct.pack("!I", _crc32(prelude) & 0xFFFFFFFF)
+    prelude_crc: Final = struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF)
     message: Final = prelude + prelude_crc + headers_bytes + payload_bytes
-    return message + struct.pack("!I", _crc32(message, 0) & 0xFFFFFFFF)
+    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
 
 
 def _bedrock_eventstream(scenario: Scenario) -> bytes:
