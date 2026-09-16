@@ -1316,6 +1316,32 @@ async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_sche
     assert session.closed
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+async def test_connection_error_retry_forwards_content(monkeypatch: pytest.MonkeyPatch, method: str):
+    """On RemoteProtocolError, content= body must arrive at the server on the retry request."""
+    captured: list[bytes] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_connection_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        captured.append(request.content)
+        return httpx.Response(200, request=request)
+
+    handler = AsyncHTTPHandler()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    monkeypatch.setattr(handler, "create_client", lambda **_: httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed)))
+
+    body = b'{"post": ["run1"]}'
+    await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
+
+    assert captured == [body]
+    await handler.close()
+
+
+
 @pytest.fixture
 def forward_proxy_server():
     """Plain HTTP forward proxy that records the absolute URIs it is asked to fetch."""
