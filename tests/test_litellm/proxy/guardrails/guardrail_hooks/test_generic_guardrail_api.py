@@ -1380,6 +1380,35 @@ class TestGenericGuardrailAPIResponseParsing:
 
         assert response.stream_holdback_chars == [3, 0, 0, 0]
 
+    def test_from_dict_parses_tool_calls(self):
+        """``tool_calls`` goes out on the request, so the response has to carry it back."""
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "send_email", "arguments": '{"to": "jane@example.com"}'},
+            }
+        ]
+
+        response = GenericGuardrailAPIResponse.from_dict(
+            {"action": "GUARDRAIL_INTERVENED", "texts": ["Done"], "tool_calls": tool_calls}
+        )
+
+        assert response.tool_calls == tool_calls
+
+    def test_from_dict_tool_calls_absent_is_none(self):
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        response = GenericGuardrailAPIResponse.from_dict({"action": "NONE", "texts": ["hi"]})
+
+        assert response.tool_calls is None
+
     @pytest.mark.asyncio
     async def test_apply_guardrail_flows_holdback_back_to_inputs(self, generic_guardrail):
         """A GUARDRAIL_INTERVENED response with stream_holdback_chars is surfaced on
@@ -1875,6 +1904,141 @@ class TestToolSupport:
             forwarded_tools = mock_post.call_args.kwargs["json"]["tools"]
 
         assert forwarded_tools == tools
+
+    @pytest.mark.asyncio
+    async def test_guardrail_returned_tool_calls_flow_back_to_inputs(self, generic_guardrail):
+        """A guardrail that rewrites tool arguments has to be able to return them.
+
+        ``tool_calls`` is sent on the request, so the matching response field is what closes
+        the loop. Without it the calls were dropped on the floor and the caller silently
+        kept the values it sent in -- for a rewriting guardrail (reversible redaction, for
+        instance) the rewritten arguments never reached the client.
+        """
+        guardrailed_tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "send_email", "arguments": '{"to": "jane@example.com"}'},
+            }
+        ]
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "GUARDRAIL_INTERVENED",
+            "texts": ["Done"],
+            "tool_calls": guardrailed_tool_calls,
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(generic_guardrail.async_handler, "post", return_value=mock_response):
+            result = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["Done"]},
+                request_data={},
+                input_type="response",
+            )
+
+        assert result["tool_calls"] == guardrailed_tool_calls
+
+    def test_guardrail_tool_calls_take_precedence_over_the_sent_ones(self, generic_guardrail):
+        """The returned calls win over the ones that went out.
+
+        Built through ``_build_guardrail_return_inputs`` rather than ``apply_guardrail`` so
+        the assertion is about this mapping, not about request-model coercion of the calls
+        the caller supplied.
+        """
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        sent = [{"id": "call_1", "type": "function", "function": {"name": "send_email", "arguments": "{}"}}]
+        returned = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "send_email", "arguments": '{"to": "jane@example.com"}'},
+            }
+        ]
+
+        result = generic_guardrail._build_guardrail_return_inputs(
+            texts=["Done"],
+            images=None,
+            tools=None,
+            tool_calls=sent,
+            guardrail_response=GenericGuardrailAPIResponse.from_dict(
+                {"action": "GUARDRAIL_INTERVENED", "texts": ["Done"], "tool_calls": returned}
+            ),
+        )
+
+        assert result["tool_calls"] == returned
+
+    def test_untouched_tool_calls_are_echoed_not_dropped(self, generic_guardrail):
+        """A guardrail that ignores tool calls must not blank them out.
+
+        The downstream handlers compare what comes back against what they sent and fall back
+        to their own copy when the lengths differ, so echoing an unchanged list leaves them
+        behaving exactly as they did before this field existed.
+        """
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        sent = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "send_email", "arguments": '{"to": "jane@example.com"}'},
+            }
+        ]
+
+        result = generic_guardrail._build_guardrail_return_inputs(
+            texts=["Done"],
+            images=None,
+            tools=None,
+            tool_calls=sent,
+            guardrail_response=GenericGuardrailAPIResponse.from_dict({"action": "NONE", "texts": ["Done"]}),
+        )
+
+        assert result["tool_calls"] == sent
+
+    def test_malformed_returned_tool_calls_are_discarded(self, generic_guardrail):
+        """A same-length list with no function block must not reach chat handling.
+
+        The chat handlers index ``function.name`` and ``function.arguments`` on whatever the
+        guardrail returns, so forwarding an unusable list raises there instead of returning a
+        response. The calls that were sent are kept instead.
+        """
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        sent = [{"id": "call_1", "type": "function", "function": {"name": "send_email", "arguments": "{}"}}]
+        malformed = [{"id": "call_1", "type": "function"}]
+
+        result = generic_guardrail._build_guardrail_return_inputs(
+            texts=["Done"],
+            images=None,
+            tools=None,
+            tool_calls=sent,
+            guardrail_response=GenericGuardrailAPIResponse.from_dict(
+                {"action": "GUARDRAIL_INTERVENED", "texts": ["Done"], "tool_calls": malformed}
+            ),
+        )
+
+        assert result["tool_calls"] == sent
+
+    def test_no_tool_calls_on_either_side_stay_absent(self, generic_guardrail):
+        """An empty list is not the same as no list: the key must stay out of the result."""
+        from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            GenericGuardrailAPIResponse,
+        )
+
+        result = generic_guardrail._build_guardrail_return_inputs(
+            texts=["Done"],
+            images=None,
+            tools=None,
+            guardrail_response=GenericGuardrailAPIResponse.from_dict({"action": "NONE", "texts": ["Done"]}),
+        )
+
+        assert "tool_calls" not in result
 
 
 class TestFailOnError:

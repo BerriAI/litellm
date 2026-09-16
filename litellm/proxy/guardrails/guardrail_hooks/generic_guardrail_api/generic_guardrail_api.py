@@ -24,14 +24,14 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import ChatCompletionToolParam
+from litellm.types.llms.openai import ChatCompletionToolCallChunk, ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
     GuardrailToolParam,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -102,6 +102,16 @@ def _sanitize_inbound_headers(
             sanitized[key] = _HEADER_PRESENT_PLACEHOLDER
 
     return sanitized or None
+
+
+def _returned_tool_call_is_usable(tool_call: object) -> bool:
+    """Whether a guardrail's returned tool call carries what the chat handlers index."""
+    function: Final = tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+    if function is None:
+        return False
+    name: Final = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
+    arguments: Final = function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+    return isinstance(name, str) and isinstance(arguments, str)
 
 
 def _extract_inbound_headers(
@@ -323,6 +333,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         images: list[str] | None,
         tools: list[ChatCompletionToolParam] | None,
         guardrail_response: GenericGuardrailAPIResponse,
+        tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None = None,
     ) -> GenericGuardrailAPIInputs:
         # Action is NONE or no modifications needed
         return_inputs: Final = GenericGuardrailAPIInputs(texts=texts)
@@ -336,6 +347,15 @@ class GenericGuardrailAPI(CustomGuardrail):
             return_inputs["tools"] = guardrail_response.tools
         elif tools:
             return_inputs["tools"] = tools
+        returned: Final = guardrail_response.tool_calls
+        usable: Final = returned is not None and all(_returned_tool_call_is_usable(call) for call in returned)
+        if returned and not usable:
+            verbose_proxy_logger.warning(
+                "Generic Guardrail API returned tool calls missing a function name or arguments; keeping the ones already sent",
+            )
+        selected: Final = returned if usable else tool_calls
+        if selected:
+            return_inputs["tool_calls"] = selected
         if guardrail_response.stream_holdback_chars is not None:
             return_inputs["stream_holdback_chars"] = guardrail_response.stream_holdback_chars
         return return_inputs
@@ -473,6 +493,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 texts=texts,
                 images=images,
                 tools=tools,
+                tool_calls=tool_calls,
                 guardrail_response=guardrail_response,
             )
 
