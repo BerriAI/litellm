@@ -15,6 +15,7 @@ from litellm.constants import DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, build_bulk_upsert, merge_by_conflict_key
 from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
     RECONCILE_DAY_SQL,
+    read_marker,
     reconciled_through,
     run_daily_global_spend_reconcile,
     run_scheduled_daily_global_spend_reconcile,
@@ -41,13 +42,25 @@ class _FakeConfigTable:
 
 
 class _FakeDb:
+    """Per-key rows are ``{date: updated_at}`` with a fake database clock that ticks per query,
+    so "rows written since the last scan" behaves like Postgres would."""
+
     def __init__(self, prisma: "_FakePrisma") -> None:
         self._prisma = prisma
         self.litellm_config = _FakeConfigTable()
 
     async def query_raw(self, sql: str, *params: str) -> list[dict[str, str]]:
-        first, last = params
-        return [{"date": d} for d in sorted(self._prisma.user_days) if first <= d <= last]
+        if sql.startswith("SELECT (NOW()"):
+            self._prisma.clock += 1
+            return [{"now": f"clock-{self._prisma.clock:04d}"}]
+        rows = self._prisma.user_rows
+        if len(params) == 1:
+            (last,) = params
+            return [{"date": d} for d in sorted(rows) if d <= last]
+        last, marker, scanned_at = params
+        return [
+            {"date": d} for d, written in sorted(rows.items()) if d <= last and (d > marker or written >= scanned_at)
+        ]
 
     async def execute_raw(self, sql: str, *params: str) -> int:
         (day,) = params
@@ -61,10 +74,16 @@ class _FakePrisma:
     """Enough of PrismaClient for the reconcile: per-key dates, a config table, and execute_raw."""
 
     def __init__(self, user_days: tuple[str, ...], failing_days: frozenset[str] = frozenset()) -> None:
-        self.user_days = user_days
+        self.clock = 0
+        self.user_rows: dict[str, str] = {d: "clock-0000" for d in user_days}
         self.failing_days = failing_days
         self.reconciled: list[str] = []
         self.db = _FakeDb(self)
+
+    def write_late_row(self, day: str) -> None:
+        """A per-key row for ``day`` lands now, after whatever scans already happened."""
+        self.clock += 1
+        self.user_rows[day] = f"clock-{self.clock:04d}"
 
     async def get_generic_data(self, key: str, value: str, table_name: str) -> _FakeConfigRow | None:
         stored = self.db.litellm_config.rows.get(value)
@@ -94,18 +113,64 @@ async def test_first_run_rolls_up_every_closed_day_and_never_today():
 
 
 @pytest.mark.asyncio
-async def test_later_run_replays_the_marker_day_and_the_day_before_only():
-    """Days older than marker-1 are settled; the marker day and its predecessor are replayed so
-    per-key rows that landed after their day was rolled up get folded in."""
+async def test_later_run_rolls_up_only_new_days_when_nothing_old_changed():
     prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-12", "2026-09-13", "2026-09-14"))
     await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
     prisma.reconciled.clear()
 
     result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
 
-    assert result.days_reconciled == ("2026-09-12", "2026-09-13", "2026-09-14")
-    assert "2026-09-01" not in prisma.reconciled
+    assert result.days_reconciled == ("2026-09-14",)
     assert await reconciled_through(prisma) == "2026-09-14"
+
+
+@pytest.mark.asyncio
+async def test_spend_landing_on_an_old_rolled_up_day_is_folded_in_by_the_next_run():
+    """Per-key rows carry the request start date, so a delayed flush or retry can add spend to a
+    day far behind the marker. That day is rewritten, and the marker never moves back for it."""
+    prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-05", "2026-09-13"))
+    await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
+    prisma.reconciled.clear()
+    prisma.write_late_row("2026-09-01")
+    prisma.write_late_row("2026-09-03")
+
+    result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
+
+    assert result.days_reconciled == ("2026-09-01", "2026-09-03")
+    assert "2026-09-05" not in prisma.reconciled
+    assert await reconciled_through(prisma) == "2026-09-13"
+
+
+@pytest.mark.asyncio
+async def test_a_late_row_seen_by_a_failed_run_is_seen_again_by_the_next_one():
+    """The scan time only advances when every pending day was rewritten, otherwise a late row
+    found by the failed run would be counted as handled."""
+    prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-13"))
+    await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
+    prisma.write_late_row("2026-09-01")
+    prisma.failing_days = frozenset({"2026-09-01"})
+    failed = await run_daily_global_spend_reconcile(prisma, today=TODAY)
+    prisma.failing_days = frozenset()
+    prisma.reconciled.clear()
+
+    result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
+
+    assert failed.failed_day == "2026-09-01"
+    assert failed.reconciled_through == "2026-09-13"
+    assert result.days_reconciled == ("2026-09-01",)
+    assert result.failed_day is None
+
+
+@pytest.mark.asyncio
+async def test_a_marker_without_a_scan_time_rolls_every_closed_day_up_again():
+    prisma = _FakePrisma(user_days=("2026-09-01", "2026-09-13"))
+    prisma.db.litellm_config.rows[DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM] = '{"reconciled_through": "2026-09-13"}'
+
+    result = await run_daily_global_spend_reconcile(prisma, today=TODAY)
+
+    assert result.days_reconciled == ("2026-09-01", "2026-09-13")
+    marker = await read_marker(prisma)
+    assert marker is not None and marker.reconciled_through == "2026-09-13" and marker.scanned_at is not None
 
 
 @pytest.mark.asyncio
@@ -116,7 +181,7 @@ async def test_a_run_with_no_new_closed_days_keeps_the_marker():
 
     result = await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
 
-    assert result.days_reconciled == ("2026-09-13",)
+    assert result.days_reconciled == ()
     assert result.reconciled_through == "2026-09-13"
 
 
@@ -149,11 +214,10 @@ async def test_the_next_run_resumes_from_the_failed_day():
 
 @pytest.mark.asyncio
 async def test_a_failure_with_nothing_done_reports_the_previous_marker_and_alerts():
-    """A late flush for the day before the marker is exactly the replay case; when that replay
-    fails the marker must stay put and the operator must hear about it."""
+    """When the rewrite of a late day fails the marker must stay put and the operator must hear about it."""
     prisma = _FakePrisma(user_days=("2026-09-13",))
     await run_daily_global_spend_reconcile(prisma, today=date(2026, 9, 14))
-    prisma.user_days = ("2026-09-12", "2026-09-13")
+    prisma.write_late_row("2026-09-12")
     prisma.failing_days = frozenset({"2026-09-12"})
     alert = AsyncMock()
 
