@@ -11,6 +11,7 @@ import os
 import warnings
 from collections.abc import AsyncGenerator
 from datetime import datetime
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -252,6 +253,20 @@ class NomaGuardrail(CustomGuardrail):
 
         if not isinstance(response, litellm.ModelResponse):
             return None
+
+        if len(response.choices) > 1:
+            checked_contents: Final = tuple(
+                [
+                    await self._process_llm_response_check(
+                        request_data,
+                        response.model_copy(update=MappingProxyType({"choices": response.choices[index : index + 1]})),
+                        user_auth,
+                        event_type,
+                    )
+                    for index in range(len(response.choices))
+                ]
+            )
+            return next((content for content in checked_contents if content is not None), None)
 
         content = None
         for choice in response.choices:
