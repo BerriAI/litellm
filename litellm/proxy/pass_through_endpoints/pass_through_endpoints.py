@@ -609,6 +609,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # merely shares the name.
         if not request_dispatched_to_pass_through_endpoint(request):
             _metadata["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
+            _metadata["user_api_key_team_model_max_budget"] = user_api_key_dict.team_model_max_budget
             _metadata["user_api_key_user_model_max_budget"] = user_api_key_dict.user_model_max_budget
             _metadata["user_api_key_end_user_model_max_budget"] = user_api_key_dict.end_user_model_max_budget
         _metadata.update(

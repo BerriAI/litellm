@@ -2541,7 +2541,7 @@ class TestRecordPartialUsageForFailure:
             function_id="test-partial-usage-failure",
         )
 
-    def _interrupted_chunks(self):
+    def _interrupted_chunks(self, *, model: str = "claude-sonnet-5"):
         return [
             self._sse(
                 "message_start",
@@ -2551,7 +2551,7 @@ class TestRecordPartialUsageForFailure:
                         "id": "msg_abc",
                         "type": "message",
                         "role": "assistant",
-                        "model": "claude-sonnet-5",
+                        "model": model,
                         "content": [],
                         "stop_reason": None,
                         "stop_sequence": None,
@@ -2588,7 +2588,7 @@ class TestRecordPartialUsageForFailure:
         AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
             litellm_logging_obj=logging_obj,
             request_body={"model": "claude-unpriced-test-model", "stream": True},
-            all_chunks=self._interrupted_chunks(),
+            all_chunks=self._interrupted_chunks(model="claude-unpriced-test-model"),
         )
 
         usage = logging_obj.model_call_details["combined_usage_object"]
