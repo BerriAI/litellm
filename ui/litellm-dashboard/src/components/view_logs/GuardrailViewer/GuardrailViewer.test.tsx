@@ -33,6 +33,15 @@ const untimedPreCall: Partial<GuardrailInformation> = {
   duration: null,
 };
 
+const timedPreCall: Partial<GuardrailInformation> = {
+  guardrail_name: "timed-pre-rail",
+  guardrail_status: "success",
+  guardrail_mode: "pre_call",
+  start_time: 1_700_000_000,
+  end_time: 1_700_000_000.1,
+  duration: 0.1,
+};
+
 const ranPostCall: Partial<GuardrailInformation> = {
   guardrail_name: "ran-rail",
   guardrail_status: "success",
@@ -115,6 +124,21 @@ describe("GuardrailViewer", () => {
     expect(screen.getByText("LLM call")).toBeInTheDocument();
     expect(screen.getByText("Response returned")).toBeInTheDocument();
     expect(screen.queryByText(/^T\+/)).not.toBeInTheDocument();
+  });
+
+  it("keeps an untimed guardrail ahead of a timed one recorded after it in the same phase", () => {
+    const untimed = makeGuardrailInformation(untimedPreCall);
+    const timedPre = makeGuardrailInformation(timedPreCall);
+    renderWithProviders(<GuardrailViewer data={[untimed, timedPre]} />);
+
+    const rows = screen.getAllByTestId("lifecycle-row");
+    const rowIndex = (label: RegExp): number => rows.findIndex((r) => within(r).queryByText(label) !== null);
+    const untimedIndex = rowIndex(/Pre-call guardrail: conduct/);
+    const timedIndex = rowIndex(/Pre-call guardrail: timed-pre-rail/);
+
+    expect(untimedIndex).toBeGreaterThanOrEqual(0);
+    expect(timedIndex).toBeGreaterThanOrEqual(0);
+    expect(untimedIndex).toBeLessThan(timedIndex);
   });
 
   it("anchors offsets on the timed entries and gives the untimed one no fabricated offset", () => {

@@ -375,15 +375,18 @@ const belongsOnLifecycle = (e: GuardrailInformation): boolean => isTimed(e) || g
 const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
   const sorted = useMemo(() => {
     const onLifecycle = entries.filter(belongsOnLifecycle);
-    const timed = onLifecycle.filter(isTimed).sort((a, b) => a.start_time - b.start_time);
-    return [...timed, ...onLifecycle.filter((e) => !isTimed(e))];
+    const byStart = onLifecycle.filter(isTimed).sort((a, b) => a.start_time - b.start_time);
+    const timedSlots = new Map(
+      onLifecycle.flatMap((e, i) => (isTimed(e) ? [i] : [])).map((slot, k) => [slot, byStart[k]]),
+    );
+    return onLifecycle.map((e, i) => timedSlots.get(i) ?? e);
   }, [entries]);
 
   const timeline = useMemo(() => {
     if (sorted.length === 0) return [];
 
     const timed = sorted.filter(isTimed);
-    const baseTime = timed.length > 0 ? timed[0].start_time : null;
+    const baseTime = timed.length > 0 ? Math.min(...timed.map((e) => e.start_time)) : null;
     const offsetOf = (e: GuardrailInformation): number | null =>
       baseTime === null || !isTimed(e) ? null : Math.round((e.end_time - baseTime) * 1000);
     const items: TimelineEntry[] = [];
