@@ -6453,6 +6453,129 @@ async def test_session_token_keeps_minted_grants_when_the_team_row_cannot_be_rea
 
 
 @pytest.mark.asyncio
+async def test_cli_session_token_refreshes_team_grants_from_team_row(monkeypatch):
+    monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-test")
+
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
+    user_info = LiteLLM_UserTable(
+        user_id="internal-user-1",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=[],
+    )
+    cli_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user_info,
+        team_id="team-abc",
+        team_alias="old-name",
+        team_models=["old-model"],
+    )
+    fresh_team = LiteLLM_TeamTableCachedObj(
+        team_id="team-abc",
+        team_alias="renamed",
+        models=["new-model"],
+    )
+    attrs = _proxy_attrs_for_db_lookup()
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for key, value in attrs.items():
+            setattr(_proxy_server_mod, key, value)
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/v1/models")
+        with (
+            patch(  # test-quality-ok: direct collaborator patch exercises the real auth builder
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                return_value=fresh_team,
+            ),
+            patch(  # test-quality-ok: direct collaborator patch exercises the real auth builder
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {cli_token}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+    finally:
+        for key, value in originals.items():
+            setattr(_proxy_server_mod, key, value)
+
+    assert result.team_models == ["new-model"]
+    assert result.team_alias == "renamed"
+
+
+@pytest.mark.asyncio
+async def test_cli_session_token_keeps_minted_team_grants_when_team_lookup_is_404(monkeypatch):
+    monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-test")
+
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
+    user_info = LiteLLM_UserTable(
+        user_id="internal-user-1",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=[],
+    )
+    cli_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user_info,
+        team_id="team-abc",
+        team_alias="old-name",
+        team_models=["old-model"],
+    )
+    attrs = _proxy_attrs_for_db_lookup()
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for key, value in attrs.items():
+            setattr(_proxy_server_mod, key, value)
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/v1/models")
+        with (
+            patch(  # test-quality-ok: direct collaborator patch exercises the real auth builder
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(status_code=404),
+            ),
+            patch(  # test-quality-ok: direct collaborator patch exercises the real auth builder
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {cli_token}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+    finally:
+        for key, value in originals.items():
+            setattr(_proxy_server_mod, key, value)
+
+    assert result.team_models == ["old-model"]
+
+
+@pytest.mark.asyncio
 async def test_cli_session_token_authenticates_when_jwt_auth_enabled_without_license(monkeypatch):
     """A lite login token is an encrypted (non-JWT) session blob. With
     enable_jwt_auth on and no enterprise license (premium_user False), the JWT

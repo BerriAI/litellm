@@ -2304,6 +2304,9 @@ async def _user_api_key_auth_builder(
                 # guardrails (or any other metadata) added after the key was cached
                 # are picked up on subsequent requests without a cache eviction.
                 valid_token.team_metadata = _team_obj.metadata
+                if valid_token.is_session_token:
+                    valid_token.team_models = list(_team_obj.models)  # mutable-ok: auth model requires a fresh list
+                    valid_token.team_alias = _team_obj.team_alias
             else:
                 valid_token.team_object_permission = None
 
