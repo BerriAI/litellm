@@ -428,24 +428,25 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     self.completed_response = openai_responses_api_chunk
-                    _response_obj: Final[ResponsesAPIResponse | None] = getattr(
-                        openai_responses_api_chunk, "response", None
-                    )
-                    if (
-                        _chunk_type
-                        in (
-                            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-                            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
-                        )
-                        and _response_obj is not None
-                        and _response_obj.usage is None
+                    _response_obj: Final[object] = getattr(openai_responses_api_chunk, "response", None)
+                    if _chunk_type in (
+                        openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                        openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
                     ):
-                        _response_obj.usage = _estimate_usage_safely(
-                            self.model or "",
-                            self.request_data.get("input"),
-                            self.request_data,
-                            self._generated_content + self._generated_tool_arguments,
-                        )
+                        if isinstance(_response_obj, ResponsesAPIResponse) and _response_obj.usage is None:
+                            _response_obj.usage = _estimate_usage_safely(
+                                self.model or "",
+                                self.request_data.get("input"),
+                                self.request_data,
+                                self._generated_content + self._generated_tool_arguments,
+                            )
+                        elif isinstance(_response_obj, dict) and _response_obj.get("usage") is None:  # pyright: ignore[reportUnknownMemberType]  # the model_constructed terminal event leaves response as an untyped dict
+                            _response_obj["usage"] = _estimate_usage_safely(
+                                self.model or "",
+                                self.request_data.get("input"),
+                                self.request_data,
+                                self._generated_content + self._generated_tool_arguments,
+                            )
                     _stamp_responses_usage_cost(getattr(openai_responses_api_chunk, "response", None), self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:

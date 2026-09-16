@@ -849,3 +849,45 @@ async def test_completed_event_without_usage_counts_tool_input_deltas(tool_delta
     assert usage is not None
     assert usage.output_tokens > 0
     assert usage.total_tokens == usage.input_tokens + usage.output_tokens
+
+
+@pytest.mark.asyncio
+async def test_completed_event_with_a_dict_response_still_gets_the_usage_estimate():
+    """transform_streaming_response can model_construct a terminal event whose
+    response stays a plain dict; the estimate must fill it without raising."""
+    dict_response: Final = {
+        "id": "resp_dict",
+        "model": "gpt-4o-mini",
+        "object": "response",
+        "output": [],
+        "usage": None,
+    }
+
+    def _transform(model, parsed_chunk, logging_obj):
+        if parsed_chunk.get("type") == "response.completed":
+            return ResponseCompletedEvent.model_construct(type="response.completed", response=dict_response)
+        stub: Final = Mock()
+        stub.type = parsed_chunk.get("type")
+        if "delta" in parsed_chunk:
+            stub.delta = parsed_chunk.get("delta")
+        return stub
+
+    config: Final = Mock(spec=BaseResponsesAPIConfig)
+    config.transform_streaming_response.side_effect = _transform
+    iterator: Final = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_text.delta", "delta": "hello world"}),
+            _sse_event({"type": "response.completed", "response": {}}),
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=config,
+        request_data={"input": "count these input tokens please"},
+    )
+
+    async for _ in iterator:
+        pass
+
+    usage: Final = iterator.completed_response.response["usage"]
+    assert usage is not None
+    assert usage.input_tokens > 0
+    assert usage.output_tokens > 0
