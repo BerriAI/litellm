@@ -104,3 +104,29 @@ it("leaves the default_user_id placeholder unlinked", () => {
   expect(screen.getAllByText("default_user_id")).toHaveLength(2);
   expect(screen.queryByRole("link", { name: "default_user_id" })).not.toBeInTheDocument();
 });
+
+it("sorts by the controlled sorting prop and reports header clicks through onSortingChange", async () => {
+  const user = userEvent.setup();
+  const onSortingChange = vi.fn();
+  const keys = [
+    makeDeletedKey({ token: "sk-cheap", key_alias: "cheap-key", spend: 1 }),
+    makeDeletedKey({ token: "sk-pricey", key_alias: "pricey-key", spend: 9 }),
+  ];
+  renderWithProviders(
+    <DeletedKeysTable
+      {...defaultProps}
+      keys={keys}
+      totalCount={2}
+      sorting={[{ id: "spend", desc: true }]}
+      onSortingChange={onSortingChange}
+    />,
+  );
+
+  const rows = screen.getAllByRole("row").slice(1);
+  expect(within(rows[0]).getByText("pricey-key")).toBeInTheDocument();
+  expect(within(rows[1]).getByText("cheap-key")).toBeInTheDocument();
+
+  await user.click(screen.getByTestId("sort-header-deleted_at"));
+
+  expect(onSortingChange).toHaveBeenCalledTimes(1);
+});

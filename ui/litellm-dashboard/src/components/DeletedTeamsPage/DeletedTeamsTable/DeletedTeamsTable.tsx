@@ -12,6 +12,9 @@ import { getDeletedTeamsTableColumns } from "./DeletedTeamsTableColumns";
 interface DeletedTeamsTableProps {
   teams: DeletedTeam[];
   isLoading: boolean;
+  isError?: boolean;
+  sorting?: SortingState;
+  onSortingChange?: OnChangeFn<SortingState>;
   pagination: PaginationState;
   onPaginationChange: OnChangeFn<PaginationState>;
   rowCount: number;
@@ -34,11 +37,14 @@ function EmptyState() {
 export function DeletedTeamsTable({
   teams,
   isLoading,
+  isError,
+  sorting,
+  onSortingChange,
   pagination,
   onPaginationChange,
   rowCount,
 }: DeletedTeamsTableProps) {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const [internalSorting, setInternalSorting] = useState<SortingState>(DEFAULT_SORTING);
 
   const columns = useMemo(() => getDeletedTeamsTableColumns(), []);
 
@@ -48,13 +54,14 @@ export function DeletedTeamsTable({
       columns={columns}
       getRowId={(team, index) => team.team_id || String(index)}
       sortingMode="client"
-      sorting={sorting}
-      onSortingChange={setSorting}
+      sorting={sorting ?? internalSorting}
+      onSortingChange={onSortingChange ?? setInternalSorting}
       paginationMode="server"
       pagination={pagination}
       onPaginationChange={onPaginationChange}
       rowCount={rowCount}
       isLoading={isLoading}
+      isError={isError}
       loadingMessage="Loading deleted teams…"
       noDataMessage={<EmptyState />}
       size="compact"

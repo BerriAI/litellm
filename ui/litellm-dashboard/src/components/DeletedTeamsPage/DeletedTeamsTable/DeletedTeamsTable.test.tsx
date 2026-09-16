@@ -1,4 +1,5 @@
 import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi, it, expect, beforeEach } from "vitest";
 import { renderWithProviders } from "../../../../tests/test-utils";
 import { DeletedTeamsTable } from "./DeletedTeamsTable";
@@ -95,9 +96,36 @@ it("links the organization and deleted by cells, leaving the deleted team id unl
 });
 
 it("leaves the default_user_id placeholder unlinked in the deleted by cell", () => {
-  const team = makeDeletedTeam({ deleted_by: "default_user_id", organization_id: null });
+  const team = makeDeletedTeam({ deleted_by: "default_user_id", organization_id: undefined });
   renderWithProviders(<DeletedTeamsTable teams={[team]} isLoading={false} rowCount={1} {...paginationProps} />);
 
   expect(screen.getByText("default_user_id")).toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "default_user_id" })).not.toBeInTheDocument();
+});
+
+it("sorts by the controlled sorting prop and reports header clicks through onSortingChange", async () => {
+  const user = userEvent.setup();
+  const onSortingChange = vi.fn();
+  const teams = [
+    makeDeletedTeam({ team_id: "team-cheap", team_alias: "cheap-team", spend: 1 }),
+    makeDeletedTeam({ team_id: "team-pricey", team_alias: "pricey-team", spend: 9 }),
+  ];
+  renderWithProviders(
+    <DeletedTeamsTable
+      teams={teams}
+      isLoading={false}
+      rowCount={2}
+      sorting={[{ id: "spend", desc: true }]}
+      onSortingChange={onSortingChange}
+      {...paginationProps}
+    />,
+  );
+
+  const rows = screen.getAllByRole("row").slice(1);
+  expect(within(rows[0]).getByText("pricey-team")).toBeInTheDocument();
+  expect(within(rows[1]).getByText("cheap-team")).toBeInTheDocument();
+
+  await user.click(screen.getByTestId("sort-header-deleted_at"));
+
+  expect(onSortingChange).toHaveBeenCalledTimes(1);
 });

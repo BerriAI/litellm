@@ -13,6 +13,9 @@ interface DeletedKeysTableProps {
   keys: DeletedKeyResponse[];
   totalCount: number;
   isLoading: boolean;
+  isError?: boolean;
+  sorting?: SortingState;
+  onSortingChange?: OnChangeFn<SortingState>;
   pagination: PaginationState;
   onPaginationChange: OnChangeFn<PaginationState>;
 }
@@ -35,10 +38,13 @@ export function DeletedKeysTable({
   keys,
   totalCount,
   isLoading,
+  isError,
+  sorting,
+  onSortingChange,
   pagination,
   onPaginationChange,
 }: DeletedKeysTableProps) {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const [internalSorting, setInternalSorting] = useState<SortingState>(DEFAULT_SORTING);
 
   const columns = useMemo(() => getDeletedKeysTableColumns(), []);
 
@@ -48,13 +54,14 @@ export function DeletedKeysTable({
       columns={columns}
       getRowId={(key, index) => key.token || String(index)}
       sortingMode="client"
-      sorting={sorting}
-      onSortingChange={setSorting}
+      sorting={sorting ?? internalSorting}
+      onSortingChange={onSortingChange ?? setInternalSorting}
       paginationMode="server"
       pagination={pagination}
       onPaginationChange={onPaginationChange}
       rowCount={totalCount}
       isLoading={isLoading}
+      isError={isError}
       loadingMessage="Loading deleted keys…"
       noDataMessage={<EmptyState />}
       size="compact"

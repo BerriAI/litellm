@@ -1,10 +1,11 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
-import { chooseSelectOption } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import AuditLogsPanel from "./AuditLogsPanel";
+import type { AuditLogEntry } from "./AuditLogsTableColumns";
 
 vi.mock("../networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../networking")>();
@@ -32,13 +33,45 @@ const ID_PARAM_KEYS = [
   "table_name",
 ] as const satisfies readonly (keyof AuditLogsParams)[];
 
-const respondWith = (total: number) => {
-  const response = { audit_logs: [], total, page: 1, page_size: PAGE_SIZE, total_pages: Math.ceil(total / PAGE_SIZE) };
+const ROWS: AuditLogEntry[] = [
+  {
+    id: "log-1",
+    updated_at: "2026-07-20T12:00:00Z",
+    changed_by: "user-42",
+    changed_by_api_key: "sk-hash-abc",
+    action: "created",
+    table_name: "LiteLLM_TeamTable",
+    object_id: "team-obj-123",
+    before_value: {},
+    updated_values: { foo: "bar" },
+  },
+  {
+    id: "log-2",
+    updated_at: "2026-07-20T11:00:00Z",
+    changed_by: "user-43",
+    changed_by_api_key: "sk-hash-def",
+    action: "deleted",
+    table_name: "LiteLLM_UserTable",
+    object_id: "user-obj-456",
+    before_value: { a: 1 },
+    updated_values: {},
+  },
+];
+
+const respondWith = (total: number, rows: AuditLogEntry[] = []) => {
+  const response = {
+    audit_logs: rows,
+    total,
+    page: 1,
+    page_size: PAGE_SIZE,
+    total_pages: Math.ceil(total / PAGE_SIZE),
+  };
   return vi.mocked(uiAuditLogsCall).mockResolvedValue(response);
 };
 
 const lastCall = () => vi.mocked(uiAuditLogsCall).mock.calls.at(-1)?.[0];
 const sentIdParams = () => ID_PARAM_KEYS.filter((key) => lastCall()?.params?.[key] !== undefined);
+const lastUrl = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.mock.calls.at(-1)?.[0];
 
 const defaultProps = {
   accessToken: "sk-test",
@@ -49,14 +82,13 @@ const defaultProps = {
   premiumUser: true,
 };
 
-const renderPanel = () => {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <AuditLogsPanel {...defaultProps} />
-    </QueryClientProvider>,
-  );
-};
+interface UrlOptions {
+  searchParams?: Record<string, string>;
+  onUrlUpdate?: OnUrlUpdateFunction;
+}
+
+const renderPanel = (urlOptions: UrlOptions = {}) =>
+  renderWithProviders(<AuditLogsPanel {...defaultProps} />, urlOptions);
 
 const TEXT_FILTERS: { filterId: string; placeholder: string; paramKey: keyof AuditLogsParams }[] = [
   { filterId: "object_id", placeholder: "Enter object ID…", paramKey: "object_id" },
@@ -79,6 +111,7 @@ const SELECT_FILTERS: {
 describe("AuditLogsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
     respondWith(0);
   });
 
@@ -92,7 +125,7 @@ describe("AuditLogsPanel", () => {
     await user.click(screen.getByTestId("pagination-next"));
     await waitFor(() => expect(lastCall()?.page).toBe(2));
 
-    await user.type(screen.getByTestId("datatable-search"), "team-abc");
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "team-abc" } });
 
     await waitFor(() => expect(lastCall()?.params?.search).toBe("team-abc"));
     expect(lastCall()?.page).toBe(1);
@@ -100,17 +133,16 @@ describe("AuditLogsPanel", () => {
   });
 
   it("trims the search and drops params.search once the box is cleared", async () => {
-    const user = userEvent.setup();
-    renderPanel();
-    const input = await screen.findByTestId("datatable-search");
-
-    await user.type(input, "  abc");
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderPanel({ searchParams: { audit_search: "  abc" }, onUrlUpdate });
     await waitFor(() => expect(lastCall()?.params?.search).toBe("abc"));
 
-    await user.clear(input);
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "" } });
 
     await waitFor(() => expect(lastCall()?.params?.search).toBeUndefined());
     expect(sentIdParams()).toEqual([]);
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(lastUrl(onUrlUpdate)?.searchParams.has("audit_search")).toBe(false);
   });
 
   it.each(TEXT_FILTERS)("maps the $filterId drawer filter to params.$paramKey", async ({ placeholder, paramKey }) => {
@@ -142,4 +174,127 @@ describe("AuditLogsPanel", () => {
       expect(sentIdParams()).toEqual([paramKey]);
     },
   );
+
+  describe("URL state", () => {
+    it("queries the page, page size, search and filters named by the audit_ URL keys", async () => {
+      respondWith(120);
+      renderPanel({
+        searchParams: {
+          audit_page: "2",
+          audit_page_size: "25",
+          audit_search: "abc",
+          audit_filter_team: "team-1",
+          audit_filter_action: "created",
+          audit_filter_table: "LiteLLM_TeamTable",
+        },
+      });
+
+      await waitFor(() => expect(lastCall()?.page).toBe(2));
+      expect(lastCall()?.page_size).toBe(25);
+      const expectedParams = {
+        search: "abc",
+        object_team_id: "team-1",
+        action: "created",
+        table_name: "LiteLLM_TeamTable",
+      };
+      expect(lastCall()?.params).toMatchObject(expectedParams);
+      expect(sentIdParams()).toEqual(["search", "object_team_id", "action", "table_name"]);
+      expect(screen.getByTestId("datatable-search")).toHaveValue("abc");
+      expect(screen.getByTestId("filter-chip-team_id")).toHaveTextContent("team-1");
+      await waitFor(() => expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 5"));
+    });
+
+    it("ignores the unprefixed page, search and filter keys that belong to Request Logs", async () => {
+      renderPanel({ searchParams: { page: "4", search: "nope", filter_team: "other-team" } });
+
+      await waitFor(() => expect(uiAuditLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.page).toBe(1);
+      expect(sentIdParams()).toEqual([]);
+    });
+
+    it("writes audit_page when paging and clears it again when a filter is applied", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      respondWith(120);
+      renderPanel({ onUrlUpdate });
+      await waitFor(() => expect(uiAuditLogsCall).toHaveBeenCalled());
+
+      await user.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.get("audit_page")).toBe("2"));
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("page")).toBe(false);
+
+      await user.click(screen.getByTestId("datatable-filters-trigger"));
+      fireEvent.change(await screen.findByPlaceholderText("Enter object ID…"), { target: { value: "obj-9" } });
+      await user.click(screen.getByTestId("filter-drawer-apply"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.get("audit_filter_object_id")).toBe("obj-9"));
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("audit_page")).toBe(false);
+    });
+
+    it("writes the typed search to audit_search", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderPanel({ onUrlUpdate });
+
+      fireEvent.change(await screen.findByTestId("datatable-search"), { target: { value: "team-abc" } });
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.get("audit_search")).toBe("team-abc"));
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("search")).toBe(false);
+    });
+
+    it("writes the team and table filters under their renamed audit_ keys", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderPanel({ onUrlUpdate });
+      await waitFor(() => expect(uiAuditLogsCall).toHaveBeenCalled());
+
+      await user.click(screen.getByTestId("datatable-filters-trigger"));
+      fireEvent.change(await screen.findByPlaceholderText("Enter team ID…"), { target: { value: "team-9" } });
+      const [, tableTrigger] = await screen.findAllByRole("combobox");
+      await chooseSelectOption(user, tableTrigger, "Teams");
+      await user.click(screen.getByTestId("filter-drawer-apply"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.get("audit_filter_team")).toBe("team-9"));
+      expect(lastUrl(onUrlUpdate)?.searchParams.get("audit_filter_table")).toBe("LiteLLM_TeamTable");
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("audit_filter_team_id")).toBe(false);
+      expect(lastUrl(onUrlUpdate)?.searchParams.has("audit_filter_table_name")).toBe(false);
+    });
+  });
+
+  describe("detail drawer deep link", () => {
+    it("opens the drawer for ?audit_log_id= when that row is on the loaded page", async () => {
+      respondWith(2, ROWS);
+      renderPanel({ searchParams: { audit_log_id: "log-2" } });
+
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText("user-obj-456")).toBeInTheDocument();
+      expect(within(dialog).queryByText("team-obj-123")).not.toBeInTheDocument();
+    });
+
+    it("keeps the drawer closed when ?audit_log_id= is not on the loaded page", async () => {
+      respondWith(2, ROWS);
+      renderPanel({ searchParams: { audit_log_id: "log-missing" } });
+
+      await screen.findByText("team-obj-123");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("pushes ?audit_log_id= when a row is opened and removes it on close", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      respondWith(2, ROWS);
+      renderPanel({ onUrlUpdate });
+
+      await user.click(await screen.findByText("team-obj-123"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.get("audit_log_id")).toBe("log-1"));
+      expect(lastUrl(onUrlUpdate)?.options.history).toBe("push");
+      const dialog = await screen.findByRole("dialog");
+
+      await user.click(within(dialog).getByRole("button", { name: "Close" }));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.searchParams.has("audit_log_id")).toBe(false));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+  });
 });

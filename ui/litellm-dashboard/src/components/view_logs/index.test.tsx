@@ -1,8 +1,10 @@
-import { screen } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import SpendLogsTable from "./index";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 
 const { useAuthorizedMock, useOrganizationsMock } = vi.hoisted(() => ({
   useAuthorizedMock: vi.fn(),
@@ -51,11 +53,35 @@ const defaultProps = {
 
 const ORG_ADMIN_MEMBERSHIPS = [{ organization_id: "org-1", members: [{ user_id: "user-1", user_role: "org_admin" }] }];
 
-const renderAs = (sessionRole: string, organizations: unknown[] = []) => {
+interface UrlOptions {
+  searchParams?: string;
+  onUrlUpdate?: OnUrlUpdateFunction;
+}
+
+const renderAs = (sessionRole: string, organizations: unknown[] = [], urlOptions: UrlOptions = {}) => {
   useAuthorizedMock.mockReturnValue({ userId: "user-1", userRole: sessionRole });
   useOrganizationsMock.mockReturnValue({ data: organizations });
-  return renderWithProviders(<SpendLogsTable {...defaultProps} userRole={sessionRole} />);
+  return renderWithProviders(<SpendLogsTable {...defaultProps} userRole={sessionRole} />, urlOptions);
 };
+
+const renderKeepingMountUrlWrites = (sessionRole: string, searchParams: string, onUrlUpdate: OnUrlUpdateFunction) => {
+  useAuthorizedMock.mockReturnValue({ userId: "user-1", userRole: sessionRole });
+  useOrganizationsMock.mockReturnValue({ data: [] });
+  return render(
+    <NuqsTestingAdapter
+      searchParams={searchParams}
+      onUrlUpdate={onUrlUpdate}
+      hasMemory
+      resetUrlUpdateQueueOnMount={false}
+    >
+      <QueryClientProvider client={testQueryClient}>
+        <SpendLogsTable {...defaultProps} userRole={sessionRole} />
+      </QueryClientProvider>
+    </NuqsTestingAdapter>,
+  );
+};
+
+const lastUrl = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
 
 const tabNames = () => screen.getAllByRole("tab").map((tab) => tab.textContent);
 
@@ -192,6 +218,85 @@ describe("SpendLogsTable", () => {
 
       expect(document.querySelector('[aria-busy="true"]')).not.toBeInTheDocument();
       expect(screen.getByRole("tab", { name: "Request Logs" })).toBeInTheDocument();
+    });
+  });
+
+  describe("URL tab state", () => {
+    it("opens the tab named by ?tab= on load", () => {
+      renderAs("Admin", [], { searchParams: "?tab=audit-logs" });
+
+      expect(screen.getByRole("tab", { name: "Audit Logs" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByTestId("audit-logs-panel")).toHaveTextContent("active");
+      expect(screen.getByTestId("request-logs-panel")).toHaveTextContent("inactive");
+    });
+
+    it("writes the selected tab's slug to ?tab=", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderAs("Admin", [], { onUrlUpdate });
+
+      await user.click(screen.getByRole("tab", { name: "Deleted Keys" }));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("tab")).toBe("deleted-keys"));
+    });
+
+    it("drops ?tab= when the user returns to Request Logs", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderAs("Admin", [], { searchParams: "?tab=deleted-teams", onUrlUpdate });
+      expect(screen.getByTestId("deleted-teams-page")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("tab", { name: "Request Logs" }));
+
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(lastUrl(onUrlUpdate)?.has("tab")).toBe(false);
+      expect(screen.getByTestId("request-logs-panel")).toHaveTextContent("active");
+    });
+
+    it("falls back to Request Logs and clears an unknown ?tab=", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderKeepingMountUrlWrites("Admin", "?tab=nonsense&log_id=abc", onUrlUpdate);
+
+      expect(screen.getByRole("tab", { name: "Request Logs" })).toHaveAttribute("aria-selected", "true");
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(lastUrl(onUrlUpdate)?.has("tab")).toBe(false);
+      expect(lastUrl(onUrlUpdate)?.get("log_id")).toBe("abc");
+    });
+
+    it("falls back and clears ?tab=audit-logs for an internal user who cannot see that tab", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderKeepingMountUrlWrites("Internal User", "?tab=audit-logs", onUrlUpdate);
+
+      expect(screen.getByRole("tab", { name: "Request Logs" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.queryByTestId("audit-logs-panel")).not.toBeInTheDocument();
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(lastUrl(onUrlUpdate)?.has("tab")).toBe(false);
+    });
+
+    it("lets an org admin deep-link to Deleted Teams even though the session role reads as internal user", () => {
+      renderAs("Internal User", ORG_ADMIN_MEMBERSHIPS, { searchParams: "?tab=deleted-teams" });
+
+      expect(screen.getByRole("tab", { name: "Deleted Teams" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("keeps ?tab=audit-logs while credentials resolve, then lands on it once the admin role is known", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      useAuthorizedMock.mockReturnValue({ userId: null, userRole: null });
+      const { rerender } = renderWithProviders(
+        <SpendLogsTable {...defaultProps} accessToken={null} userRole={null} userID={null} />,
+        { searchParams: "?tab=audit-logs", onUrlUpdate },
+      );
+      expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(onUrlUpdate).not.toHaveBeenCalled();
+
+      useAuthorizedMock.mockReturnValue({ userId: "user-1", userRole: "Admin" });
+      rerender(<SpendLogsTable {...defaultProps} />);
+
+      expect(screen.getByRole("tab", { name: "Audit Logs" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByTestId("audit-logs-panel")).toHaveTextContent("active");
+      expect(onUrlUpdate).not.toHaveBeenCalled();
     });
   });
 });

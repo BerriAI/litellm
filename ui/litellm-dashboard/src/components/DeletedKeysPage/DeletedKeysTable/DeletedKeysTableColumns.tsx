@@ -29,6 +29,8 @@ function UserLinkCell({ userId }: { userId: string | null | undefined }) {
   );
 }
 
+export const DELETED_KEYS_SORT_FIELDS: readonly string[] = ["spend", "created_at", "deleted_at"];
+
 export const getDeletedKeysTableColumns = (): ColumnDef<DeletedKeyResponse>[] => [
   {
     id: "token",

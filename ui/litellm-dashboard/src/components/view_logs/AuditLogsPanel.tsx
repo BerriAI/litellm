@@ -1,7 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { ColumnFiltersState, OnChangeFn, PaginationState } from "@tanstack/react-table";
+import { ColumnFiltersState } from "@tanstack/react-table";
+import { parseAsString, useQueryState } from "nuqs";
+import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { uiAuditLogsCall } from "../networking";
@@ -23,6 +25,23 @@ const auditLogsPreviewImg = `${asset_logos_folder}audit-logs-preview.png`;
 
 const PAGE_SIZE = 50;
 
+const FILTER_COLUMNS = ["object_id", "changed_by", "team_id", "key_hash", "action", "table_name"] as const;
+type FilterColumn = (typeof FILTER_COLUMNS)[number];
+
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<FilterColumn> = {
+  sortFields: ["updated_at"],
+  defaultSort: { id: "updated_at", desc: true },
+  defaultPageSize: PAGE_SIZE,
+  filterColumns: FILTER_COLUMNS,
+  keyPrefix: "audit_",
+  urlKeys: { filter_team_id: "filter_team", filter_table_name: "filter_table" },
+};
+
+const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): string | undefined => {
+  const value = filters.find((filter) => filter.id === column)?.value;
+  return typeof value === "string" ? value : undefined;
+};
+
 interface AuditLogsResponse {
   audit_logs: AuditLogEntry[];
   total: number;
@@ -30,6 +49,8 @@ interface AuditLogsResponse {
   page_size: number;
   total_pages: number;
 }
+
+const EMPTY_ROWS: AuditLogEntry[] = [];
 
 export default function AuditLogsPanel({
   userID,
@@ -39,19 +60,21 @@ export default function AuditLogsPanel({
   isActive,
   premiumUser,
 }: AuditLogsProps) {
-  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
-  const [searchInput, setSearchInput] = useState("");
+  const {
+    search: searchInput,
+    setSearch,
+    pagination,
+    onPaginationChange,
+    columnFilters,
+    onColumnFiltersChange,
+  } = useUrlTableState(TABLE_STATE_OPTIONS);
   const [debouncedSearch] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
-  const [selectedLog, setSelectedLog] = useState<AuditLogEntry | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selectedLogId, setSelectedLogId] = useQueryState(
+    "audit_log_id",
+    parseAsString.withOptions({ history: "push" }),
+  );
 
   const searchTerm = debouncedSearch.trim();
-
-  const getFilterValue = (columnId: string): string | undefined => {
-    const entry = columnFilters.find((filter) => filter.id === columnId);
-    return typeof entry?.value === "string" && entry.value.trim() ? entry.value.trim() : undefined;
-  };
 
   const canQueryAuditLogs = !!accessToken && !!token && !!userRole && !!userID && isActive && premiumUser;
 
@@ -67,12 +90,12 @@ export default function AuditLogsPanel({
         page_size: pagination.pageSize,
         params: {
           search: searchTerm || undefined,
-          object_id: getFilterValue("object_id"),
-          changed_by: getFilterValue("changed_by"),
-          object_key_hash: getFilterValue("key_hash"),
-          object_team_id: getFilterValue("team_id"),
-          action: getFilterValue("action"),
-          table_name: getFilterValue("table_name"),
+          object_id: appliedFilter(columnFilters, "object_id"),
+          changed_by: appliedFilter(columnFilters, "changed_by"),
+          object_key_hash: appliedFilter(columnFilters, "key_hash"),
+          object_team_id: appliedFilter(columnFilters, "team_id"),
+          action: appliedFilter(columnFilters, "action"),
+          table_name: appliedFilter(columnFilters, "table_name"),
           sort_by: "updated_at",
           sort_order: "desc",
         },
@@ -82,20 +105,11 @@ export default function AuditLogsPanel({
     placeholderData: keepPreviousData,
   });
 
-  const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
-    setColumnFilters(updaterOrValue);
-    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, []);
+  const rows = query.data?.audit_logs ?? EMPTY_ROWS;
+  const selectedLog = useMemo(() => rows.find((log) => log.id === selectedLogId) ?? null, [rows, selectedLogId]);
 
-  const handleSearchChange = useCallback((value: string) => {
-    setSearchInput(value);
-    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, []);
-
-  const handleViewLog = useCallback((log: AuditLogEntry) => {
-    setSelectedLog(log);
-    setDrawerOpen(true);
-  }, []);
+  const handleViewLog = useCallback((log: AuditLogEntry) => void setSelectedLogId(log.id), [setSelectedLogId]);
+  const closeDrawer = useCallback(() => void setSelectedLogId(null), [setSelectedLogId]);
 
   if (!premiumUser) {
     return (
@@ -132,21 +146,22 @@ export default function AuditLogsPanel({
       </div>
 
       <AuditLogsTable
-        data={query.data?.audit_logs ?? []}
+        data={rows}
         rowCount={query.data?.total ?? 0}
         isLoading={query.isLoading}
+        isError={query.isError}
         isRefreshing={query.isFetching}
         pagination={pagination}
-        onPaginationChange={setPagination}
+        onPaginationChange={onPaginationChange}
         columnFilters={columnFilters}
-        onColumnFiltersChange={handleColumnFiltersChange}
+        onColumnFiltersChange={onColumnFiltersChange}
         searchValue={searchInput}
-        onSearchChange={handleSearchChange}
+        onSearchChange={setSearch}
         onRefresh={() => query.refetch()}
         onViewLog={handleViewLog}
       />
 
-      <AuditLogDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} log={selectedLog} />
+      <AuditLogDrawer open={selectedLog !== null} onClose={closeDrawer} log={selectedLog} />
     </>
   );
 }
