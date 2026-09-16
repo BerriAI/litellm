@@ -21,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     MaskedHTTPStatusError,
     _get_httpx_client,
+    get_async_httpx_client,
     get_ssl_configuration,
 )
 
@@ -303,6 +304,23 @@ def test_get_ssl_configuration():
 
             # Verify it returns the mocked SSL context
             assert result == mock_ssl_context
+
+
+def test_get_ssl_configuration_http2_uses_separate_context():
+    from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
+
+    _ssl_context_cache.clear()
+
+    default_context = get_ssl_configuration()
+    http2_context = get_ssl_configuration(http2=True)
+
+    assert default_context is not http2_context
+    assert get_ssl_configuration() is default_context
+    assert get_ssl_configuration(http2=True) is http2_context
+
+    custom_context = ssl.create_default_context()
+    assert get_ssl_configuration(custom_context) is custom_context
+    assert get_ssl_configuration(custom_context, http2=True) is custom_context
 
 
 def test_get_ssl_configuration_integration():
@@ -643,6 +661,89 @@ def test_get_httpx_client_applies_httpx_timeout_object_without_mocking_handler()
         assert handler.client.timeout == t
     finally:
         handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_http2_transport():
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    http2_handler = AsyncHTTPHandler(http2=True)
+    default_handler = AsyncHTTPHandler()
+    try:
+        assert isinstance(http2_handler.client._transport, httpx.AsyncHTTPTransport)
+        assert http2_handler.client._transport._pool._http2 is True
+        assert isinstance(default_handler.client._transport, httpx.AsyncHTTPTransport)
+        assert default_handler.client._transport._pool._http2 is False
+    finally:
+        await http2_handler.close()
+        await default_handler.close()
+        monkeypatch.undo()
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_http2_request():
+    requests: list[httpx.Request] = []
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = AsyncHTTPHandler(http2=True)
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    try:
+        response = await handler.get("https://example.com/search")
+        assert response.json() == {"ok": True}
+        assert requests[0].url == "https://example.com/search"
+    finally:
+        await handler.close()
+
+
+def test_http_handler_http2_transport():
+    http2_handler = HTTPHandler(http2=True)
+    default_handler = HTTPHandler()
+    try:
+        assert http2_handler.client._transport._pool._http2 is True
+        assert default_handler.client._transport._pool._http2 is False
+    finally:
+        http2_handler.close()
+        default_handler.close()
+
+
+def test_http_handler_http2_request():
+    requests: list[httpx.Request] = []
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = HTTPHandler(http2=True)
+    handler.client.close()
+    handler.client = httpx.Client(transport=httpx.MockTransport(mock_handler))
+    try:
+        response = handler.get("https://example.com/search")
+        assert response.json() == {"ok": True}
+        assert requests[0].url == "https://example.com/search"
+    finally:
+        handler.close()
+
+
+@pytest.mark.asyncio
+async def test_get_async_httpx_client_http2_cache_key():
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.types.utils import LlmProviders
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    http2_handler = get_async_httpx_client(llm_provider=LlmProviders.VERTEX_AI, params={"http2": True})
+    default_handler = get_async_httpx_client(llm_provider=LlmProviders.VERTEX_AI)
+    try:
+        assert http2_handler is not default_handler
+        assert http2_handler.client._transport._pool._http2 is True
+    finally:
+        await http2_handler.close()
+        await default_handler.close()
+        monkeypatch.undo()
 
 
 def test_sync_get_forwards_per_request_timeout():

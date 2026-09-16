@@ -2666,6 +2666,40 @@ def test_vector_store_search_handler_direct_config_sync_skips_http():
 
 
 @pytest.mark.asyncio
+async def test_async_vector_store_search_handler_passes_provider_httpx_params():
+    from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
+        VertexSearchAPIVectorStoreConfig,
+    )
+
+    response = httpx.Response(200, json={"results": []})
+    client = AsyncMock(spec=AsyncHTTPHandler)
+    client.post.return_value = response
+    config = VertexSearchAPIVectorStoreConfig()
+    logging_obj = Mock(model_call_details={})
+
+    with (
+        patch.object(config, "validate_environment", return_value={}),
+        patch.object(config, "get_complete_url", return_value="https://discoveryengine.googleapis.com/v1/search"),
+        patch(  # test-quality-ok: verifies vector-store transport configuration reaches the HTTP client factory
+            "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+            return_value=client,
+        ) as get_client,
+    ):
+        result = await BaseLLMHTTPHandler().async_vector_store_search_handler(
+            vector_store_id="vs",
+            query="q",
+            vector_store_search_optional_params={},
+            vector_store_provider_config=config,
+            custom_llm_provider="vertex_ai",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=logging_obj,
+        )
+
+    assert result["data"] == []
+    assert get_client.call_args.kwargs["params"] == {"ssl_verify": None, "http2": True}
+
+
+@pytest.mark.asyncio
 async def test_vector_store_search_handler_direct_config_async_skips_http():
     handler = BaseLLMHTTPHandler()
     stub_response = {"object": "vector_store.search_results.page", "search_query": "q", "data": []}
