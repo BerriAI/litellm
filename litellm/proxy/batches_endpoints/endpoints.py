@@ -861,7 +861,7 @@ async def list_batches(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
-            request_data={"after": after, "limit": limit},
+            request_data={**data, "after": after, "limit": limit},
         )
         litellm_call_id: Final = request_litellm_call_id(data)
         log_llm_api_exception(e, litellm_call_id)

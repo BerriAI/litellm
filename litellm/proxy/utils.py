@@ -38,7 +38,11 @@ from litellm.proxy._types import (
     SpendLogsMetadata,
     SpendLogsPayload,
 )
-from litellm.proxy.common_utils.openai_error_payload import litellm_call_id_headers, openai_error_param
+from litellm.proxy.common_utils.openai_error_payload import (
+    litellm_call_id_headers,
+    openai_error_param,
+    with_litellm_call_id,
+)
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
@@ -7660,7 +7664,7 @@ def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) 
             code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
         )
     elif isinstance(e, ProxyException):
-        return e
+        return with_litellm_call_id(e, litellm_call_id)
     _status_code: Final = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
     return ProxyException(
         message=str(e),
