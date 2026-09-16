@@ -353,6 +353,22 @@ def test_model_group_info_proxy_admin_ignores_key_model_restriction(
     assert [model["model_group"] for model in response.json()["data"]] == ["gpt-4", "claude-3"]
 
 
+@pytest.mark.parametrize("admin_role", ["proxy_admin", "proxy_admin_viewer"])
+def test_model_group_info_proxy_admin_expands_wildcard_deployments(client, auth_as, model_group_info_router, admin_role):
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    model_group_info_router.get_model_names.return_value = ["gpt-4", "anthropic/*"]
+    known_anthropic_models = get_known_models_from_wildcard(wildcard_model="anthropic/*")
+    assert known_anthropic_models
+
+    with auth_as(LitellmUserRoles(admin_role), models=["no-default-models"]):
+        response = client.get("/model_group/info")
+
+    assert response.status_code == 200
+    assert [model["model_group"] for model in response.json()["data"]] == ["gpt-4", *known_anthropic_models]
+
+
 def test_model_group_info_internal_user_key_model_restriction_applies(client, auth_as, model_group_info_router):
     from litellm.proxy._types import LitellmUserRoles
 
