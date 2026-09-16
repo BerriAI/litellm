@@ -8,8 +8,8 @@ actually bills. So a free model with a paid fallback spends without a gate.
 
 This predicate is injected into the router to re-check budget for each fallback target before it is
 attempted, mirroring `fallback_model_access.py`. It deliberately leaves the primary attempt alone:
-a zero-cost model is never blocked by budget, and only the paid fallback is refused. Opt-in via
-`general_settings.enforce_fallback_budget: true`.
+a zero-cost model is never blocked by budget, and only the paid fallback is refused. On by default;
+set `general_settings.enforce_fallback_budget: false` to restore the unguarded behaviour.
 
 Scope: the key's and the user's `max_budget`. Not covered yet, and each needs a read-only evaluation
 path before it can be: team, team-member, end-user, org, global and per-model budgets, whose
@@ -50,7 +50,7 @@ class _RequestMetadata(BaseModel):
 
 
 class _FallbackBudgetSettings(BaseModel):
-    enforce_fallback_budget: bool = False
+    enforce_fallback_budget: bool = True
 
 
 def _token_in_metadata(metadata: object) -> UserAPIKeyAuth | None:
