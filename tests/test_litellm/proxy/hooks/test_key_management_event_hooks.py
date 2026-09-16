@@ -515,7 +515,6 @@ class TestRotateVirtualKeyInSecretManager:
 
 
 class TestKeyUpdatedSecretManagerSync:
-    """Tests that /key/update moves the stored secret when the key alias changes."""
 
     @staticmethod
     def _configure_secret_manager(
@@ -543,7 +542,6 @@ class TestKeyUpdatedSecretManagerSync:
     async def test_updated_hook_renames_secret_when_alias_changes(
         self, monkeypatch: pytest.MonkeyPatch, existing_alias: str | None
     ):
-        """A new alias on /key/update must move the secret to the new name, keeping the stored key value."""
         from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
 
         mock_secret_manager: Final = self._configure_secret_manager(monkeypatch, stored_value="sk-stored-key")
@@ -572,7 +570,6 @@ class TestKeyUpdatedSecretManagerSync:
     async def test_updated_hook_leaves_secret_alone_when_alias_unchanged(
         self, monkeypatch: pytest.MonkeyPatch, requested_alias: str | None
     ):
-        """An update that keeps or omits the alias must not touch the secret manager."""
         from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
 
         mock_secret_manager: Final = self._configure_secret_manager(monkeypatch, stored_value="sk-stored-key")
@@ -589,7 +586,6 @@ class TestKeyUpdatedSecretManagerSync:
 
     @pytest.mark.asyncio
     async def test_updated_hook_skips_rename_when_secret_missing(self, monkeypatch: pytest.MonkeyPatch):
-        """If the key was never stored under its current name there is nothing to move, so no secret is created."""
         from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
 
         mock_secret_manager: Final = self._configure_secret_manager(monkeypatch, stored_value=None)
@@ -607,7 +603,6 @@ class TestKeyUpdatedSecretManagerSync:
     async def test_updated_hook_ignores_alias_change_when_store_virtual_keys_disabled(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        """With store_virtual_keys off, an alias change must not read or write any secret."""
         from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
 
         mock_secret_manager: Final = self._configure_secret_manager(
