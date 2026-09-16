@@ -21,9 +21,6 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_non_python_regex_patterns,
     drop_tool_reference_parts_from_tool_messages,
-    flatten_top_level_schema_combinators,
-    get_tool_call_names,
-    hoist_images_from_tool_messages,
     flatten_combinators_and_drop_non_python_regex_patterns,
     get_tool_call_names,
     hoist_images_from_tool_messages,
@@ -73,19 +70,6 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
-
-
-def _tool_with_flattened_parameters(tool: Mapping[str, object]) -> Mapping[str, object]:
-    function: Final = tool.get("function")
-    if not isinstance(function, dict):
-        return tool
-    parameters: Final = function.get("parameters")
-    if not isinstance(parameters, dict):
-        return tool
-    flattened: Final = flatten_top_level_schema_combinators(parameters)
-    if flattened is parameters:
-        return tool
-    return {**tool, "function": {**function, "parameters": flattened}}  # mutable-ok: request tools are JSON dicts
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -468,8 +452,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         provider: Final = litellm_params.get("custom_llm_provider")
         if not isinstance(tools, list) or provider != "openai":
             return _NO_TOOLS_UPDATE
-        flattened: Final = [  # mutable-ok: request tools are a JSON list
-            _tool_with_flattened_parameters(tool) if isinstance(tool, dict) else tool for tool in tools
+        raw_api_base: Final = litellm_params.get("api_base")
+        sanitize: Final = (
+            flatten_combinators_and_drop_non_python_regex_patterns
+            if self._targets_openai_hosted_endpoint(provider, raw_api_base if isinstance(raw_api_base, str) else None)
+            else drop_non_python_regex_patterns
+        )
+        sanitized: Final = [  # mutable-ok: request tools are a JSON list
+            tool_with_sanitized_parameters(tool, sanitize) if isinstance(tool, dict) else tool for tool in tools
         ]
         return MappingProxyType({"tools": sanitized})
 
