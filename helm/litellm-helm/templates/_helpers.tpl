@@ -63,7 +63,7 @@ migrations Job.
 */}}
 {{- define "litellm.migrationsLabels" -}}
 helm.sh/chart: {{ include "litellm.chart" . }}
-app.kubernetes.io/name: {{ include "litellm.name" . }}-migrations
+app.kubernetes.io/name: {{ printf "%s-migrations" (include "litellm.name" .) | trunc 63 | trimSuffix "-" }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: migrations
 {{- if .Chart.AppVersion }}

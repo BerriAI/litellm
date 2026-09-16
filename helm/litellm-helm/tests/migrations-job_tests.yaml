@@ -380,3 +380,32 @@ tests:
       - equal:
           path: spec.template.metadata.labels["app.kubernetes.io/name"]
           value: litellm-migrations
+
+  - it: should keep the migrations name label within the 63 character limit
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      nameOverride: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      # "litellm.name" already truncates to 63, so appending "-migrations"
+      # afterwards would produce a 71 character value and Kubernetes rejects
+      # any label longer than 63, failing the install.
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-mi
+
+  - it: should not let podLabels put its pods back into the Service selector
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      podLabels:
+        app.kubernetes.io/name: litellm
+    asserts:
+      # podLabels is the same global map the deployment pods use, so an override
+      # of this key would otherwise restore the very selector match this
+      # template exists to break.
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: litellm-migrations
