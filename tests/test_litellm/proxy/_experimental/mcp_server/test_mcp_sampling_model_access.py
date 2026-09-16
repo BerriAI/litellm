@@ -123,7 +123,7 @@ class TestCheckModelAccess:
             "litellm.proxy.auth.auth_checks.can_key_call_model",
             new_callable=AsyncMock,
             side_effect=ProxyException(
-                message="key not allowed to access model. This key can only access models=['gpt-3.5-turbo']. Tried to access claude-3-opus-20240229",
+                message="key not allowed to access model. Tried to access claude-3-opus-20240229",
                 type="key_model_access_denied",
                 param="model",
                 code=401,

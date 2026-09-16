@@ -4059,7 +4059,7 @@ def _can_object_call_model(
             return True
 
     raise ProxyException(
-        message=f"{object_type} not allowed to access model. This {object_type} can only access models={models}. Tried to access {model}",
+        message=f"{object_type} not allowed to access model. Tried to access {model}",
         type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
         param="model",
         code=status.HTTP_403_FORBIDDEN,

@@ -7841,3 +7841,20 @@ async def test_enforced_model_allowlists_reads_every_level_from_cache():
     ]
     assert [list(scope) for scope in personal] == [[], [], [], ["o3"], []]
     assert [list(scope) for scope in without_database] == [["gpt-4o"], ["gpt-4o-mini"]]
+
+def test_model_access_denied_does_not_leak_allowlist():
+    """Verify 403 error does not expose the full model allowlist (#40217)."""
+    import pytest
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+    from litellm.proxy.utils import ProxyException
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="gpt-4o",
+            llm_router=None,
+            models=["gpt-3.5-turbo", "claude-3-5-sonnet"],
+            object_type="key"
+        )
+    assert str(exc_info.value.code) == "403"
+    assert "models=" not in exc_info.value.message
+    assert "Tried to access gpt-4o" in exc_info.value.message
