@@ -3710,6 +3710,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
             "AWS_REGION_NAME",
+            "S3_LOG_PROMPTS_ONLY",
         ],
     )
 
