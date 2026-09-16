@@ -1,0 +1,16 @@
+[
+  {
+    "model_name": "ui-capability-qa",
+    "adaptive": false,
+    "enable_context_window_escalation": false,
+    "escalation_keywords": [],
+    "other_settings_preserved": true
+  },
+  {
+    "model_name": "ui-fuse-qa",
+    "adaptive": false,
+    "enable_context_window_escalation": false,
+    "escalation_keywords": [],
+    "other_settings_preserved": true
+  }
+]
