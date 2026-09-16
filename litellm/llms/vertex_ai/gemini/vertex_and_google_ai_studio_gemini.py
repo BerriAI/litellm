@@ -87,6 +87,7 @@ from ..common_utils import (
     VertexAIError,
     _build_json_schema,
     _build_vertex_schema,
+    _convert_consts_to_enums,
     supports_response_json_schema,
 )
 from ..vertex_llm_base import VertexBase
@@ -610,16 +611,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         for tool in value:
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
-                _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
-
-                if (
-                    "parameters" in _openai_function_object
-                    and _openai_function_object["parameters"] is not None
-                    and isinstance(_openai_function_object["parameters"], dict)
-                ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
-                    _openai_function_object["parameters"] = _build_vertex_schema(_openai_function_object["parameters"])
-
-                openai_function_object = _openai_function_object
+                openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
 
             elif "name" in tool:  # functions list
                 openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)
@@ -679,13 +671,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 _description = openai_function_object.get("description", None)
                 _parameters = openai_function_object.get("parameters", None)
-                if isinstance(_parameters, str) and len(_parameters) == 0:
-                    _parameters = {
-                        "type": "object",
-                    }
                 if _description is not None:
                     gtool_func_declaration["description"] = _description
-                if _parameters is not None:
+                if isinstance(_parameters, dict):
+                    _convert_consts_to_enums(_parameters)
+                    gtool_func_declaration["parameters"] = _build_vertex_schema(_parameters)
+                elif isinstance(_parameters, str) and len(_parameters) == 0:
+                    gtool_func_declaration["parameters"] = {"type": "object"}
+                elif _parameters is not None:
                     gtool_func_declaration["parameters"] = _parameters
                 gtool_func_declarations.append(gtool_func_declaration)
             else:
