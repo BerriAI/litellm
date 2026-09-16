@@ -264,7 +264,7 @@ describe("forecast classifier configuration", () => {
     });
     expect(saved.tiers).toEqual({ SIMPLE: ["efficient"], MEDIUM: ["middle"], REASONING: ["capable"] });
     expect(saved.tier_model_configs).toEqual(stored.tier_model_configs);
-    expect(saved.adaptive).toBe(true);
+    expect(saved.adaptive).toBe(false);
     expect(saved.plan_mode_min_tier).toBe("MEDIUM");
   });
 
