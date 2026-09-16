@@ -69,17 +69,26 @@ def _public_request(
     )
 
 
+def _context(request: LiteLLMMessagesRequest) -> Context:
+    return Context(
+        Route.MESSAGES,
+        provider=request.custom_llm_provider,
+        model=request.model,
+        delivery=Delivery.STREAMING if request.stream else Delivery.COMPLETED,
+    )
+
+
 _DISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
-    context=lambda request: _context(request),
+    context=_context,
     bypass=lambda request: request.kwargs.get("is_async") is True,
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
-    context=lambda request: _context(request),
+    context=_context,
 )
 
 
@@ -105,15 +114,6 @@ async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:
         python=python,
         binding=NATIVE_AMESSAGES,
         native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
-    )
-
-
-def _context(request: LiteLLMMessagesRequest) -> Context:
-    return Context(
-        Route.MESSAGES,
-        provider=request.custom_llm_provider,
-        model=request.model,
-        delivery=Delivery.STREAMING if request.stream else Delivery.COMPLETED,
     )
 
 

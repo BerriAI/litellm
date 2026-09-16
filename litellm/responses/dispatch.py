@@ -62,17 +62,26 @@ def _public_request(
     )
 
 
+def _context(request: LiteLLMResponsesRequest) -> Context:
+    return Context(
+        Route.RESPONSES,
+        provider=request.custom_llm_provider,
+        model=request.model,
+        delivery=Delivery.STREAMING if request.stream else Delivery.COMPLETED,
+    )
+
+
 _DISPATCH: Final = PublicDispatch(
     route=Route.RESPONSES,
     request=lambda args, kwargs: _public_request(_RESPONSES, args, kwargs),
-    context=lambda request: _context(request),
+    context=_context,
     bypass=lambda request: request.kwargs.get("aresponses") is True,
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.RESPONSES,
     request=lambda args, kwargs: _public_request(_ARESPONSES, args, kwargs),
-    context=lambda request: _context(request),
+    context=_context,
 )
 
 
@@ -98,15 +107,6 @@ async def aresponses(*args: object, **kwargs: object) -> ResponsesResult:  # kwa
         python=python,
         binding=NATIVE_ARESPONSES,
         native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
-    )
-
-
-def _context(request: LiteLLMResponsesRequest) -> Context:
-    return Context(
-        Route.RESPONSES,
-        provider=request.custom_llm_provider,
-        model=request.model,
-        delivery=Delivery.STREAMING if request.stream else Delivery.COMPLETED,
     )
 
 
