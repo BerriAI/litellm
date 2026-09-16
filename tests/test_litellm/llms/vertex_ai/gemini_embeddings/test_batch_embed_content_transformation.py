@@ -10,6 +10,7 @@ Covers:
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
@@ -299,10 +300,16 @@ class TestProcessResponse:
             )
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 class TestProcessEmbedContentResponseUsage:
     """Gemini Embedding 2 embedContent usageMetadata must drive spend.
 
     Regression for multimodal calls recording prompt_tokens=0 / spend=$0.
+
+    Uses ``local_model_cost_map`` so the model_cost dict and the ``get_model_info``
+    lru_cache are reset for each test. Cost assertions on this class read the
+    rates back out of ``litellm.model_cost`` rather than pinning vendor prices,
+    per the "never pin third-party facts" rule.
     """
 
     MODEL = "gemini-embedding-2"
@@ -430,7 +437,8 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(0.00012)
+        expected_per_image = litellm.model_cost[self.MODEL]["input_cost_per_image"]
+        assert prompt_cost == pytest.approx(1 * expected_per_image)
 
     def test_file_reference_non_image_not_counted_as_image(self):
         """A files/... ref resolving to a non-image mime must not be image-counted."""
@@ -465,7 +473,8 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(2.0 * 0.00016)
+        expected_per_audio_second = litellm.model_cost[self.MODEL]["input_cost_per_audio_per_second"]
+        assert prompt_cost == pytest.approx(2.0 * expected_per_audio_second)
 
     def test_video_plus_audio_does_not_double_bill_text(self):
         """Video+audio responses must not get video tokens reassigned to text."""
@@ -499,5 +508,10 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        # 1 floor text token at 2e-7 + 2s of video at 7.9e-4 + 2s of audio at 1.6e-4
-        assert prompt_cost == pytest.approx(1 * 2e-7 + 2 * 0.00079 + 2 * 0.00016)
+        rates = litellm.model_cost[self.MODEL]
+        expected = (
+            1 * rates["input_cost_per_token"]
+            + 2 * rates["input_cost_per_video_per_second"]
+            + 2 * rates["input_cost_per_audio_per_second"]
+        )
+        assert prompt_cost == pytest.approx(expected)
