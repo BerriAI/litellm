@@ -1,6 +1,6 @@
-import importlib_metadata
+from importlib.metadata import PackageNotFoundError, version as _version
 
 try:
-    version = importlib_metadata.version("litellm")
-except Exception:
+    version = _version("litellm")
+except PackageNotFoundError:
     version = "unknown"
