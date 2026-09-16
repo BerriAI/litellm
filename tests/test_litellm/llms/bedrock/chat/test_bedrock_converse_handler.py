@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import boto3
@@ -93,7 +94,11 @@ CONVERSE_RESPONSE = {
 
 
 async def _drive_async_completion(
-    *, skip_pre_call_logging: bool, logging_obj, credentials: Credentials = RESOLVED_CREDENTIALS
+    *,
+    skip_pre_call_logging: bool,
+    logging_obj,
+    credentials: Credentials = RESOLVED_CREDENTIALS,
+    outer_dispatch: bool = False,
 ):
     """Run the real `async_completion` with a stubbed transport."""
     import httpx as _httpx
@@ -109,6 +114,9 @@ async def _drive_async_completion(
 
     client.post = post
     client.__class__ = AsyncHTTPHandler
+
+    if outer_dispatch:
+        return await _run(credentials=credentials, acompletion=True, client=client, logging_obj=logging_obj)
 
     return await BedrockConverseLLM().async_completion(
         model="anthropic.claude-sonnet-4-5-v1:0",
@@ -153,6 +161,26 @@ async def test_async_completion_signs_off_the_event_loop(monkeypatch):
 
     response = await _drive_async_completion(
         skip_pre_call_logging=False, logging_obj=MagicMock(), credentials=probe.credentials()
+    )
+    await release
+
+    assert response.choices[0].message.content == "hi"
+    assert probe.served_during_refresh is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rust_enabled", (False, True))
+async def test_python_only_async_dispatch_refreshes_credentials_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, rust_enabled: bool
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setenv("LITELLM_RUST", "1" if rust_enabled else "0")
+    configuration.rust(rust_enabled)
+    probe: Final = EventLoopProbe()
+    release: Final = asyncio.create_task(probe.release_refresh_from_the_loop())
+
+    response: Final = await _drive_async_completion(
+        skip_pre_call_logging=False, logging_obj=MagicMock(), credentials=probe.credentials(), outer_dispatch=True
     )
     await release
 
