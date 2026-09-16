@@ -4,6 +4,8 @@ import os
 from enum import Enum, auto
 from typing import Final
 
+from typing_extensions import assert_never
+
 _TRUE_ENV_VALUES: Final = frozenset({"1", "true", "yes", "on"})
 _GLOBAL_ENV_NAME: Final = "LITELLM_RUST"
 
@@ -55,6 +57,8 @@ def decide(
                 else rollout is Rollout.RUST_OPT_OUT
             )
             return Decision.RUST_WITH_FALLBACK if switch else Decision.PYTHON
+        case _:
+            assert_never(rollout)
 
 
 def decision(rollout: Rollout) -> Decision:
