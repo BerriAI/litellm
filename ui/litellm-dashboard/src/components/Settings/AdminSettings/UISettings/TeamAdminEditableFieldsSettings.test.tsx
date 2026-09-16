@@ -21,7 +21,7 @@ describe("TeamAdminEditableFieldsSettings", () => {
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 
-  it("renders one checkbox per supported field, checked for the enabled ones", () => {
+  it("renders one checkbox per supported field, checked for the enabled ones and named by the field's form label when the dashboard has one", () => {
     renderWithProviders(
       <TeamAdminEditableFieldsSettings
         editableFields={["tpm_limit"]}
@@ -35,7 +35,7 @@ describe("TeamAdminEditableFieldsSettings", () => {
     expect(screen.getByText("1 field enabled")).toBeInTheDocument();
     expect(screen.getByText("Fields a team admin may change")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "max_budget" })).not.toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "tpm_limit" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Tokens per minute Limit (TPM)" })).toBeChecked();
   });
 
   it("saves the list with the field added when an unchecked field is ticked", async () => {
@@ -67,7 +67,7 @@ describe("TeamAdminEditableFieldsSettings", () => {
       />,
     );
 
-    await user.click(screen.getByRole("checkbox", { name: "tpm_limit" }));
+    await user.click(screen.getByRole("checkbox", { name: "Tokens per minute Limit (TPM)" }));
 
     expect(onUpdate).toHaveBeenCalledWith({ team_admin_editable_team_fields: ["max_budget"] });
   });
@@ -84,7 +84,7 @@ describe("TeamAdminEditableFieldsSettings", () => {
       />,
     );
 
-    await user.click(screen.getByRole("checkbox", { name: "tpm_limit" }));
+    await user.click(screen.getByRole("checkbox", { name: "Tokens per minute Limit (TPM)" }));
 
     expect(onUpdate).not.toHaveBeenCalled();
   });

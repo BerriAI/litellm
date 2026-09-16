@@ -39,6 +39,29 @@ export const parseSupportedTeamAdminEditableFields = (uiSettingsFieldSchema: unk
   return items.success ? fieldListSchema.parse(items.data.enum) : [];
 };
 
+const TEAM_ADMIN_FIELD_LABELS: ReadonlyMap<string, string> = new Map([["tpm_limit", "Tokens per minute Limit (TPM)"]]);
+
+export const teamAdminFieldLabel = (field: string): string => TEAM_ADMIN_FIELD_LABELS.get(field) ?? field;
+
+export interface TeamAdminSettingsValues {
+  readonly tpm_limit?: string | number | null;
+}
+
+export interface TeamAdminSettingsChanges {
+  readonly tpm_limit?: number | null;
+}
+
+const numberOrNull = (value: string | number | null | undefined): number | null => {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
+export const teamAdminSettingsChanges = (
+  values: TeamAdminSettingsValues,
+  editableFields: ReadonlySet<string>,
+): TeamAdminSettingsChanges => (editableFields.has("tpm_limit") ? { tpm_limit: numberOrNull(values.tpm_limit) } : {});
+
 export const parseTeamEditAccess = (callerEditAccess: unknown): TeamEditAccess => {
   const parsed = callerEditAccessSchema.safeParse(callerEditAccess);
   if (!parsed.success) return { kind: "none" };

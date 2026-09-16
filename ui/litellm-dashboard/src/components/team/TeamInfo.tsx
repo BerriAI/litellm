@@ -53,7 +53,9 @@ import {
   parseTeamEditAccess,
   TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION,
   TEAM_ADMIN_EDITING_DISABLED_TITLE,
+  type TeamAdminSettingsChanges,
 } from "./teamAdminEditAccess";
+import TeamAdminSettingsForm from "./TeamAdminSettingsForm";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
@@ -862,6 +864,27 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     setMemberToDelete(null);
   };
 
+  const persistTeamUpdate = async (token: string, updateData: Record<string, unknown>) => {
+    await teamUpdateCall(token, updateData);
+    queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+
+    toast.success("Team settings updated successfully");
+    setIsEditing(false);
+    fetchTeamInfo();
+  };
+
+  const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges) => {
+    if (!accessToken) return;
+    setIsTeamSaving(true);
+    try {
+      await persistTeamUpdate(accessToken, { team_id: teamId, ...changes });
+    } catch (error) {
+      console.error("Error updating team:", error);
+    } finally {
+      setIsTeamSaving(false);
+    }
+  };
+
   const handleTeamUpdate = async (values: any) => {
     try {
       if (!accessToken) return;
@@ -1112,12 +1135,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      await teamUpdateCall(accessToken, updateData);
-      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
-
-      toast.success("Team settings updated successfully");
-      setIsEditing(false);
-      fetchTeamInfo();
+      await persistTeamUpdate(accessToken, updateData);
     } catch (error) {
       console.error("Error updating team:", error);
     } finally {
@@ -1134,6 +1152,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   }
 
   const { team_info: info } = teamData;
+
+  const teamAdminSettingsEditor =
+    teamEditAccess.kind === "team_admin" ? (
+      <TeamAdminSettingsForm
+        initialValues={{ tpm_limit: info.tpm_limit }}
+        editableFields={teamEditAccess.editableFields}
+        isSaving={isTeamSaving}
+        onCancel={() => setIsEditing(false)}
+        onSave={saveTeamAdminSettings}
+      />
+    ) : null;
 
   const inheritedMcpServers = computeInheritedGrants(
     info.access_group_mcp_server_ids,
@@ -1347,8 +1376,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             )}
           </div>
 
-          {isEditing && isGuardrailsLoading ? (
-            <div className="p-4">Loading...</div>
+          {isEditing && (teamAdminSettingsEditor !== null || isGuardrailsLoading) ? (
+            teamAdminSettingsEditor ?? <div className="p-4">Loading...</div>
           ) : isEditing ? (
             <TooltipProvider>
               <form onSubmit={(event) => void form.handleSubmit(onTeamUpdateSubmit)(event)}>
