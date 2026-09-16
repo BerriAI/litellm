@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_DailyGlobalSpend" (
     "api_requests" BIGINT NOT NULL DEFAULT 0,
     "successful_requests" BIGINT NOT NULL DEFAULT 0,
     "failed_requests" BIGINT NOT NULL DEFAULT 0,
+    "total_response_time_ms" BIGINT NOT NULL DEFAULT 0,
+    "timed_requests" BIGINT NOT NULL DEFAULT 0,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 

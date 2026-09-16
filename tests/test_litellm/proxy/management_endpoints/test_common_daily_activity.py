@@ -1771,6 +1771,10 @@ async def test_get_daily_activity_aggregated_serves_closed_days_from_the_global_
     ]
     _seed_daily_user_spend(_aggregated_postgresql, rows)
     with _aggregated_postgresql.cursor() as cur:
+        cur.execute(
+            'UPDATE "LiteLLM_DailyUserSpend" SET total_response_time_ms = prompt_tokens * 25, '
+            "timed_requests = api_requests"
+        )
         cur.execute(_GLOBAL_SPEND_MIGRATION.read_text())  # pyright: ignore[reportArgumentType]  # DDL literal
         cur.execute(
             re.sub(r"\$(\d+)", r"%(p\1)s", RECONCILE_DAY_SQL),  # pyright: ignore[reportArgumentType]  # $N -> psycopg
@@ -1805,6 +1809,8 @@ async def test_get_daily_activity_aggregated_serves_closed_days_from_the_global_
     assert global_sql[0].count('FROM "LiteLLM_DailyUserSpend"') == 3
     assert from_global.model_dump() == from_per_key.model_dump()
     assert from_global.metadata.total_spend == pytest.approx(2 * sum(float(i + 1) for i in range(n_keys)))
+    assert from_global.metadata.total_response_time_ms == 2 * n_keys * 10 * 25
+    assert from_global.metadata.total_timed_requests == 2 * n_keys
     assert {day.date.isoformat() for day in from_global.results} == {"2026-06-01", "2026-06-02"}
     assert len(from_global.results[0].breakdown.api_keys) == USAGE_TOP_API_KEYS_LIMIT
     assert set(from_global.results[0].breakdown.model_groups) == {"gpt-5", "claude"}
