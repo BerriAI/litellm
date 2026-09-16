@@ -155,6 +155,7 @@ class _GroupingSetsRow(SimpleNamespace):
     mcp_namespaced_tool_name: str | None
     endpoint: str | None
     group_level: int
+    distinct_api_keys: int | None
     spend: float | None
     prompt_tokens: int | None
     completion_tokens: int | None
@@ -800,7 +801,8 @@ def _build_aggregated_sql_query(
             (GROUPING(date) << 6) | {_API_KEY_ROLLED_UP_BIT}
                 | GROUPING(model, {_MODEL_GROUP_EXPR},
                            custom_llm_provider, mcp_namespaced_tool_name,
-                           endpoint) AS group_level,{metric_select}
+                           endpoint) AS group_level,
+            NULL::bigint AS distinct_api_keys,{metric_select}
         FROM "{pg_table}"
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
@@ -814,7 +816,7 @@ def _build_aggregated_sql_query(
         ))
         UNION ALL
         (WITH top_api_keys AS (
-            SELECT api_key
+            SELECT api_key, COUNT(*) OVER () AS distinct_api_keys
             FROM "{pg_table}"
             WHERE {where_clause} AND api_key <> {sentinel_param}
             GROUP BY api_key
@@ -831,9 +833,10 @@ def _build_aggregated_sql_query(
             endpoint,
             GROUPING(date, api_key, model, {_MODEL_GROUP_EXPR},
                      custom_llm_provider, mcp_namespaced_tool_name,
-                     endpoint) AS group_level,{metric_select}
-        FROM "{pg_table}"
-        WHERE {where_clause} AND api_key IN (SELECT api_key FROM top_api_keys)
+                     endpoint) AS group_level,
+            MAX(top_api_keys.distinct_api_keys) AS distinct_api_keys,{metric_select}
+        FROM "{pg_table}" JOIN top_api_keys USING (api_key)
+        WHERE {where_clause}
         GROUP BY GROUPING SETS (
             (date, api_key),
             (date, model, api_key),
@@ -1398,6 +1401,7 @@ async def get_daily_activity_aggregated(
         )
 
         records: Final = [_GroupingSetsRow(**row) for row in (raw_rows or ())]
+        total_api_keys: Final = next((r.distinct_api_keys for r in records if r.distinct_api_keys is not None), 0)
 
         # The grouping-sets dispatcher places each row directly in its bucket
         # using the row's GROUPING() bitmask. No Python-side summing needed.
@@ -1452,6 +1456,7 @@ async def get_daily_activity_aggregated(
                 total_pages=1,
                 has_more=False,
                 api_key_limit=USAGE_TOP_API_KEYS_LIMIT,
+                total_api_keys=total_api_keys,
             ),
         )
 

@@ -105,6 +105,11 @@ class DailySpendMetadata(BaseModel):
         description="When set, api_keys and every api_key_breakdown list at most this many keys, "
         "ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
     )
+    total_api_keys: int | None = Field(
+        default=None,
+        description="Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key "
+        "lists are truncated to the highest-spend keys.",
+    )
 
 
 class SpendAnalyticsPaginatedResponse(BaseModel):

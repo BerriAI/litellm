@@ -27504,6 +27504,11 @@ export interface components {
              */
             page: number;
             /**
+             * Total Api Keys
+             * @description Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.
+             */
+            total_api_keys?: number | null;
+            /**
              * Total Api Requests
              * @default 0
              */
