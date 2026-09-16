@@ -981,7 +981,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     # estimate; floor it there again so a row carrying a
                     # large base64 audio payload cannot slide the batch
                     # under the TPM limit.
-                    if messages_contain_input_audio_content_blocks((entry.get("body") or {}).get("messages")):
+                    entry_body = entry.get("body") if isinstance(entry, dict) else None
+                    if isinstance(entry_body, dict) and messages_contain_input_audio_content_blocks(
+                        entry_body.get("messages")
+                    ):
                         entry_total_tokens = max(entry_total_tokens, _estimate_batch_entry_tokens(raw_line))
                 except Exception:
                     entry_total_tokens = _estimate_batch_entry_tokens(raw_line)
