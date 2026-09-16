@@ -852,9 +852,10 @@ async def test_completed_event_without_usage_counts_tool_input_deltas(tool_delta
 
 
 @pytest.mark.asyncio
-async def test_completed_event_with_a_dict_response_still_gets_the_usage_estimate():
+async def test_completed_event_with_a_dict_response_is_typed_and_billed():
     """transform_streaming_response can model_construct a terminal event whose
-    response stays a plain dict; the estimate must fill it without raising."""
+    response stays a plain dict; the iterator must type it so the estimated
+    usage reaches the cost stamping path."""
     dict_response: Final = {
         "id": "resp_dict",
         "model": "gpt-4o-mini",
@@ -874,12 +875,14 @@ async def test_completed_event_with_a_dict_response_still_gets_the_usage_estimat
 
     config: Final = Mock(spec=BaseResponsesAPIConfig)
     config.transform_streaming_response.side_effect = _transform
+    logging_obj: Final = _logging_obj_stub()
+    logging_obj._response_cost_calculator.return_value = 0.000704
     iterator: Final = _make_iterator(
         sse_events=[
             _sse_event({"type": "response.output_text.delta", "delta": "hello world"}),
             _sse_event({"type": "response.completed", "response": {}}),
         ],
-        logging_obj=_logging_obj_stub(),
+        logging_obj=logging_obj,
         config=config,
         request_data={"input": "count these input tokens please"},
     )
@@ -887,7 +890,11 @@ async def test_completed_event_with_a_dict_response_still_gets_the_usage_estimat
     async for _ in iterator:
         pass
 
-    usage: Final = iterator.completed_response.response["usage"]
+    completed_response: Final = iterator.completed_response.response
+    assert isinstance(completed_response, ResponsesAPIResponse)
+    usage: Final = completed_response.usage
     assert usage is not None
     assert usage.input_tokens > 0
     assert usage.output_tokens > 0
+    assert usage.cost == pytest.approx(0.000704)
+    logging_obj._response_cost_calculator.assert_any_call(result=completed_response)

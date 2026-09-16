@@ -429,25 +429,31 @@ class BaseResponsesAPIStreamingIterator:
                 ):
                     self.completed_response = openai_responses_api_chunk
                     _response_obj: Final[object] = getattr(openai_responses_api_chunk, "response", None)
-                    if _chunk_type in (
-                        openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-                        openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    _typed_response: Final[ResponsesAPIResponse | None] = (
+                        ResponsesAPIResponse.model_construct(**_response_obj)  # pyright: ignore[reportUnknownArgumentType]  # the model_constructed terminal event leaves response as an untyped dict
+                        if isinstance(_response_obj, dict)
+                        else _response_obj
+                        if isinstance(_response_obj, ResponsesAPIResponse)
+                        else None
+                    )
+                    if (
+                        _typed_response is not None
+                        and _chunk_type
+                        in (
+                            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                        )
+                        and _typed_response.usage is None
                     ):
-                        if isinstance(_response_obj, ResponsesAPIResponse) and _response_obj.usage is None:
-                            _response_obj.usage = _estimate_usage_safely(
-                                self.model or "",
-                                self.request_data.get("input"),
-                                self.request_data,
-                                self._generated_content + self._generated_tool_arguments,
-                            )
-                        elif isinstance(_response_obj, dict) and _response_obj.get("usage") is None:  # pyright: ignore[reportUnknownMemberType]  # the model_constructed terminal event leaves response as an untyped dict
-                            _response_obj["usage"] = _estimate_usage_safely(
-                                self.model or "",
-                                self.request_data.get("input"),
-                                self.request_data,
-                                self._generated_content + self._generated_tool_arguments,
-                            )
-                    _stamp_responses_usage_cost(getattr(openai_responses_api_chunk, "response", None), self.logging_obj)
+                        _typed_response.usage = _estimate_usage_safely(
+                            self.model or "",
+                            self.request_data.get("input"),
+                            self.request_data,
+                            self._generated_content + self._generated_tool_arguments,
+                        )
+                    if _typed_response is not None and _typed_response is not _response_obj:
+                        openai_responses_api_chunk.response = _typed_response  # pyright: ignore[reportAttributeAccessIssue]  # reached only on the dict path, which only response-carrying terminal events produce
+                    _stamp_responses_usage_cost(_typed_response, self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
