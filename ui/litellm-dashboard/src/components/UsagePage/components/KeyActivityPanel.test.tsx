@@ -1,5 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "@/../tests/test-utils";
 
 import type { ModelActivityData } from "../types";
 import KeyActivityPanel from "./KeyActivityPanel";
@@ -38,15 +40,18 @@ const keyMetrics: Record<string, ModelActivityData> = {
   "hash-bob": activity("bob-key", "bob@example.com", "user-bob"),
 };
 
+const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
 describe("KeyActivityPanel", () => {
   it("renders every key and the full count before searching", () => {
-    render(<KeyActivityPanel keyMetrics={keyMetrics} />);
+    renderWithProviders(<KeyActivityPanel keyMetrics={keyMetrics} />);
     expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-alicehash-bob");
     expect(screen.getByText("Showing 2 of 2 keys")).toBeInTheDocument();
   });
 
   it("narrows the rendered keys to those matching the user email", () => {
-    render(<KeyActivityPanel keyMetrics={keyMetrics} />);
+    renderWithProviders(<KeyActivityPanel keyMetrics={keyMetrics} />);
     fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "bob@example.com" } });
     expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-bob");
     expect(screen.getByTestId("rendered-keys")).not.toHaveTextContent("hash-alice");
@@ -54,18 +59,37 @@ describe("KeyActivityPanel", () => {
   });
 
   it("shows an empty state instead of zeroed metrics when nothing matches", () => {
-    render(<KeyActivityPanel keyMetrics={keyMetrics} />);
+    renderWithProviders(<KeyActivityPanel keyMetrics={keyMetrics} />);
     fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "carol" } });
     expect(screen.queryByTestId("rendered-keys")).not.toBeInTheDocument();
     expect(screen.getByText('No keys match "carol" in this date range')).toBeInTheDocument();
   });
 
   it("clears the search and restores every key", () => {
-    render(<KeyActivityPanel keyMetrics={keyMetrics} />);
+    renderWithProviders(<KeyActivityPanel keyMetrics={keyMetrics} />);
     fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "user-alice" } });
     expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-alice");
     fireEvent.click(screen.getByLabelText("Clear key search"));
     expect(screen.getByLabelText("Search keys")).toHaveValue("");
     expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-alicehash-bob");
+  });
+
+  it("applies the search from ?key_search= on load", () => {
+    renderWithProviders(<KeyActivityPanel keyMetrics={keyMetrics} />, { searchParams: "?key_search=bob" });
+    expect(screen.getByLabelText("Search keys")).toHaveValue("bob");
+    expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-bob");
+    expect(screen.getByTestId("rendered-keys")).not.toHaveTextContent("hash-alice");
+    expect(screen.getByText("Showing 1 of 2 keys")).toBeInTheDocument();
+  });
+
+  it("writes ?key_search= while typing and drops it when the search is cleared", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<KeyActivityPanel keyMetrics={keyMetrics} />, { onUrlUpdate });
+
+    fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "user-alice" } });
+    await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("key_search")).toBe("user-alice"));
+
+    fireEvent.click(screen.getByLabelText("Clear key search"));
+    await waitFor(() => expect(lastUrl(onUrlUpdate)?.has("key_search")).toBe(false));
   });
 });

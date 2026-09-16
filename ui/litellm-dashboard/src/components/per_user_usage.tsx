@@ -1,9 +1,19 @@
-import React, { useState, useEffect, useCallback } from "react";
-import type { ColumnDef, OnChangeFn, PaginationState } from "@tanstack/react-table";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { functionalUpdate, type ColumnDef, type OnChangeFn, type PaginationState } from "@tanstack/react-table";
 import { BarChart } from "@/components/shared/charts";
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { perUserAnalyticsCall } from "./networking";
+
+const PER_USER_TABS = ["details", "distribution"] as const;
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["user_id"],
+  defaultSort: { id: "user_id", desc: false },
+  defaultPageSize: 50,
+  filterColumns: [],
+  keyPrefix: "per_user_",
+};
 
 interface PerUserMetrics {
   user_id: string;
@@ -41,15 +51,18 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
     total_pages: 0,
   });
 
-  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
-  const [pagedTags, setPagedTags] = useState(selectedTags);
-
-  if (pagedTags !== selectedTags) {
-    setPagedTags(selectedTags);
-    setPagination((prev) => (prev.pageIndex === 0 ? prev : { ...prev, pageIndex: 0 }));
-  }
+  const [activeTab, setActiveTab] = useUrlTab(PER_USER_TABS, "details", "per_user_tab");
+  const { pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
+  const tagsKey = JSON.stringify(selectedTags);
+  const pagedTagsKeyRef = useRef(tagsKey);
 
   useEffect(() => {
+    const tagsChanged = pagedTagsKeyRef.current !== tagsKey;
+    pagedTagsKeyRef.current = tagsKey;
+    if (tagsChanged && pagination.pageIndex > 0) {
+      onPaginationChange({ ...pagination, pageIndex: 0 });
+      return;
+    }
     if (!accessToken) return;
 
     let stale = false;
@@ -57,7 +70,7 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
       accessToken,
       pagination.pageIndex + 1,
       pagination.pageSize,
-      pagedTags.length > 0 ? pagedTags : undefined,
+      selectedTags.length > 0 ? selectedTags : undefined,
     )
       .then((response) => {
         if (stale) return;
@@ -68,14 +81,17 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
     return () => {
       stale = true;
     };
-  }, [accessToken, pagedTags, pagination]);
+  }, [accessToken, selectedTags, tagsKey, pagination, onPaginationChange]);
 
-  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>((updaterOrValue) => {
-    setPagination((prev) => {
-      const next = typeof updaterOrValue === "function" ? updaterOrValue(prev) : updaterOrValue;
-      return next.pageSize === prev.pageSize ? next : { pageIndex: 0, pageSize: next.pageSize };
-    });
-  }, []);
+  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>(
+    (updaterOrValue) => {
+      onPaginationChange((prev) => {
+        const next = functionalUpdate(updaterOrValue, prev);
+        return next.pageSize === prev.pageSize ? next : { pageIndex: 0, pageSize: next.pageSize };
+      });
+    },
+    [onPaginationChange],
+  );
 
   const columns: ColumnDef<PerUserMetrics>[] = [
     {
@@ -124,7 +140,7 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
       <h3 className="text-lg font-medium text-foreground">Per User Usage</h3>
       <p className="text-sm text-muted-foreground">Individual developer usage metrics</p>
 
-      <Tabs defaultValue="details">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="details" className="flex-none rounded-none px-4 py-2">
             User Details

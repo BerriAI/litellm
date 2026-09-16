@@ -1,7 +1,14 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { renderWithProviders } from "@/../tests/test-utils";
 import UserAgentActivity from "./user_agent_activity";
 import * as networking from "./networking";
+
+const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
 
 // Mock the networking module
 vi.mock("./networking", () => ({
@@ -110,7 +117,7 @@ describe("UserAgentActivity", () => {
   });
 
   it("should render summary cards with user agent data", async () => {
-    render(<UserAgentActivity {...defaultProps} />);
+    renderWithProviders(<UserAgentActivity {...defaultProps} />);
 
     // Wait for data to load
     await waitFor(() => {
@@ -135,7 +142,7 @@ describe("UserAgentActivity", () => {
   });
 
   it("should switch between DAU, WAU, and MAU tabs", async () => {
-    render(<UserAgentActivity {...defaultProps} />);
+    renderWithProviders(<UserAgentActivity {...defaultProps} />);
 
     // Wait for data to load
     await waitFor(() => {
@@ -167,7 +174,7 @@ describe("UserAgentActivity", () => {
   });
 
   it("should display filter dropdown and allow tag selection", async () => {
-    render(<UserAgentActivity {...defaultProps} />);
+    renderWithProviders(<UserAgentActivity {...defaultProps} />);
 
     // Wait for tags to load
     await waitFor(() => {
@@ -217,7 +224,7 @@ describe("UserAgentActivity", () => {
   };
 
   it("keeps every tab panel mounted so switching tabs does not reset their state", async () => {
-    render(<UserAgentActivity {...defaultProps} />);
+    renderWithProviders(<UserAgentActivity {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockTagDauCall).toHaveBeenCalled();
@@ -243,7 +250,7 @@ describe("UserAgentActivity", () => {
       ],
     });
 
-    render(<UserAgentActivity {...defaultProps} />);
+    renderWithProviders(<UserAgentActivity {...defaultProps} />);
 
     await waitFor(() => {
       expect(
@@ -265,7 +272,7 @@ describe("UserAgentActivity", () => {
       ],
     });
 
-    render(<UserAgentActivity {...defaultProps} />);
+    renderWithProviders(<UserAgentActivity {...defaultProps} />);
 
     await waitFor(() => {
       expect(
@@ -284,7 +291,7 @@ describe("UserAgentActivity", () => {
       ],
     });
 
-    render(<UserAgentActivity {...defaultProps} />);
+    renderWithProviders(<UserAgentActivity {...defaultProps} />);
 
     await waitFor(() => {
       expect(
@@ -293,5 +300,122 @@ describe("UserAgentActivity", () => {
     });
 
     expectStackedTwoCategoryChart(chartForTitle("Monthly Active Users - Last 7 Months"), "Month 1");
+  });
+
+  describe("URL state", () => {
+    const CHROME = "User-Agent: Chrome/1.0";
+    const FIREFOX = "User-Agent: Firefox/2.0";
+
+    it("opens the outer tab named by ?ua_tab=", async () => {
+      renderWithProviders(<UserAgentActivity {...defaultProps} />, { searchParams: "?ua_tab=per-user" });
+
+      expect(await screen.findByRole("tab", { name: "Per User Usage (Last 30 Days)" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(screen.getByRole("tab", { name: "DAU/WAU/MAU" })).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("opens the period named by ?ua_period=", async () => {
+      renderWithProviders(<UserAgentActivity {...defaultProps} />, { searchParams: "?ua_period=wau" });
+
+      expect(await screen.findByRole("tab", { name: "WAU" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("tab", { name: "DAU" })).toHaveAttribute("aria-selected", "false");
+    });
+
+    it("falls back to the default tabs and clears unknown ?ua_tab= and ?ua_period= values", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      render(<UserAgentActivity {...defaultProps} />, {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <NuqsTestingAdapter
+            searchParams={`?ua_tab=cohorts&ua_period=yearly&agents=${encodeURIComponent(CHROME)}`}
+            onUrlUpdate={onUrlUpdate}
+            hasMemory
+            resetUrlUpdateQueueOnMount={false}
+          >
+            {children}
+          </NuqsTestingAdapter>
+        ),
+      });
+
+      expect(screen.getByRole("tab", { name: "DAU/WAU/MAU" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("tab", { name: "DAU" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("tab", { name: "WAU" })).toHaveAttribute("aria-selected", "false");
+      expect(screen.getByRole("tab", { name: "MAU" })).toHaveAttribute("aria-selected", "false");
+      await waitFor(() => {
+        expect(lastUrl(onUrlUpdate)?.has("ua_tab")).toBe(false);
+        expect(lastUrl(onUrlUpdate)?.has("ua_period")).toBe(false);
+      });
+      expect(lastUrl(onUrlUpdate)?.get("agents")).toBe(CHROME);
+    });
+
+    it("writes ?ua_period= when a period tab is clicked and ?ua_tab= when the outer tab changes", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UserAgentActivity {...defaultProps} />, { onUrlUpdate });
+
+      await user.click(screen.getByRole("tab", { name: "MAU" }));
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("ua_period")).toBe("mau"));
+      expect(screen.getByRole("tab", { name: "MAU" })).toHaveAttribute("aria-selected", "true");
+
+      await user.click(screen.getByRole("tab", { name: "Per User Usage (Last 30 Days)" }));
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("ua_tab")).toBe("per-user"));
+      expect(lastUrl(onUrlUpdate)?.get("ua_period")).toBe("mau");
+    });
+
+    it("reads the agent filter from ?agents= and sends it with every fetch", async () => {
+      renderWithProviders(<UserAgentActivity {...defaultProps} />, {
+        searchParams: { agents: `${CHROME},${FIREFOX}` },
+      });
+
+      await waitFor(() => {
+        expect(mockTagDauCall).toHaveBeenCalledWith("test-token", expect.any(Date), undefined, [CHROME, FIREFOX]);
+      });
+      expect(mockTagWauCall).toHaveBeenCalledWith("test-token", expect.any(Date), undefined, [CHROME, FIREFOX]);
+      expect(mockTagMauCall).toHaveBeenCalledWith("test-token", expect.any(Date), undefined, [CHROME, FIREFOX]);
+      await waitFor(() => {
+        expect(mockUserAgentSummaryCall).toHaveBeenCalledWith(
+          "test-token",
+          defaultProps.dateValue.from,
+          defaultProps.dateValue.to,
+          [CHROME, FIREFOX],
+        );
+      });
+      expect(screen.getByLabelText("Chrome/1.0")).toBeInTheDocument();
+      expect(screen.getByLabelText("Firefox/2.0")).toBeInTheDocument();
+    });
+
+    it("clearing the agent filter drops ?agents= and refetches unfiltered", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UserAgentActivity {...defaultProps} />, { searchParams: { agents: CHROME }, onUrlUpdate });
+
+      await waitFor(() => {
+        expect(mockTagDauCall).toHaveBeenCalledWith("test-token", expect.any(Date), undefined, [CHROME]);
+      });
+
+      await user.click(screen.getByLabelText("Clear user agent filter"));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.has("agents")).toBe(false));
+      await waitFor(() => {
+        expect(mockTagDauCall).toHaveBeenLastCalledWith("test-token", expect.any(Date), undefined, undefined);
+      });
+      expect(screen.queryByLabelText("Chrome/1.0")).not.toBeInTheDocument();
+    });
+
+    it("selecting an agent writes ?agents=", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<UserAgentActivity {...defaultProps} />, { onUrlUpdate });
+
+      await waitFor(() => expect(mockTagDistinctCall).toHaveBeenCalled());
+      await user.click(screen.getByLabelText("All User Agents"));
+      await user.click(await screen.findByRole("option", { name: "Firefox/2.0" }));
+
+      await waitFor(() => expect(lastUrl(onUrlUpdate)?.get("agents")).toBe(FIREFOX));
+      await waitFor(() => {
+        expect(mockTagDauCall).toHaveBeenLastCalledWith("test-token", expect.any(Date), undefined, [FIREFOX]);
+      });
+    });
   });
 });

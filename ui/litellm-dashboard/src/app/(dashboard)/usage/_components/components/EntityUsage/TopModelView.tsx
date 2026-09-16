@@ -2,7 +2,7 @@ import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useState } from "react";
+import { parseAsStringLiteral, useQueryState } from "nuqs";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 type TopModel = {
@@ -17,12 +17,22 @@ interface TopModelViewProps {
   topModels: TopModel[];
   topModelsLimit: number;
   setTopModelsLimit: (limit: number) => void;
+  viewModeUrlKey?: string;
 }
 
 export const TOP_MODEL_LIMITS = [5, 10, 25, 50];
 
-export default function TopModelView({ topModels, topModelsLimit, setTopModelsLimit }: TopModelViewProps) {
-  const [modelViewMode, setModelViewMode] = useState<"chart" | "table">("table");
+const VIEW_MODES = ["table", "chart"] as const;
+type ViewMode = (typeof VIEW_MODES)[number];
+const viewModeParser = parseAsStringLiteral(VIEW_MODES).withDefault("table");
+
+export default function TopModelView({
+  topModels,
+  topModelsLimit,
+  setTopModelsLimit,
+  viewModeUrlKey = "top_models_view",
+}: TopModelViewProps) {
+  const [modelViewMode, setModelViewMode] = useQueryState(viewModeUrlKey, viewModeParser);
 
   const columns = [
     {
@@ -69,7 +79,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
             ))}
           </TabsList>
         </Tabs>
-        <Tabs value={modelViewMode} onValueChange={(value: string) => setModelViewMode(value as "chart" | "table")}>
+        <Tabs value={modelViewMode} onValueChange={(value: ViewMode) => void setModelViewMode(value)}>
           <TabsList aria-label="Top model view mode">
             <TabsTrigger value="table" className="flex-none px-3">
               Table View
