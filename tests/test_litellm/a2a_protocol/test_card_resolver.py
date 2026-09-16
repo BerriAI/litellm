@@ -5,8 +5,10 @@ Tests that the card resolver tries both old and new well-known paths.
 """
 
 from types import SimpleNamespace
+from typing import Any, Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from litellm.a2a_protocol.card_resolver import (
@@ -140,42 +142,69 @@ def test_normalize_agent_card_interfaces_downgrades_miscased_interfaces_to_the_0
     assert card.supported_interfaces[0].protocol_version == "1.0"
 
 
+_FOUNDRY_BASE_URL: Final = "https://foundry.example.com/a2a"
+
+_FOUNDRY_CARD_JSON: Final = {
+    "name": "Foundry Agent",
+    "description": "A test agent",
+    "url": "https://foundry.example.com/a2a",
+    "version": "1.0",
+    "capabilities": {"streaming": True},
+    "defaultInputModes": ["text"],
+    "defaultOutputModes": ["text"],
+    "skills": [{"id": "chat", "name": "chat", "description": "Chat", "tags": ["chat"]}],
+    "protocolVersion": "1.0",
+}
+
+
+class _FakeHttpxClient:
+    """Answers GETs from a path -> (status, body) map and records the path of each call."""
+
+    def __init__(self, base_url: str, responses: dict[str, tuple[int, dict[str, Any]]]) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._responses = responses
+        self.calls: list[str] = []
+
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        path: Final = url.removeprefix(self._base_url)
+        self.calls.append(path)
+        status_code, body = self._responses[path]
+        return httpx.Response(status_code, json=body, request=httpx.Request("GET", url))
+
+
 @pytest.mark.asyncio
 async def test_card_resolver_falls_through_to_the_foundry_card_path():
     """Microsoft Foundry agents serve their card only at /agentCard/v1.0 and 404 both well-known
     paths, so discovery must reach that path after the two well-known probes fail."""
-    mock_agent_card = MagicMock()
-    paths_called = []
+    httpx_client = _FakeHttpxClient(
+        base_url=_FOUNDRY_BASE_URL,
+        responses={
+            "/.well-known/agent-card.json": (404, {"error": "not found"}),
+            "/.well-known/agent.json": (404, {"error": "not found"}),
+            "/agentCard/v1.0": (200, dict(_FOUNDRY_CARD_JSON)),
+        },
+    )
 
-    async def mock_parent_get_agent_card(self, relative_card_path=None, http_kwargs=None):
-        paths_called.append(relative_card_path)
-        if relative_card_path == "/agentCard/v1.0":
-            return mock_agent_card
-        raise Exception("404 Not Found")
+    resolver = LiteLLMA2ACardResolver(httpx_client=httpx_client, base_url=_FOUNDRY_BASE_URL)
+    result = await resolver.get_agent_card()
 
-    with patch.object(LiteLLMA2ACardResolver.__bases__[0], "get_agent_card", mock_parent_get_agent_card):
-        resolver = LiteLLMA2ACardResolver(httpx_client=MagicMock(), base_url="https://foundry.example.com/a2a")
-        result = await resolver.get_agent_card()
-
-    assert paths_called == ["/.well-known/agent-card.json", "/.well-known/agent.json", "/agentCard/v1.0"]
-    assert result is mock_agent_card
+    assert httpx_client.calls == ["/.well-known/agent-card.json", "/.well-known/agent.json", "/agentCard/v1.0"]
+    assert result.name == "Foundry Agent"
+    assert result.supported_interfaces[0].url == "https://foundry.example.com/a2a"
 
 
 @pytest.mark.asyncio
 async def test_card_resolver_explicit_path_skips_the_probes():
-    mock_agent_card = MagicMock()
-    paths_called = []
+    httpx_client = _FakeHttpxClient(
+        base_url=_FOUNDRY_BASE_URL,
+        responses={"/agentCard/v1.0": (200, dict(_FOUNDRY_CARD_JSON))},
+    )
 
-    async def mock_parent_get_agent_card(self, relative_card_path=None, http_kwargs=None):
-        paths_called.append(relative_card_path)
-        return mock_agent_card
+    resolver = LiteLLMA2ACardResolver(httpx_client=httpx_client, base_url=_FOUNDRY_BASE_URL)
+    result = await resolver.get_agent_card(relative_card_path="agentCard/v1.0")
 
-    with patch.object(LiteLLMA2ACardResolver.__bases__[0], "get_agent_card", mock_parent_get_agent_card):
-        resolver = LiteLLMA2ACardResolver(httpx_client=MagicMock(), base_url="https://foundry.example.com/a2a")
-        result = await resolver.get_agent_card(relative_card_path="agentCard/v1.0")
-
-    assert paths_called == ["agentCard/v1.0"]
-    assert result is mock_agent_card
+    assert httpx_client.calls == ["/agentCard/v1.0"]
+    assert result.name == "Foundry Agent"
 
 
 @pytest.mark.asyncio
@@ -184,18 +213,21 @@ async def test_card_resolver_names_every_probed_path_when_discovery_fails():
     error would hide the auth failure that actually explains the outage."""
     from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError
 
-    async def mock_parent_get_agent_card(self, relative_card_path=None, http_kwargs=None):
-        if relative_card_path == "/.well-known/agent.json":
-            raise Exception("HTTP 401 Unauthorized")
-        raise Exception("HTTP 404 Not Found")
+    httpx_client = _FakeHttpxClient(
+        base_url=_FOUNDRY_BASE_URL,
+        responses={
+            "/.well-known/agent-card.json": (404, {"error": "not found"}),
+            "/.well-known/agent.json": (401, {"error": "unauthorized"}),
+            "/agentCard/v1.0": (404, {"error": "not found"}),
+        },
+    )
 
-    with patch.object(LiteLLMA2ACardResolver.__bases__[0], "get_agent_card", mock_parent_get_agent_card):
-        resolver = LiteLLMA2ACardResolver(httpx_client=MagicMock(), base_url="https://foundry.example.com/a2a")
-        with pytest.raises(A2AAgentCardDiscoveryError) as raised:
-            await resolver.get_agent_card()
+    resolver = LiteLLMA2ACardResolver(httpx_client=httpx_client, base_url=_FOUNDRY_BASE_URL)
+    with pytest.raises(A2AAgentCardDiscoveryError) as raised:
+        await resolver.get_agent_card()
 
     message = str(raised.value)
-    assert "https://foundry.example.com/a2a" in message
-    assert "/.well-known/agent-card.json (HTTP 404 Not Found)" in message
-    assert "/.well-known/agent.json (HTTP 401 Unauthorized)" in message
-    assert "/agentCard/v1.0 (HTTP 404 Not Found)" in message
+    assert _FOUNDRY_BASE_URL in message
+    assert "/.well-known/agent-card.json (" in message and "HTTP 404" in message
+    assert "/.well-known/agent.json (" in message and "HTTP 401" in message
+    assert "/agentCard/v1.0 (" in message

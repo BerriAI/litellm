@@ -67,14 +67,7 @@ def _resolve_config_secret(value: object) -> str | None:
 
 
 def get_azure_ai_agent_entra_token(litellm_params: Mapping[str, object]) -> str:
-    """
-    Mint the Entra ID bearer for a Microsoft Foundry agent endpoint from the agent's own `litellm_params`.
-
-    Unlike the `azure` provider's `get_azure_ad_token`, this never falls back to the process-wide
-    `AZURE_*` environment variables: only the credentials registered on the agent (literal values or
-    `os.environ/` references) may authenticate a call to that agent's URL. Foundry agents accept only
-    the `https://ai.azure.com/.default` scope, so that scope applies unless `azure_scope` is set.
-    """
+    """Mints the Entra bearer from the agent's own litellm_params, never from process-wide AZURE_* env vars."""
     from litellm.llms.azure.common_utils import (
         get_azure_ad_token_from_entra_id,
         get_azure_ad_token_from_oidc,
