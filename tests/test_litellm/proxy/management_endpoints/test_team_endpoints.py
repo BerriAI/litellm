@@ -541,6 +541,50 @@ async def test_update_team_rejects_a_duration_that_never_advances(
     mock_find_unique.assert_not_awaited()
 
 
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_set_budget_reset_at_treats_a_blank_duration_as_unset(blank):
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    data = UpdateTeamRequest.model_construct(team_id="team-1", budget_duration=blank)
+    updated_kv = {"budget_duration": blank}
+
+    persisted = _set_budget_reset_at(data, updated_kv)
+
+    assert persisted["budget_duration"] is None
+    assert persisted["budget_reset_at"] is None
+    assert updated_kv == {"budget_duration": blank}
+    assert data.budget_duration == blank
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_create_persistence_drops_blank_budget_duration_without_mutating_input(blank):
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _persistence_values_for_budget_duration,
+    )
+
+    dumped = {"team_alias": "blank-duration-team", "budget_duration": blank, "max_budget": 10}
+
+    persisted = _persistence_values_for_budget_duration(dumped, blank)
+
+    assert "budget_duration" not in persisted
+    assert persisted["team_alias"] == "blank-duration-team"
+    assert dumped == {"team_alias": "blank-duration-team", "budget_duration": blank, "max_budget": 10}
+
+
+def test_create_persistence_keeps_a_usable_budget_duration_without_mutating_input():
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _persistence_values_for_budget_duration,
+    )
+
+    dumped = {"team_alias": "daily-team", "budget_duration": "1d"}
+
+    persisted = _persistence_values_for_budget_duration(dumped, "1d")
+
+    assert persisted["budget_duration"] == "1d"
+    assert persisted is not dumped
+    assert dumped == {"team_alias": "daily-team", "budget_duration": "1d"}
+
+
 @pytest.mark.asyncio
 async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
     """
@@ -10821,7 +10865,7 @@ async def test_update_team_blocks_non_admin_passthrough_routes(mock_db_client):
 def test_set_budget_reset_at_clears_when_budget_duration_null():
     """
     When budget_duration is explicitly set to null, _set_budget_reset_at
-    should set budget_reset_at=None in updated_kv so Prisma clears it in the DB.
+    should set budget_reset_at=None in the persistence copy so Prisma clears it.
     """
     from litellm.proxy._types import UpdateTeamRequest
     from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
@@ -10829,16 +10873,17 @@ def test_set_budget_reset_at_clears_when_budget_duration_null():
     data = UpdateTeamRequest(team_id="test-team", budget_duration=None)
     updated_kv = {"team_id": "test-team", "budget_duration": None}
 
-    _set_budget_reset_at(data, updated_kv)
+    persisted = _set_budget_reset_at(data, updated_kv)
 
-    assert "budget_reset_at" in updated_kv
-    assert updated_kv["budget_reset_at"] is None
+    assert persisted["budget_reset_at"] is None
+    assert persisted["budget_duration"] is None
+    assert updated_kv == {"team_id": "test-team", "budget_duration": None}
 
 
 def test_set_budget_reset_at_noop_when_budget_duration_not_sent():
     """
     When budget_duration is NOT sent (unset), _set_budget_reset_at should
-    not add budget_reset_at to updated_kv.
+    not add budget_reset_at to the persistence copy.
     """
     from litellm.proxy._types import UpdateTeamRequest
     from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
@@ -10846,15 +10891,17 @@ def test_set_budget_reset_at_noop_when_budget_duration_not_sent():
     data = UpdateTeamRequest(team_id="test-team")
     updated_kv = {"team_id": "test-team"}
 
-    _set_budget_reset_at(data, updated_kv)
+    persisted = _set_budget_reset_at(data, updated_kv)
 
-    assert "budget_reset_at" not in updated_kv
+    assert "budget_reset_at" not in persisted
+    assert persisted == {"team_id": "test-team"}
+    assert updated_kv == {"team_id": "test-team"}
 
 
 def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
     """
     When budget_duration is set to a valid string, _set_budget_reset_at
-    should compute and set budget_reset_at.
+    should compute and set budget_reset_at on the persistence copy.
     """
     from litellm.proxy._types import UpdateTeamRequest
     from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
@@ -10862,10 +10909,11 @@ def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
     data = UpdateTeamRequest(team_id="test-team", budget_duration="30d")
     updated_kv = {"team_id": "test-team", "budget_duration": "30d"}
 
-    _set_budget_reset_at(data, updated_kv)
+    persisted = _set_budget_reset_at(data, updated_kv)
 
-    assert "budget_reset_at" in updated_kv
-    assert updated_kv["budget_reset_at"] is not None
+    assert persisted["budget_reset_at"] is not None
+    assert persisted["budget_duration"] == "30d"
+    assert updated_kv == {"team_id": "test-team", "budget_duration": "30d"}
 
 
 @pytest.mark.asyncio
@@ -13163,6 +13211,35 @@ async def test_new_team_explicit_null_budget_duration_beats_configured_default(
 
     await new_team(
         data=NewTeamRequest(team_alias="lifetime-budget-team", budget_duration=None),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    team_data = mock_team_create.call_args.kwargs["data"]
+    assert team_data.get("budget_duration") is None
+    assert team_data.get("budget_reset_at") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blank", ["", "   "])
+async def test_new_team_blank_budget_duration_is_lifetime_not_a_daily_reset(
+    mock_db_client, mock_admin_auth, monkeypatch, blank
+):
+    """A form-posted empty budget_duration used to stamp budget_reset_at at
+    next midnight. It must persist as unset, the same as an explicit null.
+    """
+    from fastapi import Request
+
+    import litellm
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    monkeypatch.setattr(litellm, "default_team_settings", None)
+    monkeypatch.setattr(litellm, "default_team_params", {"budget_duration": "30d"})
+    mock_team_create = _wire_new_team_prisma(mock_db_client)
+
+    await new_team(
+        data=NewTeamRequest(team_alias="blank-duration-team", budget_duration=blank),
         http_request=MagicMock(spec=Request),
         user_api_key_dict=mock_admin_auth,
     )

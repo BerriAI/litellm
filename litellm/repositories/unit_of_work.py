@@ -33,6 +33,13 @@ def _spend_reset_data(budget_reset_at: datetime | None, spend_decrement: float |
     return {"spend": spend, "budget_reset_at": budget_reset_at}  # mutable-ok: prisma update payload must be a dict
 
 
+def _duration_quarantine_data() -> Mapping[str, object]:
+    return {
+        "budget_duration": None,
+        "budget_reset_at": None,
+    }  # mutable-ok: prisma update payload must be a dict
+
+
 @dataclass(frozen=True, slots=True)
 class KeySpendResetWrites:
     table: BatchTable
@@ -43,6 +50,12 @@ class KeySpendResetWrites:
         self.table.update(
             where={"token": token},  # mutable-ok: prisma where filter must be a dict
             data=_spend_reset_data(budget_reset_at, spend_decrement),
+        )
+
+    def queue_duration_quarantine(self, token: str) -> None:
+        self.table.update(
+            where={"token": token},  # mutable-ok: prisma where filter must be a dict
+            data=_duration_quarantine_data(),
         )
 
 
@@ -58,6 +71,12 @@ class UserSpendResetWrites:
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
+    def queue_duration_quarantine(self, user_id: str) -> None:
+        self.table.update(
+            where={"user_id": user_id},  # mutable-ok: prisma where filter must be a dict
+            data=_duration_quarantine_data(),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class TeamSpendResetWrites:
@@ -69,6 +88,12 @@ class TeamSpendResetWrites:
         self.table.update(
             where={"team_id": team_id},  # mutable-ok: prisma where filter must be a dict
             data=_spend_reset_data(budget_reset_at, spend_decrement),
+        )
+
+    def queue_duration_quarantine(self, team_id: str) -> None:
+        self.table.update(
+            where={"team_id": team_id},  # mutable-ok: prisma where filter must be a dict
+            data=_duration_quarantine_data(),
         )
 
 
@@ -96,6 +121,9 @@ class BudgetWindowWrites:
         """``update_many`` so a tier deleted between the read and the commit is a
         no-op row count instead of a P2025 that aborts the whole chunk."""
         self.table.update_many(where={"budget_id": budget_id}, data={"budget_reset_at": budget_reset_at})
+
+    def queue_window_quarantine(self, budget_id: str) -> None:
+        self.table.update_many(where={"budget_id": budget_id}, data=_duration_quarantine_data())
 
 
 @dataclass(frozen=True, slots=True)

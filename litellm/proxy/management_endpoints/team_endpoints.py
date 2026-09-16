@@ -1527,12 +1527,12 @@ async def new_team(
                     value=getattr(data, field),
                 )
 
-        # If budget_duration is set, set `budget_reset_at`
-        if complete_team_data.budget_duration is not None:
+        usable_budget_duration: Final = _usable_budget_duration(complete_team_data.budget_duration)
+        if usable_budget_duration is not None:
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             complete_team_data.budget_reset_at = get_budget_reset_time(
-                budget_duration=complete_team_data.budget_duration,
+                budget_duration=usable_budget_duration,
             )
 
         # If budget_limits is set, initialize reset_at for each window
@@ -1552,7 +1552,11 @@ async def new_team(
             members_with_roles = complete_team_data.members_with_roles
             complete_team_data.members_with_roles = []
 
-        complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
+        dumped_team_data: Final = complete_team_data.model_dump(exclude_none=True)
+        complete_team_data_dict = _persistence_values_for_budget_duration(
+            dumped_team_data,
+            complete_team_data.budget_duration,
+        )
 
         # Serialize router_settings to JSON (matching key creation pattern)
         router_settings_value: Final = getattr(data, "router_settings", None)
@@ -2213,7 +2217,7 @@ async def update_team(
             )
 
         # Check budget_duration and budget_reset_at
-        _set_budget_reset_at(data, updated_kv)
+        updated_kv = _set_budget_reset_at(data, updated_kv)
 
         _team_member_fields_in_request: Final = {
             field
@@ -2233,12 +2237,13 @@ async def update_team(
                 *LiteLLM_ManagementEndpoint_MetadataFields_Premium,
             )
         )
+        incoming_metadata: Final = updated_kv.get("metadata")
         if isinstance(existing_team_row.metadata, dict):
             if "metadata" not in updated_kv and (_team_member_fields_in_request or _writes_metadata_backed_field):
                 updated_kv["metadata"] = copy.deepcopy(existing_team_row.metadata)
-            elif isinstance(updated_kv.get("metadata"), dict):
+            elif isinstance(incoming_metadata, dict):
                 updated_kv["metadata"] = {
-                    **updated_kv["metadata"],
+                    **incoming_metadata,
                     **{
                         key: existing_team_row.metadata[key]
                         for key in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
@@ -2442,25 +2447,46 @@ async def patch_team(
         raise handle_exception_on_proxy(e)
 
 
-def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
-    """Set budget_reset_at in updated_kv if budget_duration is provided."""
-    if data.budget_duration is not None:
+def _usable_budget_duration(duration: str | None) -> str | None:
+    if duration is None or duration.strip() == "":
+        return None
+    return duration
+
+
+def _persistence_values_for_budget_duration(
+    persistence_values: Mapping[str, object],
+    duration: str | None,
+) -> dict[str, object]:
+    if _usable_budget_duration(duration) is not None:
+        return {**persistence_values}
+    return {key: value for key, value in persistence_values.items() if key != "budget_duration"}
+
+
+def _budget_reset_persistence_fields(data: UpdateTeamRequest, updated_kv: Mapping[str, object]) -> Mapping[str, object]:
+    usable_budget_duration: Final = _usable_budget_duration(data.budget_duration)
+    if usable_budget_duration is not None:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
-        reset_at: Final = get_budget_reset_time(budget_duration=data.budget_duration)
-        updated_kv["budget_reset_at"] = reset_at
-    elif "budget_duration" in updated_kv and updated_kv["budget_duration"] is None:
-        updated_kv["budget_reset_at"] = None
+        return MappingProxyType({"budget_reset_at": get_budget_reset_time(budget_duration=usable_budget_duration)})
+    if data.budget_duration is not None or ("budget_duration" in updated_kv and updated_kv["budget_duration"] is None):
+        return MappingProxyType({"budget_duration": None, "budget_reset_at": None})
+    return MappingProxyType({})
 
-    if data.budget_limits is not None and len(data.budget_limits) > 0:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
-        initialized_windows: Final = []
-        for window in data.budget_limits:
-            w = window if isinstance(window, dict) else window.model_dump()
-            w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
-            initialized_windows.append(w)
-        updated_kv["budget_limits"] = json.dumps(initialized_windows)
+def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: Mapping[str, object]) -> dict[str, object]:
+    """Return a persistence copy with budget_reset_at. Does not mutate `updated_kv`."""
+    budget_fields: Final = _budget_reset_persistence_fields(data, updated_kv)
+    if data.budget_limits is None or len(data.budget_limits) == 0:
+        return {**updated_kv, **budget_fields}
+
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    initialized_windows: Final = []
+    for window in data.budget_limits:
+        w = window if isinstance(window, dict) else window.model_dump()
+        w["reset_at"] = get_budget_reset_time(budget_duration=w["budget_duration"]).isoformat()
+        initialized_windows.append(w)
+    return {**updated_kv, **budget_fields, "budget_limits": json.dumps(initialized_windows)}
 
 
 async def handle_update_object_permission(data_json: dict, existing_team_row: _ObjectPermissionRow) -> dict:
