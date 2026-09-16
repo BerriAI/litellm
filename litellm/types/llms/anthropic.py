@@ -586,7 +586,7 @@ class MessageBlockDelta(TypedDict):
 
     type: Literal["message_delta"]
     delta: MessageDelta
-    usage: UsageDelta
+    usage: NotRequired[ReadOnly[UsageDelta]]
     context_management: NotRequired[ContextManagementResponse]
 
 
