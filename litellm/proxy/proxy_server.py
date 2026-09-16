@@ -1684,7 +1684,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 def _log_model_access_denial(exc: ProxyException) -> None:
     if not litellm.model_access_denied_message or not isinstance(exc, ModelAccessDeniedProxyException):
         return
-    verbose_proxy_logger.warning(exc.internal_message.replace("\r", "").replace("\n", ""))
+    verbose_proxy_logger.warning(exc.sanitized_internal_message())
 
 
 def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Exception | None = None) -> None:
