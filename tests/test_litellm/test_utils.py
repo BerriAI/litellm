@@ -920,11 +920,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 },
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
                 "tpm": {"type": "number"},
-                "aliases": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "uniqueItems": True,
-                },
                 "supported_endpoints": {
                     "type": "array",
                     "items": {

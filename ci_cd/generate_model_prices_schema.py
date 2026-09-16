@@ -58,12 +58,6 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
 }
 
 ARRAY_KEYS: dict[str, JsonSchema] = {
-    "aliases": {
-        "type": "array",
-        "description": "Alternate model ids that share this entry's pricing and capabilities.",
-        "items": STRING,
-        "uniqueItems": True,
-    },
     "supported_audio_formats": {
         "type": "array",
         "description": "Audio container formats the model can return.",
