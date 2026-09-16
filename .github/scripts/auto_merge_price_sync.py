@@ -418,13 +418,12 @@ def _gather_inputs(
     )
 
 
+def merge_request_body(pr: PullRequest) -> dict[str, str]:
+    return {"merge_method": "merge", "commit_title": f"{pr.title} (#{pr.number})", "sha": pr.head_sha}
+
+
 def _merge(token: str, repo: str, pr: PullRequest) -> None:
-    status, _ = _request_allow_fail(
-        token,
-        "PUT",
-        f"/repos/{repo}/pulls/{pr.number}/merge",
-        {"merge_method": "merge", "commit_title": f"{pr.title} (#{pr.number})"},
-    )
+    status, _ = _request_allow_fail(token, "PUT", f"/repos/{repo}/pulls/{pr.number}/merge", merge_request_body(pr))
     if status in (200, 405, 409):
         print(f"auto-merge-price-sync: PR #{pr.number} merge call returned {status}")
         return
