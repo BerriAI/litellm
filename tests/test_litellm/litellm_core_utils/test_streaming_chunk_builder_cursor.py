@@ -35,6 +35,7 @@ from litellm.types.utils import (
 def _make_chunk(
     *,
     content: str = "",
+    reasoning_content: str | None = None,
     usage: Usage = None,
     finish_reason: str = None,
     custom_llm_provider: str = "anthropic",
@@ -48,7 +49,7 @@ def _make_chunk(
             StreamingChoices(
                 finish_reason=finish_reason,
                 index=0,
-                delta=Delta(content=content, role="assistant"),
+                delta=Delta(content=content, role="assistant", reasoning_content=reasoning_content),
             )
         ],
         usage=usage,
@@ -168,14 +169,14 @@ class TestAnthropicCursorBug:
         """
         OpenAI's only usage chunk is the penultimate one (with
         stream_options.include_usage=true), and it carries the real value
-        directly. Our cursor fix must not break this path — output > 1
-        means saw_non_cursor_completion=True so no reset happens.
+        directly. The cursor reset is Anthropic-only, so this path is untouched.
         """
         # Simulate OpenAI: content chunks first, then ONE usage chunk at the end
-        text_chunks = [_make_chunk(content=t) for t in ["The", " answer", " is 42"]]
+        text_chunks = [_make_chunk(content=t, custom_llm_provider="openai") for t in ["The", " answer", " is 42"]]
         usage_chunk = _make_chunk(
             usage=Usage(prompt_tokens=42, completion_tokens=15, total_tokens=57),
             finish_reason="stop",
+            custom_llm_provider="openai",
         )
         chunks = [*text_chunks, usage_chunk]
 
@@ -222,6 +223,56 @@ class TestAnthropicCursorBug:
             f"(message_start + message_delta both saw output_tokens=1, "
             f"confirming message_delta arrived), got {usage.completion_tokens}"
         )
+
+    @pytest.mark.parametrize("placeholder", [1, 8])
+    def test_lone_message_start_placeholder_resets_regardless_of_value(self, placeholder: int):
+        """
+        The message_start placeholder is not always 1; newer models emit values
+        like 8. A single completion-bearing usage event on an Anthropic stream
+        is always message_start, so it must reset no matter its value.
+        """
+        message_start = _make_chunk(
+            usage=Usage(prompt_tokens=100, completion_tokens=placeholder, total_tokens=100 + placeholder)
+        )
+        chunks = [message_start, _make_chunk(content="partial")]
+
+        processor = ChunkProcessor(chunks=chunks, messages=[])
+        result = processor._calculate_usage_per_chunk(chunks=chunks)
+
+        assert result["completion_tokens"] == 0
+
+    @pytest.mark.parametrize("placeholder", [1, 8])
+    def test_reasoning_only_interrupted_stream_estimates_from_reasoning(self, placeholder: int):
+        """
+        Stream cancelled while the model was still thinking: only the
+        message_start placeholder and reasoning_content deltas were seen.
+        The recovered usage must reflect the reasoning the provider billed,
+        not the placeholder and not 0.
+        """
+        reasoning = "Let me think carefully about this problem. " * 200
+        message_start = _make_chunk(
+            usage=Usage(prompt_tokens=100, completion_tokens=placeholder, total_tokens=100 + placeholder)
+        )
+        reasoning_chunks = [_make_chunk(reasoning_content=reasoning[i : i + 50]) for i in range(0, len(reasoning), 50)]
+        chunks = [message_start, *reasoning_chunks]
+
+        processor = ChunkProcessor(chunks=chunks, messages=[])
+        response = processor.build_base_response(chunks=chunks)
+        response.choices[0].message.reasoning_content = reasoning
+        reasoning_tokens = processor.count_reasoning_tokens(response)
+        assert reasoning_tokens is not None and reasoning_tokens > 100
+
+        usage = processor.calculate_usage(
+            chunks=chunks,
+            model="claude-sonnet-4-6",
+            completion_output="",
+            messages=[],
+            reasoning_tokens=reasoning_tokens,
+        )
+
+        assert usage.completion_tokens == reasoning_tokens
+        assert usage.completion_tokens_details is not None
+        assert usage.completion_tokens_details.reasoning_tokens == reasoning_tokens
 
     def test_anthropic_cache_only_chunks_after_message_start_still_resets(self):
         """
@@ -297,11 +348,12 @@ class TestNonAnthropicStreamingIntact:
     """Make sure providers without cursor pattern still work."""
 
     def test_completion_tokens_above_one_never_resets(self):
-        """Any chunk reporting completion_tokens > 1 sets saw_non_cursor
-        and prevents the reset."""
+        """A non-Anthropic provider's single usage event is the real value,
+        whatever it is."""
         chunks = [
             _make_chunk(
-                usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+                usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+                custom_llm_provider="openai",
             ),
         ]
         processor = ChunkProcessor(chunks=chunks, messages=[])

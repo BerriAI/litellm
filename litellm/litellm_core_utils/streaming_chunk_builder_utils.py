@@ -835,16 +835,14 @@ class ChunkProcessor:
         # # Update usage information if needed
         prompt_tokens = 0
         completion_tokens = 0
-        # Anthropic's `message_start` SSE event carries usage.output_tokens=1 as a
-        # cursor/placeholder; the real value only arrives in `message_delta`.
+        # Anthropic's `message_start` SSE event carries a small usage.output_tokens
+        # placeholder (1, 8, ...); the real value only arrives in `message_delta`.
         # If a stream is cancelled before `message_delta` lands, the last-wins
-        # accumulator below leaves completion_tokens stuck at 1 — which then
-        # bypasses the `completion_tokens or token_counter(...)` fallback in
-        # calculate_usage() because 1 is truthy. Count the completion-bearing
-        # usage events so `_reset_anthropic_cursor_completion_tokens` can tell a
-        # legitimate single-token reply (Anthropic emits 1 in BOTH message_start
-        # AND message_delta, so >=2 events is positive evidence message_delta
-        # arrived) from a stale lone cursor.
+        # accumulator below leaves completion_tokens stuck at the placeholder,
+        # which is truthy and so bypasses the `completion_tokens or ...` fallback
+        # in calculate_usage(). Count the completion-bearing usage events so
+        # `_reset_anthropic_cursor_completion_tokens` can tell a completed stream
+        # (message_start AND message_delta, so >=2 events) from a lone placeholder.
         completion_usage_updates = 0
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: int | None = None
@@ -969,20 +967,16 @@ class ChunkProcessor:
         """Reset a stale Anthropic ``message_start`` cursor placeholder to 0.
 
         See the ``completion_usage_updates`` comment in
-        ``_calculate_usage_per_chunk``. The accumulated value is NOT a stale
-        cursor when either it is > 1 (definitely not a placeholder) or we saw
-        >= 2 completion-bearing usage events (positive evidence ``message_delta``
-        arrived). Otherwise — the only completion update we ever saw was the
-        Anthropic ``message_start`` cursor (=1) — reset to 0 so
-        ``calculate_usage()``'s ``or token_counter(text=...)`` fallback estimates
-        from the actually-received completion text instead of trusting the
-        placeholder. Gated on ``custom_llm_provider == "anthropic"`` so the
-        heuristic (which encodes Anthropic's specific message_start SSE shape)
-        does not silently affect other providers that may legitimately report
-        ``completion_tokens=1`` from a single usage event.
+        ``_calculate_usage_per_chunk``. With >= 2 completion-bearing usage events
+        ``message_delta`` arrived and the value is real. Otherwise the only
+        completion update we ever saw was the Anthropic ``message_start``
+        placeholder, whose value is not always 1, so reset to 0 and let
+        ``calculate_usage()`` estimate from the received text and reasoning.
+        Gated on ``custom_llm_provider == "anthropic"`` so other providers that
+        legitimately report completion tokens from a single usage event are
+        left alone.
         """
-        saw_non_cursor_completion: Final = completion_tokens > 1 or completion_usage_updates >= 2
-        if saw_non_cursor_completion:
+        if completion_usage_updates >= 2:
             return completion_tokens
 
         custom_llm_provider: str | None = None
@@ -995,7 +989,7 @@ class ChunkProcessor:
             if isinstance(hp, dict):
                 custom_llm_provider = hp.get("custom_llm_provider")
 
-        if custom_llm_provider == "anthropic" and completion_tokens == 1:
+        if custom_llm_provider == "anthropic":
             return 0
         return completion_tokens
 
@@ -1037,13 +1031,13 @@ class ChunkProcessor:
         except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
             returned_usage.prompt_tokens = 0
-        returned_usage.completion_tokens = (
-            completion_tokens
-            or token_counter(
+        returned_usage.completion_tokens = completion_tokens or (
+            token_counter(
                 model=model,
                 text=completion_output,
                 count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
             )
+            + (reasoning_tokens or 0)
         )
         returned_usage.total_tokens = returned_usage.prompt_tokens + returned_usage.completion_tokens
 
