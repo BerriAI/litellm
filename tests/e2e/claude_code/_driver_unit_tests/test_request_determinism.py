@@ -33,7 +33,7 @@ from typing import List, Tuple
 
 import pytest
 
-from claude_code.cli_driver import _stable_cli_state, run_claude
+from claude_code.cli_driver import _FIXED_CLI_USER_ID, _seed_cli_identity, _stable_cli_state, run_claude
 from claude_code.rate_limiter import RateLimiter
 
 _STUB_REPLY = {
@@ -141,3 +141,20 @@ def test_concurrent_cells_do_not_collide_on_the_pinned_session(
     assert codes == [0, 0, 0, 0]
     assert bodies, "the CLI sent no request to the stub, so there is nothing to compare"
     assert set(Counter(bodies).values()) == {4}
+
+
+def test_seeding_the_device_id_survives_threads_racing_on_the_same_directory(tmp_path: Path) -> None:
+    """`run_claude_models_parallel` drives several models from one process, so the
+    seed's staged file has to be unique per thread and not merely per process."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    seeded = config_dir / ".claude.json"
+
+    for _round in range(20):
+        seeded.unlink(missing_ok=True)
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            for outcome in [pool.submit(_seed_cli_identity, str(config_dir)) for _ in range(16)]:
+                outcome.result()
+
+    assert json.loads(seeded.read_text(encoding="utf-8"))["userID"] == _FIXED_CLI_USER_ID
+    assert sorted(entry.name for entry in config_dir.iterdir()) == [".claude.json"]
