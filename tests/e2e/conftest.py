@@ -23,6 +23,7 @@ from typing import Final
 import pytest
 import requests
 from e2e_config import (
+    CLI_DETERMINISM_OPT_IN_ENV,
     CONTROL_PLANE_BASE_URL,
     FIXTURE_DIR,
     FIXTURE_MODE_RAW,
@@ -53,6 +54,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "managed_files": MANAGED_FILES_OPT_IN_ENV,
         "prompt_caching_stack": PROMPT_CACHING_OPT_IN_ENV,
         "redis_chaos": REDIS_CHAOS_OPT_IN_ENV,
+        "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
     }
 )
 
@@ -119,6 +121,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "prompt_caching_stack: needs a proxy running with router_settings.optional_pre_call_checks including "
         "prompt_caching; deselected unless E2E_PROMPT_CACHING_STACK is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "cli_determinism: drives the real claude CLI for several seconds, which widens the window in which "
+        "another test's in-flight upstream call is attributed to it; deselected unless E2E_CLI_DETERMINISM is set",
     )
     config.addinivalue_line(
         "markers",
