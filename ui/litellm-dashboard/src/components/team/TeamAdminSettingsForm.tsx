@@ -1,6 +1,7 @@
 "use client";
 
 import { Save } from "lucide-react";
+import { useWatch } from "react-hook-form";
 import { z } from "zod/v4";
 
 import { FormField } from "@/components/shared/form/FormField";
@@ -37,7 +38,9 @@ export default function TeamAdminSettingsForm({
   onSave,
 }: TeamAdminSettingsFormProps) {
   const form = useZodForm(teamAdminSettingsSchema, { defaultValues: initialValues });
-  const submit = form.handleSubmit((values) => onSave(teamAdminSettingsChanges(values, editableFields)));
+  const draft = useWatch({ control: form.control });
+  const hasChanges = Object.keys(teamAdminSettingsChanges(draft, initialValues, editableFields)).length > 0;
+  const submit = form.handleSubmit((values) => onSave(teamAdminSettingsChanges(values, initialValues, editableFields)));
 
   return (
     <form onSubmit={(event) => void submit(event)}>
@@ -56,7 +59,7 @@ export default function TeamAdminSettingsForm({
         <Button type="button" variant="outline" onClick={onCancel} disabled={isSaving}>
           Cancel
         </Button>
-        <Button type="submit" disabled={isSaving}>
+        <Button type="submit" disabled={isSaving || !hasChanges}>
           {isSaving ? <UiLoadingSpinner className="size-4" /> : <Save className="size-4" />}
           Save Changes
         </Button>

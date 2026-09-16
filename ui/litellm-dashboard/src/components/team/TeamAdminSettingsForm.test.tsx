@@ -53,6 +53,18 @@ describe("TeamAdminSettingsForm", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ tpm_limit: null }));
   });
 
+  it("keeps Save disabled until the TPM limit differs from the team's", () => {
+    renderForm(new Set(["tpm_limit"]));
+    const tpmInput = screen.getByLabelText("Tokens per minute Limit (TPM)");
+    const save = screen.getByRole("button", { name: /save changes/i });
+
+    expect(save).toBeDisabled();
+    fireEvent.change(tpmInput, { target: { value: "5000" } });
+    expect(save).toBeEnabled();
+    fireEvent.change(tpmInput, { target: { value: "1000" } });
+    expect(save).toBeDisabled();
+  });
+
   it("closes without saving on cancel", async () => {
     const user = userEvent.setup();
     const { onSave, onCancel } = renderForm(new Set(["tpm_limit"]));
@@ -65,6 +77,7 @@ describe("TeamAdminSettingsForm", () => {
 
   it("locks both buttons while a save is in flight", () => {
     renderForm(new Set(["tpm_limit"]), { isSaving: true });
+    fireEvent.change(screen.getByLabelText("Tokens per minute Limit (TPM)"), { target: { value: "5000" } });
 
     expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
