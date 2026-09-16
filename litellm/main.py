@@ -8739,9 +8739,12 @@ def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
 
 def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     response_cost: Final = _stream_builder_response_cost(response, logging_obj)
-    if response_cost is None:
-        return
     hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    if response_cost is None:
+        # Non-positive usage.cost (or a logging_obj deferral) must leave the field
+        # absent so token-based pricing can run — clear any earlier stamp.
+        hidden_params.pop("response_cost", None)
+        return
     hidden_params["response_cost"] = response_cost
 
 
