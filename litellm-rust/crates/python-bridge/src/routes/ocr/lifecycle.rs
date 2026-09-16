@@ -87,28 +87,9 @@ impl PythonOcrHost {
             &projected.fields.secret_fields,
             &request.url,
         )?;
-        if !self.state.logger()?.callbacks_needed(py, "payload")? {
-            self.state
-                .logger()?
-                .object(py)
-                .call_method0("record_api_call_start_time")?;
-            return Ok(request);
-        }
-        if let Some(body) = request.body.as_object_mut() {
-            for name in &request.retained_fields {
-                body.remove(name);
-            }
-        }
         let body = to_py(py, &request.body)?
             .into_bound(py)
             .cast_into::<PyDict>()?;
-        if let Some(retained) = &self.projected()?.callback_inputs {
-            for name in &request.retained_fields {
-                if let Some(value) = retained.bind(py).get_item(name)? {
-                    body.set_item(name, value)?;
-                }
-            }
-        }
         let headers = PyDict::new(py);
         for (name, value) in &request.headers {
             headers.set_item(name, value)?;
@@ -134,16 +115,13 @@ impl PythonOcrHost {
         py: Python<'_>,
         request: OcrPostCallRequest,
     ) -> PyResult<OcrPostCallRequest> {
-        let logger = self.state.logger()?;
-        if logger.callbacks_needed(py, "payload")? {
-            let projected = self.projected()?;
-            logger.post_ocr(
-                py,
-                &request.original_response,
-                projected.body.as_ref(),
-                projected.headers.as_ref(),
-            )?;
-        }
+        let projected = self.projected()?;
+        self.state.logger()?.post_ocr(
+            py,
+            &request.original_response,
+            projected.body.as_ref(),
+            projected.headers.as_ref(),
+        )?;
         Ok(request)
     }
 }

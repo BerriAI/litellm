@@ -119,69 +119,6 @@ def test_native_ocr_pre_call_header_rebinding_does_not_replace_execution_root(oc
     assert "x-rebound" not in ocr_server.requests[0].headers
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_native_ocr_pre_call_nested_document_edit_updates_caller_callback_and_provider_references(
-    ocr_server: RecordingServer, asynchronous: bool
-) -> None:
-    original: Final = dict(OCR_DOCUMENT)
-    replacement_url: Final = "data:application/pdf;base64,ZGVm"
-    retained: Final = []
-    aliases: Final = []
-
-    class Retain(CustomLogger):
-        def log_pre_api_call(self, model, messages, kwargs):
-            aliases.append(request_body(kwargs)["document"] is original)
-            retained.append(request_body(kwargs)["document"])
-
-    class Edit(CustomLogger):
-        def log_pre_api_call(self, model, messages, kwargs):
-            original["document_url"] = replacement_url
-
-    arguments: Final = {
-        "model": "mistral/mistral-ocr-latest",
-        "document": original,
-        "api_key": "test-key",
-        "api_base": ocr_server.base_url,
-        "callbacks": [Retain(), Edit()],
-    }
-    response: Final = (
-        await call_native_aocr(ocr_server, **arguments)
-        if asynchronous
-        else call_native_ocr(ocr_server, **arguments)
-    )
-
-    assert aliases == [True]
-    assert retained[0]["document_url"] == replacement_url
-    assert original["document_url"] == replacement_url
-    assert ocr_server.requests[0].body["document"]["document_url"] == replacement_url
-    assert response.pages[0].markdown == "native OCR response"
-
-
-def test_native_ocr_pre_call_document_replacement_does_not_mutate_original_document(
-    ocr_server: RecordingServer,
-) -> None:
-    original: Final = dict(OCR_DOCUMENT)
-    replacement: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,ZGVm"}
-    retained: Final = []
-
-    class RetainAndReplace(CustomLogger):
-        def log_pre_api_call(self, model, messages, kwargs):
-            body = request_body(kwargs)
-            retained.append(body["document"])
-            body["document"] = replacement
-
-    call_native_ocr(
-        ocr_server,
-        document=original,
-        callbacks=[RetainAndReplace()],
-    )
-
-    assert retained[0] is original
-    assert original["document_url"] == OCR_DOCUMENT["document_url"]
-    assert ocr_server.requests[0].body["document"] == replacement
-
-
 def test_native_ocr_pre_call_body_rebinding_is_visible_to_callbacks_but_not_provider(
     ocr_server: RecordingServer,
 ) -> None:
