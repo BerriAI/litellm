@@ -1666,7 +1666,6 @@ def test_budget_table_reset_invalidates_every_access_group_not_just_the_first(
 
 
 def test_project_reset_zeroes_spend_on_due_tiers(reset_budget_job, mock_prisma_client, monkeypatch):
-    """A project linked to an expiring budget tier has its spend zeroed in the same cascade transaction."""
     _make_counter_invalidation_job(monkeypatch)
     mock_prisma_client.data["budget"] = [_budget_row(budget_id="budget-due", budget_duration="7d")]
     mock_prisma_client.db.litellm_projecttable.set_find_many_results(

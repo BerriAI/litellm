@@ -1062,10 +1062,6 @@ async def test_batch_database_updates_queues_org_member_spend_for_the_request_us
 
 @pytest.mark.asyncio
 async def test_project_spend_is_persisted_to_project_table_and_project_cache_is_evicted():
-    """Regression for LIT-3269: a request made with a project-scoped key must
-    increment LiteLLM_ProjectTable.spend, otherwise /project/info stays at 0
-    and the project budget never blocks. The cached project row is evicted so
-    the next auth check reads the fresh spend."""
     db_writer: Final = DBSpendUpdateWriter()
     await db_writer._batch_database_updates(
         response_cost=0.25,

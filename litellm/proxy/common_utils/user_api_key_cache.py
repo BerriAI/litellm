@@ -307,12 +307,10 @@ def model_access_group_spend_counter_key(access_group_name: str) -> str:
 
 
 def project_cache_key(project_id: str) -> str:
-    """Cache key one project row is stored under; shared by auth, spend tracking and the spend writer."""
     return f"project_id:{project_id}"
 
 
 def project_spend_counter_key(project_id: str) -> str:
-    """Spend counter key for one project; the reservation, cost callback, auth and reseed paths all read it."""
     return f"spend:project:{project_id}"
 
 
