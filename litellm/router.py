@@ -8281,7 +8281,6 @@ class Router:
         pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = [
             RedisPipelineIncrementOperation(key=key, increment_value=increment_value, ttl=RoutingArgs.ttl.value)
             for key, increment_value in ((tpm_key, total_tokens), (rpm_key, rpm_increment))
-            if increment_value > 0
         ]
         post_increment_values: Final = await self.cache.async_increment_cache_pipeline(
             increment_list=pipeline_operations,
