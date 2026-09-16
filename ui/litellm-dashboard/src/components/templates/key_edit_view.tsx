@@ -82,8 +82,12 @@ interface KeyEditViewProps {
   premiumUser?: boolean;
 }
 
-export function KeyEditView({
-  keyData,
+export function KeyEditView(props: KeyEditViewProps) {
+  return <KeyEditSession key={props.keyData.token} {...props} />;
+}
+
+function KeyEditSession({
+  keyData: initialKeyData,
   onCancel,
   onSubmit,
   teams,
@@ -92,6 +96,9 @@ export function KeyEditView({
   userRole,
   premiumUser = false,
 }: KeyEditViewProps) {
+  // Background key-list refreshes must not overwrite an in-progress edit.
+  // Switching keys or reopening the editor starts a new session.
+  const [keyData] = useState(initialKeyData);
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const canViewPolicies = hasCapability(userRole, "viewPolicies");
   const canViewPrompts = hasCapability(userRole, "viewPrompts");
@@ -180,10 +187,6 @@ export function KeyEditView({
   useEffect(() => {
     form.setValue("disabled_callbacks", disabledCallbacks);
   }, [form, disabledCallbacks]);
-
-  useEffect(() => {
-    form.reset(toKeyEditFormValues(keyData));
-  }, [keyData, form]);
 
   // Sync auto-rotation state with form values
   useEffect(() => {

@@ -18,8 +18,11 @@ const test = base.extend<{ scopedKey: ScopedKey }>({
       team_id: E2E_TEAM_CRUD_ID,
       models: [CHAT_MODEL_A],
     });
-    await use({ alias, token: created.token });
-    await deleteVirtualKey(page.request, created.token);
+    try {
+      await use({ alias, token: created.token });
+    } finally {
+      await deleteVirtualKey(page.request, created.token);
+    }
   },
 });
 
@@ -34,15 +37,41 @@ test.describe("Proxy Admin - Key budget window", () => {
 
     await navigateToPage(page, Page.ApiKeys);
     await dismissFeedbackPopup(page);
-    await openKeyDetail(page, alias);
-
-    await page.getByRole("tab", { name: "Settings" }).click();
-    await page.getByRole("button", { name: "Edit Settings" }).click();
-
-    await page.getByRole("spinbutton", { name: "Max Budget (USD)" }).fill("12.5");
+    // Deliver the real search result after editing starts: replacing the list's
+    // key object must not reset the open form and erase its unsaved budget.
+    const searchReceived = Promise.withResolvers<void>();
+    const releaseSearch = Promise.withResolvers<void>();
+    const isAliasSearch = (url: string) => {
+      const parsed = new URL(url);
+      return parsed.pathname.endsWith("/key/list") && parsed.searchParams.get("search") === alias;
+    };
+    await page.route("**/key/list?**", async (route) => {
+      if (!isAliasSearch(route.request().url())) return route.continue();
+      const response = await route.fetch();
+      searchReceived.resolve();
+      await releaseSearch.promise;
+      await route.fulfill({ response });
+    });
+    try {
+      await openKeyDetail(page, alias);
+      await page.getByRole("tab", { name: "Settings" }).click();
+      await page.getByRole("button", { name: "Edit Settings" }).click();
+      await page.getByRole("spinbutton", { name: "Max Budget (USD)" }).fill("12.5");
+      await searchReceived.promise;
+      const refreshed = page.waitForResponse((response) => isAliasSearch(response.url()));
+      releaseSearch.resolve();
+      await refreshed;
+    } finally {
+      releaseSearch.resolve();
+      await page.unrouteAll({ behavior: "wait" });
+    }
     await page.getByLabel("Reset Budget", { exact: true }).click();
     await page.getByRole("option", { name: "monthly", exact: true }).click();
-    await page.getByRole("button", { name: "Save Changes" }).click();
+    const saved = await captureRequestBody(page, { method: "POST", urlIncludes: "/key/update" }, async () => {
+      await page.getByRole("button", { name: "Save Changes" }).click();
+    });
+    expect(saved.max_budget, "a delayed search response must not erase the budget draft").toBe("12.5");
+    expect(saved.budget_duration).toBe("30d");
 
     await expect
       .poll(async () => (await readKeyInfo(page.request, token)).max_budget, {
