@@ -20,6 +20,7 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     OTELSemconvCategory,
     parse_semconv_opt_in,
 )
+from litellm.integrations.otel.mappers.utils import drop_none
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.semconv import Metric
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
@@ -209,10 +210,10 @@ def _provider_label(custom_llm_provider: object) -> str | None:
     """The provider label for one call's metrics and events, or None when the
     call carries no provider.
 
-    Callers omit the label entirely in that case: the OTLP encoder rejects a
-    None attribute value outright, and a placeholder would mint a permanent
-    metric series that no operator can act on. Mirrors the v2 integration's
-    ``_provider_attributes``.
+    Every attribute set drops None before export, so the label is simply absent
+    in that case: the OTLP encoder rejects a None attribute value outright, and a
+    placeholder would mint a permanent metric series that no operator can act
+    on. Mirrors the v2 integration's ``_provider_attributes``.
     """
     if not isinstance(custom_llm_provider, str) or not custom_llm_provider:
         return None
@@ -1615,14 +1616,17 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         ) = _resolve_metric_attribute_filter(attributes)
         self._metric_attr_filter_resolved = True
 
-    def _filter_metric_attributes(self, attrs: dict[str, str]) -> dict[str, str]:
+    def _filter_metric_attributes(self, attrs: Mapping[str, str | None]) -> dict[str, str]:
         if not self._metric_attr_filter_resolved:
             self._ensure_metric_attribute_filter()
+        return {k: v for k, v in attrs.items() if v is not None and self._metric_attribute_allowed(k)}
+
+    def _metric_attribute_allowed(self, key: str) -> bool:
         if self._metric_attr_include is not None:
-            return {k: v for k, v in attrs.items() if k in self._metric_attr_include}
+            return key in self._metric_attr_include
         if self._metric_attr_exclude is not None:
-            return {k: v for k, v in attrs.items() if k not in self._metric_attr_exclude}
-        return attrs
+            return key not in self._metric_attr_exclude
+        return True
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s: Final = (end_time - start_time).total_seconds()
@@ -1633,7 +1637,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             "gen_ai.operation.name": (
                 self._gen_ai_operation_name(kwargs) if self._gen_ai_semconv_latest_experimental else "chat"
             ),
-            **({"gen_ai.system": provider} if provider else {}),
+            "gen_ai.system": provider,
             "gen_ai.request.model": kwargs.get("model"),
             "gen_ai.framework": "litellm",
         }
@@ -1888,7 +1892,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             role = msg.get("role", "user")
             attrs = {
                 "event_name": "gen_ai.content.prompt",
-                **({"gen_ai.system": provider} if provider else {}),
+                "gen_ai.system": provider,
             }
             if role == "tool" and msg.get("id"):
                 attrs["id"] = msg["id"]
@@ -1908,7 +1912,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 severity_number=SeverityNumber.INFO,
                 severity_text="INFO",
                 body=body,
-                attributes=attrs,
+                attributes=drop_none(attrs),
             )
             otel_logger.emit(log_record)
 
@@ -1916,7 +1920,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         for idx, choice in enumerate(response_obj.get("choices", [])):
             attrs = {
                 "event_name": "gen_ai.content.completion",
-                **({"gen_ai.system": provider} if provider else {}),
+                "gen_ai.system": provider,
                 "index": idx,
                 "finish_reason": choice.get("finish_reason"),
             }
@@ -1940,7 +1944,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 severity_number=SeverityNumber.INFO,
                 severity_text="INFO",
                 body=body,
-                attributes=attrs,
+                attributes=drop_none(attrs),
             )
             otel_logger.emit(log_record)
 
