@@ -1340,6 +1340,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "IMAGE_PROHIBITED_CONTENT",
             "TOO_MANY_TOOL_CALLS",
             "MALFORMED_RESPONSE",
+            "NO_IMAGE",
         }
     )
 
@@ -1683,7 +1684,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         completion_response: GenerateContentResponseBody,
     ) -> ModelResponse:
         ## CONTENT POLICY VIOLATION ERROR
-        model_response.choices[0].finish_reason = "content_filter"
+        if model_response.choices and len(model_response.choices) > 0:
+            model_response.choices[0].finish_reason = "content_filter"
 
         _chat_completion_message: Final = {
             "role": "assistant",
@@ -2224,21 +2226,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         grounding_metadata: Final[list[dict]] = []
         url_context_metadata: Final[list[dict]] = []
-        image_response: list[ImageURLListItem] | None = None
         safety_ratings: Final[list] = []
         citation_metadata: Final[list] = []
-        chat_completion_message: Final[ChatCompletionResponseMessage] = {"role": "assistant"}
-        chat_completion_logprobs: ChoiceLogprobs | None = None
-        tools: list[ChatCompletionToolCallChunk] | None = []
-        functions: ChatCompletionToolCallFunctionChunk | None = None
-        thinking_blocks: list[ChatCompletionThinkingBlock] | None = None
-        reasoning_content: str | None = None
-        thought_signatures: Sequence[str] | None = None
-        server_side_tool_invocations: list[dict[str, object]] | None = None
 
         for idx, candidate in enumerate(_candidates):
-            if "content" not in candidate:
-                continue
+            chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
+            image_response: list[ImageURLListItem] | None = None
+            chat_completion_logprobs: ChoiceLogprobs | None = None
+            tools: list[ChatCompletionToolCallChunk] | None = []
+            functions: ChatCompletionToolCallFunctionChunk | None = None
+            thinking_blocks: list[ChatCompletionThinkingBlock] | None = None
+            reasoning_content: str | None = None
+            thought_signatures: Sequence[str] | None = None
+            server_side_tool_invocations: list[dict[str, object]] | None = None
 
             # Extract metadata using helper function
             (
@@ -2253,7 +2253,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             safety_ratings.extend(candidate_safety_ratings)
             citation_metadata.extend(candidate_citation_metadata)
 
-            if "parts" in candidate["content"]:
+            finish_reason_raw = candidate.get("finishReason")
+            if finish_reason_raw is not None:
+                finish_reason_fields = chat_completion_message.get("provider_specific_fields") or {}
+                finish_reason_fields["finish_reason"] = finish_reason_raw
+                finish_reason_fields["gemini_finish_reason"] = finish_reason_raw
+                chat_completion_message["provider_specific_fields"] = finish_reason_fields
+
+            if "content" not in candidate:
+                if isinstance(model_response, ModelResponseStream) and not finish_reason_raw:
+                    continue
+                chat_completion_message["content"] = None
+            elif "parts" in candidate["content"]:
                 (
                     content,
                     reasoning_content,
@@ -2369,6 +2380,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     logprobs=chat_completion_logprobs,
                     enhancements=None,
                 )
+                psf_value = chat_completion_message.get("provider_specific_fields")
+                if psf_value:
+                    choice.provider_specific_fields = psf_value
                 model_response.choices.append(choice)
 
         return (
@@ -2496,10 +2510,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 citation_metadata  # older approach - maintaining to prevent regressions
             )
 
-            ## ADD TRAFFIC TYPE ##
+            ## ADD TRAFFIC TYPE / FINISH REASON ##
             traffic_type: Final = completion_response.get("usageMetadata", {}).get("trafficType")
-            if traffic_type:
-                model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
+            candidate_finish_reason: Final = _candidates[0].get("finishReason") if _candidates else None
+            if traffic_type or candidate_finish_reason:
+                psf: Final = model_response._hidden_params.setdefault("provider_specific_fields", {})
+                if traffic_type:
+                    psf["traffic_type"] = traffic_type
+                if candidate_finish_reason:
+                    psf["finish_reason"] = candidate_finish_reason
+                    psf["gemini_finish_reason"] = candidate_finish_reason
 
             ## ADD SERVICE TIER ##
             if getattr(raw_response, "headers", None):
@@ -3190,10 +3210,13 @@ class ModelResponseIterator:
                         mapped_finish_reason = "tool_calls"
                     else:
                         mapped_finish_reason = VertexGeminiConfig._check_finish_reason(None, finish_reason_str)
+                delta_psf = None
+                if finish_reason_str is not None:
+                    delta_psf = {"finish_reason": finish_reason_str, "gemini_finish_reason": finish_reason_str}
                 choice = StreamingChoices(
                     finish_reason=mapped_finish_reason,
                     index=candidate.get("index", 0),
-                    delta=Delta(content=None, role=None),
+                    delta=Delta(content=None, role=None, provider_specific_fields=delta_psf),
                     logprobs=None,
                     enhancements=None,
                 )
