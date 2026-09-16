@@ -3902,6 +3902,78 @@ class TestTestConnectionUsesTheNamedCredential:
         assert probe.headers["authorization"] == f"Bearer {self.CREDENTIAL_KEY}"
 
 
+class TestTestConnectionLeavesSharedPricingAlone:
+    """A connection test must not write prices into ``litellm.model_cost``: a probe
+    carries no router deployment id, so ``completion`` would register them under
+    the shared ``{provider}/{model}`` key that sibling deployments price from."""
+
+    MODEL = "openai/test-connection-pricing-probe"
+    SHARED_KEY = MODEL
+    CONFIG_KEY = "sk-configured"
+    COMPLETION = TestTestConnectionUsesTheNamedCredential.COMPLETION
+
+    def _probe(self, monkeypatch, config_litellm_params: dict, request_litellm_params: dict) -> httpx.Request:
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        app = FastAPI()
+        app.include_router(_health_endpoints_module.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        router = MagicMock()
+        router.get_deployment.return_value = None
+        router.get_model_list.return_value = [
+            {"model_name": "pricing-probe", "litellm_params": config_litellm_params, "model_info": {}}
+        ]
+
+        with (
+            patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: the deployment the probe is matched against is a proxy global; it has no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            respx.mock(assert_all_called=True) as respx_mock,
+        ):
+            respx_mock.post(path__regex=r".*/chat/completions").respond(json=self.COMPLETION)
+            response = TestClient(app).post(
+                "/health/test_connection",
+                json={"mode": "chat", "litellm_params": request_litellm_params, "model_info": {"mode": "chat"}},
+            )
+            probe = respx_mock.calls.last.request
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        return probe
+
+    def test_request_pricing_is_not_registered_under_the_shared_key(self, monkeypatch):
+        probe = self._probe(
+            monkeypatch,
+            {"model": self.MODEL, "api_key": self.CONFIG_KEY, "api_base": "https://configured.example/v1"},
+            {"model": self.MODEL, "input_cost_per_token": 1.0, "output_cost_per_token": 2.0},
+        )
+
+        assert probe.headers["authorization"] == f"Bearer {self.CONFIG_KEY}"
+        assert self.SHARED_KEY not in litellm.model_cost
+
+    def test_configured_pricing_is_not_registered_under_the_shared_key(self, monkeypatch):
+        probe = self._probe(
+            monkeypatch,
+            {
+                "model": self.MODEL,
+                "api_key": self.CONFIG_KEY,
+                "api_base": "https://configured.example/v1",
+                "input_cost_per_token": 3.0,
+                "output_cost_per_token": 4.0,
+            },
+            {"model": self.MODEL},
+        )
+
+        assert probe.url.host == "configured.example"
+        assert self.SHARED_KEY not in litellm.model_cost
+
+
 class TestNoRedisWarning:
     """`show_no_redis_warning` drives the Admin UI's default-on "no Redis" banner."""
 
