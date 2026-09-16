@@ -64,6 +64,7 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
+    build_upstream_authorize_url,
     build_upstream_oauth2_token_request,
     get_request_base_url,
     resolve_upstream_resource,
@@ -799,9 +800,9 @@ def _redirect_to_upstream_authorize(
         **({"scope": scope_value} if scope_value else {}),
         **({"resource": upstream_resource} if upstream_resource else {}),
     }
-    parsed_auth_url: Final = urlparse(mcp_server.effective_authorization_url or "")
-    merged_params: Final = {**dict(parse_qsl(parsed_auth_url.query)), **passthrough_params}
-    return RedirectResponse(urlunparse(parsed_auth_url._replace(query=urlencode(merged_params))))
+    return RedirectResponse(
+        build_upstream_authorize_url(mcp_server.effective_authorization_url or "", passthrough_params)
+    )
 
 
 def _bridge_access_denied_redirect(redirect_uri: str, state: str, mcp_server: MCPServer) -> RedirectResponse:
@@ -972,11 +973,9 @@ async def authorize_with_server(
     if upstream_resource:
         params["resource"] = upstream_resource
 
-    parsed_auth_url: Final = urlparse(resolved_server.effective_authorization_url)
-    existing_params: Final = dict(parse_qsl(parsed_auth_url.query))
-    existing_params.update(params)
-    final_url: Final = urlunparse(parsed_auth_url._replace(query=urlencode(existing_params)))
-    response: Final = RedirectResponse(final_url)
+    response: Final = RedirectResponse(
+        build_upstream_authorize_url(resolved_server.effective_authorization_url, params)
+    )
     _set_oauth_state_cookie(response, request, relay_state, encoded_state)
     return response
 
