@@ -180,17 +180,15 @@ const parseRawGitSource = (url: URL, subPath?: string): SkillSourcePreview | nul
 
 interface SshRemote {
   cloneUrl: string;
-  repoPath: string;
+  repoName: string;
 }
-
-const withGitSuffix = (path: string): string => `${path.replace(/\.git$/i, "")}.git`;
 
 const buildSshRemote = (rawPath: string, toCloneUrl: (repoPath: string) => string): SshRemote | null => {
   if (rawPath.split("/").some((segment) => DOTS_ONLY_SEGMENT_REGEX.test(segment))) {
     return null;
   }
-  const repoPath = withGitSuffix(rawPath);
-  return { cloneUrl: toCloneUrl(repoPath), repoPath };
+  const bare = rawPath.replace(/\.git$/i, "");
+  return { cloneUrl: toCloneUrl(`${bare}.git`), repoName: lastSegment(bare) };
 };
 
 const parseSshRemote = (raw: string): SshRemote | null => {
@@ -208,9 +206,6 @@ const parseSshRemote = (raw: string): SshRemote | null => {
   return null;
 };
 
-const parseSshSource = (remote: SshRemote, subPath?: string): SkillSourcePreview | null =>
-  buildGitSourcePreview("SSH", remote.cloneUrl, lastSegment(remote.repoPath).replace(/\.git$/, ""), subPath);
-
 const parseArchiveSource = (url: URL): SkillSourcePreview => ({
   parsed: { source: "archive", url: url.href },
   label: `Zip archive — ${url.host}${url.pathname}`,
@@ -225,9 +220,9 @@ const parseArchiveSource = (url: URL): SkillSourcePreview => ({
  * with an optional subfolder turning it into git-subdir.
  */
 export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourcePreview | null => {
-  const sshRemote = parseSshRemote(rawUrl);
-  if (sshRemote) {
-    return parseSshSource(sshRemote, subPath);
+  const ssh = parseSshRemote(rawUrl);
+  if (ssh) {
+    return buildGitSourcePreview("SSH", ssh.cloneUrl, ssh.repoName, subPath);
   }
   const url = parseRepoUrl(rawUrl);
   if (!url) {
