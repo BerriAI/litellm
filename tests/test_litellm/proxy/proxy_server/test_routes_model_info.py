@@ -340,10 +340,13 @@ def model_group_info_router(monkeypatch):
     return router
 
 
-def test_model_group_info_proxy_admin_ignores_key_model_restriction(client, auth_as, model_group_info_router):
+@pytest.mark.parametrize("admin_role", ["proxy_admin", "proxy_admin_viewer"])
+def test_model_group_info_proxy_admin_ignores_key_model_restriction(
+    client, auth_as, model_group_info_router, admin_role
+):
     from litellm.proxy._types import LitellmUserRoles
 
-    with auth_as(LitellmUserRoles.PROXY_ADMIN, models=["no-default-models"]):
+    with auth_as(LitellmUserRoles(admin_role), models=["no-default-models"]):
         response = client.get("/model_group/info")
 
     assert response.status_code == 200
