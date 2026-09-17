@@ -5287,8 +5287,15 @@ def transcribe_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+    monkeypatch.setitem(
+        app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual", user_id="user-a")
+    )
     yield TestClient(app)
+
+
+def _owned_job(owner: str | None, status: str = "COMPLETED") -> dict[str, object]:
+    tags = {"Tags": [{"Key": "litellm-owner", "Value": owner}]} if owner is not None else {}
+    return {"TranscriptionJob": {"TranscriptionJobName": "litellm-job-1", "TranscriptionJobStatus": status, **tags}}
 
 
 class TestTranscribeProxyRoute:
@@ -5299,6 +5306,7 @@ class TestTranscribeProxyRoute:
             "Media": {"MediaFileUri": "s3://bucket/audio.wav"},
         }
     )
+    OWNER_TAG: Final = MappingProxyType({"Key": "litellm-owner", "Value": "user-a"})
 
     def test_signs_and_forwards_start_transcription_job(self, transcribe_client: TestClient) -> None:
         upstream_body = {
@@ -5317,17 +5325,27 @@ class TestTranscribeProxyRoute:
         assert targets[0] == "Transcribe.StartTranscriptionJob"
         assert set(targets[1:]) <= {"Transcribe.GetTranscriptionJob"}
         sent = route.calls[0].request
-        assert json.loads(sent.content) == dict(self.START_JOB_BODY)
+        assert json.loads(sent.content) == {**dict(self.START_JOB_BODY), "Tags": [dict(self.OWNER_TAG)]}
         assert sent.headers["content-type"] == "application/x-amz-json-1.1"
         assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=test-access-key/")
         assert "/us-west-2/transcribe/aws4_request" in sent.headers["authorization"]
         assert "x-amz-date" in sent.headers
 
+    def test_the_caller_cannot_forge_the_owner_tag(self, transcribe_client: TestClient) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post(
+                "/transcribe/StartTranscriptionJob",
+                json={**dict(self.START_JOB_BODY), "Tags": [{"Key": "litellm-owner", "Value": "user-b"}]},
+            )
+
+        assert response.status_code == 400
+        assert "litellm-owner" in response.json()["detail"]
+        assert not route.called
+
     def test_sdk_route_reads_operation_from_x_amz_target_and_resigns(self, transcribe_client: TestClient) -> None:
         with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(
-                return_value=httpx.Response(200, json={"TranscriptionJob": {"TranscriptionJobStatus": "COMPLETED"}})
-            )
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=_owned_job("user-a")))
             response = transcribe_client.post(
                 "/transcribe",
                 json={"TranscriptionJobName": "litellm-job-1"},
@@ -5338,21 +5356,76 @@ class TestTranscribeProxyRoute:
                 },
             )
 
-        assert (response.status_code, response.json()) == (
-            200,
-            {"TranscriptionJob": {"TranscriptionJobStatus": "COMPLETED"}},
-        )
+        assert (response.status_code, response.json()) == (200, _owned_job("user-a"))
+        assert [call.request.headers["x-amz-target"] for call in route.calls] == ["Transcribe.GetTranscriptionJob"] * 2
         sent = route.calls.last.request
-        assert sent.headers["x-amz-target"] == "Transcribe.GetTranscriptionJob"
         assert "Credential=test-access-key/" in sent.headers["authorization"]
         assert "sk-virtual" not in sent.headers["authorization"]
+
+    @pytest.mark.parametrize("operation", ["GetTranscriptionJob", "DeleteTranscriptionJob"])
+    @pytest.mark.parametrize("owner", ["user-b", None])
+    def test_jobs_started_by_others_are_not_reachable(
+        self, transcribe_client: TestClient, operation: str, owner: str | None
+    ) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=_owned_job(owner)))
+            response = transcribe_client.post(
+                f"/transcribe/{operation}", json={"TranscriptionJobName": "litellm-job-1"}
+            )
+
+        assert response.status_code == 404
+        assert [call.request.headers["x-amz-target"] for call in route.calls] == ["Transcribe.GetTranscriptionJob"]
+
+    def test_the_owner_may_delete_the_job(self, transcribe_client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            route.side_effect = [httpx.Response(200, json=_owned_job("user-a")), httpx.Response(200, json={})]
+            response = transcribe_client.post(
+                "/transcribe/DeleteTranscriptionJob", json={"TranscriptionJobName": "litellm-job-1"}
+            )
+
+        assert (response.status_code, response.json()) == (200, {})
+        assert [call.request.headers["x-amz-target"] for call in route.calls] == [
+            "Transcribe.GetTranscriptionJob",
+            "Transcribe.DeleteTranscriptionJob",
+        ]
+
+    @pytest.mark.parametrize("operation", ["ListTranscriptionJobs", "ListVocabularies", "DeleteVocabulary"])
+    def test_account_wide_operations_need_a_proxy_admin(self, transcribe_client: TestClient, operation: str) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post(f"/transcribe/{operation}", json={})
+
+        assert response.status_code == 403
+        assert operation in response.json()["detail"]
+        assert not route.called
+
+    def test_a_proxy_admin_reaches_account_wide_operations(
+        self, transcribe_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setitem(
+            app.dependency_overrides,
+            user_api_key_auth,
+            lambda: UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(TRANSCRIBE_UPSTREAM).mock(
+                return_value=httpx.Response(200, json={"TranscriptionJobSummaries": []})
+            )
+            response = transcribe_client.post("/transcribe/ListTranscriptionJobs", json={})
+
+        assert (response.status_code, response.json()) == (200, {"TranscriptionJobSummaries": []})
 
     def test_upstream_error_status_and_body_are_returned(self, transcribe_client: TestClient) -> None:
         aws_error = {"__type": "BadRequestException", "Message": "The requested job couldn't be found."}
         with respx.mock(assert_all_called=True) as upstream:
             upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(400, json=aws_error))
             response = transcribe_client.post(
-                "/transcribe/GetTranscriptionJob", json={"TranscriptionJobName": "missing"}
+                "/transcribe/StartTranscriptionJob",
+                json={**dict(self.START_JOB_BODY), "TranscriptionJobName": "missing"},
             )
 
         assert (response.status_code, response.json()) == (400, aws_error)
@@ -5386,7 +5459,7 @@ class TestTranscribeProxyRoute:
         with respx.mock(assert_all_called=False) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
             response = transcribe_client.post(
-                "/transcribe/ListTranscriptionJobs", content=raw_body, headers={"Content-Type": "application/json"}
+                "/transcribe/GetTranscriptionJob", content=raw_body, headers={"Content-Type": "application/json"}
             )
 
         assert response.status_code == 400
@@ -5399,7 +5472,7 @@ class TestTranscribeProxyRoute:
             monkeypatch.delenv(name, raising=False)
         with respx.mock(assert_all_called=False) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
-            response = transcribe_client.post("/transcribe/ListTranscriptionJobs", json={})
+            response = transcribe_client.post("/transcribe/GetTranscriptionJob", json={})
 
         assert response.status_code == 400
         assert "AWS region" in response.json()["detail"]
@@ -5495,9 +5568,7 @@ class TestVertexAILiveWebsocketPassthrough:
             ]
         )
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
-        monkeypatch.setattr(
-            passthrough_module.passthrough_endpoint_router, "default_vertex_config", None
-        )
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
         self._clear_vertex_env(monkeypatch)
         websocket = self._websocket()
         ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
@@ -5639,9 +5710,7 @@ class TestVertexAILiveWebsocketPassthrough:
         )
 
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
-        monkeypatch.setattr(
-            passthrough_module.passthrough_endpoint_router, "default_vertex_config", None
-        )
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
         self._clear_vertex_env(monkeypatch)
         websocket = self._websocket()
         ensure_token = AsyncMock(side_effect=Exception("Unable to find your credentials"))

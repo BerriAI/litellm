@@ -7,13 +7,20 @@ import httpx
 import pytest
 
 import litellm
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.transcribe_passthrough_logging_handler import (
     TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS,
+    TRANSCRIBE_OWNER_TAG,
     TranscribePassthroughLoggingHandler,
+    TranscribeRefusal,
+    media_predates_job,
     price_transcription_job,
     requested_media_format,
     s3_media_url,
+    transcribe_admin_only_refusal,
     transcribe_cost_per_second,
+    transcribe_job_access_refusal,
+    transcribe_owned_start_request,
     transcribe_supported_operations,
     transcribe_unpriceable_request_reason,
     write_media_within_limit,
@@ -46,23 +53,27 @@ async def _no_sleep(_: float) -> None:
 
 
 MEDIA_URI = "s3://b/a.wav"
+CREATED_AT = 1_789_682_363.696
 
 
-def _job(status: str, media_uri: str | None = MEDIA_URI) -> dict[str, object]:
+def _job(
+    status: str, media_uri: str | None = MEDIA_URI, created_at: float | None = CREATED_AT, **members: object
+) -> dict[str, object]:
     media = {"Media": {"MediaFileUri": media_uri}} if media_uri else {}
-    return {"TranscriptionJob": {"TranscriptionJobStatus": status, **media}}
+    created = {"CreationTime": created_at} if created_at is not None else {}
+    return {"TranscriptionJob": {"TranscriptionJobStatus": status, **media, **created, **members}}
 
 
-async def _no_media(uri: str) -> float | None:
+async def _no_media(uri: str, created_at: float) -> float | None:
     raise AssertionError("the media must not be measured on this path")
 
 
 def _media_probe(*durations: float | None | Exception):
     remaining = list(durations)
-    measured: list[str] = []
+    measured: list[tuple[str, float]] = []
 
-    async def media_seconds(uri: str) -> float | None:
-        measured.append(uri)
+    async def media_seconds(uri: str, created_at: float) -> float | None:
+        measured.append((uri, created_at))
         outcome = remaining.pop(0) if len(remaining) > 1 else remaining[0]
         if isinstance(outcome, Exception):
             raise outcome
@@ -266,7 +277,7 @@ class TestPriceTranscriptionJob:
 
         assert cost == pytest.approx(18 * COST_PER_SECOND)
         assert seen == ["job-1", "job-1", "job-1"]
-        assert measured == [MEDIA_URI]
+        assert measured == [(MEDIA_URI, CREATED_AT)]
 
     @pytest.mark.asyncio
     async def test_a_failed_poll_is_retried_instead_of_ending_pricing(self):
@@ -310,7 +321,7 @@ class TestPriceTranscriptionJob:
         cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, media_seconds, sleep=_no_sleep)
 
         assert cost == pytest.approx(TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS * COST_PER_SECOND)
-        assert measured == [MEDIA_URI]
+        assert measured == [(MEDIA_URI, CREATED_AT)]
 
     @pytest.mark.asyncio
     async def test_media_fetch_is_retried_then_charged_the_maximum(self):
@@ -339,6 +350,157 @@ class TestPriceTranscriptionJob:
         cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, _no_media, sleep=_no_sleep)
 
         assert cost == pytest.approx(TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS * COST_PER_SECOND)
+
+    @pytest.mark.asyncio
+    async def test_completed_job_without_creation_time_is_charged_the_maximum_unmeasured(self):
+        get_job, _ = _sequence(_job("COMPLETED", created_at=None))
+        media_seconds, measured = _media_probe(60.0)
+
+        cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, media_seconds, sleep=_no_sleep)
+
+        assert cost == pytest.approx(TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS * COST_PER_SECOND)
+        assert measured == []
+
+
+class TestMediaPredatesJob:
+    LAST_MODIFIED = "Thu, 17 Sep 2026 17:45:00 GMT"
+    LAST_MODIFIED_EPOCH = 1_789_667_100.0
+
+    def test_object_written_before_the_job_counts(self):
+        assert media_predates_job(httpx.Headers({"Last-Modified": self.LAST_MODIFIED}), self.LAST_MODIFIED_EPOCH + 30)
+
+    def test_object_written_in_the_same_second_as_the_job_counts(self):
+        assert media_predates_job(httpx.Headers({"Last-Modified": self.LAST_MODIFIED}), self.LAST_MODIFIED_EPOCH - 0.4)
+
+    def test_object_rewritten_after_the_job_does_not_count(self):
+        assert not media_predates_job(
+            httpx.Headers({"Last-Modified": self.LAST_MODIFIED}), self.LAST_MODIFIED_EPOCH - 30
+        )
+
+    @pytest.mark.parametrize("headers", [{}, {"Last-Modified": "yesterday"}])
+    def test_unknown_modification_time_does_not_count(self, headers: dict[str, str]):
+        assert not media_predates_job(httpx.Headers(headers), self.LAST_MODIFIED_EPOCH + 30)
+
+
+VIRTUAL_KEY = UserAPIKeyAuth(api_key="hashed-key-a", user_id="user-a", team_id="team-a")
+OTHER_VIRTUAL_KEY = UserAPIKeyAuth(api_key="hashed-key-b", user_id="user-b", team_id="team-b")
+ADMIN_KEY = UserAPIKeyAuth(api_key="hashed-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
+class TestTranscribeAdminOnlyRefusal:
+    @pytest.mark.parametrize("operation", ["StartTranscriptionJob", "GetTranscriptionJob", "DeleteTranscriptionJob"])
+    def test_job_scoped_operations_are_open_to_virtual_keys(self, operation: str):
+        assert transcribe_admin_only_refusal(operation, VIRTUAL_KEY) is None
+
+    @pytest.mark.parametrize("operation", ["ListTranscriptionJobs", "ListVocabularies", "DeleteVocabulary"])
+    def test_account_wide_operations_are_refused_for_virtual_keys(self, operation: str):
+        refusal = transcribe_admin_only_refusal(operation, VIRTUAL_KEY)
+
+        assert refusal is not None
+        assert refusal.status_code == 403
+        assert operation in refusal.detail
+
+    @pytest.mark.parametrize("operation", ["ListTranscriptionJobs", "DeleteVocabulary"])
+    def test_account_wide_operations_are_open_to_proxy_admins(self, operation: str):
+        assert transcribe_admin_only_refusal(operation, ADMIN_KEY) is None
+
+
+class TestTranscribeOwnedStartRequest:
+    def test_the_caller_identity_is_appended_to_the_job_tags(self):
+        body = {"TranscriptionJobName": "j", "Tags": [{"Key": "env", "Value": "qa"}]}
+
+        owned = transcribe_owned_start_request(body, VIRTUAL_KEY)
+
+        assert owned == {
+            "TranscriptionJobName": "j",
+            "Tags": ({"Key": "env", "Value": "qa"}, {"Key": TRANSCRIBE_OWNER_TAG, "Value": "user-a"}),
+        }
+        assert body == {"TranscriptionJobName": "j", "Tags": [{"Key": "env", "Value": "qa"}]}
+
+    def test_a_request_without_tags_gets_the_owner_tag(self):
+        owned = transcribe_owned_start_request({"TranscriptionJobName": "j"}, VIRTUAL_KEY)
+
+        assert owned == {"TranscriptionJobName": "j", "Tags": ({"Key": TRANSCRIBE_OWNER_TAG, "Value": "user-a"},)}
+
+    def test_the_caller_cannot_supply_the_owner_tag(self):
+        owned = transcribe_owned_start_request(
+            {"TranscriptionJobName": "j", "Tags": [{"Key": TRANSCRIBE_OWNER_TAG, "Value": "user-b"}]}, VIRTUAL_KEY
+        )
+
+        assert isinstance(owned, TranscribeRefusal)
+        assert owned.status_code == 400
+
+    @pytest.mark.parametrize("tags", ["env=qa", ["env"], {"Key": "env"}])
+    def test_malformed_tags_are_refused(self, tags: object):
+        owned = transcribe_owned_start_request({"TranscriptionJobName": "j", "Tags": tags}, VIRTUAL_KEY)
+
+        assert isinstance(owned, TranscribeRefusal)
+        assert owned.status_code == 400
+
+    def test_a_key_without_any_identity_is_refused(self):
+        owned = transcribe_owned_start_request({"TranscriptionJobName": "j"}, UserAPIKeyAuth())
+
+        assert isinstance(owned, TranscribeRefusal)
+        assert owned.status_code == 400
+
+
+def _tagged(owner: str | None) -> dict[str, object]:
+    tags = {"Tags": [{"Key": TRANSCRIBE_OWNER_TAG, "Value": owner}]} if owner is not None else {}
+    return _job("COMPLETED", **tags)
+
+
+class TestTranscribeJobAccessRefusal:
+    @pytest.mark.asyncio
+    async def test_the_key_that_started_the_job_may_read_it(self):
+        get_job, seen = _sequence(_tagged("user-a"))
+
+        assert await transcribe_job_access_refusal("job-1", VIRTUAL_KEY, get_job) is None
+        assert seen == ["job-1"]
+
+    @pytest.mark.asyncio
+    async def test_a_job_started_by_another_key_is_reported_missing(self):
+        get_job, _ = _sequence(_tagged("user-b"))
+
+        refusal = await transcribe_job_access_refusal("job-1", VIRTUAL_KEY, get_job)
+
+        assert refusal is not None
+        assert refusal.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_a_job_started_outside_the_proxy_is_reported_missing(self):
+        get_job, _ = _sequence(_tagged(None))
+
+        refusal = await transcribe_job_access_refusal("job-1", OTHER_VIRTUAL_KEY, get_job)
+
+        assert refusal is not None
+        assert refusal.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_a_job_that_cannot_be_looked_up_is_reported_missing(self):
+        async def get_job(job_name: str) -> dict[str, object]:
+            raise httpx.HTTPStatusError("boom", request=MagicMock(), response=MagicMock())
+
+        refusal = await transcribe_job_access_refusal("job-1", VIRTUAL_KEY, get_job)
+
+        assert refusal is not None
+        assert refusal.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_a_non_string_job_name_is_refused_before_any_lookup(self):
+        get_job, seen = _sequence(_tagged("user-a"))
+
+        refusal = await transcribe_job_access_refusal(["job-1"], VIRTUAL_KEY, get_job)
+
+        assert refusal is not None
+        assert refusal.status_code == 400
+        assert seen == []
+
+    @pytest.mark.asyncio
+    async def test_a_proxy_admin_reads_any_job_without_a_lookup(self):
+        get_job, seen = _sequence(_tagged("user-b"))
+
+        assert await transcribe_job_access_refusal("job-1", ADMIN_KEY, get_job) is None
+        assert seen == []
 
 
 class TestTranscribePassthroughHandler:
@@ -453,13 +615,14 @@ class TestStartTranscriptionJobIsLoggedAtJobCost:
             scheduled.append(job_name)
             return 0.0
 
-        logging = PassThroughEndpointLogging(TranscribePassthroughLoggingHandler(job_pricer=job_pricer))
         immediate: list[dict[str, object]] = []
 
-        async def handle_logging(**kwargs: object) -> None:
+        async def log_dispatch(**kwargs: object) -> None:
             immediate.append(kwargs)
 
-        logging._handle_logging = handle_logging  # rebind-ok: the shared dispatch is the observable under test
+        logging = PassThroughEndpointLogging(
+            TranscribePassthroughLoggingHandler(job_pricer=job_pricer), log_dispatch=log_dispatch
+        )
 
         await logging.pass_through_async_success_handler(
             httpx_response=_make_response("StartTranscriptionJob"),
