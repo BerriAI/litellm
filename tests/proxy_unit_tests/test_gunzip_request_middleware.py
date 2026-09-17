@@ -363,3 +363,4 @@ def test_should_delegate_to_original_receive_after_body():
     assert receive_calls[0]["body"] == json.dumps(payload).encode("utf-8")
     assert receive_calls[1]["type"] == "http.disconnect"
     assert original_calls == 1
+
