@@ -78,7 +78,6 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
                         {"text": instruction}
                     ]
                 }],
-                "system": [{"text": "You are a transcription assistant."}],
                 "inferenceConfig": inference_config,
             }),
         })
@@ -152,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn request_matches_python_shape() {
+    fn request_keeps_transcription_instructions_in_user_message() {
         let params = Map::from_iter([
             ("language".to_string(), json!("en")),
             ("prompt".to_string(), json!("Speaker names")),
@@ -177,7 +176,6 @@ mod tests {
                         {"text": "Transcribe the audio. Respond with only the transcript. The audio language is en. Additional context: Speaker names"}
                     ]
                 }],
-                "system": [{"text": "You are a transcription assistant."}],
                 "inferenceConfig": {"maxTokens": 4096, "temperature": 0}
             })
         );
