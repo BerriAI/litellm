@@ -905,6 +905,48 @@ class CostMap(RootModel[dict[str, CostMapEntry]]):
     pass
 
 
+class ConfigPatchResponse(BaseModel):
+    status: str
+    values: dict[str, float | dict[str, float]]
+
+
+class CostDiscountConfig(RootModel[dict[str, float]]):
+    pass
+
+
+class CostMarginConfig(RootModel[dict[str, float | dict[str, float]]]):
+    pass
+
+
+class CostDiscountConfigResponse(BaseModel):
+    values: dict[str, float]
+
+
+class CostMarginConfigResponse(BaseModel):
+    values: dict[str, float | dict[str, float]]
+
+
+class BedrockGuardrailParams(BaseModel):
+    guardrail: Literal["bedrock"] = "bedrock"
+    mode: Literal["pre_call"] = "pre_call"
+    default_on: bool = False
+    guardrailIdentifier: str
+    guardrailVersion: str
+
+
+class BedrockGuardrailSpec(BaseModel):
+    guardrail_name: str
+    litellm_params: BedrockGuardrailParams
+
+
+class GuardrailCreateBody(BaseModel):
+    guardrail: BedrockGuardrailSpec
+
+
+class GuardrailCreateResponse(BaseModel):
+    guardrail_id: str
+
+
 class FileEntry(BaseModel):
     id: str
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Iterator
-from typing import Final, Literal
+from typing import Final
 
 import pytest
 from cost_rows import CostRow, approx_equal, poll_cost_row
@@ -11,15 +11,23 @@ from e2e_config import settle_propagation, unique_marker
 from e2e_http import NoBody, StreamingResponse, unwrap
 from lifecycle import ResourceManager
 from models import (
+    BedrockGuardrailParams,
+    BedrockGuardrailSpec,
     ChatBody,
     ChatMessage,
     ChatResponse,
+    ConfigPatchResponse,
+    CostDiscountConfig,
+    CostDiscountConfigResponse,
+    CostMarginConfig,
+    CostMarginConfigResponse,
+    GuardrailCreateBody,
+    GuardrailCreateResponse,
     KeyDeleteBody,
     KeyGenerateBody,
     LiteLLMParamsBody,
     ModelDeleteBody,
 )
-from pydantic import BaseModel, RootModel
 from spend_e2e_client import SpendClient
 
 pytestmark = pytest.mark.e2e
@@ -29,48 +37,6 @@ OUTPUT_RATE: Final = 0.0001
 DISCOUNT: Final = 0.25
 MARGIN_PERCENT: Final = 0.1
 MARGIN_FIXED: Final = 0.0005
-
-
-class _ConfigPatchResponse(BaseModel):
-    status: str
-    values: dict[str, float | dict[str, float]]
-
-
-class _DiscountConfig(RootModel[dict[str, float]]):
-    pass
-
-
-class _MarginConfig(RootModel[dict[str, float | dict[str, float]]]):
-    pass
-
-
-class _DiscountConfigResponse(BaseModel):
-    values: dict[str, float]
-
-
-class _MarginConfigResponse(BaseModel):
-    values: dict[str, float | dict[str, float]]
-
-
-class _BedrockParams(BaseModel):
-    guardrail: Literal["bedrock"] = "bedrock"
-    mode: Literal["pre_call"] = "pre_call"
-    default_on: bool = False
-    guardrailIdentifier: str
-    guardrailVersion: str
-
-
-class _GuardrailSpec(BaseModel):
-    guardrail_name: str
-    litellm_params: _BedrockParams
-
-
-class _GuardrailCreate(BaseModel):
-    guardrail: _GuardrailSpec
-
-
-class _GuardrailCreateResponse(BaseModel):
-    guardrail_id: str
 
 
 def _register_bedrock_guardrail(
@@ -84,16 +50,16 @@ def _register_bedrock_guardrail(
         client.proxy.transport.post(
             "/guardrails",
             headers=client.proxy.transport.master,
-            json=_GuardrailCreate(
-                guardrail=_GuardrailSpec(
+            json=GuardrailCreateBody(
+                guardrail=BedrockGuardrailSpec(
                     guardrail_name=name,
-                    litellm_params=_BedrockParams(
+                    litellm_params=BedrockGuardrailParams(
                         guardrailIdentifier=identifier,
                         guardrailVersion=version,
                     ),
                 )
             ),
-            response_type=_GuardrailCreateResponse,
+            response_type=GuardrailCreateResponse,
         )
     ).guardrail_id
     settle_propagation(time.monotonic())
@@ -129,8 +95,8 @@ def _set_discount(client: SpendClient, values: dict[str, float]) -> float:
         client.proxy.transport.patch(
             "/config/cost_discount_config",
             headers=client.proxy.transport.master,
-            json=_DiscountConfig(values),
-            response_type=_ConfigPatchResponse,
+            json=CostDiscountConfig(values),
+            response_type=ConfigPatchResponse,
         )
     )
     return time.monotonic()
@@ -141,8 +107,8 @@ def _set_margin(client: SpendClient, values: dict[str, float | dict[str, float]]
         client.proxy.transport.patch(
             "/config/cost_margin_config",
             headers=client.proxy.transport.master,
-            json=_MarginConfig(values),
-            response_type=_ConfigPatchResponse,
+            json=CostMarginConfig(values),
+            response_type=ConfigPatchResponse,
         )
     )
     return time.monotonic()
@@ -154,7 +120,7 @@ def _get_discount(client: SpendClient) -> dict[str, float]:
             "/config/cost_discount_config",
             headers=client.proxy.transport.master,
             params=NoBody(),
-            response_type=_DiscountConfigResponse,
+            response_type=CostDiscountConfigResponse,
         )
     ).values
 
@@ -165,7 +131,7 @@ def _get_margin(client: SpendClient) -> dict[str, float | dict[str, float]]:
             "/config/cost_margin_config",
             headers=client.proxy.transport.master,
             params=NoBody(),
-            response_type=_MarginConfigResponse,
+            response_type=CostMarginConfigResponse,
         )
     ).values
 
