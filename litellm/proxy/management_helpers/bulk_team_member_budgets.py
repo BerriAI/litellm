@@ -7,7 +7,7 @@ cap never moves another member's.
 """
 
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -93,6 +93,10 @@ async def _shared_budget_ids(tx: "Prisma", budget_ids: frozenset[str]) -> frozen
     return frozenset(budget_id for budget_id in budget_ids if sum(1 for row in rows if row.budget_id == budget_id) > 1)
 
 
+def _audit_value(value: object) -> object:
+    return value.isoformat() if isinstance(value, datetime) else value
+
+
 def _limits_audit_value(
     rows: "Sequence[prisma_models.LiteLLM_TeamMembership]",
 ) -> str:
@@ -108,9 +112,9 @@ def _limits_audit_value(
                     "user_id": row.user_id,
                     "budget_id": row.budget_id,
                     **{
-                        field: getattr(row.litellm_budget_table, field)
+                        field: _audit_value(getattr(row.litellm_budget_table, field))
                         for field in _AUDITED_LIMITS
-                        if row.litellm_budget_table is not None
+                        if row.litellm_budget_table is not None and getattr(row.litellm_budget_table, field) is not None
                     },
                 }
                 for row in sorted(rows, key=lambda row: row.user_id)
