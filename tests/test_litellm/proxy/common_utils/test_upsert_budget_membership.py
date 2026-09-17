@@ -246,8 +246,6 @@ async def test_clone_on_write_from_shared_default(mock_tx, fake_user):
     mock_tx.litellm_budgettable.update.assert_not_called()
     mock_tx.litellm_budgettable.create.assert_awaited_once()
     create_data = mock_tx.litellm_budgettable.create.await_args.kwargs["data"]
-    # The patch never touched budget_duration, so the fork keeps the window it
-    # inherited: restarting it here would hand the member a fresh period for free.
     assert create_data.pop("budget_reset_at") == shared_reset_at
     assert create_data == {
         "created_by": fake_user.user_id,

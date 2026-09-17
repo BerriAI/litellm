@@ -585,18 +585,18 @@ async def _upsert_budget_and_membership(
     source_row: Final = (
         await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id}) if is_shared_default else None
     )
-    source: Final[Mapping[str, Any]] = source_row.model_dump() if source_row is not None else {}
+    source: Final[Mapping[str, Any]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
 
     create_data: Final[dict[str, Any]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
-        **{f: source[f] for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS if _is_set_budget_value(source.get(f))},
+        **MappingProxyType(
+            {f: source[f] for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS if _is_set_budget_value(source.get(f))}
+        ),
         **write_data,
     }
 
-    # A patch that leaves the reset cadence alone must not move the deadline: the clone
-    # inherits the source row's window instead of restarting it from now, which would
-    # silently grant a member a fresh period whenever any unrelated limit is edited.
+    # Restarting an inherited window on an unrelated edit hands the member a free period.
     carried: Final = source.get("budget_reset_at") if "budget_duration" not in budget_patch else None
     if carried is not None:
         create_data["budget_reset_at"] = carried
