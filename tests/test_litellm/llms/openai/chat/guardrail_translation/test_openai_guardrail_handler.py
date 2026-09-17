@@ -1893,6 +1893,183 @@ class TestScanOnlyToolResults:
         assert data["messages"][4]["content"] == "and then?"
 
 
+class TestNoScannableContentRecordsNotRun:
+    """LIT-6314: a guardrail whose scoping leaves nothing to scan must still persist an evaluation record"""
+
+    def _system_only_data(self) -> dict:
+        return {"messages": [{"role": "system", "content": "SYSTEM-PROMPT"}]}
+
+    def _recorded_entries(self, data: dict) -> list:
+        metadata = data.get("metadata") or data.get("litellm_metadata") or {}
+        return metadata.get("standard_logging_guardrail_information") or []
+
+    @pytest.mark.asyncio
+    async def test_skipped_scan_records_not_run_entry(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="skip-system-guardrail")
+        guardrail.skip_system_message_in_guardrail = True
+        data = self._system_only_data()
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.last_inputs is None, "nothing survived scoping, apply_guardrail must not run"
+        entries = self._recorded_entries(data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_name"] == "skip-system-guardrail"
+        assert entries[0]["guardrail_status"] == "not_run"
+        assert entries[0]["guardrail_response"] == "no scannable content after message scoping"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("skip_system", [False, True])
+    async def test_empty_content_does_not_blame_scoping(self, skip_system: bool):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="unscoped-guardrail")
+        guardrail.skip_system_message_in_guardrail = skip_system
+        data = {"messages": [{"role": "user", "content": None}]}
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.last_inputs is None
+        entries = self._recorded_entries(data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_status"] == "not_run"
+        assert entries[0]["guardrail_response"] == "no scannable content"
+
+    @pytest.mark.asyncio
+    async def test_self_recording_guardrail_is_left_alone(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="self-recording-guardrail")
+        guardrail.skip_system_message_in_guardrail = True
+        guardrail.records_own_guardrail_information = True
+        data = self._system_only_data()
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.last_inputs is None
+        assert self._recorded_entries(data) == []
+
+    @pytest.mark.asyncio
+    async def test_scannable_content_records_no_extra_entry(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="normal-guardrail")
+        data = {"messages": [{"role": "user", "content": "hello"}]}
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.last_inputs is not None
+        assert all(e.get("guardrail_status") != "not_run" for e in self._recorded_entries(data))
+
+    @pytest.mark.asyncio
+    async def test_image_only_content_is_not_reported_as_not_run(self):
+        """Images are only scanned alongside text, so an image-only request is a
+        pre-existing scan gap, not a message-scoping skip, and must not be labelled one"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="image-guardrail")
+        guardrail.skip_system_message_in_guardrail = True
+        data = {
+            "messages": [
+                {"role": "system", "content": "SYSTEM-PROMPT"},
+                {
+                    "role": "user",
+                    "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
+                },
+            ]
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert self._recorded_entries(data) == []
+
+    @pytest.mark.asyncio
+    async def test_scoped_out_image_only_message_is_not_reported_as_not_run(self):
+        """An image in a skipped role must behave like any other image-only request"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="image-guardrail")
+        guardrail.skip_system_message_in_guardrail = True
+        data = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
+                },
+            ]
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.last_inputs is None
+        assert self._recorded_entries(data) == []
+
+    @pytest.mark.asyncio
+    async def test_scoped_out_text_with_image_records_not_run(self):
+        """Scoping removed text too, so the skip is recorded even though an image sat beside it"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="image-guardrail")
+        guardrail.skip_system_message_in_guardrail = True
+        data = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "Describe this picture."},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+                    ],
+                },
+            ]
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.last_inputs is None
+        entries = self._recorded_entries(data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_status"] == "not_run"
+        assert entries[0]["guardrail_response"] == "no scannable content after message scoping"
+
+
+class ToolDroppingTextGuardrail(CustomGuardrail):
+    """Answers one text per non-tool message it saw, the way a guardrail that
+    filters tool rows out before scanning does, and hands back only texts."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="tool-dropping-redactor")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        kept = [m for m in inputs.get("structured_messages") or [] if m.get("role") != "tool"]
+        return {**inputs, "texts": [str(m.get("content")).replace("POISON", "[BLOCKED]") for m in kept]}
+
+
+class TestPerMessageTextWriteBack:
+    """Texts that no longer pair one-to-one with what the handler extracted must be
+    rejected by name instead of sliding onto the wrong messages."""
+
+    @pytest.mark.asyncio
+    async def test_fewer_texts_than_extracted_over_a_tool_message_is_rejected(self):
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+        handler = OpenAIChatCompletionsHandler()
+        original_messages = [
+            {"role": "system", "content": "SYSTEM-PROMPT"},
+            {"role": "user", "content": "fetch the page"},
+            {"role": "assistant", "content": "fetching"},
+            {"role": "tool", "tool_call_id": "call_1", "content": "page says POISON here"},
+            {"role": "user", "content": "and then?"},
+        ]
+        data = {"messages": json.loads(json.dumps(original_messages))}
+
+        with pytest.raises(UnappliableRequestRewrite) as excinfo:
+            await handler.process_input_messages(data=data, guardrail_to_apply=ToolDroppingTextGuardrail())
+
+        assert excinfo.value.guardrail_name == "tool-dropping-redactor"
+        assert data["messages"] == original_messages, "a rejected rewrite must leave the request untouched"
+
+
 class TestBuildBlockSseChunks:
     """build_block_sse_chunks turns a streaming ModifyResponseException into 200 SSE chunks"""
 
@@ -2029,9 +2206,34 @@ class TestStreamingScanKey:
             [self._chunk("hi"), tool_chunk, self._chunk(None, finish_reason="stop")]
         )
         assert open_key == StreamingScanKey(texts=("hi",))
+        assert open_key.tool_calls_in_flight is True
+        assert handler.get_streaming_scan_key([self._chunk("hi")]).tool_calls_in_flight is False
         assert ended_key.texts == ("hi",)
         assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
+        assert ended_key.tool_calls_in_flight is False
         assert ended_key != open_key
+
+    def test_legacy_function_call_delta_is_held_like_a_tool_call(self):
+        from litellm.types.utils import Delta, FunctionCall, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+        function_chunk = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=None, function_call=FunctionCall(name="run_shell", arguments='{"cmd": "rm"}')),
+                    finish_reason=None,
+                )
+            ]
+        )
+        open_key = handler.get_streaming_scan_key([self._chunk("hi"), function_chunk])
+        ended_key = handler.get_streaming_scan_key(
+            [self._chunk("hi"), function_chunk, self._chunk(None, finish_reason="function_call")]
+        )
+        assert open_key.tool_calls_in_flight is True
+        assert open_key.tool_calls == ()
+        assert len(ended_key.tool_calls) == 1 and "run_shell" in ended_key.tool_calls[0]
+        assert ended_key.tool_calls_in_flight is False
 
     def test_text_after_the_first_choice_finishes_still_changes_the_key(self):
         handler = OpenAIChatCompletionsHandler()

@@ -324,18 +324,18 @@ CONVERSE_METADATA_EVENT = {
 }
 
 
-def _converse_stream_wrapper(events):
+def _converse_stream_wrapper(events, model=CONVERSE_MODEL):
     async def bedrock_stream():
-        decoder = AWSEventStreamDecoder(model=CONVERSE_MODEL)
+        decoder = AWSEventStreamDecoder(model=model)
         for event in events:
             yield decoder._chunk_parser(chunk_data=event)
 
     return CustomStreamWrapper(
         completion_stream=bedrock_stream(),
-        model=CONVERSE_MODEL,
+        model=model,
         custom_llm_provider="bedrock",
         logging_obj=LiteLLMLoggingObj(
-            model=CONVERSE_MODEL,
+            model=model,
             messages=[{"role": "user", "content": "hi"}],
             stream=True,
             call_type="completion",
@@ -425,6 +425,46 @@ async def test_converse_stream_ends_on_finish_reason_chunk(events, expected_fini
     roles = [choice.delta.role for chunk in chunks for choice in chunk.choices if choice.delta.role]
     assert roles == ["assistant"]
     assert any(getattr(chunk, "usage", None) is not None for chunk in wrapper.chunks)
+
+
+@pytest.mark.asyncio
+async def test_nova_invoke_stream_reports_bedrock_usage_and_finish_reason():
+    """InvokeModel Nova wraps every Converse event under its event-type key and reports usage
+    without ``totalTokens``; the stream must end on Bedrock's finish reason and surface the
+    cached tokens instead of a token-count estimate."""
+    events = (
+        {"messageStart": {"role": "assistant"}},
+        {"contentBlockDelta": {"delta": {"text": "OK"}, "contentBlockIndex": 0}},
+        {"contentBlockDelta": {"delta": {"text": "."}, "contentBlockIndex": 0}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"messageStop": {"stopReason": "end_turn"}},
+        {
+            "metadata": {
+                "usage": {
+                    "inputTokens": 5,
+                    "outputTokens": 3,
+                    "cacheReadInputTokenCount": 12262,
+                    "cacheWriteInputTokenCount": 0,
+                },
+                "metrics": {},
+                "trace": {},
+            }
+        },
+    )
+    wrapper = _converse_stream_wrapper(events, model="bedrock/invoke/us.amazon.nova-pro-v1:0")
+
+    chunks = [chunk async for chunk in wrapper]
+
+    assert "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices) == "OK."
+    finish_reasons = [choice.finish_reason for chunk in chunks for choice in chunk.choices if choice.finish_reason]
+    assert finish_reasons == ["stop"]
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    usages = [chunk.usage for chunk in wrapper.chunks if getattr(chunk, "usage", None) is not None]
+    assert len(usages) == 1
+    assert usages[0].prompt_tokens == 12267
+    assert usages[0].prompt_tokens_details.cached_tokens == 12262
+    assert usages[0].completion_tokens == 3
+    assert usages[0].total_tokens == 12270
 
 
 @pytest.mark.asyncio

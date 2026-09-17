@@ -1,24 +1,53 @@
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from .base import GuardrailConfigModel
 
 
-class SingulrGuardrailRequest(BaseModel):
-    model: str | None = None
-    messages: list[dict[str, Any]] | None = None
-    tools: list[dict[str, Any]] | None = None
-    model_response: dict[str, Any] | None = None
-    litellm_metadata: dict[str, Any] | None = None
+class ContentBlock(BaseModel):
+    type: str | None = None
+    text: str | None = None
+
+
+class ToolCallFunction(BaseModel):
+    name: str
+    arguments: str
+
+
+class ToolCall(BaseModel):
+    id: str
+    type: str = "function"
+    function: ToolCallFunction
+
+
+class AssistantMessage(BaseModel):
+    role: Literal["assistant"] = "assistant"
+    content: str | Sequence[ContentBlock] | None = None
+    tool_calls: Sequence[ToolCall] | None = None
 
 
 class SingulrGuardrailPayload(BaseModel):
-    litellm_call_id: str | None = None
-    request_data: SingulrGuardrailRequest | None = None
-    input_type: str
-    is_playground_request: bool | None = None
-    playground_text: str | None = None
+    correlation_id: str | None = None
+    model_name: str | None = None
+    model_provider_name: str | None = None
+    guardrail_scope: str | None = None
+    messages: Sequence[Mapping[str, object]] | None = None
+    images: Sequence[str] | None = None
+    tools: Sequence[Mapping[str, object]] | None = None
+    response: AssistantMessage | None = None
+    metadata: Mapping[str, str] | None = None
+
+
+class SingulrMcpGuardrailPayload(BaseModel):
+    model_name: str | None = None
+    guardrail_scope: str | None = None
+    tool_name: str | None = None
+    tool_arguments: object = None
+    mcp_server_name: str | None = None
+    tool_result: Sequence[str] | None = None
+    metadata: Mapping[str, str] | None = None
 
 
 class SingulrGuardrailResponse(BaseModel):

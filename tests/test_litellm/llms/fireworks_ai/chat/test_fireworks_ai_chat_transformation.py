@@ -1189,6 +1189,28 @@ def test_reasoning_effort_integer_passthrough():
     assert isinstance(result["reasoning_effort"], int)
 
 
+def test_reasoning_effort_dict_from_anthropic_adapter_flattened_to_effort_string():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"effort": "medium", "summary": "detailed"}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "medium"
+
+
+def test_reasoning_effort_dict_without_effort_key_dropped():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"summary": "detailed"}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in result
+
+
 def test_reasoning_effort_auto_dropped_to_model_default():
     config = FireworksAIConfig()
     result = config.map_openai_params(

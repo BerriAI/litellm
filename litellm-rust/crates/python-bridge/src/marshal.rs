@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
-use litellm_core::auth::InputSource;
+use litellm_auth::InputSource;
 use litellm_python_interop::from_py_preserving_errors as from_py;
 
 pub(crate) struct RouteOptions {
@@ -190,6 +190,7 @@ mod tests {
 
     #[test]
     fn required_shapes_preserve_nested_values_and_existing_errors() {
+        Python::initialize();
         let nested = json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}]);
         assert_eq!(
             Value::Array(required_array("messages", nested.clone()).unwrap()),
