@@ -149,9 +149,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
     }
 
     fn transform_create_batch_request(&self) -> Result<Value, Error> {
-        Err(Error::InvalidRequest(
-            "Batch creation not yet implemented for Anthropic".into(),
-        ))
+        Err(Error::Unsupported("Anthropic message batch creation"))
     }
 
     fn transform_create_batch_response(
@@ -159,9 +157,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         _response: AnthropicMessageBatch,
         _now: i64,
     ) -> Result<LiteLlmMessageBatch, Error> {
-        Err(Error::InvalidResponse(
-            "Batch creation not yet implemented for Anthropic".into(),
-        ))
+        Err(Error::Unsupported("Anthropic message batch creation"))
     }
 
     fn retrieve_batch_url(
@@ -171,7 +167,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         if batch_id.is_empty() {
-            return Err(Error::InvalidRequest("batch_id is required".into()));
+            return Err(Error::MissingField("batch_id"));
         }
         let mut url = batches_base_url(api_base, env_lookup)?;
         url.path_segments_mut()
@@ -331,14 +327,12 @@ mod tests {
     fn preserves_python_placeholder_for_batch_creation() {
         assert!(matches!(
             ANTHROPIC_BATCHES_TRANSFORMATION.transform_create_batch_request(),
-            Err(Error::InvalidRequest(message))
-                if message == "Batch creation not yet implemented for Anthropic"
+            Err(Error::Unsupported("Anthropic message batch creation"))
         ));
         let response: AnthropicMessageBatch = serde_json::from_value(json!({})).unwrap();
         assert!(matches!(
             ANTHROPIC_BATCHES_TRANSFORMATION.transform_create_batch_response(response, 0),
-            Err(Error::InvalidResponse(message))
-                if message == "Batch creation not yet implemented for Anthropic"
+            Err(Error::Unsupported("Anthropic message batch creation"))
         ));
     }
 }
