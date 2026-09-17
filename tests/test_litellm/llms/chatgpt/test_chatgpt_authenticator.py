@@ -55,9 +55,7 @@ class TestChatGPTAuthenticator:
             assert token == "token-new"
 
     def test_get_account_id_from_id_token(self, authenticator):
-        id_token = _make_jwt(
-            {"https://api.openai.com/auth": {"chatgpt_account_id": "acct-123"}}
-        )
+        id_token = _make_jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-123"}})
         auth_data = json.dumps({"id_token": id_token})
 
         with (
@@ -68,3 +66,22 @@ class TestChatGPTAuthenticator:
             assert account_id == "acct-123"
             mock_write.assert_called_once()
             assert mock_write.call_args[0][0]["account_id"] == "acct-123"
+
+    def test_get_account_id_prefers_stored_value_without_rewriting_file(self, authenticator):
+        id_token = _make_jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-from-token"}})
+        auth_data = json.dumps({"account_id": "acct-stored", "id_token": id_token})
+
+        with (
+            patch("builtins.open", mock_open(read_data=auth_data)),
+            patch.object(authenticator, "_write_auth_file") as mock_write,
+        ):
+            assert authenticator.get_account_id() == "acct-stored"
+            mock_write.assert_not_called()
+
+    def test_get_account_id_without_login_returns_none(self, authenticator):
+        with (
+            patch("builtins.open", mock_open(read_data="{}")),
+            patch.object(authenticator, "_write_auth_file") as mock_write,
+        ):
+            assert authenticator.get_account_id() is None
+            mock_write.assert_not_called()
