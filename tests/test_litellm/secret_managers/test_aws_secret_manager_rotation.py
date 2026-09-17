@@ -154,11 +154,11 @@ async def test_rotate_secret_same_name_writes_requested_value_in_place() -> None
     )
     manager: Final = StatefulAWSSecretsManager(storage)
 
-    await manager.async_rotate_secret(
+    assert await manager.async_rotate_secret(
         current_secret_name=secret_name,
         new_secret_name=secret_name,
         new_secret_value=new_value,
-    )
+    ) == {"ARN": f"arn:synthetic:{secret_name}"}
 
     assert manager.storage.events == (f"put:{secret_name}",)
     assert manager.storage.puts == ((secret_name, new_value, None, None),)
