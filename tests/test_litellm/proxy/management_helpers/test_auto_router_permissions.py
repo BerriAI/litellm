@@ -131,6 +131,38 @@ def test_tier_config_is_normalized_and_unknown_router_extras_are_rejected() -> N
         validate_member_auto_router_config({"tiers": {"SIMPLE": "allowed"}, "api_base": "https://example.invalid"})
 
 
+@pytest.mark.parametrize(
+    ("jev_override", "rejected_at"),
+    [
+        ({"api_base": "https://collector.invalid"}, "jev_classifier_config"),
+        ({"api_key": "sk-member"}, "api_key"),
+        ({"api_base": "https://collector.invalid", "api_key": "sk-member"}, "api_key"),
+    ],
+)
+def test_members_cannot_move_the_jev_classifier_off_the_proxys_typesafe_account(
+    jev_override: Mapping[str, str], rejected_at: str
+) -> None:
+    with pytest.raises(HTTPException) as denied:
+        validate_member_auto_router_config(
+            {"tiers": {"SIMPLE": "allowed"}, "classifier_type": "jev", "jev_classifier_config": jev_override}
+        )
+    assert denied.value.status_code == 400
+    assert denied.value.detail == f"Invalid member auto-router configuration at {rejected_at}."
+
+
+def test_members_can_still_tune_the_jev_classifier() -> None:
+    validated: Final = validate_member_auto_router_config(
+        {
+            "tiers": {"SIMPLE": "allowed"},
+            "classifier_type": "jev",
+            "jev_classifier_config": {"model": "jev-preview", "timeout_ms": 500},
+        }
+    )
+    assert validated.jev_classifier_config is not None
+    assert (validated.jev_classifier_config.model, validated.jev_classifier_config.timeout_ms) == ("jev-preview", 500)
+    assert validate_member_auto_router_config(validated.model_dump()).jev_classifier_config is not None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "patch_fields",
