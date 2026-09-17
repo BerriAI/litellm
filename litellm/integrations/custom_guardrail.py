@@ -960,15 +960,15 @@ class CustomGuardrail(CustomLogger):
 
     def _chat_shaped_output_scan(
         self,
-        scratch_request: Mapping[str, object],
+        scratch_request: dict[str, object],  # mutable-ok: process_output_response takes the shared request dict
         translation: "BaseTranslation",
         output_translation_cls: type["BaseTranslation"],
-    ) -> tuple["BaseTranslation", dict[str, object]]:  # mutable-ok: BaseTranslation.process_output_response contract
+    ) -> tuple["BaseTranslation", dict[str, object]]:  # mutable-ok: process_output_response takes a dict
         """The output translation, pinned to the input's scan context, and the logged request in chat shape."""
         context: Final = translation.request_scan_context(scratch_request, self)
         output_translation: Final = output_translation_cls(pinned_request_scan_context=context)
         if not context.conversation_supplied:
-            return output_translation, dict(scratch_request)
+            return output_translation, scratch_request
         return output_translation, {
             **scratch_request,
             "messages": list(context.structured_messages),

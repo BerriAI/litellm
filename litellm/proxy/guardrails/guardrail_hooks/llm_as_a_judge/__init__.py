@@ -164,7 +164,7 @@ def _judge_conversation(
     scan_messages: Final = inputs.get("structured_messages")
     if not scan_messages:
         fallback: Final = request_data.get("messages")
-        return fallback if isinstance(fallback, list) else []
+        return fallback if isinstance(fallback, list) else ()
     if input_type == "response" and scan_messages[-1].get("role") == "assistant":
         return scan_messages[:-1]
     return scan_messages

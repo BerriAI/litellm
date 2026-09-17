@@ -10,11 +10,13 @@ For monitor-only mode, enable only akto-ingest without akto-validate.
 import asyncio
 import json
 import os
+from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -26,7 +28,8 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -34,6 +37,16 @@ if TYPE_CHECKING:
 HTTP_PROXY_PATH: Final = "/api/http-proxy"
 AKTO_CONNECTOR_NAME: Final = "litellm"
 DEFAULT_GUARDRAIL_TIMEOUT: Final = 5
+
+
+class _AktoAssistantMessage(TypedDict):
+    role: ReadOnly[Literal["assistant"]]
+    content: ReadOnly[str | None]
+    tool_calls: NotRequired[ReadOnly[Sequence[ChatCompletionToolCallChunk] | Sequence[ChatCompletionMessageToolCall]]]
+
+
+class _AktoChoice(TypedDict):
+    message: ReadOnly[_AktoAssistantMessage]
 
 
 class AktoGuardrail(CustomGuardrail):
@@ -201,20 +214,28 @@ class AktoGuardrail(CustomGuardrail):
             return model_response.model_dump()
 
         texts: Final = inputs.get("texts", [])
-        tool_calls: Final = inputs.get("tool_calls") or []
+        tool_calls: Final = inputs.get("tool_calls")
         if not texts and not tool_calls:
             return {}
-        first_message: Final = {
-            "content": texts[0] if texts else None,
-            "role": "assistant",
-            **({"tool_calls": tool_calls} if tool_calls else {}),
-        }
-        return {
-            "choices": [
-                {"message": first_message},
-                *({"message": {"content": t, "role": "assistant"}} for t in texts[1:]),
-            ]
-        }
+        content: Final = texts[0] if texts else None
+        first_message: Final = (
+            _AktoAssistantMessage(role="assistant", content=content, tool_calls=tool_calls)
+            if tool_calls
+            else _AktoAssistantMessage(role="assistant", content=content)
+        )
+        choices: Final = (
+            _AktoChoice(message=first_message),
+            *(_AktoChoice(message=_AktoAssistantMessage(role="assistant", content=t)) for t in texts[1:]),
+        )
+        return {"choices": choices}
+
+    @staticmethod
+    def _response_mirror_inputs(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
+        """The request-side mirror of a response scan: the model, plus the tool calls the reply made."""
+        tool_calls: Final = inputs.get("tool_calls")
+        if tool_calls:
+            return GenericGuardrailAPIInputs(model=inputs.get("model"), tool_calls=tool_calls)
+        return GenericGuardrailAPIInputs(model=inputs.get("model"))
 
     @staticmethod
     def build_tag_metadata(request_data: dict) -> dict[str, str]:
@@ -243,11 +264,7 @@ class AktoGuardrail(CustomGuardrail):
         """
         request_path: Final = self.extract_request_path(request_data)
         request_headers: Final = self.build_request_headers(request_data)
-        request_inputs: Final = (
-            GenericGuardrailAPIInputs(model=inputs.get("model"), tool_calls=inputs.get("tool_calls") or [])
-            if include_response
-            else inputs
-        )
+        request_inputs: Final = self._response_mirror_inputs(inputs) if include_response else inputs
         request_body: Final = self.build_request_body(request_inputs, request_data)
         tag: Final = self.build_tag_metadata(request_data)
 

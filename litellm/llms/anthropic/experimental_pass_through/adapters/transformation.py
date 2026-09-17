@@ -769,8 +769,8 @@ class LiteLLMAnthropicMessagesAdapter:
             function_chunk = ChatCompletionToolParamFunctionChunk(
                 name=truncated_name,
             )
-            if "input_schema" in tool:
-                function_chunk["parameters"] = dict(tool["input_schema"])
+            if "input_schema" in tool and tool["input_schema"] is not None:
+                function_chunk["parameters"] = tool["input_schema"].copy()
             if "description" in tool:
                 function_chunk["description"] = tool["description"]
             if "strict" in tool:

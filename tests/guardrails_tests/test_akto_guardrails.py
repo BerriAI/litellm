@@ -264,7 +264,7 @@ def test_build_response_body_puts_tool_calls_on_the_first_choice_only():
     body = AktoGuardrail.build_response_body(
         GenericGuardrailAPIInputs(texts=["Sunny.", "Rainy."], tool_calls=tool_calls)
     )
-    assert body["choices"] == [
+    assert list(body["choices"]) == [
         {"message": {"content": "Sunny.", "role": "assistant", "tool_calls": tool_calls}},
         {"message": {"content": "Rainy.", "role": "assistant"}},
     ]
