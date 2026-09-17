@@ -1,3 +1,5 @@
+import time
+
 from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
     convert_mid_conversation_system_turns,
@@ -60,3 +62,19 @@ def test_convert_mid_conversation_system_turns_moves_system_after_tool_result():
     assert result[1] is tool_result
     assert result[2]["role"] == "user"
     assert result[2]["content"][0]["text"] == CONVERTED_SYSTEM_NOTE
+
+
+def test_convert_mid_conversation_system_turns_handles_long_system_run_in_linear_time():
+    system_run = [{"role": "system", "content": f"reminder {i}"} for i in range(20_000)]
+    tool_result = {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "Rainy"}],
+    }
+
+    started = time.perf_counter()
+    result = convert_mid_conversation_system_turns([{"role": "user", "content": "hi"}, *system_run, tool_result])
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 5
+    assert result[1] is tool_result
+    assert [m["content"][1]["text"] for m in result[2:]] == [m["content"] for m in system_run]
