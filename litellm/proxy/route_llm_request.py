@@ -262,8 +262,6 @@ _VIDEO_FALLBACK_ROUTE_TYPES: Final = frozenset(
     }
 )
 
-# Route types whose callers go through common_processing_pre_call_logic but
-# never dispatch through route_request, so no model routing exists for them.
 _NO_MODEL_ROUTING_ROUTE_TYPES: Final = frozenset({"apply_guardrail", "call_mcp_tool"})
 
 
