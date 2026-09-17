@@ -1819,6 +1819,36 @@ def test_cached_get_model_group_info():
     assert result5 is result6
 
 
+def test_cached_get_model_group_info_does_not_leak_router_instances():
+    """
+    _cached_get_model_group_info keys its cache on self as well as
+    model_group. If it were decorated with @lru_cache directly on the
+    class, the cache would key on self too, keeping every Router that
+    ever called it (set_response_headers does, on every request)
+    reachable for the life of the process, even after discard() and every
+    other reference are dropped.
+    """
+    import gc
+    import weakref
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+            },
+        ]
+    )
+    router._cached_get_model_group_info("gpt-4")
+    router.discard()
+    router_ref = weakref.ref(router)
+
+    del router
+    gc.collect()
+
+    assert router_ref() is None
+
+
 def test_model_group_info_cost_from_db_model_info():
     """
     When get_deployment_model_info fails (model_info is None fallback),
