@@ -528,7 +528,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         return result if result else None
 
-    def request_scan_context(self, data: dict, guardrail_to_apply: "CustomGuardrail") -> RequestScanContext:
+    def request_scan_context(
+        self, data: Mapping[str, object], guardrail_to_apply: "CustomGuardrail"
+    ) -> RequestScanContext:
         if data.get("messages") is None:
             return RequestScanContext()
         translated: Final = self._translate_to_openai(
@@ -715,9 +717,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    def _hoisted_top_level_system_message(
-        self, data: dict
-    ) -> AllMessageValues | None:  # mutable-ok: API message payload
+    def _hoisted_top_level_system_message(self, data: Mapping[str, object]) -> AllMessageValues | None:
         """Return the system message produced by translating the top-level prompt."""
         system: Final = data.get("system")
         if not system:

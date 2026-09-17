@@ -965,10 +965,7 @@ class CustomGuardrail(CustomLogger):
         translation: "BaseTranslation",
     ) -> dict[str, object]:  # mutable-ok: BaseTranslation.process_output_response contract
         """The logged request in OpenAI chat shape, for an output scan whose translation differs from the input's."""
-        context: Final = translation.request_scan_context(
-            dict(scratch_request),  # mutable-ok: BaseTranslation.request_scan_context requires a dict
-            self,
-        )
+        context: Final = translation.request_scan_context(scratch_request, self)
         return {
             **scratch_request,
             "messages": list(context.structured_messages),

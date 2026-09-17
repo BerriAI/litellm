@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
@@ -7,6 +7,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    request_tools,
     response_assistant_turn,
     scoped_structured_message_indices,
 )
@@ -301,16 +302,21 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def request_scan_context(self, data: dict, guardrail_to_apply: "CustomGuardrail") -> RequestScanContext:
+    def request_scan_context(
+        self, data: Mapping[str, object], guardrail_to_apply: "CustomGuardrail"
+    ) -> RequestScanContext:
         """Override wherever ``process_input_messages`` scopes or translates the request differently."""
+        structured_messages: Final = self.get_structured_messages(
+            dict(data)  # mutable-ok: get_structured_messages takes the request as a dict
+        )
         return RequestScanContext.scoped(
-            self.get_structured_messages(data) or (), data.get("tools") or (), guardrail_to_apply
+            structured_messages or (), request_tools(data.get("tools")), guardrail_to_apply
         )
 
     def with_response_context(
         self,
         inputs: "GenericGuardrailAPIInputs",
-        request_data: dict | None,
+        request_data: Mapping[str, object] | None,
         guardrail_to_apply: "CustomGuardrail",
     ) -> "GenericGuardrailAPIInputs":
         """``inputs`` plus the scoped request conversation, closed by the scanned reply, and the request tools."""

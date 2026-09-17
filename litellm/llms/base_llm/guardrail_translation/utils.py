@@ -14,6 +14,7 @@ from litellm.types.llms.openai import (
     ChatCompletionTextObject,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolParam,
     ResponseAPIUsage,
 )
 
@@ -329,6 +330,15 @@ def response_assistant_turn(
 
 
 ToolT = TypeVar("ToolT")
+
+
+def request_tools(raw_tools: object) -> tuple[ChatCompletionToolParam, ...]:
+    """The request's ``tools`` list, as the chat completion request model already validated it upstream."""
+    if not isinstance(raw_tools, list):
+        return ()
+    return tuple(
+        cast(Sequence[ChatCompletionToolParam], raw_tools)  # cast-ok: the request model validated tools upstream
+    )
 
 
 def openai_tool_name(tool: object) -> str | None:

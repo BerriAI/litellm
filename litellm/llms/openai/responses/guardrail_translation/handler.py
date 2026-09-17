@@ -452,9 +452,16 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
         return cast(list[AllMessageValues], messages) if messages else None
 
-    def request_scan_context(self, data: dict, guardrail_to_apply: "CustomGuardrail") -> RequestScanContext:
+    def request_scan_context(
+        self, data: Mapping[str, object], guardrail_to_apply: "CustomGuardrail"
+    ) -> RequestScanContext:
         raw_tools: Final = data.get("tools")
-        structured_messages: Final = tuple(self.get_structured_messages(data) or ())
+        structured_messages: Final = tuple(
+            self.get_structured_messages(
+                dict(data)  # mutable-ok: get_structured_messages takes the request as a dict
+            )
+            or ()
+        )
         return RequestScanContext(
             structured_messages=structured_messages,
             tools=tuple(
