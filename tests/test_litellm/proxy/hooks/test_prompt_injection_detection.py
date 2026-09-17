@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import time
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -73,29 +74,27 @@ async def test_heuristics_check_keeps_event_loop_responsive():
         prompt_injection_params=LiteLLMPromptInjectionParams(heuristics_check=True)
     )
     data = {"model": "test-model", "messages": [{"role": "user", "content": LONG_SAFE_PROMPT}]}
-    ticks_during_scan: list[float] = []
-    scan_done = asyncio.Event()
 
-    async def ticker() -> None:
-        while not scan_done.is_set():
+    async def ticks_until_done(task: asyncio.Task[dict]) -> AsyncIterator[float]:
+        while not task.done():
             await asyncio.sleep(0.01)
-            ticks_during_scan.append(time.perf_counter())
+            yield time.perf_counter()
 
-    ticker_task = asyncio.create_task(ticker())
-    started = time.perf_counter()
-    result = await detector.async_pre_call_hook(
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
-        cache=DualCache(),
-        data=data,
-        call_type="acompletion",
+    scan = asyncio.create_task(
+        detector.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            cache=DualCache(),
+            data=data,
+            call_type="acompletion",
+        )
     )
+    started = time.perf_counter()
+    ticks_during_scan = tuple([tick async for tick in ticks_until_done(scan)])
     finished = time.perf_counter()
-    scan_done.set()
-    await ticker_task
+    result = await scan
 
     assert result == data
-    ticks_before_finish = [tick for tick in ticks_during_scan if tick < finished]
-    assert len(ticks_before_finish) >= int((finished - started) / 0.05)
+    assert len(ticks_during_scan) >= int((finished - started) / 0.05)
 
 
 @pytest.mark.asyncio
