@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
@@ -221,6 +222,24 @@ class UserApiKeyCache(DualCache):
             return
         await super().async_delete_cache(key)
 
+    async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
+        """Batch twin of ``async_delete_cache``, partitioned like
+        ``async_set_cache_pipeline``.
+
+        Both partitions are cleared even when one raises, because a caller
+        batching these has already committed the rows they cache.
+        """
+        key_object_keys: Final = tuple(key for key in keys if is_user_key_cache_key(key))
+        other_keys: Final = tuple(key for key in keys if not is_user_key_cache_key(key))
+        outcomes: Final = await asyncio.gather(
+            self.key_object_cache.async_delete_cache_keys(key_object_keys),
+            super().async_delete_cache_keys(other_keys),
+            return_exceptions=True,
+        )
+        failed: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, BaseException))
+        if failed:
+            raise failed[0]
+
     def flush_cache(self) -> None:
         super().flush_cache()
         self.key_object_cache.in_memory_cache.flush_cache()
@@ -334,6 +353,14 @@ def team_membership_reservation_cache_key(user_id: str, team_id: str) -> str:
     than assume a single write is visible to both.
     """
     return f"team_membership:{user_id}:{team_id}"
+
+
+#: Cached under ``team_membership_reservation_cache_key`` when a member has no ``LiteLLM_TeamMembership``
+#: row, so a session-token member without a per-member budget costs no DB read per request. Lives beside
+#: the key builder because it is part of the same cache protocol: every reader of the key must know that
+#: a plain string here means "no row", distinct from a serialized membership. The two budget readers
+#: already treat a non-model value as "no row", so they need no change to stay correct.
+NO_TEAM_MEMBERSHIP_SENTINEL: Final = "__no_team_membership__"
 
 
 def get_management_object_ttl(cache: DualCache) -> float:

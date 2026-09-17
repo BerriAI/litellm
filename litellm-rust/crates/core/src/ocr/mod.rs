@@ -1,17 +1,32 @@
-mod adapters;
+mod arguments;
 pub mod client;
-mod codecs;
-mod document;
+pub(crate) mod document;
 pub mod error;
-mod handler;
+pub use error::Error;
+pub(crate) mod handler;
 pub mod hooks;
-mod prepare;
-mod registry;
+pub(crate) mod json;
+mod lifecycle;
+pub(crate) mod prepare;
+mod provider_config;
 pub mod types;
 pub mod wire;
 
+pub use arguments::{
+    consumed_optional_param_names, consumed_optional_params, is_supported_request,
+};
 pub use client::{OcrClient, ocr};
-pub use types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
+pub use document::{encode_file_document, mime_type_for_name, read_path_document};
+pub use lifecycle::{
+    NativeOutcome, NativeResult, NoopOcrHost, OcrAdmission, OcrCall, OcrCallStep, OcrDecline,
+    OcrHookHost, OcrHost, OcrHostOperation, OcrHostResult,
+};
+pub use provider_config::{get_api_key_env_var, get_health_check_document};
+pub use types::{
+    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrConnectionInputs, OcrCredentialInputs,
+    OcrDocument, OcrDocumentInput, OcrFileContent, OcrPage, OcrPageDimensions, OcrPageImage,
+    OcrTransportConfig, OcrUsageInfo,
+};
 
 #[cfg(test)]
 #[path = "../../tests/azure_ai_ocr.rs"]

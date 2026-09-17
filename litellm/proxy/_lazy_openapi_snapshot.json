@@ -3125,6 +3125,11 @@
               "title": "Total Prompt Tokens",
               "type": "integer"
             },
+            "total_response_time_ms": {
+              "default": 0,
+              "title": "Total Response Time Ms",
+              "type": "integer"
+            },
             "total_spend": {
               "default": 0.0,
               "title": "Total Spend",
@@ -3133,6 +3138,11 @@
             "total_successful_requests": {
               "default": 0,
               "title": "Total Successful Requests",
+              "type": "integer"
+            },
+            "total_timed_requests": {
+              "default": 0,
+              "title": "Total Timed Requests",
               "type": "integer"
             },
             "total_tokens": {
@@ -3234,6 +3244,17 @@
                 }
               ],
               "title": "User Email"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
             }
           },
           "title": "KeyMetadata",
@@ -3630,6 +3651,16 @@
             "successful_requests": {
               "default": 0,
               "title": "Successful Requests",
+              "type": "integer"
+            },
+            "timed_requests": {
+              "default": 0,
+              "title": "Timed Requests",
+              "type": "integer"
+            },
+            "total_response_time_ms": {
+              "default": 0,
+              "title": "Total Response Time Ms",
               "type": "integer"
             },
             "total_tokens": {
@@ -5130,6 +5161,49 @@
             }
           ],
           "summary": "Get Skill",
+          "tags": [
+            "anthropic_skills"
+          ]
+        }
+      },
+      "/v1/skills/{skill_id}/archive": {
+        "get": {
+          "description": "Stored skill upload, repacked so SKILL.md sits at the archive root.",
+          "operationId": "agent_skills_archive_v1_skills__skill_id__archive_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "skill_id",
+              "required": true,
+              "schema": {
+                "title": "Skill Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/zip": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Agent Skills Archive",
           "tags": [
             "anthropic_skills"
           ]
@@ -9932,7 +10006,7 @@
             },
             "unreachable_fallback": {
               "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
+              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
               "enum": [
                 "fail_closed",
                 "fail_open"
@@ -10894,6 +10968,18 @@
               "description": "Custom advisory message template used when on_flagged='inject_system_message'. Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
               "title": "Advisory System Message"
             },
+            "agent_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Agent identity reported to Agent 365 with every tool evaluation. When unset, the caller's key alias is used.",
+              "title": "Agent Id"
+            },
             "akto_account_id": {
               "anyOf": [
                 {
@@ -11396,6 +11482,30 @@
               "title": "Chunk Budget Chars",
               "type": "integer"
             },
+            "client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client id of the gateway's Entra app registration (a confidential client). Falls back to the AGENT365_CLIENT_ID environment variable.",
+              "title": "Client Id"
+            },
+            "client_secret": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client secret of the gateway's Entra app registration, used to perform the On-Behalf-Of exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable.",
+              "title": "Client Secret"
+            },
             "confidence_threshold": {
               "default": 0.5,
               "default_value": 0.5,
@@ -11448,6 +11558,12 @@
               ],
               "description": "Enable content moderation to check for harmful content (harassment, hate speech, etc.).",
               "title": "Content Moderation Check"
+            },
+            "contextual_grounding_from_messages": {
+              "default": false,
+              "description": "ApplyGuardrail: when True, post-call scans of a request with no grounding_source / query content parts send the system and developer messages as the grounding source and the latest user message as the query, so the guardrail's contextual grounding policy can score the response. Bedrock bills contextual grounding units for these scans and rejects queries, sources and responses over its contextual grounding length limits, so leave this off for guardrails without a contextual grounding policy. Default False: plain messages are never sent as grounding context.",
+              "title": "Contextual Grounding From Messages",
+              "type": "boolean"
             },
             "credentials": {
               "anyOf": [
@@ -12436,6 +12552,18 @@
               "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
               "title": "Realtime Violation Message"
             },
+            "resource_app_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Application id of the Agent 365 resource the OBO token is minted for. Defaults to the production resource ea9ffc3e-8a23-4a7d-836d-234d7c7565c1; the Test and PreProd environments use a different id. Falls back to the AGENT365_RESOURCE_APP_ID environment variable.",
+              "title": "Resource App Id"
+            },
             "rules": {
               "anyOf": [
                 {
@@ -12673,6 +12801,18 @@
               "description": "The ID of your Model Armor template",
               "title": "Template Id"
             },
+            "tenant_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Entra tenant id used for the On-Behalf-Of token exchange. Falls back to the AGENT365_TENANT_ID environment variable.",
+              "title": "Tenant Id"
+            },
             "timeout": {
               "anyOf": [
                 {
@@ -12908,18 +13048,24 @@
             "PHONE_NUMBER",
             "MEDICAL_LICENSE",
             "URL",
+            "MAC_ADDRESS",
+            "UUID",
             "US_BANK_NUMBER",
             "US_DRIVER_LICENSE",
             "US_ITIN",
             "US_PASSPORT",
             "US_SSN",
+            "US_MBI",
+            "US_NPI",
             "UK_NHS",
             "UK_NINO",
             "UK_PASSPORT",
             "UK_POSTCODE",
             "UK_VEHICLE_REGISTRATION",
+            "UK_DRIVING_LICENCE",
             "ES_NIF",
             "ES_NIE",
+            "ES_PASSPORT",
             "IT_FISCAL_CODE",
             "IT_DRIVER_LICENSE",
             "IT_VAT_CODE",
@@ -12937,7 +13083,38 @@
             "IN_VEHICLE_REGISTRATION",
             "IN_VOTER",
             "IN_PASSPORT",
-            "FI_PERSONAL_IDENTITY_CODE"
+            "IN_GSTIN",
+            "FI_PERSONAL_IDENTITY_CODE",
+            "DE_TAX_ID",
+            "DE_TAX_NUMBER",
+            "DE_VAT_ID",
+            "DE_PASSPORT",
+            "DE_ID_CARD",
+            "DE_FUEHRERSCHEIN",
+            "DE_SOCIAL_SECURITY",
+            "DE_HEALTH_INSURANCE",
+            "DE_LANR",
+            "DE_BSNR",
+            "DE_KFZ",
+            "DE_HANDELSREGISTER",
+            "DE_PLZ",
+            "KR_RRN",
+            "KR_FRN",
+            "KR_PASSPORT",
+            "KR_DRIVER_LICENSE",
+            "KR_BRN",
+            "CA_SIN",
+            "SE_PERSONNUMMER",
+            "SE_ORGANISATIONSNUMMER",
+            "TH_TNIN",
+            "TR_NATIONAL_ID",
+            "TR_LICENSE_PLATE",
+            "NG_NIN",
+            "NG_VEHICLE_REGISTRATION",
+            "PH_TIN",
+            "PH_UMID",
+            "PH_PASSPORT",
+            "ZA_ID_NUMBER"
           ],
           "title": "PiiEntityType",
           "type": "string"
@@ -15129,6 +15306,17 @@
               "title": "Jwt Claim Value",
               "type": "string"
             },
+            "jwt_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Jwt Issuer"
+            },
             "key": {
               "title": "Key",
               "type": "string"
@@ -15213,6 +15401,17 @@
               "title": "Jwt Claim Value",
               "type": "string"
             },
+            "jwt_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Jwt Issuer"
+            },
             "updated_at": {
               "format": "date-time",
               "title": "Updated At",
@@ -15268,6 +15467,17 @@
                 }
               ],
               "title": "Is Active"
+            },
+            "jwt_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Jwt Issuer"
             },
             "key": {
               "anyOf": [
@@ -18810,6 +19020,228 @@
             }
           ],
           "summary": "Mistral Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/nvidia_nim/{endpoint}": {
+        "delete": {
+          "description": "Relay a native NVIDIA NIM request through a LiteLLM model group.\n\n`{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's\n`api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through\nvirtual key auth, model access checks, and spend logging.",
+          "operationId": "nvidia_nim_proxy_route_nvidia_nim__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Nvidia Nim Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "Relay a native NVIDIA NIM request through a LiteLLM model group.\n\n`{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's\n`api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through\nvirtual key auth, model access checks, and spend logging.",
+          "operationId": "nvidia_nim_proxy_route_nvidia_nim__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Nvidia Nim Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "Relay a native NVIDIA NIM request through a LiteLLM model group.\n\n`{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's\n`api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through\nvirtual key auth, model access checks, and spend logging.",
+          "operationId": "nvidia_nim_proxy_route_nvidia_nim__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Nvidia Nim Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "Relay a native NVIDIA NIM request through a LiteLLM model group.\n\n`{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's\n`api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through\nvirtual key auth, model access checks, and spend logging.",
+          "operationId": "nvidia_nim_proxy_route_nvidia_nim__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Nvidia Nim Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "Relay a native NVIDIA NIM request through a LiteLLM model group.\n\n`{PROXY_BASE_URL}/nvidia_nim/{model_group}/v1/infer` forwards the body unchanged to the deployment's\n`api_base`, so object detection and OCR NIMs whose payload carries no `model` field still go through\nvirtual key auth, model access checks, and spend logging.",
+          "operationId": "nvidia_nim_proxy_route_nvidia_nim__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Nvidia Nim Proxy Route",
           "tags": [
             "llm_passthrough"
           ]
@@ -22505,47 +22937,34 @@
       },
       "/.well-known/oauth-protected-resource": {
         "get": {
-          "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
-          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource_get",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "mcp_server_name",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Mcp Server Name"
-              }
-            }
-          ],
+          "operationId": "oauth_protected_resource_root__well_known_oauth_protected_resource_get",
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "title": "Response Oauth Protected Resource Root  Well Known Oauth Protected Resource Get",
+                    "type": "object"
                   }
                 }
               },
-              "description": "Validation Error"
+              "description": "Successful Response"
             }
           },
-          "summary": "Oauth Protected Resource Mcp",
+          "summary": "Oauth Protected Resource Root",
           "tags": [
             "mcp_byok_oauth"
           ]
@@ -24726,47 +25145,34 @@
       },
       "/.well-known/oauth-protected-resource": {
         "get": {
-          "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
-          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource_get_2",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "mcp_server_name",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Mcp Server Name"
-              }
-            }
-          ],
+          "operationId": "oauth_protected_resource_root__well_known_oauth_protected_resource_get_2",
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "title": "Response Oauth Protected Resource Root  Well Known Oauth Protected Resource Get",
+                    "type": "object"
                   }
                 }
               },
-              "description": "Validation Error"
+              "description": "Successful Response"
             }
           },
-          "summary": "Oauth Protected Resource Mcp",
+          "summary": "Oauth Protected Resource Root",
           "tags": [
             "mcp_discoverable"
           ]
@@ -25137,6 +25543,129 @@
             }
           },
           "summary": "Authorize Flow",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/authorize/mcp-session": {
+        "get": {
+          "operationId": "authorize_mcp_session_authorize_mcp_session_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "redirect_uri",
+              "required": true,
+              "schema": {
+                "title": "Redirect Uri",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "client_id",
+              "required": true,
+              "schema": {
+                "title": "Client Id",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "state",
+              "required": false,
+              "schema": {
+                "default": "",
+                "title": "State",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "code_challenge",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Code Challenge"
+              }
+            },
+            {
+              "in": "query",
+              "name": "code_challenge_method",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Code Challenge Method"
+              }
+            },
+            {
+              "in": "query",
+              "name": "response_type",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Response Type"
+              }
+            },
+            {
+              "in": "query",
+              "name": "resource",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Resource"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Authorize Mcp Session",
           "tags": [
             "mcp_discoverable"
           ]
@@ -38241,8 +38770,7 @@
               "required": false,
               "schema": {
                 "default": 10,
-                "maximum": 100,
-                "minimum": 1,
+                "minimum": 0,
                 "title": "Count",
                 "type": "integer"
               }
@@ -38946,8 +39474,7 @@
               "required": false,
               "schema": {
                 "default": 10,
-                "maximum": 100,
-                "minimum": 1,
+                "minimum": 0,
                 "title": "Count",
                 "type": "integer"
               }

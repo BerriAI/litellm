@@ -205,6 +205,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/gigachat/",
             "/milvus/",
             "/mistral/",
+            "/nvidia_nim/",
             "/openai/",
             "/openai_passthrough/",
             "/tinyfish/",

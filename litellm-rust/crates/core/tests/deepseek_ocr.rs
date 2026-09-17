@@ -1,8 +1,10 @@
 use rstest::rstest;
 use serde_json::{Value, json};
 
-use crate::ocr::codecs::deepseek::{
-    DeepSeekOcrParams, DeepSeekOcrResponse, transform_ocr_request, transform_ocr_response,
+use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+use crate::llms::vertex_ai::ocr::deepseek_transformation::{
+    DeepSeekOcrParams, DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig,
+    normalize_response as transform_ocr_response,
 };
 use crate::ocr::types::OcrDocument;
 
@@ -22,7 +24,9 @@ fn request_mapping_matches_python(#[case] name: &str, #[case] value: Value) {
     let params: DeepSeekOcrParams =
         serde_json::from_value(json!({name: value.clone(), "ignored": true})).unwrap();
     let result = serde_json::to_value(
-        transform_ocr_request("deepseek-ai/deepseek-ocr-maas", document(), &params).unwrap(),
+        VertexAIDeepSeekOCRConfig
+            .transform_ocr_request("deepseek-ai/deepseek-ocr-maas", document(), &params, &[])
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(result["model"], "deepseek-ai/deepseek-ocr-maas");
@@ -35,15 +39,44 @@ fn request_mapping_matches_python(#[case] name: &str, #[case] value: Value) {
 }
 
 #[rstest]
+#[case(json!({"type":"image_url","image_url":"data:image/png;base64,AA=="}))]
+#[case(json!({"type":"document_url","document_url":"data:application/pdf;base64,AA=="}))]
+fn request_maps_both_document_types_to_image_content(#[case] document: Value) {
+    let source = document
+        .get("image_url")
+        .or_else(|| document.get("document_url"))
+        .unwrap()
+        .clone();
+    let request = VertexAIDeepSeekOCRConfig
+        .transform_ocr_request(
+            "deepseek-ai/deepseek-ocr-maas",
+            serde_json::from_value(document).unwrap(),
+            &DeepSeekOcrParams::default(),
+            &[],
+        )
+        .unwrap();
+    let result = serde_json::to_value(request).unwrap();
+    assert_eq!(
+        result["messages"][0]["content"][0],
+        json!({"type":"image_url","image_url":source})
+    );
+}
+
+#[rstest]
 #[case(json!("# hello"), "# hello")]
 #[case(json!("{broken"), "{broken")]
 #[case(json!(" {\"pages\":[]} "), " {\"pages\":[]} ")]
-#[case(json!({"pages":[]}), "{\"pages\":[]}")]
-#[case(json!({}), "{}")]
+#[case(json!({"pages":[]}), "")]
 #[case(json!("[]"), "[]")]
 #[case(json!("{\"pages\":[{\"markdown\":\"json text\"}]}"), "json text")]
 #[case(json!({"pages":[{"markdown":"object"}]}), "object")]
 fn response_codec_handles_text_json_and_objects(#[case] content: Value, #[case] expected: &str) {
+    let structured = content
+        .as_object()
+        .is_some_and(|object| object.contains_key("pages"))
+        || content
+            .as_str()
+            .is_some_and(|text| text.contains("\"pages\""));
     let response: DeepSeekOcrResponse = serde_json::from_value(
         json!({"choices":[{"message":{"content":content}}],"usage":{"prompt_tokens":1}}),
     )
@@ -53,7 +86,11 @@ fn response_codec_handles_text_json_and_objects(#[case] content: Value, #[case] 
         .into_json();
     assert_eq!(result["pages"][0]["markdown"], expected);
     assert_eq!(result["pages"][0]["index"], 0);
-    assert_eq!(result["usage_info"]["prompt_tokens"], 1);
+    if structured {
+        assert!(result["usage_info"].is_null());
+    } else {
+        assert_eq!(result["usage_info"]["prompt_tokens"], 1);
+    }
 }
 
 #[test]
@@ -82,6 +119,7 @@ fn structured_result_maps_pages_usage_model_and_annotation() {
 #[test]
 fn response_codec_rejects_missing_empty_and_malformed_content() {
     for value in [
+        json!({"choices":[{"message":{"content":{}}}]}),
         json!({"choices":[]}),
         json!({"choices":[{"message":{"content":""}}]}),
         json!({"choices":[{"message":{"content":"{\"pages\":[{\"markdown\":42}]}"}}]}),

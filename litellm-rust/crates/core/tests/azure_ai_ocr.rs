@@ -17,15 +17,15 @@ async fn facade_executes_azure_mistral_with_prepared_auth() {
         &base,
         json!({"include_image_base64":true}),
     );
-    request.connection.api_key = None;
-    request.connection.extra_headers = vec![(
+    request.credentials.api_key = None;
+    request.transport.extra_headers = vec![(
         "Authorization".into(),
         "Bearer python-prepared-token".into(),
     )];
 
     let result = perform_ocr(request).await.unwrap();
     server.await.unwrap();
-    assert_eq!(result.pages[0]["markdown"], "hello");
+    assert_eq!(result.pages[0].markdown, "hello");
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].starts_with("POST /providers/mistral/azure/ocr "));
@@ -53,7 +53,7 @@ async fn facade_acquires_supplied_entra_token_for_final_request() {
         &base,
         json!({"azure_ad_token":"rust-owned-token"}),
     );
-    request.connection.api_key = None;
+    request.credentials.api_key = None;
 
     perform_ocr(request).await.unwrap();
     server.await.unwrap();
@@ -70,7 +70,7 @@ async fn facade_acquires_supplied_entra_token_for_final_request() {
 struct ReplaceBodyDocument;
 
 impl OcrHooks for ReplaceBodyDocument {
-    fn has_guardrails(&self) -> bool {
+    fn intercepts_requests(&self) -> bool {
         true
     }
 

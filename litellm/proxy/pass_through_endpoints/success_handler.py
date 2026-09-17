@@ -394,7 +394,9 @@ class PassThroughEndpointLogging:
     def is_vertex_route(self, url_route: str) -> bool:
         if any(f":{method}" in url_route for method in self.TRACKED_VERTEX_METHOD_ROUTES):
             return True
-        return any(resource in url_route for resource in self.TRACKED_VERTEX_RESOURCE_ROUTES)
+        if any(resource in url_route for resource in self.TRACKED_VERTEX_RESOURCE_ROUTES):
+            return True
+        return VertexPassthroughLoggingHandler.is_vertex_interactions_route(url_route)
 
     def is_anthropic_route(self, url_route: str):
         for route in self.TRACKED_ANTHROPIC_ROUTES:
@@ -470,8 +472,12 @@ class PassThroughEndpointLogging:
 
     def is_gemini_route(self, url_route: str, custom_llm_provider: str | None = None):
         """Check if the URL route is a Gemini API route."""
+        if custom_llm_provider != "gemini":
+            return False
+        if VertexPassthroughLoggingHandler.is_interactions_route(url_route):
+            return True
         for route in self.TRACKED_GEMINI_ROUTES:
-            if route in url_route and custom_llm_provider == "gemini":
+            if route in url_route:
                 return True
         return False
 
