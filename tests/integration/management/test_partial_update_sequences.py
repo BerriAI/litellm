@@ -5,10 +5,11 @@ from typing import Final
 import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
-from integration._support.client import Gateway, object_value
-from integration._support.database import read_rows
-from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 from pydantic import JsonValue
+
+from tests.integration._support.client import Gateway, object_value
+from tests.integration._support.database import read_rows
+from tests.integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 
 
 def _key_rows(digest: str) -> list[dict[str, JsonValue]]:
