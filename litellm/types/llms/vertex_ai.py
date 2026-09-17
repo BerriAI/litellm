@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
+    ReadOnly,
     Required,
     TypedDict,
 )
@@ -52,7 +53,8 @@ class PartType(TypedDict, total=False):
     file_data: FileDataType
     function_call: FunctionCall
     function_response: FunctionResponse
-    functionResponse: FunctionResponse  # writable-ok: serializer renames the internal key in place
+    functionCall: ReadOnly[FunctionCall]
+    functionResponse: ReadOnly[FunctionResponse]
     thought: bool
     thoughtSignature: str
     media_resolution: Literal["low", "medium", "high"]

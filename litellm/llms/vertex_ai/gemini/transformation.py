@@ -1217,12 +1217,29 @@ def _transform_request_body(
                 if media_resolution_value and generation_config is not None:
                     generation_config["mediaResolution"] = media_resolution_value["level"]
 
-        for message in content:
-            for part in message["parts"]:
-                if "function_response" in part:
-                    part["functionResponse"] = part.pop("function_response")
-
-        data: Final = RequestBody(contents=content)
+        wire_content: Final[
+            list[ContentType]
+        ] = [  # mutable-ok: [LIT002] JSON wire contract requires a list; built once without mutation
+            {  # mutable-ok: [LIT002] JSON encoding requires a dict; copies the content without mutation
+                **message,
+                "parts": [  # mutable-ok: [LIT002] ContentType requires a list; built once without mutation
+                    cast(
+                        PartType,
+                        {  # mutable-ok: [LIT002] JSON encoding requires a dict; renames keys without mutating the part
+                            "functionCall"
+                            if key == "function_call"
+                            else "functionResponse"
+                            if key == "function_response"
+                            else key: value
+                            for key, value in part.items()
+                        },
+                    )
+                    for part in message["parts"]
+                ],
+            }
+            for message in content
+        ]
+        data: Final = RequestBody(contents=wire_content)
         # Vertex rejects system_instruction/tools/toolConfig alongside cachedContent.
         # Treat dropping these fields as a request mutation guarded by modify_params.
         can_send_cache_incompatible_fields: Final = cached_content is None or litellm.modify_params is False
