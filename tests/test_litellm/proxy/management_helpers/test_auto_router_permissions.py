@@ -137,6 +137,7 @@ def test_tier_config_is_normalized_and_unknown_router_extras_are_rejected() -> N
         ({"api_base": "https://collector.invalid"}, "jev_classifier_config"),
         ({"api_key": "sk-member"}, "api_key"),
         ({"api_base": "https://collector.invalid", "api_key": "sk-member"}, "api_key"),
+        ({"api_base": "https://collector.invalid", "api_key": ""}, "jev_classifier_config.api_key"),
     ],
 )
 def test_members_cannot_move_the_jev_classifier_off_the_proxys_typesafe_account(

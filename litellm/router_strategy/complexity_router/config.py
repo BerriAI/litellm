@@ -697,6 +697,13 @@ class JevClassifierConfig(BaseModel):
             raise ValueError("jev_classifier_config.instructions must be non-empty; omit it to use the default")
         return value
 
+    @field_validator("api_key")
+    @classmethod
+    def _reject_blank_api_key(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("jev_classifier_config.api_key must be non-empty; omit it to use TYPESAFE_API_KEY")
+        return value
+
     @model_validator(mode="after")
     def _keep_the_environment_key_on_the_environment_base(self) -> "JevClassifierConfig":
         if self.api_base is not None and self.api_key is None:

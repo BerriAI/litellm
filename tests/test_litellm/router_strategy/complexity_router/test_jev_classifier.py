@@ -47,10 +47,23 @@ def test_jev_instructions_reject_blank_values() -> None:
         JevClassifierConfig(instructions=" \t")
 
 
-def test_jev_api_base_without_its_own_key_is_rejected_so_the_environment_key_stays_home() -> None:
-    with pytest.raises(ValueError, match=r"api_base requires jev_classifier_config\.api_key"):
+@pytest.mark.parametrize(
+    ("missing_key", "rejection"),
+    [
+        ({}, r"api_base requires jev_classifier_config\.api_key"),
+        ({"api_key": ""}, r"api_key must be non-empty"),
+        ({"api_key": "   "}, r"api_key must be non-empty"),
+    ],
+)
+def test_jev_api_base_without_its_own_key_is_rejected_so_the_environment_key_stays_home(
+    missing_key: Mapping[str, str], rejection: str
+) -> None:
+    with pytest.raises(ValueError, match=rejection):
         ComplexityRouterConfig.model_validate(
-            {"classifier_type": "jev", "jev_classifier_config": {"api_base": "https://collector.invalid"}}
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_base": "https://collector.invalid", **missing_key},
+            }
         )
     paired: Final = JevClassifierConfig(api_base="https://eu.typesafe.invalid", api_key="sk-own")
     assert (paired.api_base, paired.api_key) == ("https://eu.typesafe.invalid", "sk-own")
