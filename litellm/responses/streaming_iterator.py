@@ -37,6 +37,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
 from litellm.types.integrations.custom_logger import converted_stream_requested
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
     ResponseAPIUsage,
@@ -141,6 +142,8 @@ def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
 
 _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
+_MAX_CONTENT_INDEX: Final = 1024
+_MAX_OUTPUT_INDEX: Final = 1024
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
@@ -256,6 +259,12 @@ class BaseResponsesAPIStreamingIterator:
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
         self.completed_response: ResponsesAPIStreamingResponse | None = None
+        self._streamed_output_items: dict[  # mutable-ok: SSE accumulator
+            int, BaseLiteLLMOpenAIResponseObject
+        ] = {}  # mutable-ok: initialized empty; filled incrementally per SSE event
+        self._streamed_text_only_items: dict[  # mutable-ok: SSE fallback accumulator
+            int, BaseLiteLLMOpenAIResponseObject
+        ] = {}  # mutable-ok: initialized empty; filled incrementally per SSE event
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
         self._yielded_first_chunk = False
@@ -447,13 +456,20 @@ class BaseResponsesAPIStreamingIterator:
                             )
                         ),
                     )
+                    _final_response: Final[ResponsesAPIResponse | None] = (
+                        self._backfilled_response(_billed_response) if _estimate_wanted else _billed_response
+                    )
                     _terminal_chunk: Final = (
                         openai_responses_api_chunk
-                        if _billed_response is None or _billed_response is _response_obj
-                        else openai_responses_api_chunk.model_copy(update={"response": _billed_response})
+                        if _final_response is None or _final_response is _response_obj
+                        else openai_responses_api_chunk.model_copy(
+                            update={  # mutable-ok: transient update mapping for model_copy
+                                "response": _final_response
+                            }
+                        )
                     )
                     self.completed_response = _terminal_chunk
-                    _stamp_responses_usage_cost(_billed_response, self.logging_obj)
+                    _stamp_responses_usage_cost(_final_response, self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
@@ -718,6 +734,98 @@ class BaseResponsesAPIStreamingIterator:
 
         self._completed_response_cached = True
 
+    def _backfilled_response(self, response: ResponsesAPIResponse | None) -> ResponsesAPIResponse | None:
+        """
+        Fill an empty terminal output with the items recorded while streaming, so a provider
+        that streams its items and then sends an empty output still yields the model's answer.
+        """
+        if response is None or response.output or not (self._streamed_output_items or self._streamed_text_only_items):
+            return response
+        try:
+            _merged_items: Final = {  # mutable-ok: transient merge for backfill sort; not retained
+                **self._streamed_text_only_items,
+                **self._streamed_output_items,
+            }
+            _backfill: Final = [  # mutable-ok: the output field expects a list
+                item.model_dump() if hasattr(item, "model_dump") else item for _, item in sorted(_merged_items.items())
+            ]
+            return response.model_copy(
+                update={  # mutable-ok: transient update mapping for model_copy
+                    "output": _backfill
+                }
+            )
+        except Exception:  # noqa: BLE001  # best-effort backfill; any failure must not crash the stream
+            verbose_logger.warning("streaming_iterator: failed to backfill terminal output", exc_info=True)
+            return response
+
+    def _accumulate_streamed_output_item(self, chunk: ResponsesAPIStreamingResponse) -> None:
+        """
+        Accumulate OUTPUT_ITEM_DONE / OUTPUT_TEXT_DONE payloads from a post-hook chunk
+        so they can backfill response.completed.output when the provider sends it empty.
+        Called after async_post_call_streaming_deployment_hook so only the final,
+        hook-transformed item is retained (not the raw pre-hook version).
+        """
+        _chunk_type: Final = getattr(chunk, "type", None)
+        if _chunk_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            _item: Final = getattr(chunk, "item", None)
+            _output_index: Final = getattr(
+                chunk,
+                "output_index",
+                max(self._streamed_output_items, default=-1) + 1,
+            )
+            if _item is not None and isinstance(_output_index, int) and 0 <= _output_index <= _MAX_OUTPUT_INDEX:
+                self._streamed_output_items[_output_index] = (
+                    _item  # mutable-ok: incremental index-keyed accumulation across SSE events; no immutable equivalent
+                )
+
+        elif _chunk_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+            _text: Final = getattr(chunk, "text", None)
+            _text_output_index: Final = getattr(chunk, "output_index", None)
+            if (
+                isinstance(_text, str)
+                and isinstance(_text_output_index, int)
+                and 0 <= _text_output_index <= _MAX_OUTPUT_INDEX
+                and _text_output_index not in self._streamed_output_items
+            ):
+                _content_index: Final = getattr(chunk, "content_index", 0) or 0
+                if 0 <= _content_index <= _MAX_CONTENT_INDEX:
+                    _item_id: Final = getattr(chunk, "item_id", None) or f"msg_{_text_output_index}"
+                    _existing: Final = self._streamed_text_only_items.get(_text_output_index)
+                    _existing_content: Final = list(  # mutable-ok: copy existing content for slot replacement
+                        getattr(_existing, "content", None) or []  # mutable-ok: empty fallback for missing content
+                    )
+                    _annotations: Final = getattr(chunk, "annotations", None)
+                    _slot: Final = {  # mutable-ok: content dict matches provider schema
+                        "type": "output_text",
+                        "text": _text,
+                        "annotations": _annotations or [],  # mutable-ok: empty fallback for missing annotations
+                    }
+                    _content: Final = (  # mutable-ok: list concat building content array; computed once
+                        _existing_content[:_content_index]
+                        + [_slot]  # mutable-ok: list concat for slot replacement
+                        + _existing_content[_content_index + 1 :]
+                        if _content_index < len(_existing_content)
+                        else _existing_content
+                        + [  # mutable-ok: list concat for gap padding
+                            {  # mutable-ok: placeholder content dict for gap padding
+                                "type": "output_text",
+                                "text": "",
+                                "annotations": [],  # mutable-ok: empty annotations placeholder
+                            }
+                            for _ in range(_content_index - len(_existing_content))
+                        ]
+                        + [_slot]  # mutable-ok: list concat appending final slot
+                    )
+                    self._streamed_text_only_items[_text_output_index] = BaseLiteLLMOpenAIResponseObject.model_validate(
+                        {  # mutable-ok: incremental index-keyed fallback accumulation; validated into a model here
+                            "type": "message",
+                            "id": getattr(_existing, "id", _item_id),
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": _content,
+                        }
+                    )
+
     async def _call_post_streaming_deployment_hook(
         self, chunk: ResponsesAPIStreamingResponse
     ) -> ResponsesAPIStreamingResponse:
@@ -935,6 +1043,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                         chunk=result,
                     )
                     self._yielded_first_chunk = True
+                    self._accumulate_streamed_output_item(result)
                     return result
                 # If result is None, continue the loop to get the next chunk
 
@@ -1017,6 +1126,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                         chunk=result,
                     )
                     self._yielded_first_chunk = True
+                    self._accumulate_streamed_output_item(result)
                     return result
                 # If result is None, continue the loop to get the next chunk
 
@@ -1093,6 +1203,10 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             chunk_size=self.CHUNK_SIZE,
         )
         self._idx = 0
+        # completed_response is set directly here and in __anext__/__next__ because
+        # these iterators replay pre-built events from _build_synthetic_response_events,
+        # which always populates output. They bypass _process_chunk intentionally, so the
+        # output backfill logic there does not apply.
         self.completed_response = self._events[-1]
 
     def __aiter__(self):
@@ -1160,6 +1274,8 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             chunk_size=MockResponsesAPIStreamingIterator.CHUNK_SIZE,
         )
         self._idx = 0
+        # See MockResponsesAPIStreamingIterator._set_events_from_response for why
+        # completed_response is set directly rather than via _process_chunk.
         self.completed_response = self._events[-1]
 
     def __aiter__(self):
