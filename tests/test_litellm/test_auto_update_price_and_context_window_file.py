@@ -140,6 +140,27 @@ def test_transform_skips_rows_without_valid_token_prices_so_priced_local_entries
     assert local["friendliai/zai-org/GLM-Test"]["output_cost_per_token"] == 5e-07
 
 
+def test_sync_keeps_live_friendli_entry_when_catalog_row_has_invalid_pricing(sync_module):
+    local = {
+        "friendliai/zai-org/GLM-Test": {
+            "litellm_provider": "friendliai",
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 5e-07,
+        }
+    }
+    raw_catalog = [_reasoning_model(pricing={})]
+    remote = sync_module.transform_friendli_data(raw_catalog, local)
+    dropped = sync_module._stale_friendli_keys(
+        local_keys=frozenset(local),
+        friendli_keys_in_remote=sync_module._friendli_catalog_keys(raw_catalog),
+    )
+    sync_module.sync_local_data_with_remote(
+        local, remote, replace_keys=frozenset(remote), catalog_dropped_keys=dropped
+    )
+    assert "friendliai/zai-org/GLM-Test" in local
+    assert local["friendliai/zai-org/GLM-Test"]["input_cost_per_token"] == 1.5e-07
+
+
 def test_transform_keeps_zero_priced_rows(sync_module):
     free_model = _reasoning_model(pricing={"input": "0", "output": "0"})
     entry = sync_module.transform_friendli_data([free_model], {})["friendliai/zai-org/GLM-Test"]
@@ -254,8 +275,17 @@ def test_sync_keeps_all_entries_when_friendli_fetch_fails_or_is_empty(sync_modul
     }
     for failed_fetch in (None, []):
         remote = sync_module.transform_friendli_data(failed_fetch, local)
-        assert remote == {}
-        sync_module.sync_local_data_with_remote(local, remote, replace_keys=frozenset(remote))
+        catalog_keys = sync_module._friendli_catalog_keys(failed_fetch)
+        dropped = (
+            frozenset()
+            if not catalog_keys
+            else sync_module._stale_friendli_keys(
+                local_keys=frozenset(local), friendli_keys_in_remote=catalog_keys
+            )
+        )
+        sync_module.sync_local_data_with_remote(
+            local, remote, replace_keys=frozenset(remote), catalog_dropped_keys=dropped
+        )
         assert "friendliai/zai-org/GLM-Test" in local
         assert "openrouter/kept" in local
 

@@ -165,6 +165,12 @@ def transform_friendli_data(data: list, local_data: dict) -> dict[str, dict[str,
     return transformed
 
 # Synchronize local data with remote data
+def _friendli_catalog_keys(data: list | None) -> frozenset[str]:
+    if not data:
+        return frozenset()
+    return frozenset(f"{FRIENDLI_PROVIDER}/{model['id']}" for model in data if "id" in model)
+
+
 def _stale_friendli_keys(
     local_keys: frozenset[str],
     friendli_keys_in_remote: frozenset[str],
@@ -325,22 +331,21 @@ def main():
     vercel_data = transform_vercel_ai_gateway_data(vercel_data)
 
     friendli_data = asyncio.run(fetch_data(FRIENDLI_API_URL))
-    friendli_fetch_failed = friendli_data is None
+    friendli_catalog_keys = _friendli_catalog_keys(friendli_data)
     friendli_data = transform_friendli_data(friendli_data, local_data)
 
     # Combine both datasets
     all_remote_data = {**openrouter_data, **vercel_data, **friendli_data}
 
-    # Deletion only runs when the Friendli catalog itself was fetched: if the
-    # catalog is unreachable, absence proves nothing and deleting entries would
-    # wipe live models. OpenRouter/Vercel rows never qualify for deletion; their
-    # gateways can delist rows users still route to
+    # Deletion only runs when Friendli returns a non-empty catalog. Catalog rows
+    # with invalid pricing still prove the model is live, so deletion compares
+    # against raw catalog ids instead of transformed priced rows
     catalog_dropped_keys: frozenset[str] = (
         frozenset()
-        if friendli_fetch_failed
+        if not friendli_catalog_keys
         else _stale_friendli_keys(
             local_keys=frozenset(local_data or {}),
-            friendli_keys_in_remote=frozenset(friendli_data),
+            friendli_keys_in_remote=friendli_catalog_keys,
         )
     )
 
