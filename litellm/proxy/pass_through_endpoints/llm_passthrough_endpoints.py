@@ -38,7 +38,6 @@ from litellm.constants import (
     AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX,
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
-    AZURE_SPEECH_UNPRICED_WRITE_METHODS,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
@@ -1360,11 +1359,10 @@ def resolve_azure_speech_base_url(endpoint_path: str, api_base: str | None, regi
     return httpx.URL(f"https://{region}.{domain}")
 
 
-def azure_speech_write_is_unpriced(method: str, endpoint_path: str) -> bool:
+def azure_speech_path_manages_shared_resources(endpoint_path: str) -> bool:
     return (
         endpoint_path.startswith(AZURE_SPEECH_BATCH_PATH_PREFIX)
         and endpoint_path != AZURE_SPEECH_FAST_TRANSCRIPTION_PATH
-        and method.upper() in AZURE_SPEECH_UNPRICED_WRITE_METHODS
     )
 
 
@@ -1406,15 +1404,14 @@ async def azure_speech_proxy_route(
                 "AZURE_SPEECH_REGION or AZURE_SPEECH_API_BASE in the proxy environment."
             ),
         )
-    if azure_speech_write_is_unpriced(
-        method=request.method, endpoint_path=normalized_endpoint_path
-    ) and not is_proxy_admin(user_api_key_dict):
+    if azure_speech_path_manages_shared_resources(normalized_endpoint_path) and not is_proxy_admin(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail=(
-                f"{request.method} {normalized_endpoint_path} creates Azure Speech work whose cost is unknown at "
-                "request time, so it is limited to proxy admin keys. Use "
-                f"{AZURE_SPEECH_FAST_TRANSCRIPTION_PATH} for transcription that is priced per request."
+                f"{request.method} {normalized_endpoint_path} manages batch transcription resources that belong to "
+                "the proxy's Azure Speech subscription and whose cost is unknown at request time, so it is limited "
+                f"to proxy admin keys. Use {AZURE_SPEECH_FAST_TRANSCRIPTION_PATH} for transcription that is priced "
+                "per request."
             ),
         )
     azure_speech_api_key: Final = passthrough_endpoint_router.get_credentials(

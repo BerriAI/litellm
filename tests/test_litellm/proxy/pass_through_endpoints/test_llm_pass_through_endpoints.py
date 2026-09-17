@@ -6232,13 +6232,17 @@ class TestAzureSpeechProxyRoute:
             ("POST", AZURE_SPEECH_BATCH_ENDPOINT),
             ("POST", "/speechtotext/v3.2/models"),
             ("PUT", "/speechtotext/v3.2/endpoints/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab"),
+            ("GET", AZURE_SPEECH_BATCH_ENDPOINT),
+            ("GET", f"{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab/files"),
+            ("PATCH", f"{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab"),
+            ("DELETE", f"{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab"),
         ],
     )
-    def test_non_admin_key_cannot_create_unpriced_batch_work(
+    def test_non_admin_key_cannot_manage_shared_batch_resources(
         self, azure_speech_client: TestClient, method: str, endpoint: str
     ) -> None:
         with respx.mock(assert_all_called=False) as upstream:
-            catch_all = upstream.route().mock(return_value=httpx.Response(201, json={"status": "NotStarted"}))
+            catch_all = upstream.route().mock(return_value=httpx.Response(200, json={"status": "Succeeded"}))
 
             response = azure_speech_client.request(
                 method,
@@ -6251,9 +6255,23 @@ class TestAzureSpeechProxyRoute:
         assert AZURE_SPEECH_FAST_ENDPOINT in response.text
         assert not catch_all.called
 
-    def test_non_admin_key_can_still_read_delete_and_fast_transcribe_in_the_batch_family(
-        self, azure_speech_client: TestClient
-    ) -> None:
+    def test_non_admin_key_can_still_fast_transcribe_in_the_batch_family(self, azure_speech_client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
+                return_value=httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
+            )
+
+            response = azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_FAST_ENDPOINT}",
+                params={"api-version": "2024-11-15"},
+                files={"audio": ("eagle.wav", AZURE_SPEECH_WAV_BYTES, "audio/wav")},
+                data={"definition": json.dumps({"locales": ["en-US"]})},
+                headers={"Authorization": "Bearer sk-virtual"},
+            )
+
+        assert response.status_code == 200
+
+    def test_admin_key_reads_and_deletes_batch_jobs(self, azure_speech_admin_client: TestClient) -> None:
         job_path: Final = f"{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab"
         with respx.mock(assert_all_called=True) as upstream:
             upstream.get(f"https://eastus.api.cognitive.microsoft.com{job_path}").mock(
@@ -6262,23 +6280,15 @@ class TestAzureSpeechProxyRoute:
             upstream.delete(f"https://eastus.api.cognitive.microsoft.com{job_path}").mock(
                 return_value=httpx.Response(204)
             )
-            upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
-                return_value=httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
-            )
 
             statuses = [
-                azure_speech_client.get(f"/azure_speech{job_path}", headers={"Authorization": "Bearer sk-virtual"}),
-                azure_speech_client.delete(f"/azure_speech{job_path}", headers={"Authorization": "Bearer sk-virtual"}),
-                azure_speech_client.post(
-                    f"/azure_speech{AZURE_SPEECH_FAST_ENDPOINT}",
-                    params={"api-version": "2024-11-15"},
-                    files={"audio": ("eagle.wav", AZURE_SPEECH_WAV_BYTES, "audio/wav")},
-                    data={"definition": json.dumps({"locales": ["en-US"]})},
-                    headers={"Authorization": "Bearer sk-virtual"},
+                azure_speech_admin_client.get(f"/azure_speech{job_path}", headers={"Authorization": "Bearer sk-admin"}),
+                azure_speech_admin_client.delete(
+                    f"/azure_speech{job_path}", headers={"Authorization": "Bearer sk-admin"}
                 ),
             ]
 
-        assert [r.status_code for r in statuses] == [200, 204, 200]
+        assert [r.status_code for r in statuses] == [200, 204]
 
     def test_fast_transcription_multipart_upload_is_forwarded_byte_for_byte(
         self, azure_speech_client: TestClient
@@ -6305,14 +6315,16 @@ class TestAzureSpeechProxyRoute:
         assert sent.headers["ocp-apim-subscription-key"] == "server-subscription-key"
         assert "authorization" not in sent.headers
 
-    def test_batch_get_is_forwarded_with_the_job_id_path(self, azure_speech_client: TestClient) -> None:
+    def test_batch_get_is_forwarded_with_the_job_id_path(self, azure_speech_admin_client: TestClient) -> None:
         job_path: Final = f"{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab/files"
         with respx.mock(assert_all_called=True) as upstream:
             route = upstream.get(f"https://eastus.api.cognitive.microsoft.com{job_path}").mock(
                 return_value=httpx.Response(200, json={"values": []})
             )
 
-            response = azure_speech_client.get(f"/azure_speech{job_path}", headers={"Authorization": "Bearer sk-virtual"})
+            response = azure_speech_admin_client.get(
+                f"/azure_speech{job_path}", headers={"Authorization": "Bearer sk-admin"}
+            )
 
         assert (response.status_code, response.json()) == (200, {"values": []})
         assert route.calls.last.request.headers["ocp-apim-subscription-key"] == "server-subscription-key"
@@ -6445,8 +6457,8 @@ class TestAzureSpeechProxyRoute:
             short_audio = upstream.post(
                 f"https://my-speech.cognitiveservices.azure.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}"
             ).mock(return_value=httpx.Response(200, json=AZURE_SPEECH_TRANSCRIPT))
-            batch = upstream.get(f"https://my-speech.cognitiveservices.azure.com{AZURE_SPEECH_BATCH_ENDPOINT}").mock(
-                return_value=httpx.Response(200, json={"values": []})
+            fast = upstream.post(f"https://my-speech.cognitiveservices.azure.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
+                return_value=httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
             )
 
             azure_speech_client.post(
@@ -6454,9 +6466,15 @@ class TestAzureSpeechProxyRoute:
                 content=AZURE_SPEECH_WAV_BYTES,
                 headers={"Content-Type": "audio/wav", "Authorization": "Bearer sk-virtual"},
             )
-            azure_speech_client.get(f"/azure_speech{AZURE_SPEECH_BATCH_ENDPOINT}", headers={"Authorization": "Bearer x"})
+            azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_FAST_ENDPOINT}",
+                params={"api-version": "2024-11-15"},
+                files={"audio": ("eagle.wav", AZURE_SPEECH_WAV_BYTES, "audio/wav")},
+                data={"definition": json.dumps({"locales": ["en-US"]})},
+                headers={"Authorization": "Bearer sk-virtual"},
+            )
 
-        assert short_audio.called and batch.called
+        assert short_audio.called and fast.called
 
     @pytest.mark.parametrize("endpoint", ["openai/deployments/whisper/audio/transcriptions", "speech", "speechtotext"])
     def test_unknown_path_family_is_rejected_before_any_upstream_call(
@@ -6543,6 +6561,7 @@ class TestAzureSpeechRawBodyThroughRealAuth:
         monkeypatch.setenv("AZURE_SPEECH_API_KEY", "server-subscription-key")
         monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
         monkeypatch.delenv("AZURE_SPEECH_API_BASE", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.in_memory_llm_clients_cache.flush_cache()
         with patch.multiple(  # test-quality-ok: the real user_api_key_auth reads proxy_server module globals (master_key, caches) that have no injection seam
