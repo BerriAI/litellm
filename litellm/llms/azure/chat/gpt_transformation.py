@@ -283,9 +283,7 @@ class AzureOpenAIConfig(BaseConfig):
         request_params: Final = {
             key: value
             for key, value in optional_params.items()
-            if key != "tool_choice"
-            or optional_params.get("tools")
-            or optional_params.get("functions")
+            if key != "tool_choice" or optional_params.get("tools") or optional_params.get("functions")
         }
         return {
             "model": model,
