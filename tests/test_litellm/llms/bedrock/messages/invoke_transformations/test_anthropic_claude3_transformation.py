@@ -23,6 +23,9 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_system import (
+    as_system_content_blocks,
+)
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
@@ -2533,20 +2536,16 @@ def test_bedrock_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_
 
 
 def test_as_system_content_blocks_handles_each_shape():
-    """``_as_system_content_blocks`` normalizes every system shape: ``None`` -> empty,
+    """``as_system_content_blocks`` normalizes every system shape: ``None`` -> empty,
     a string -> a single text block, a list -> a shallow copy, and any other value
     (e.g. a bare content-block dict) -> wrapped in a single-element list."""
     block = {"type": "text", "text": "x"}
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(None) == []
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks("hello") == [
-        {"type": "text", "text": "hello"}
-    ]
+    assert as_system_content_blocks(None) == []
+    assert as_system_content_blocks("hello") == [{"type": "text", "text": "hello"}]
     blocks = [block]
-    out = AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(blocks)
+    out = as_system_content_blocks(blocks)
     assert out == blocks and out is not blocks
-    assert AmazonAnthropicClaudeMessagesConfig._as_system_content_blocks(block) == [
-        block
-    ]
+    assert as_system_content_blocks(block) == [block]
 
 
 @pytest.mark.parametrize(

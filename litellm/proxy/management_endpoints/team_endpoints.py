@@ -129,6 +129,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
+    member_budget_patch,
     validate_budget_duration,
     validate_team_model_max_budget,
 )
@@ -3686,27 +3687,6 @@ async def team_member_delete(
     return existing_team_row
 
 
-_MEMBER_BUDGET_PATCH_FIELDS: Final = {
-    "max_budget_in_team": "max_budget",
-    "tpm_limit": "tpm_limit",
-    "rpm_limit": "rpm_limit",
-    "budget_duration": "budget_duration",
-    "allowed_models": "allowed_models",
-}
-
-
-def _build_member_budget_patch(data: TeamMemberUpdateRequest) -> dict[str, object]:
-    """Map the budget fields the request actually set (merge-patch: a sent
-    value updates, an explicit null clears, an absent field is left untouched)
-    to their budget-table columns."""
-    provided: Final = data.model_dump(exclude_unset=True)
-    return {
-        column: provided[request_field]
-        for request_field, column in _MEMBER_BUDGET_PATCH_FIELDS.items()
-        if request_field in provided
-    }
-
-
 @router.post(
     "/team/member_update",
     tags=["team management"],
@@ -3812,7 +3792,7 @@ async def team_member_update(
             team_default_budget_id = raw_default_budget_id
 
     ### upsert new budget
-    budget_patch: Final = _build_member_budget_patch(data)
+    budget_patch: Final = member_budget_patch(data)
     async with prisma_client.tx() as tx:
         await _upsert_budget_and_membership(
             tx=tx,
