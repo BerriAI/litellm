@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
@@ -280,6 +281,41 @@ def test_rag_query_returns_response_cost_header(client_internal_user):
 
     assert response.status_code == 200, response.json()
     assert response.headers.get("x-litellm-response-cost") == "3.45e-06"
+
+
+@pytest.mark.parametrize(
+    ("upstream_error", "expected_status"),
+    [
+        (litellm.BadRequestError(message="filter andAll needs two clauses", model="kb", llm_provider="bedrock"), 400),
+        (litellm.NotFoundError(message="Knowledge Base does not exist", model="kb", llm_provider="bedrock"), 404),
+        (RuntimeError("pipeline blew up"), 500),
+    ],
+)
+def test_rag_query_surfaces_upstream_status_code(client_internal_user, upstream_error, expected_status):
+    """A vector store rejection must reach the caller with its own status code, never a blanket 500."""
+    with (
+        patch(  # test-quality-ok: the handler calls the module-level litellm.aquery directly; no injection seam
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new=AsyncMock(side_effect=upstream_error),
+        ),
+        patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: proxy module global, no injection seam
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "bedrock/us.anthropic.claude-sonnet-5",
+                "messages": [{"role": "user", "content": "How was this document ingested?"}],
+                "retrieval_config": {
+                    "vector_store_id": "L7INRFMVQT",
+                    "custom_llm_provider": "bedrock",
+                    "retrieval_filter": {"andAll": [{"equals": {"key": "department", "value": "billing"}}]},
+                },
+            },
+        )
+
+    assert response.status_code == expected_status, response.text
+    assert str(upstream_error) in response.json()["detail"]["error"]
 
 
 def test_rag_query_stream_returns_event_stream(client_internal_user):

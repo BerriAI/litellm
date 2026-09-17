@@ -16424,7 +16424,7 @@ class TestMemberAutoRouterInference:
                     project_id="router-project", team_id="router-team", models=["restricted-model"],
                 ), model_type=LiteLLM_ProjectTableCachedObj,
             )
-        with pytest.raises(ProxyException, match="not allowed to access model"):
+        with pytest.raises(ProxyException, match="is not available for this API key"):
             await self._route(self._router(), self._request(actor=self.actor.model_copy(update={
                 "models": ["member-router"] if ceiling == "key" else self.actor.models,
                 "project_id": "router-project" if ceiling == "project" else None,
@@ -16453,7 +16453,7 @@ class TestMemberAutoRouterInference:
         assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 1
         self.database.db.litellm_accessgrouptable.find_unique.return_value = group.model_copy(update={"access_model_names": []})
         await evict_and_broadcast(cache_keys=("access_group_id:router-group",), user_api_key_cache=self.cache)
-        with pytest.raises(ProxyException, match="not allowed to access model"):
+        with pytest.raises(ProxyException, match="is not available for this API key"):
             await self._route(router, request)
         assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 2
 
@@ -16471,7 +16471,7 @@ class TestMemberAutoRouterInference:
             key="team_id:router-team", model_type=LiteLLM_TeamTable,
             value=self.team.model_copy(update={"models": ["member-router"]}),
         )
-        with pytest.raises(ProxyException, match="not allowed to access model"):
+        with pytest.raises(ProxyException, match="is not available for this API key"):
             await self._route(router, self._request())
         self.database.db.litellm_teamtable.find_unique.reset_mock()
         admin: Final = self._request(tag="admin")
