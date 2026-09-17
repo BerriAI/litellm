@@ -5297,9 +5297,6 @@ async def _virtual_key_max_budget_alert_check(
 
 
 def _effective_team_member_budget(budget: LiteLLM_BudgetTable, now: datetime) -> float | None:
-    """Per-member cap including an unexpired temp_budget_increase. Naive
-    temp_budget_expiry values are treated as UTC (same convention as
-    _get_temp_budget_increase for keys)."""
     if budget.max_budget is None:
         return None
     if budget.temp_budget_increase is None or budget.temp_budget_expiry is None:

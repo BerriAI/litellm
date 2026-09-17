@@ -8531,7 +8531,6 @@ async def test_team_member_budget_check_temp_budget_increase_extends_cap():
             return 150.0
         return fallback_spend
 
-    # $150 spend is over the $100 cap but under the $200 temp-extended cap.
     with (
         patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
         patch(
