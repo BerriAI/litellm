@@ -10,8 +10,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Final, TypeAlias
 
-from typing_extensions import assert_never
-
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.ui_session_utils import build_effective_auth_contexts
 from litellm.proxy._types import (
@@ -74,13 +72,9 @@ class AgentRequestHandler:
         agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(user_api_key_auth, resolve_ceiling)
         if agent_ceiling is None:
             return key_team_access
-        match key_team_access:
-            case UnrestrictedAgentAccess():
-                return RestrictedAgentAccess(agent_ceiling)
-            case RestrictedAgentAccess(key_team_ids):
-                return RestrictedAgentAccess(key_team_ids & agent_ceiling)
-            case _:
-                assert_never(key_team_access)
+        if isinstance(key_team_access, UnrestrictedAgentAccess):
+            return RestrictedAgentAccess(agent_ceiling)
+        return RestrictedAgentAccess(key_team_access.agent_ids & agent_ceiling)
 
     @staticmethod
     async def _resolve_key_team_agent_access(
