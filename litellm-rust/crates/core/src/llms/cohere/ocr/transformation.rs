@@ -4,13 +4,13 @@ use serde_with::serde_as;
 
 use crate::call_arguments::{CallArguments, parse_options};
 use crate::constants::{COHERE_API_KEY_ENV, COHERE_PARSE_API_BASE};
-use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
+use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, decode_and_normalize_response};
 use crate::ocr::OcrClient;
 use crate::ocr::document::InlineDocument;
 use crate::ocr::prepare::credential_env;
 use crate::ocr::types::{
-    LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrPageImage, OcrUsageInfo,
-    PreparedOcrRequest,
+    LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrPageImage, OcrResponseFormat,
+    OcrUsageInfo, PreparedOcrRequest,
 };
 use crate::serde_compat::LaxI64;
 use crate::url_utils::ApiUrl;
@@ -88,6 +88,10 @@ impl BaseOcrConfig for CohereParseConfig {
     type ProviderRequest = CohereRequest;
     type Environment = Vec<(String, String)>;
 
+    fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
+        &["output_format", "req_format"]
+    }
+
     fn get_api_key_env_var(&self) -> Option<&'static str> {
         Some(COHERE_API_KEY_ENV)
     }
@@ -99,21 +103,29 @@ impl BaseOcrConfig for CohereParseConfig {
         }
     }
 
+    fn map_ocr_params(
+        &self,
+        non_default_params: &CallArguments,
+        _model: &str,
+    ) -> Result<CohereOptions, crate::ocr::Error> {
+        Ok(parse_options(non_default_params)?)
+    }
+
     async fn validate_environment(
         &self,
         request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, crate::ocr::Error> {
-        self.validate_environment(&request.connection, &credential_env)
+        self.resolve_headers(&request.connection, &credential_env)
     }
 
     fn get_complete_url(
         &self,
         request: &PreparedOcrRequest,
-        _params: &Self::OcrParams,
+        _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
-        self.get_complete_url(
+        self.build_ocr_url(
             request
                 .connection
                 .api_base
@@ -133,45 +145,61 @@ impl BaseOcrConfig for CohereParseConfig {
         Ok(build_request(model, image_url, optional_params))
     }
 
-    fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
-        &["output_format", "req_format"]
-    }
-
-    fn map_ocr_params(
-        &self,
-        arguments: &CallArguments,
-        _model: &str,
-    ) -> Result<CohereOptions, crate::ocr::Error> {
-        Ok(parse_options(arguments)?)
-    }
-
-    async fn async_transform_ocr_request(
-        &self,
-        model: &str,
-        document: OcrDocument,
-        optional_params: &CohereOptions,
-        headers: &[(String, String)],
-        _context: OcrRequestContext<'_>,
-    ) -> Result<CohereRequest, crate::ocr::Error> {
-        self.transform_ocr_request(model, document, optional_params, headers)
-    }
-
     fn transform_ocr_response(
         &self,
         model: &str,
         raw_response: &[u8],
-        request_format: crate::ocr::types::OcrResponseFormat,
+        request_format: OcrResponseFormat,
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        crate::llms::base_llm::ocr::transformation::decode_and_normalize_response(
-            model,
-            raw_response,
-            request_format,
-            normalize_response,
-        )
+        decode_and_normalize_response(model, raw_response, request_format, normalize_response)
     }
 
     fn validate_request_body(&self, body: &Value) -> Result<(), crate::ocr::Error> {
         validate_document(&crate::ocr::prepare::body_document(body)?)
+    }
+}
+
+impl CohereParseConfig {
+    fn resolve_headers(
+        &self,
+        connection: &OcrConnection,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<Vec<(String, String)>, crate::ocr::Error> {
+        if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
+            return Ok(connection.extra_headers.clone());
+        }
+        let key = connection
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                self.get_api_key_env_var()
+                    .and_then(env_lookup)
+                    .filter(|key| !key.trim().is_empty())
+            })
+            .ok_or_else(|| {
+                crate::ocr::Error::Auth(litellm_auth::Error::ProviderAuthentication(
+                    "Missing COHERE_API_KEY - set it in the environment or pass api_key".into(),
+                ))
+            })?;
+        Ok(
+            std::iter::once(("Authorization".into(), format!("Bearer {key}")))
+                .chain(connection.extra_headers.clone())
+                .collect(),
+        )
+    }
+
+    fn build_ocr_url(&self, api_base: &str) -> Result<String, crate::ocr::Error> {
+        let parsed = reqwest::Url::parse(api_base).map_err(|_| invalid_api_base())?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(invalid_api_base());
+        }
+        ApiUrl::parse(api_base)
+            .and_then(|url| url.complete_path(&["v2", "parse"]))
+            .map(|url| url.into_string())
+            .map_err(|_| invalid_api_base())
     }
 }
 
@@ -292,50 +320,6 @@ fn billed_pages(response: &CohereResponse) -> Option<i64> {
     response.meta.as_ref()?.billed_units.as_ref()?.pages
 }
 
-impl CohereParseConfig {
-    fn get_complete_url(&self, base: &str) -> Result<String, crate::ocr::Error> {
-        let parsed = reqwest::Url::parse(base).map_err(|_| invalid_api_base())?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            return Err(invalid_api_base());
-        }
-        ApiUrl::parse(base)
-            .and_then(|url| url.complete_path(&["v2", "parse"]))
-            .map(|url| url.into_string())
-            .map_err(|_| invalid_api_base())
-    }
-
-    fn validate_environment(
-        &self,
-        connection: &OcrConnection,
-        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-    ) -> Result<Vec<(String, String)>, crate::ocr::Error> {
-        if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
-            return Ok(connection.extra_headers.clone());
-        }
-        let key = connection
-            .api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|key| !key.is_empty())
-            .map(str::to_string)
-            .or_else(|| {
-                self.get_api_key_env_var()
-                    .and_then(env_lookup)
-                    .filter(|key| !key.trim().is_empty())
-            })
-            .ok_or_else(|| {
-                crate::ocr::Error::Auth(litellm_auth::Error::ProviderAuthentication(
-                    "Missing COHERE_API_KEY - set it in the environment or pass api_key".into(),
-                ))
-            })?;
-        Ok(
-            std::iter::once(("Authorization".into(), format!("Bearer {key}")))
-                .chain(connection.extra_headers.clone())
-                .collect(),
-        )
-    }
-}
-
 fn invalid_api_base() -> crate::ocr::Error {
     crate::ocr::Error::RequestField {
         path: "api_base".into(),
@@ -385,27 +369,31 @@ mod tests {
         );
     }
 
-    #[test]
-    fn options_read_known_fields_without_changing_arguments() {
+    #[rstest]
+    #[case::cohere(false)]
+    #[case::azure(true)]
+    fn options_read_known_fields_without_changing_arguments(#[case] azure: bool) {
         let arguments = serde_json::from_value(json!({
             "output_format":"blocks", "req_format":"native", "extension":false
         }))
         .unwrap();
-        for config in [false, true] {
-            let mapped = if config {
-                crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig
-                    .map_ocr_params(&arguments, "parse")
-            } else {
-                CohereParseConfig.map_ocr_params(&arguments, "parse")
-            }
-            .unwrap();
-            assert_eq!(
-                serde_json::to_value(mapped).unwrap(),
-                json!({"output_format":"blocks"})
-            );
+        let mapped = if azure {
+            crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig
+                .map_ocr_params(&arguments, "parse")
+        } else {
+            CohereParseConfig.map_ocr_params(&arguments, "parse")
         }
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(mapped).unwrap(),
+            json!({"output_format":"blocks"})
+        );
         assert_eq!(arguments["req_format"], "native");
         assert_eq!(arguments["extension"], false);
+    }
+
+    #[test]
+    fn options_reject_invalid_output_format() {
         let invalid = serde_json::from_value(json!({"output_format":"html"})).unwrap();
         assert!(matches!(
             CohereParseConfig.map_ocr_params(&invalid, "parse"),
@@ -415,13 +403,17 @@ mod tests {
     }
 
     #[test]
-    fn billed_pages_accept_integral_doubles_and_reject_fractional_counts() {
+    fn billed_pages_accept_integral_doubles() {
         let response = serde_json::from_str::<CohereResponse>(
             r#"{"pages":[],"meta":{"billed_units":{"pages":1.0}}}"#,
         )
         .unwrap();
         let normalized = normalize_response("parse", response).unwrap();
         assert_eq!(normalized.usage_info.unwrap().pages_processed, Some(1));
+    }
+
+    #[test]
+    fn billed_pages_reject_fractional_counts() {
         assert!(
             serde_json::from_str::<CohereResponse>(
                 r#"{"pages":[],"meta":{"billed_units":{"pages":1.5}}}"#,
@@ -590,25 +582,27 @@ mod tests {
         assert_eq!(normalized.usage_info.unwrap().pages_processed, Some(3));
     }
 
+    #[rstest]
+    #[case::empty(json!({}))]
+    #[case::null_meta(json!({"meta":null}))]
+    #[case::null_billed_units(json!({"pages":[],"meta":{"billed_units":null}}))]
+    fn response_defaults(#[case] value: Value) {
+        let normalized =
+            normalize_response("parse", serde_json::from_value(value).unwrap()).unwrap();
+        assert!(normalized.pages.is_empty());
+        assert_eq!(normalized.usage_info.unwrap().pages_processed, Some(0));
+    }
+
+    #[rstest]
+    #[case::null_pages(json!({"pages":null}))]
+    #[case::invalid_markdown(json!({"pages":[{"markdown":"text"}]}))]
+    #[case::invalid_index(json!({"pages":[{"index":"bad"}]}))]
+    fn response_rejects_invalid_fields(#[case] value: Value) {
+        assert!(serde_json::from_value::<CohereResponse>(value).is_err());
+    }
+
     #[test]
-    fn response_defaults_and_invalid_fields() {
-        for value in [
-            json!({}),
-            json!({"meta":null}),
-            json!({"pages":[],"meta":{"billed_units":null}}),
-        ] {
-            let normalized =
-                normalize_response("parse", serde_json::from_value(value).unwrap()).unwrap();
-            assert!(normalized.pages.is_empty());
-            assert_eq!(normalized.usage_info.unwrap().pages_processed, Some(0));
-        }
-        for value in [
-            json!({"pages":null}),
-            json!({"pages":[{"markdown":"text"}]}),
-            json!({"pages":[{"index":"bad"}]}),
-        ] {
-            assert!(serde_json::from_value::<CohereResponse>(value).is_err());
-        }
+    fn null_markdown_uses_page_defaults() {
         let normalized = normalize_response(
             "parse",
             serde_json::from_value(json!({"pages":[{"markdown":null}]})).unwrap(),
@@ -710,24 +704,30 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::document_url(json!({"type":"document_url","document_url":"https://example.com/a.pdf"}))]
+    #[case::empty_image_url(json!({"type":"image_url","image_url":""}))]
+    #[case::pdf_data_uri(json!({"type":"image_url","image_url":"data:application/pdf;base64,YQ=="}))]
+    fn request_requires_image(#[case] value: Value) {
+        assert!(matches!(
+            validate_document(&serde_json::from_value(value).unwrap()),
+            Err(crate::ocr::Error::CohereImageOnly)
+        ));
+    }
+
+    #[rstest]
+    #[case::markdown("markdown", true)]
+    #[case::blocks("blocks", true)]
+    #[case::unsupported("html", false)]
+    fn request_requires_supported_output_format(#[case] format: &str, #[case] valid: bool) {
+        assert_eq!(
+            serde_json::from_value::<CohereOptions>(json!({"output_format":format})).is_ok(),
+            valid
+        );
+    }
+
     #[test]
-    fn request_requires_image_and_supported_output_format() {
-        for value in [
-            json!({"type":"document_url","document_url":"https://example.com/a.pdf"}),
-            json!({"type":"image_url","image_url":""}),
-            json!({"type":"image_url","image_url":"data:application/pdf;base64,YQ=="}),
-        ] {
-            assert!(matches!(
-                validate_document(&serde_json::from_value(value).unwrap()),
-                Err(crate::ocr::Error::CohereImageOnly)
-            ));
-        }
-        assert!(serde_json::from_value::<CohereOptions>(json!({"output_format":"html"})).is_err());
-        for format in ["markdown", "blocks"] {
-            assert!(
-                serde_json::from_value::<CohereOptions>(json!({"output_format":format})).is_ok()
-            );
-        }
+    fn request_defaults_to_markdown() {
         let request = CohereParseConfig
             .transform_ocr_request(
                 "parse-v5.0",
@@ -746,28 +746,30 @@ mod tests {
         );
     }
 
-    #[test]
-    fn completes_provider_urls_without_duplicate_paths_and_preserves_queries() {
-        for suffix in ["", "/v2", "/v2/parse"] {
-            assert_eq!(
-                CohereParseConfig
-                    .get_complete_url(&format!("https://example.com{suffix}?tenant=a"))
-                    .unwrap(),
-                "https://example.com/v2/parse?tenant=a"
-            );
-        }
+    #[rstest]
+    #[case::base("")]
+    #[case::version("/v2")]
+    #[case::complete("/v2/parse")]
+    fn completes_provider_urls_without_duplicate_paths_and_preserves_queries(#[case] suffix: &str) {
+        assert_eq!(
+            CohereParseConfig
+                .build_ocr_url(&format!("https://example.com{suffix}?tenant=a"))
+                .unwrap(),
+            "https://example.com/v2/parse?tenant=a"
+        );
+    }
+
+    #[rstest]
+    #[case::relative("relative/path")]
+    #[case::unsupported_scheme("ftp://example.com")]
+    fn rejects_invalid_urls(#[case] api_base: &str) {
+        assert!(CohereParseConfig.build_ocr_url(api_base).is_err());
     }
 
     #[test]
-    fn rejects_invalid_urls_and_blank_keys() {
-        assert!(CohereParseConfig.get_complete_url("relative/path").is_err());
-        assert!(
-            CohereParseConfig
-                .get_complete_url("ftp://example.com")
-                .is_err()
-        );
+    fn rejects_blank_keys() {
         assert!(matches!(
-            CohereParseConfig.validate_environment(
+            CohereParseConfig.resolve_headers(
                 &OcrConnection {
                     api_key: Some("  ".into()),
                     ..Default::default()

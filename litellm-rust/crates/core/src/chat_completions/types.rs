@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
+use crate::llms::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth};
 
 /// A `/chat/completions` call as it crosses into the core.
 ///
@@ -24,7 +24,7 @@ pub struct ChatCompletionsRequest<'a> {
 
 pub(super) struct ResolvedChatCompletionsRequest<'a> {
     pub(super) model: String,
-    pub(super) config: &'static dyn ChatCompletionsProviderConfig,
+    pub(super) config: &'static dyn BaseConfig,
     pub(super) messages: Vec<ChatMessage>,
     pub(super) optional_params: Map<String, Value>,
     pub(super) api_key: Option<&'a str>,
@@ -35,7 +35,7 @@ pub(super) struct ResolvedChatCompletionsRequest<'a> {
 
 pub(super) struct ProviderChatCompletionsRequest {
     pub(super) model: String,
-    pub(super) config: &'static dyn ChatCompletionsProviderConfig,
+    pub(super) config: &'static dyn BaseConfig,
     pub(super) url: String,
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,

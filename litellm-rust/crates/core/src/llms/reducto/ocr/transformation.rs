@@ -5,12 +5,15 @@ use serde_json::{Map, Value, json};
 
 use crate::call_arguments::{CallArguments, compose_body};
 use crate::constants::{REDUCTO_API_BASE, REDUCTO_API_KEY_ENV, REDUCTO_ID_PREFIX};
-use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
+use crate::llms::base_llm::ocr::transformation::{
+    BaseOcrConfig, OcrRequestContext, decode_and_normalize_response,
+};
 use crate::ocr::OcrClient;
 use crate::ocr::document::InlineDocument;
 use crate::ocr::prepare::{build_http_request, credential_env, guardrail_document};
 use crate::ocr::types::{
-    LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrUsageInfo, PreparedOcrRequest,
+    LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrResponseFormat, OcrUsageInfo,
+    PreparedOcrRequest,
 };
 use crate::params::OpaqueParams;
 use crate::url_utils::ApiUrl;
@@ -83,48 +86,48 @@ impl BaseOcrConfig for ReductoParseV3Config {
     type ProviderRequest = ReductoV3Request;
     type Environment = Vec<(String, String)>;
 
-    async fn validate_environment(
-        &self,
-        request: &PreparedOcrRequest,
-        _client: &OcrClient,
-    ) -> Result<Self::Environment, crate::ocr::Error> {
-        validate_environment(&request.connection, &credential_env)
-    }
-
-    fn get_complete_url(
-        &self,
-        request: &PreparedOcrRequest,
-        _params: &Self::OcrParams,
-        _environment: &Self::Environment,
-    ) -> Result<String, crate::ocr::Error> {
-        get_complete_url(request.connection.api_base.as_deref())
-    }
-
-    fn transform_ocr_request(
-        &self,
-        _model: &str,
-        document: OcrDocument,
-        params: &Self::OcrParams,
-        _headers: &[(String, String)],
-    ) -> Result<Self::ProviderRequest, crate::ocr::Error> {
-        Ok(ReductoV3Request {
-            input: uploaded_file_id(document)?,
-            params: params.clone(),
-        })
-    }
-
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &["formatting", "retrieval", "settings"]
     }
 
     fn map_ocr_params(
         &self,
-        arguments: &CallArguments,
+        non_default_params: &CallArguments,
         model: &str,
     ) -> Result<ReductoV3Params, crate::ocr::Error> {
-        Ok(arguments
+        Ok(non_default_params
             .select(self.get_supported_ocr_params(model))
             .into())
+    }
+
+    async fn validate_environment(
+        &self,
+        request: &PreparedOcrRequest,
+        _client: &OcrClient,
+    ) -> Result<Self::Environment, crate::ocr::Error> {
+        resolve_headers(&request.connection, &credential_env)
+    }
+
+    fn get_complete_url(
+        &self,
+        request: &PreparedOcrRequest,
+        _optional_params: &Self::OcrParams,
+        _environment: &Self::Environment,
+    ) -> Result<String, crate::ocr::Error> {
+        build_ocr_url(request.connection.api_base.as_deref())
+    }
+
+    fn transform_ocr_request(
+        &self,
+        _model: &str,
+        document: OcrDocument,
+        optional_params: &Self::OcrParams,
+        _headers: &[(String, String)],
+    ) -> Result<Self::ProviderRequest, crate::ocr::Error> {
+        Ok(ReductoV3Request {
+            input: uploaded_file_id(document)?,
+            params: optional_params.clone(),
+        })
     }
 
     async fn async_transform_ocr_request(
@@ -146,14 +149,9 @@ impl BaseOcrConfig for ReductoParseV3Config {
         &self,
         model: &str,
         raw_response: &[u8],
-        request_format: crate::ocr::types::OcrResponseFormat,
+        request_format: OcrResponseFormat,
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        crate::llms::base_llm::ocr::transformation::decode_and_normalize_response(
-            model,
-            raw_response,
-            request_format,
-            normalize_response,
-        )
+        decode_and_normalize_response(model, raw_response, request_format, normalize_response)
     }
 
     async fn prepare_request(
@@ -173,6 +171,20 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
     type ProviderRequest = ReductoLegacyRequest;
     type Environment = Vec<(String, String)>;
 
+    fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
+        &["enhance"]
+    }
+
+    fn map_ocr_params(
+        &self,
+        non_default_params: &CallArguments,
+        model: &str,
+    ) -> Result<ReductoLegacyParams, crate::ocr::Error> {
+        Ok(non_default_params
+            .select(self.get_supported_ocr_params(model))
+            .into())
+    }
+
     async fn validate_environment(
         &self,
         request: &PreparedOcrRequest,
@@ -186,34 +198,23 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
     fn get_complete_url(
         &self,
         request: &PreparedOcrRequest,
-        params: &Self::OcrParams,
+        optional_params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
-        ReductoParseV3Config.get_complete_url(request, params, environment)
+        ReductoParseV3Config.get_complete_url(request, optional_params, environment)
     }
 
     fn transform_ocr_request(
         &self,
         _model: &str,
         document: OcrDocument,
-        params: &Self::OcrParams,
+        optional_params: &Self::OcrParams,
         _headers: &[(String, String)],
     ) -> Result<Self::ProviderRequest, crate::ocr::Error> {
-        Ok(build_legacy_body(uploaded_file_id(document)?, params))
-    }
-
-    fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
-        &["enhance"]
-    }
-
-    fn map_ocr_params(
-        &self,
-        arguments: &CallArguments,
-        model: &str,
-    ) -> Result<ReductoLegacyParams, crate::ocr::Error> {
-        Ok(arguments
-            .select(self.get_supported_ocr_params(model))
-            .into())
+        Ok(build_legacy_body(
+            uploaded_file_id(document)?,
+            optional_params,
+        ))
     }
 
     async fn async_transform_ocr_request(
@@ -232,7 +233,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         &self,
         model: &str,
         raw_response: &[u8],
-        request_format: crate::ocr::types::OcrResponseFormat,
+        request_format: OcrResponseFormat,
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
         ReductoParseV3Config.transform_ocr_response(model, raw_response, request_format)
     }
@@ -403,7 +404,7 @@ fn page(index: i64, markdown: String, blocks: Option<Value>) -> OcrPage {
         ..Default::default()
     }
 }
-fn get_complete_url(api_base: Option<&str>) -> Result<String, crate::ocr::Error> {
+fn build_ocr_url(api_base: Option<&str>) -> Result<String, crate::ocr::Error> {
     complete_endpoint_url(api_base, "parse")
 }
 
@@ -420,7 +421,7 @@ fn complete_endpoint_url(api_base: Option<&str>, path: &str) -> Result<String, c
         })
 }
 
-fn validate_environment(
+fn resolve_headers(
     connection: &OcrConnection,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<(String, String)>, crate::ocr::Error> {
@@ -655,7 +656,7 @@ mod tests {
             api_key: Some("passed-key".into()),
             ..Default::default()
         };
-        let headers = validate_environment(&connection, &|_| Some("env-key".into())).unwrap();
+        let headers = resolve_headers(&connection, &|_| Some("env-key".into())).unwrap();
         assert_eq!(headers[0].1, "Bearer passed-key");
     }
 
@@ -665,7 +666,7 @@ mod tests {
             api_key: Some(" ".into()),
             ..Default::default()
         };
-        let headers = validate_environment(&connection, &|_| Some(" env-key ".into())).unwrap();
+        let headers = resolve_headers(&connection, &|_| Some(" env-key ".into())).unwrap();
         assert_eq!(headers[0].1, "Bearer env-key");
     }
 
@@ -676,7 +677,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            validate_environment(&connection, &|_| None).unwrap(),
+            resolve_headers(&connection, &|_| None).unwrap(),
             connection.extra_headers
         );
     }

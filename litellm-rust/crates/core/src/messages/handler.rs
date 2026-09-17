@@ -37,7 +37,9 @@ pub(super) async fn execute_messages_provider_call(
 
     let response = serde_json::from_str(&text)
         .map_err(|err| Error::InvalidResponse(format!("invalid messages response JSON: {err}")))?;
-    request.config.transform_response(&request.model, response)
+    request
+        .config
+        .transform_anthropic_messages_response(&request.model, response)
 }
 
 pub(super) async fn execute_messages_provider_stream(

@@ -5,16 +5,18 @@ use super::types::{
     LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument, PreparedOcrRequest,
     ResolvedOcrCredentials,
 };
+use crate::litellm_core_utils::get_llm_provider_logic::{
+    CustomLlmProvider, get_custom_llm_provider,
+};
 use crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig;
-use crate::llms::azure_ai::ocr::document_intelligence::transformation::AzureDocumentIntelligenceOCRConfig;
-use crate::llms::azure_ai::ocr::transformation::AzureAIOCRConfig;
+use crate::llms::azure_ai::ocr::document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig;
+use crate::llms::azure_ai::ocr::transformation::AzureAiOcrConfig;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrResponseContext};
 use crate::llms::cohere::ocr::transformation::CohereParseConfig;
 use crate::llms::mistral::ocr::transformation::MistralOcrConfig;
 use crate::llms::reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config};
 use crate::llms::vertex_ai::ocr::deepseek_transformation::VertexAIDeepSeekOCRConfig;
-use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
-use crate::providers::custom_llm_provider::{CustomLlmProvider, get_custom_llm_provider};
+use crate::llms::vertex_ai::ocr::transformation::VertexAiOcrConfig;
 
 macro_rules! dispatch_config {
     ($config:expr, $method:ident($($argument:expr),* $(,)?)) => {
@@ -27,12 +29,12 @@ macro_rules! dispatch_config {
         match $config {
             OcrConfigKind::Cohere => CohereParseConfig.$method($($argument),*)$($suffix)*,
             OcrConfigKind::Mistral => MistralOcrConfig.$method($($argument),*)$($suffix)*,
-            OcrConfigKind::AzureAi => AzureAIOCRConfig.$method($($argument),*)$($suffix)*,
+            OcrConfigKind::AzureAi => AzureAiOcrConfig.$method($($argument),*)$($suffix)*,
             OcrConfigKind::AzureCohere => AzureAICohereParseConfig.$method($($argument),*)$($suffix)*,
-            OcrConfigKind::AzureDocumentIntelligence => AzureDocumentIntelligenceOCRConfig.$method($($argument),*)$($suffix)*,
+            OcrConfigKind::AzureDocumentIntelligence => AzureDocumentIntelligenceOcrConfig.$method($($argument),*)$($suffix)*,
             OcrConfigKind::ReductoLegacy => ReductoParseLegacyConfig.$method($($argument),*)$($suffix)*,
             OcrConfigKind::ReductoV3 => ReductoParseV3Config.$method($($argument),*)$($suffix)*,
-            OcrConfigKind::VertexAi => VertexAIOCRConfig.$method($($argument),*)$($suffix)*,
+            OcrConfigKind::VertexAi => VertexAiOcrConfig.$method($($argument),*)$($suffix)*,
             OcrConfigKind::VertexDeepSeek => VertexAIDeepSeekOCRConfig.$method($($argument),*)$($suffix)*,
         }
     };

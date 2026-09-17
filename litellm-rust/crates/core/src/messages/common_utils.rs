@@ -1,17 +1,17 @@
 use serde_json::{Map, Value};
 
 use super::Error;
-use super::transformation::AnthropicMessagesProviderConfig;
 use crate::http_utils::string_headers as shared_string_headers;
 pub(super) use crate::http_utils::{has_bearer_auth, has_header, truncate_error_body};
-use crate::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
-use crate::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
+use crate::llms::anthropic::experimental_pass_through::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
+use crate::llms::azure_ai::anthropic::messages_transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
+use crate::llms::base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig;
 
 const HEADER_CONTEXT: &str = "messages";
 
 pub(super) fn messages_provider_config(
     provider: &str,
-) -> Option<&'static dyn AnthropicMessagesProviderConfig> {
+) -> Option<&'static dyn BaseAnthropicMessagesConfig> {
     match provider {
         "anthropic" => Some(&ANTHROPIC_MESSAGES_CONFIG),
         "azure_ai" => Some(&AZURE_ANTHROPIC_MESSAGES_CONFIG),

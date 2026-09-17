@@ -1,19 +1,18 @@
 use serde_json::{Map, Value, json};
 
-use super::super::aws_base::{bedrock_model_id_and_region, resolve_bedrock_region};
-use super::super::constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE};
 use crate::chat_completions::Error;
 use crate::chat_completions::conversation::{Conversation, TurnRole, build_conversation};
 use crate::chat_completions::response_utils::{finish_reason_for, unix_now, usage_from_parts};
-use crate::chat_completions::transformation::{
-    ChatCompletionsAuth, ChatCompletionsProviderConfig, Unsupported, unsupported_message,
-    unsupported_param,
-};
 use crate::chat_completions::types::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
     ChatCompletionsUsage, ChatMessage, ChatMessageContent, ProviderChatRequestData,
     ProviderChatResponseData,
 };
+use crate::llms::base_llm::chat::transformation::{
+    BaseConfig, ChatCompletionsAuth, Unsupported, unsupported_message, unsupported_param,
+};
+use litellm_auth_aws::constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE};
+use litellm_auth_aws::{bedrock_model_id_and_region, resolve_bedrock_region};
 
 /// Converse parameter names, post `map_openai_params`, that the Rust path can
 /// place verbatim in `inferenceConfig`.
@@ -49,62 +48,16 @@ const CONFIG_PARAMS: &[&str] = &[
 
 const CONVERSE_PATH_SUFFIX: &str = "/converse";
 
-pub struct BedrockChatCompletionsConfig;
+pub struct AmazonConverseConfig;
 
-pub const BEDROCK_CHAT_COMPLETIONS_CONFIG: BedrockChatCompletionsConfig =
-    BedrockChatCompletionsConfig;
+pub const BEDROCK_CHAT_COMPLETIONS_CONFIG: AmazonConverseConfig = AmazonConverseConfig;
 
-fn converse_body(conversation: &Conversation, params: &Map<String, Value>) -> Value {
-    let messages: Vec<Value> = conversation
-        .turns
-        .iter()
-        .map(|turn| {
-            json!({
-                "role": turn.role.as_str(),
-                "content": turn.texts.iter().map(|text| json!({"text": text})).collect::<Vec<_>>(),
-            })
-        })
-        .collect();
-
-    let inference_config = Map::from_iter(SUPPORTED_PARAMS.iter().filter_map(|(_, name)| {
-        params
-            .get(*name)
-            .map(|value| ((*name).to_string(), value.clone()))
-    }));
-
-    let system: Vec<Value> = conversation
-        .system
-        .iter()
-        .map(|text| json!({"text": text}))
-        .collect();
-
-    Value::Object(Map::from_iter(
-        [
-            (
-                "inferenceConfig".to_string(),
-                Value::Object(inference_config),
-            ),
-            ("messages".to_string(), json!(messages)),
-        ]
-        .into_iter()
-        .chain((!system.is_empty()).then(|| ("system".to_string(), json!(system)))),
-    ))
-}
-
-fn has_blank_text(message: &ChatMessage) -> bool {
-    match &message.content {
-        None => false,
-        Some(ChatMessageContent::Text(text)) => text.trim().is_empty(),
-        Some(ChatMessageContent::Parts(parts)) => parts.iter().any(|part| {
-            part.get("text")
-                .and_then(Value::as_str)
-                .is_none_or(|text| text.trim().is_empty())
-        }),
+impl BaseConfig for AmazonConverseConfig {
+    fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
+        SUPPORTED_PARAMS
     }
-}
 
-impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
-    fn complete_url(
+    fn get_complete_url(
         &self,
         api_base: Option<&str>,
         model: &str,
@@ -129,82 +82,6 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
             return Ok(endpoint.to_string());
         }
         Ok(format!("{endpoint}/model/{model_id}{CONVERSE_PATH_SUFFIX}"))
-    }
-
-    fn auth(
-        &self,
-        api_key: Option<&str>,
-        model: &str,
-        optional_params: &Map<String, Value>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ChatCompletionsAuth, Error> {
-        // Python reads `api_key` as the Bedrock bearer token and consults the
-        // env only when the caller passed none, so a caller-supplied empty key
-        // falls through to SigV4 without reaching for the environment. An
-        // all-whitespace token stays a bearer token here because Python sends
-        // it too: treating it as absent would sign as the host principal
-        // instead, which is the identity swap this branch exists to prevent.
-        let bearer = match api_key {
-            Some(key) => Some(key.to_string()),
-            None => env_lookup(AWS_BEARER_TOKEN_BEDROCK),
-        }
-        .filter(|token| !token.is_empty());
-        if let Some(token) = bearer {
-            return Ok(ChatCompletionsAuth::Bearer { token });
-        }
-        let (_, model_region) = bedrock_model_id_and_region(model);
-        Ok(ChatCompletionsAuth::AwsSigV4 {
-            region: resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup),
-        })
-    }
-
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        &[("Content-Type", "application/json")]
-    }
-
-    fn supported_openai_params(&self) -> &'static [(&'static str, &'static str)] {
-        SUPPORTED_PARAMS
-    }
-
-    fn config_params(&self) -> &'static [&'static str] {
-        CONFIG_PARAMS
-    }
-
-    fn unsupported_reason(
-        &self,
-        messages: &[ChatMessage],
-        optional_params: &Map<String, Value>,
-    ) -> Option<Unsupported> {
-        unsupported_param(
-            self.supported_openai_params(),
-            CONFIG_PARAMS,
-            optional_params,
-        )
-        .or_else(|| messages.iter().find_map(unsupported_message))
-        // Python's Converse translation drops blank text blocks instead of
-        // substituting the placeholder the shared conversation builder
-        // applies, so decline blank text rather than diverge.
-        .or_else(|| {
-            messages
-                .iter()
-                .any(has_blank_text)
-                .then_some(Unsupported("blank message text"))
-        })
-        // Converse has no assistant prefill: Python inserts a continue turn
-        // when a conversation opens or closes on an assistant message, and
-        // only under `litellm.modify_params`, which the core cannot see.
-        // Declining both ends also keeps the shared builder's final
-        // assistant right-strip (an Anthropic rule) unreachable here.
-        .or_else(|| {
-            let conversation = build_conversation(messages);
-            let ends_on_assistant = conversation
-                .turns
-                .last()
-                .is_some_and(|turn| turn.role == TurnRole::Assistant);
-            (!conversation.opens_on_user_turn() || ends_on_assistant).then_some(Unsupported(
-                "conversation does not run user turn to user turn",
-            ))
-        })
     }
 
     fn transform_request(
@@ -294,6 +171,127 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
             }],
             usage,
         })
+    }
+
+    fn auth(
+        &self,
+        api_key: Option<&str>,
+        model: &str,
+        optional_params: &Map<String, Value>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<ChatCompletionsAuth, Error> {
+        // Python reads `api_key` as the Bedrock bearer token and consults the
+        // env only when the caller passed none, so a caller-supplied empty key
+        // falls through to SigV4 without reaching for the environment. An
+        // all-whitespace token stays a bearer token here because Python sends
+        // it too: treating it as absent would sign as the host principal
+        // instead, which is the identity swap this branch exists to prevent.
+        let bearer = match api_key {
+            Some(key) => Some(key.to_string()),
+            None => env_lookup(AWS_BEARER_TOKEN_BEDROCK),
+        }
+        .filter(|token| !token.is_empty());
+        if let Some(token) = bearer {
+            return Ok(ChatCompletionsAuth::Bearer { token });
+        }
+        let (_, model_region) = bedrock_model_id_and_region(model);
+        Ok(ChatCompletionsAuth::AwsSigV4 {
+            region: resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup),
+        })
+    }
+
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        &[("Content-Type", "application/json")]
+    }
+
+    fn config_params(&self) -> &'static [&'static str] {
+        CONFIG_PARAMS
+    }
+
+    fn unsupported_reason(
+        &self,
+        messages: &[ChatMessage],
+        optional_params: &Map<String, Value>,
+    ) -> Option<Unsupported> {
+        unsupported_param(
+            self.supported_openai_param_mappings(),
+            CONFIG_PARAMS,
+            optional_params,
+        )
+        .or_else(|| messages.iter().find_map(unsupported_message))
+        // Python's Converse translation drops blank text blocks instead of
+        // substituting the placeholder the shared conversation builder
+        // applies, so decline blank text rather than diverge.
+        .or_else(|| {
+            messages
+                .iter()
+                .any(has_blank_text)
+                .then_some(Unsupported("blank message text"))
+        })
+        // Converse has no assistant prefill: Python inserts a continue turn
+        // when a conversation opens or closes on an assistant message, and
+        // only under `litellm.modify_params`, which the core cannot see.
+        // Declining both ends also keeps the shared builder's final
+        // assistant right-strip (an Anthropic rule) unreachable here.
+        .or_else(|| {
+            let conversation = build_conversation(messages);
+            let ends_on_assistant = conversation
+                .turns
+                .last()
+                .is_some_and(|turn| turn.role == TurnRole::Assistant);
+            (!conversation.opens_on_user_turn() || ends_on_assistant).then_some(Unsupported(
+                "conversation does not run user turn to user turn",
+            ))
+        })
+    }
+}
+
+fn converse_body(conversation: &Conversation, optional_params: &Map<String, Value>) -> Value {
+    let messages: Vec<Value> = conversation
+        .turns
+        .iter()
+        .map(|turn| {
+            json!({
+                "role": turn.role.as_str(),
+                "content": turn.texts.iter().map(|text| json!({"text": text})).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    let inference_config = Map::from_iter(SUPPORTED_PARAMS.iter().filter_map(|(_, name)| {
+        optional_params
+            .get(*name)
+            .map(|value| ((*name).to_string(), value.clone()))
+    }));
+
+    let system: Vec<Value> = conversation
+        .system
+        .iter()
+        .map(|text| json!({"text": text}))
+        .collect();
+
+    Value::Object(Map::from_iter(
+        [
+            (
+                "inferenceConfig".to_string(),
+                Value::Object(inference_config),
+            ),
+            ("messages".to_string(), json!(messages)),
+        ]
+        .into_iter()
+        .chain((!system.is_empty()).then(|| ("system".to_string(), json!(system)))),
+    ))
+}
+
+fn has_blank_text(message: &ChatMessage) -> bool {
+    match &message.content {
+        None => false,
+        Some(ChatMessageContent::Text(text)) => text.trim().is_empty(),
+        Some(ChatMessageContent::Parts(parts)) => parts.iter().any(|part| {
+            part.get("text")
+                .and_then(Value::as_str)
+                .is_none_or(|text| text.trim().is_empty())
+        }),
     }
 }
 

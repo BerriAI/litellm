@@ -3,7 +3,6 @@ pub use error::Error;
 mod client;
 mod handler;
 mod prepare;
-pub mod transformation;
 pub mod types;
 
 pub use handler::execute_audio_transcription_provider_call;

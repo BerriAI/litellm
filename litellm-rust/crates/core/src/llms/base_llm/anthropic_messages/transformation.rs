@@ -1,5 +1,5 @@
-use super::Error;
-use super::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
+use crate::messages::Error;
+use crate::messages::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessagesAuthStrategy {
@@ -16,13 +16,28 @@ impl MessagesAuthStrategy {
     }
 }
 
-pub trait AnthropicMessagesProviderConfig: Sync {
-    fn complete_url(
+pub trait BaseAnthropicMessagesConfig: Sync {
+    fn get_complete_url(
         &self,
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
+
+    fn transform_anthropic_messages_request(
+        &self,
+        request: AnthropicMessagesRequest,
+    ) -> Result<AnthropicMessagesRequest, Error> {
+        Ok(request)
+    }
+
+    fn transform_anthropic_messages_response(
+        &self,
+        _model: &str,
+        response: AnthropicMessagesResponse,
+    ) -> Result<AnthropicMessagesResponse, Error> {
+        Ok(response)
+    }
 
     fn resolve_api_key(
         &self,
@@ -43,20 +58,5 @@ pub trait AnthropicMessagesProviderConfig: Sync {
             ("anthropic-version", "2023-06-01"),
             ("content-type", "application/json"),
         ]
-    }
-
-    fn transform_request(
-        &self,
-        request: AnthropicMessagesRequest,
-    ) -> Result<AnthropicMessagesRequest, Error> {
-        Ok(request)
-    }
-
-    fn transform_response(
-        &self,
-        _model: &str,
-        response: AnthropicMessagesResponse,
-    ) -> Result<AnthropicMessagesResponse, Error> {
-        Ok(response)
     }
 }

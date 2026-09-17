@@ -2,11 +2,11 @@ use crate::responses::Error;
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsTransformResult};
 use crate::responses::websocket::{ResponsesWebSocketProviderConfig, enforce_model};
 
-pub struct OpenAIResponsesWsConfig;
+pub struct OpenAiResponsesApiConfig;
 
-pub const OPENAI_RESPONSES_WS_CONFIG: OpenAIResponsesWsConfig = OpenAIResponsesWsConfig;
+pub const OPENAI_RESPONSES_WS_CONFIG: OpenAiResponsesApiConfig = OpenAiResponsesApiConfig;
 
-impl ResponsesWebSocketProviderConfig for OpenAIResponsesWsConfig {
+impl ResponsesWebSocketProviderConfig for OpenAiResponsesApiConfig {
     fn supports_native_websocket(&self) -> bool {
         true
     }

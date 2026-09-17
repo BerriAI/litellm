@@ -226,7 +226,7 @@ fn builds_the_converse_url_from_the_region_in_the_model_id() {
     let config = &BEDROCK_CHAT_COMPLETIONS_CONFIG;
     assert_eq!(
         config
-            .complete_url(None, "us-east-1/anthropic.claude-v2", &Map::new(), &|_| {
+            .get_complete_url(None, "us-east-1/anthropic.claude-v2", &Map::new(), &|_| {
                 None
             })
             .expect("url builds"),
@@ -240,13 +240,13 @@ fn falls_back_to_the_region_env_then_the_default_region() {
     let with_env = |key: &str| (key == "AWS_REGION_NAME").then(|| "eu-west-1".to_string());
     assert_eq!(
         config
-            .complete_url(None, "anthropic.claude-v2", &Map::new(), &with_env)
+            .get_complete_url(None, "anthropic.claude-v2", &Map::new(), &with_env)
             .expect("url builds"),
         "https://bedrock-runtime.eu-west-1.amazonaws.com/model/anthropic.claude-v2/converse"
     );
     assert_eq!(
         config
-            .complete_url(None, "anthropic.claude-v2", &Map::new(), &|_| None)
+            .get_complete_url(None, "anthropic.claude-v2", &Map::new(), &|_| None)
             .expect("url builds"),
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-v2/converse"
     );
@@ -258,7 +258,7 @@ fn prefers_an_explicit_runtime_endpoint_over_the_api_base() {
     let overrides = params(json!({"aws_bedrock_runtime_endpoint": "https://vpce.internal/"}));
     assert_eq!(
         config
-            .complete_url(
+            .get_complete_url(
                 Some("https://ignored.example"),
                 "anthropic.claude-v2",
                 &overrides,
@@ -540,7 +540,7 @@ fn leaves_a_complete_converse_url_untouched() {
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-v2%3A0/converse";
     assert_eq!(
         config
-            .complete_url(
+            .get_complete_url(
                 Some(already_built),
                 "anthropic.claude-v2",
                 &Map::new(),
@@ -554,7 +554,7 @@ fn leaves_a_complete_converse_url_untouched() {
 
 #[test]
 fn host_supplied_credentials_outrank_ambient_profile_and_role_state() {
-    use crate::providers::bedrock::aws_base::host_supplied_credentials;
+    use litellm_auth_aws::host_supplied_credentials;
 
     let supplied = params(json!({
         "aws_access_key_id": "AKIAHOST",

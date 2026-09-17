@@ -17,15 +17,27 @@ use crate::url_utils::ApiUrl;
 const DEFAULT_LOCATION: &str = "us-central1";
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct VertexAIOCRConfig;
+pub(crate) struct VertexAiOcrConfig;
 
-impl BaseOcrConfig for VertexAIOCRConfig {
+impl BaseOcrConfig for VertexAiOcrConfig {
     type OcrParams = OpaqueParams;
     type ProviderRequest = MistralOcrRequest;
     type Environment = vertex::VertexEnvironment;
 
+    fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
+        MistralOcrConfig.get_supported_ocr_params(model)
+    }
+
     fn get_api_key_env_var(&self) -> Option<&'static str> {
         Some("VERTEX_AI_API_KEY")
+    }
+
+    fn map_ocr_params(
+        &self,
+        non_default_params: &CallArguments,
+        model: &str,
+    ) -> Result<OpaqueParams, crate::ocr::Error> {
+        MistralOcrConfig.map_ocr_params(non_default_params, model)
     }
 
     async fn validate_environment(
@@ -37,14 +49,14 @@ impl BaseOcrConfig for VertexAIOCRConfig {
             &request.optional_params,
             &request.input_sources,
         )?;
-        self.validate_environment(&request.connection, &config, client)
+        self.resolve_environment(&request.connection, &config, client)
             .await
     }
 
     fn get_complete_url(
         &self,
         request: &PreparedOcrRequest,
-        _params: &Self::OcrParams,
+        _optional_params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
         let config = VertexConfig::from_sourced_optional_params(
@@ -53,7 +65,7 @@ impl BaseOcrConfig for VertexAIOCRConfig {
         )?;
         let location = vertex::get_vertex_ai_location(&config, &credential_env)
             .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
-        self.get_complete_url(
+        self.build_ocr_url(
             request.connection.api_base.as_deref(),
             &environment.project_id,
             &location,
@@ -65,22 +77,10 @@ impl BaseOcrConfig for VertexAIOCRConfig {
         &self,
         model: &str,
         document: OcrDocument,
-        params: &OpaqueParams,
+        optional_params: &OpaqueParams,
         headers: &[(String, String)],
     ) -> Result<MistralOcrRequest, crate::ocr::Error> {
-        MistralOcrConfig.transform_ocr_request(model, document, params, headers)
-    }
-
-    fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
-        MistralOcrConfig.get_supported_ocr_params(model)
-    }
-
-    fn map_ocr_params(
-        &self,
-        arguments: &CallArguments,
-        model: &str,
-    ) -> Result<OpaqueParams, crate::ocr::Error> {
-        MistralOcrConfig.map_ocr_params(arguments, model)
+        MistralOcrConfig.transform_ocr_request(model, document, optional_params, headers)
     }
 
     async fn async_transform_ocr_request(
@@ -120,8 +120,8 @@ impl OcrEnvironment for vertex::VertexEnvironment {
     }
 }
 
-impl VertexAIOCRConfig {
-    pub(super) async fn validate_environment(
+impl VertexAiOcrConfig {
+    async fn resolve_environment(
         &self,
         connection: &OcrConnection,
         config: &VertexConfig,
@@ -140,7 +140,7 @@ impl VertexAIOCRConfig {
             .map_err(crate::ocr::Error::from)
     }
 
-    fn get_complete_url(
+    fn build_ocr_url(
         &self,
         api_base: Option<&str>,
         project: &str,
@@ -198,19 +198,24 @@ fn validate_location(location: &str) -> Result<(), crate::ocr::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::VertexAIOCRConfig;
+    use super::VertexAiOcrConfig;
+    use rstest::rstest;
 
     #[test]
     fn endpoint_uses_location_project_and_model() {
         assert_eq!(
-            VertexAIOCRConfig
-                .get_complete_url(None, "proj-1", "europe-west4", "mistral-ocr-maas")
+            VertexAiOcrConfig
+                .build_ocr_url(None, "proj-1", "europe-west4", "mistral-ocr-maas")
                 .unwrap(),
             "https://europe-west4-aiplatform.googleapis.com/v1/projects/proj-1/locations/europe-west4/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
         );
+    }
+
+    #[test]
+    fn endpoint_rejects_invalid_location() {
         assert!(
-            VertexAIOCRConfig
-                .get_complete_url(None, "proj-1", "attacker.example/path", "model")
+            VertexAiOcrConfig
+                .build_ocr_url(None, "proj-1", "attacker.example/path", "model")
                 .is_err()
         );
     }
@@ -315,13 +320,18 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::mistral(false)]
+    #[case::vertex(true)]
     #[tokio::test]
-    async fn configs_build_complete_requests_and_share_mistral_normalization() {
+    async fn configs_build_complete_requests_and_share_mistral_normalization(
+        #[case] use_vertex: bool,
+    ) {
         use std::time::Duration;
 
         use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
         use crate::llms::mistral::ocr::transformation::MistralOcrConfig;
-        use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
+        use crate::llms::vertex_ai::ocr::transformation::VertexAiOcrConfig;
         use crate::ocr::test_support::ocr_client;
 
         let client = ocr_client();
@@ -348,7 +358,7 @@ mod tests {
             .prepare_request(&direct, &client)
             .await
             .unwrap();
-        let vertex_http = VertexAIOCRConfig
+        let vertex_http = VertexAiOcrConfig
             .prepare_request(&vertex, &client)
             .await
             .unwrap();
@@ -357,24 +367,26 @@ mod tests {
             vertex_http.url().as_str(),
             "https://vertex.test/v1/projects/project-1/locations/us-central1/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
         );
-        for http in [&direct_http, &vertex_http] {
-            assert_eq!(http.method(), reqwest::Method::POST);
-            assert_eq!(http.headers()["authorization"], "Bearer test-key");
-            assert_eq!(http.headers()["content-type"], "application/json");
-            assert_eq!(http.timeout(), Some(&Duration::from_secs(2)));
-            let body: Value =
-                serde_json::from_slice(http.body().unwrap().as_bytes().unwrap()).unwrap();
-            assert_eq!(
-                body,
-                json!({
-                    "model": "mistral-ocr-maas",
-                    "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
-                    "pages": [0, 2],
-                    "include_image_base64": true,
-                    "unknown": "preserved"
-                })
-            );
-        }
+        let http = if use_vertex {
+            &vertex_http
+        } else {
+            &direct_http
+        };
+        assert_eq!(http.method(), reqwest::Method::POST);
+        assert_eq!(http.headers()["authorization"], "Bearer test-key");
+        assert_eq!(http.headers()["content-type"], "application/json");
+        assert_eq!(http.timeout(), Some(&Duration::from_secs(2)));
+        let body: Value = serde_json::from_slice(http.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(
+            body,
+            json!({
+                "model": "mistral-ocr-maas",
+                "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
+                "pages": [0, 2],
+                "include_image_base64": true,
+                "unknown": "preserved"
+            })
+        );
         let payload = serde_json::to_vec(
             &json!({"pages": [{"index": 0, "markdown": "hello"}], "extra": "preserved"}),
         )
@@ -383,7 +395,7 @@ mod tests {
             .transform_ocr_response(&direct.model, &payload, Default::default())
             .unwrap()
             .into_json();
-        let vertex_response = VertexAIOCRConfig
+        let vertex_response = VertexAiOcrConfig
             .transform_ocr_response(&vertex.model, &payload, Default::default())
             .unwrap()
             .into_json();

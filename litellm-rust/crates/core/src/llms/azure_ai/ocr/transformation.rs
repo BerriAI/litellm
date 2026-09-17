@@ -17,15 +17,27 @@ const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
 const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct AzureAIOCRConfig;
+pub(crate) struct AzureAiOcrConfig;
 
-impl BaseOcrConfig for AzureAIOCRConfig {
+impl BaseOcrConfig for AzureAiOcrConfig {
     type OcrParams = OpaqueParams;
     type ProviderRequest = MistralOcrRequest;
     type Environment = Vec<(String, String)>;
 
+    fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
+        MistralOcrConfig.get_supported_ocr_params(model)
+    }
+
     fn get_api_key_env_var(&self) -> Option<&'static str> {
         Some(AZURE_AI_API_KEY_ENV)
+    }
+
+    fn map_ocr_params(
+        &self,
+        non_default_params: &CallArguments,
+        model: &str,
+    ) -> Result<OpaqueParams, crate::ocr::Error> {
+        MistralOcrConfig.map_ocr_params(non_default_params, model)
     }
 
     async fn validate_environment(
@@ -40,39 +52,27 @@ impl BaseOcrConfig for AzureAIOCRConfig {
                 &request.input_sources,
             )?
         };
-        self.validate_environment(&request.connection, &config, &credential_env)
+        self.resolve_headers(&request.connection, &config, &credential_env)
             .await
     }
 
     fn get_complete_url(
         &self,
         request: &PreparedOcrRequest,
-        _params: &Self::OcrParams,
+        _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
-        self.get_complete_url(request.connection.api_base.as_deref(), &credential_env)
+        self.build_ocr_url(request.connection.api_base.as_deref(), &credential_env)
     }
 
     fn transform_ocr_request(
         &self,
         model: &str,
         document: OcrDocument,
-        params: &OpaqueParams,
+        optional_params: &OpaqueParams,
         headers: &[(String, String)],
     ) -> Result<MistralOcrRequest, crate::ocr::Error> {
-        MistralOcrConfig.transform_ocr_request(model, document, params, headers)
-    }
-
-    fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
-        MistralOcrConfig.get_supported_ocr_params(model)
-    }
-
-    fn map_ocr_params(
-        &self,
-        arguments: &CallArguments,
-        model: &str,
-    ) -> Result<OpaqueParams, crate::ocr::Error> {
-        MistralOcrConfig.map_ocr_params(arguments, model)
+        MistralOcrConfig.transform_ocr_request(model, document, optional_params, headers)
     }
 
     async fn async_transform_ocr_request(
@@ -106,7 +106,7 @@ impl BaseOcrConfig for AzureAIOCRConfig {
     }
 }
 
-impl AzureAIOCRConfig {
+impl AzureAiOcrConfig {
     /// Python `AzureAIOCRConfig.validate_environment` requires the endpoint
     /// before it resolves credentials; keep that order so a missing base is
     /// reported without invoking any token provider.
@@ -124,22 +124,7 @@ impl AzureAIOCRConfig {
             ))
     }
 
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, crate::ocr::Error> {
-        let base = Self::resolve_api_base(api_base, env_lookup)?;
-        let path: Vec<&str> = AZURE_AI_OCR_PATH.trim_matches('/').split('/').collect();
-        ApiUrl::parse(&base)
-            .and_then(|url| url.complete_path(&path))
-            .map(|url| url.into_string())
-            .map_err(|_| crate::ocr::Error::RequestField {
-                path: "api_base".into(),
-            })
-    }
-
-    pub(super) async fn validate_environment(
+    async fn resolve_headers(
         &self,
         connection: &OcrConnection,
         config: &AzureAuthInputs,
@@ -169,6 +154,21 @@ impl AzureAIOCRConfig {
         super::common_utils::validate_destination(connection, key.source())?;
         Ok(bearer_headers(connection, key.value()))
     }
+
+    fn build_ocr_url(
+        &self,
+        api_base: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, crate::ocr::Error> {
+        let base = Self::resolve_api_base(api_base, env_lookup)?;
+        let path: Vec<&str> = AZURE_AI_OCR_PATH.trim_matches('/').split('/').collect();
+        ApiUrl::parse(&base)
+            .and_then(|url| url.complete_path(&path))
+            .map(|url| url.into_string())
+            .map_err(|_| crate::ocr::Error::RequestField {
+                path: "api_base".into(),
+            })
+    }
 }
 
 fn bearer_headers(connection: &OcrConnection, key: &str) -> Vec<(String, String)> {
@@ -185,31 +185,41 @@ fn nonblank(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::{fixture, rstest};
+
     use super::*;
 
-    #[test]
-    fn completes_azure_path_and_preserves_query() {
+    #[fixture]
+    fn connection() -> OcrConnection {
+        OcrConnection {
+            api_key: Some("request-key".into()),
+            api_base: Some("https://example.com".into()),
+            ..Default::default()
+        }
+    }
+
+    #[rstest]
+    #[case::base_with_query(
+        "https://example.com/?tenant=a",
+        "https://example.com/providers/mistral/azure/ocr?tenant=a"
+    )]
+    #[case::complete_endpoint(
+        "https://example.com/providers/mistral/azure/ocr",
+        "https://example.com/providers/mistral/azure/ocr"
+    )]
+    fn completes_azure_path_and_preserves_query(#[case] api_base: &str, #[case] expected: &str) {
         assert_eq!(
-            AzureAIOCRConfig
-                .get_complete_url(Some("https://example.com/?tenant=a"), &|_| None)
+            AzureAiOcrConfig
+                .build_ocr_url(Some(api_base), &|_| None)
                 .unwrap(),
-            "https://example.com/providers/mistral/azure/ocr?tenant=a"
-        );
-        assert_eq!(
-            AzureAIOCRConfig
-                .get_complete_url(
-                    Some("https://example.com/providers/mistral/azure/ocr"),
-                    &|_| None
-                )
-                .unwrap(),
-            "https://example.com/providers/mistral/azure/ocr"
+            expected
         );
     }
 
     #[test]
     fn missing_api_base_is_structured() {
         assert!(matches!(
-            AzureAIOCRConfig::resolve_api_base(None, &|_| None),
+            AzureAiOcrConfig::resolve_api_base(None, &|_| None),
             Err(crate::ocr::Error::Auth(
                 litellm_auth::Error::MissingApiBase {
                     provider: "Azure AI",
@@ -219,17 +229,16 @@ mod tests {
         ));
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn supplied_authorization_precedes_keys() {
+    async fn supplied_authorization_precedes_keys(connection: OcrConnection) {
         let connection = OcrConnection {
-            api_key: Some("request-key".into()),
-            api_base: Some("https://example.com".into()),
             extra_headers: vec![("authorization".into(), "Bearer prepared".into())],
-            ..Default::default()
+            ..connection
         };
         assert_eq!(
-            AzureAIOCRConfig
-                .validate_environment(&connection, &Default::default(), &|_| {
+            AzureAiOcrConfig
+                .resolve_headers(&connection, &Default::default(), &|_| {
                     Some("environment-key".into())
                 })
                 .await
@@ -238,16 +247,12 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn request_key_precedes_environment_key() {
-        let connection = OcrConnection {
-            api_key: Some("request-key".into()),
-            api_base: Some("https://example.com".into()),
-            ..Default::default()
-        };
+    async fn request_key_precedes_environment_key(connection: OcrConnection) {
         assert_eq!(
-            AzureAIOCRConfig
-                .validate_environment(&connection, &Default::default(), &|_| {
+            AzureAiOcrConfig
+                .resolve_headers(&connection, &Default::default(), &|_| {
                     Some("environment-key".into())
                 })
                 .await
@@ -264,8 +269,8 @@ mod tests {
             ..Default::default()
         };
 
-        let error = AzureAIOCRConfig
-            .validate_environment(&connection, &Default::default(), &|name| {
+        let error = AzureAiOcrConfig
+            .resolve_headers(&connection, &Default::default(), &|name| {
                 (name == AZURE_AI_API_KEY_ENV).then(|| "environment-key".into())
             })
             .await
@@ -288,8 +293,8 @@ mod tests {
             ..Default::default()
         };
 
-        let headers = AzureAIOCRConfig
-            .validate_environment(&connection, &Default::default(), &|_| None)
+        let headers = AzureAiOcrConfig
+            .resolve_headers(&connection, &Default::default(), &|_| None)
             .await
             .unwrap();
 

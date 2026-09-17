@@ -1,15 +1,15 @@
 use serde_json::{Map, Value, json};
 
-pub use super::aws_base::{aws_auth_config, bedrock_model_id_and_region, resolve_bedrock_region};
-use super::constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE};
 use crate::audio_transcription::Error;
-use crate::audio_transcription::transformation::{
-    AudioTranscriptionAuth, AudioTranscriptionProviderConfig,
-};
 use crate::audio_transcription::types::{
     AudioTranscriptionRequestData, AudioTranscriptionResponseData,
 };
 use crate::http_utils::json_type_name;
+use crate::llms::base_llm::audio_transcription::transformation::{
+    AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
+};
+use litellm_auth_aws::constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE};
+use litellm_auth_aws::{bedrock_model_id_and_region, resolve_bedrock_region};
 
 const SUPPORTED_PARAMS: &[&str] = &["language", "prompt", "temperature", "response_format"];
 
@@ -45,12 +45,12 @@ fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a 
         .filter(|value| !value.is_empty())
 }
 
-impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
-    fn supported_transcription_params(&self) -> &'static [&'static str] {
+impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
+    fn get_supported_openai_params(&self) -> &'static [&'static str] {
         SUPPORTED_PARAMS
     }
 
-    fn transform_transcription_request(
+    fn transform_audio_transcription_request(
         &self,
         _model: &str,
         audio: Value,
@@ -83,7 +83,7 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         })
     }
 
-    fn transform_transcription_response(
+    fn transform_audio_transcription_response(
         &self,
         _model: &str,
         response_json: Value,
@@ -105,7 +105,7 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         Ok(AudioTranscriptionResponseData { text })
     }
 
-    fn complete_url(
+    fn get_complete_url(
         &self,
         api_base: Option<&str>,
         model: &str,
@@ -160,7 +160,7 @@ mod tests {
         ]);
         let params = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG.map_transcription_params(&params);
         let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
-            .transform_transcription_request(
+            .transform_audio_transcription_request(
                 "mistral.voxtral-mini-3b-2507",
                 json!({"data": "AQI=", "format": "wav", "filename": "sample.wav"}),
                 params,
@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn response_concatenates_content_blocks() {
         let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
-            .transform_transcription_response(
+            .transform_audio_transcription_response(
                 "model",
                 json!({"output": {"message": {"content": [{"text": "hello "}, {"text": "world"}]}}}),
             )
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn invalid_audio_is_rejected() {
-        let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG.transform_transcription_request(
+        let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG.transform_audio_transcription_request(
             "model",
             json!({"data": "AQI="}),
             Map::new(),
@@ -208,7 +208,7 @@ mod tests {
     fn region_and_url_precedence_match_python() {
         let params = Map::from_iter([("aws_region_name".to_string(), json!("eu-west-1"))]);
         let url = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
-            .complete_url(
+            .get_complete_url(
                 None,
                 "bedrock/us-east-1/mistral.voxtral-mini-3b-2507",
                 &params,

@@ -14,7 +14,6 @@ pub mod conversation;
 pub(crate) mod handler;
 mod prepare;
 pub mod response_utils;
-pub mod transformation;
 pub mod types;
 
 use handler::execute_chat_completions_provider_call;

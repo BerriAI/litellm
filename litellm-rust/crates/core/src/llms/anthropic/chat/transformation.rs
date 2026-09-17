@@ -3,17 +3,16 @@ use serde_json::{Map, Value, json};
 use crate::chat_completions::Error;
 use crate::chat_completions::conversation::{Conversation, build_conversation};
 use crate::chat_completions::response_utils::{finish_reason_for, unix_now, usage_from_parts};
-use crate::chat_completions::transformation::{
-    ChatCompletionsAuth, ChatCompletionsProviderConfig, Unsupported, unsupported_message,
-    unsupported_param,
-};
 use crate::chat_completions::types::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
     ProviderChatRequestData, ProviderChatResponseData,
 };
 use crate::constants::ANTHROPIC_OAUTH_TOKEN_PREFIX;
-use crate::providers::anthropic::messages::transformation::{
+use crate::llms::anthropic::experimental_pass_through::messages::transformation::{
     complete_anthropic_url, resolve_anthropic_api_key,
+};
+use crate::llms::base_llm::chat::transformation::{
+    BaseConfig, ChatCompletionsAuth, Unsupported, unsupported_message, unsupported_param,
 };
 
 /// Anthropic parameter names, post `map_openai_params`, that the Rust path can
@@ -33,46 +32,16 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
     ("stop", "stop_sequences"),
 ];
 
-pub struct AnthropicChatCompletionsConfig;
+pub struct AnthropicConfig;
 
-pub const ANTHROPIC_CHAT_COMPLETIONS_CONFIG: AnthropicChatCompletionsConfig =
-    AnthropicChatCompletionsConfig;
+pub const ANTHROPIC_CHAT_COMPLETIONS_CONFIG: AnthropicConfig = AnthropicConfig;
 
-fn text_block(text: &str) -> Value {
-    json!({"type": "text", "text": text})
-}
+impl BaseConfig for AnthropicConfig {
+    fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
+        SUPPORTED_PARAMS
+    }
 
-fn anthropic_body(model: &str, conversation: &Conversation, params: Map<String, Value>) -> Value {
-    let messages: Vec<Value> = conversation
-        .turns
-        .iter()
-        .map(|turn| {
-            json!({
-                "role": turn.role.as_str(),
-                "content": turn.texts.iter().map(|text| text_block(text)).collect::<Vec<_>>(),
-            })
-        })
-        .collect();
-
-    let system: Vec<Value> = conversation.system.iter().map(|s| text_block(s)).collect();
-
-    let body = Map::from_iter(
-        [
-            ("model".to_string(), json!(model)),
-            ("messages".to_string(), json!(messages)),
-        ]
-        .into_iter()
-        // Python builds `{"model", "messages", **optional_params}` with
-        // `system` already folded into optional_params, so a caller-supplied
-        // key of the same name wins here too.
-        .chain((!system.is_empty()).then(|| ("system".to_string(), json!(system))))
-        .chain(params),
-    );
-    Value::Object(body)
-}
-
-impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
-    fn complete_url(
+    fn get_complete_url(
         &self,
         api_base: Option<&str>,
         _model: &str,
@@ -80,60 +49,6 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
-    }
-
-    fn auth(
-        &self,
-        api_key: Option<&str>,
-        _model: &str,
-        _optional_params: &Map<String, Value>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ChatCompletionsAuth, Error> {
-        Ok(ChatCompletionsAuth::Header {
-            name: "x-api-key",
-            value: resolve_anthropic_api_key(api_key, env_lookup)?,
-        })
-    }
-
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        &[
-            ("anthropic-version", "2023-06-01"),
-            ("content-type", "application/json"),
-        ]
-    }
-
-    /// An OAuth bearer is the whole credential: Python's `validate_environment`
-    /// authenticates with it and drops `x-api-key` rather than resolving one, so
-    /// the resolved key must not be applied over the top. Any other forwarded
-    /// `authorization` is unrelated to this header and does not defer, which is
-    /// also what Python does: it sends the deployment's `x-api-key` alongside.
-    fn defers_to_forwarded_auth(&self, headers: &[(String, String)]) -> bool {
-        headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("authorization")
-                && value
-                    .strip_prefix("Bearer ")
-                    .is_some_and(|token| token.starts_with(ANTHROPIC_OAUTH_TOKEN_PREFIX))
-        })
-    }
-
-    fn supported_openai_params(&self) -> &'static [(&'static str, &'static str)] {
-        SUPPORTED_PARAMS
-    }
-
-    fn unsupported_reason(
-        &self,
-        messages: &[ChatMessage],
-        optional_params: &Map<String, Value>,
-    ) -> Option<Unsupported> {
-        unsupported_param(self.supported_openai_params(), &[], optional_params)
-            .or_else(|| messages.iter().find_map(unsupported_message))
-            // Anthropic rejects a request whose first turn is not a user turn.
-            // Python only repairs that under `litellm.modify_params`, which the
-            // core cannot observe, so decline instead of guessing.
-            .or_else(|| {
-                (!build_conversation(messages).opens_on_user_turn())
-                    .then_some(Unsupported("conversation does not open on a user turn"))
-            })
     }
 
     fn transform_request(
@@ -209,6 +124,93 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
             ),
         })
     }
+
+    fn auth(
+        &self,
+        api_key: Option<&str>,
+        _model: &str,
+        _optional_params: &Map<String, Value>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<ChatCompletionsAuth, Error> {
+        Ok(ChatCompletionsAuth::Header {
+            name: "x-api-key",
+            value: resolve_anthropic_api_key(api_key, env_lookup)?,
+        })
+    }
+
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        &[
+            ("anthropic-version", "2023-06-01"),
+            ("content-type", "application/json"),
+        ]
+    }
+
+    /// An OAuth bearer is the whole credential: Python's `validate_environment`
+    /// authenticates with it and drops `x-api-key` rather than resolving one, so
+    /// the resolved key must not be applied over the top. Any other forwarded
+    /// `authorization` is unrelated to this header and does not defer, which is
+    /// also what Python does: it sends the deployment's `x-api-key` alongside.
+    fn defers_to_forwarded_auth(&self, headers: &[(String, String)]) -> bool {
+        headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("authorization")
+                && value
+                    .strip_prefix("Bearer ")
+                    .is_some_and(|token| token.starts_with(ANTHROPIC_OAUTH_TOKEN_PREFIX))
+        })
+    }
+
+    fn unsupported_reason(
+        &self,
+        messages: &[ChatMessage],
+        optional_params: &Map<String, Value>,
+    ) -> Option<Unsupported> {
+        unsupported_param(self.supported_openai_param_mappings(), &[], optional_params)
+            .or_else(|| messages.iter().find_map(unsupported_message))
+            // Anthropic rejects a request whose first turn is not a user turn.
+            // Python only repairs that under `litellm.modify_params`, which the
+            // core cannot observe, so decline instead of guessing.
+            .or_else(|| {
+                (!build_conversation(messages).opens_on_user_turn())
+                    .then_some(Unsupported("conversation does not open on a user turn"))
+            })
+    }
+}
+
+fn text_block(text: &str) -> Value {
+    json!({"type": "text", "text": text})
+}
+
+fn anthropic_body(
+    model: &str,
+    conversation: &Conversation,
+    optional_params: Map<String, Value>,
+) -> Value {
+    let messages: Vec<Value> = conversation
+        .turns
+        .iter()
+        .map(|turn| {
+            json!({
+                "role": turn.role.as_str(),
+                "content": turn.texts.iter().map(|text| text_block(text)).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    let system: Vec<Value> = conversation.system.iter().map(|s| text_block(s)).collect();
+
+    let body = Map::from_iter(
+        [
+            ("model".to_string(), json!(model)),
+            ("messages".to_string(), json!(messages)),
+        ]
+        .into_iter()
+        // Python builds `{"model", "messages", **optional_params}` with
+        // `system` already folded into optional_params, so a caller-supplied
+        // key of the same name wins here too.
+        .chain((!system.is_empty()).then(|| ("system".to_string(), json!(system))))
+        .chain(optional_params),
+    );
+    Value::Object(body)
 }
 
 #[cfg(test)]
