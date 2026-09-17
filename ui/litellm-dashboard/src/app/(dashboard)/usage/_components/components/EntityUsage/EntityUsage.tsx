@@ -44,6 +44,7 @@ import EndpointUsage from "../EndpointUsage/EndpointUsage";
 import ModelViewToggle, { ModelViewType } from "../ModelViewToggle";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
+import ModelActivityPanel from "@/components/UsagePage/components/ModelActivityPanel";
 import TopModelView from "./TopModelView";
 import TeamUserSpendCard from "./TeamUserSpendCard";
 
@@ -649,7 +650,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           <div className="flex justify-end mt-2 mb-4">
             <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
           </div>
-          <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
+          <ModelActivityPanel modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
         </>
       ),
     },
