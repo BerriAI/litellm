@@ -22,7 +22,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.models.skills import LiteLLM_SkillsTable
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.discovery_endpoints.agent_skills_archive import SkillArchive, build_skill_archive
 from litellm.types.proxy.discovery_endpoints.agent_skills_endpoints import (
     MAX_SKILL_DESCRIPTION_LENGTH,
@@ -70,7 +70,15 @@ async def archive_caller(request: Request) -> UserAPIKeyAuth | None:
         return None
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-    return await user_api_key_auth(request=request, api_key=request.headers.get("Authorization", ""))
+    return await user_api_key_auth(
+        request=request,
+        api_key=request.headers.get(SpecialHeaders.openai_authorization.value, ""),
+        azure_api_key_header=request.headers.get(SpecialHeaders.azure_authorization.value),
+        anthropic_api_key_header=request.headers.get(SpecialHeaders.anthropic_authorization.value),
+        google_ai_studio_api_key_header=request.headers.get(SpecialHeaders.google_ai_studio_authorization.value),
+        azure_apim_header=request.headers.get(SpecialHeaders.azure_apim_authorization.value),
+        custom_litellm_key_header=request.headers.get(SpecialHeaders.custom_litellm_api_key.value),
+    )
 
 
 async def stored_skill(

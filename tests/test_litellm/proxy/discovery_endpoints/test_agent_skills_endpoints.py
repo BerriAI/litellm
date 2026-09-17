@@ -183,7 +183,7 @@ def authenticated_client_for(
 
     app.include_router(router)
 
-    seen: list[UserAPIKeyAuth | None] = []
+    seen: list[UserAPIKeyAuth | None] = []  # mutable-ok: test spy recording the resolved caller
 
     def _skill(
         skill_id: str,
