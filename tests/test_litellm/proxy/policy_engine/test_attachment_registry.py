@@ -158,6 +158,37 @@ class TestGetAttachedPolicies:
             "model-policy",
         ]
 
+    def test_prioritized_attachments_run_before_unprioritized_attachments(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "unprioritized-tag", "tags": ["prod"]},
+                {"policy": "prioritized-tag", "tags": ["prod"], "priority": 5},
+                {"policy": "prioritized-model", "models": ["gpt-4"], "priority": 0},
+            ]
+        )
+
+        context = PolicyMatchContext(model="gpt-4", tags=["prod"])
+
+        assert registry.get_attached_policies(context) == [
+            "prioritized-model",
+            "prioritized-tag",
+            "unprioritized-tag",
+        ]
+
+    def test_prioritized_attachments_order_by_priority_across_scope_tiers(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "team-policy", "teams": ["team-a"], "priority": 2},
+                {"policy": "model-policy", "models": ["gpt-4"], "priority": 1},
+            ]
+        )
+
+        context = PolicyMatchContext(team_alias="team-a", model="gpt-4")
+
+        assert registry.get_attached_policies(context) == ["model-policy", "team-policy"]
+
     def test_combined_team_and_model_attachment_uses_model_specificity(self):
         registry = AttachmentRegistry()
         registry.load_attachments(
@@ -474,8 +505,28 @@ class TestAttachmentRegistrySingleton:
         registry2 = get_attachment_registry()
         assert registry1 is registry2
 
+    def test_parse_attachment_reads_priority(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "prioritized", "priority": 4},
+                {"policy": "unprioritized"},
+            ]
+        )
 
-def _make_db_attachment_row(attachment_id="att-1", policy_name="db-policy", scope=None, teams=None):
+        attachments = registry.get_all_attachments()
+
+        assert attachments[0].priority == 4
+        assert attachments[1].priority is None
+
+
+def _make_db_attachment_row(
+    attachment_id: str = "att-1",
+    policy_name: str = "db-policy",
+    scope: str | None = None,
+    teams: list[str] | None = None,
+    priority: int | None = None,
+) -> MagicMock:
     row = MagicMock()
     row.attachment_id = attachment_id
     row.policy_name = policy_name
@@ -484,6 +535,7 @@ def _make_db_attachment_row(attachment_id="att-1", policy_name="db-policy", scop
     row.keys = []
     row.models = []
     row.tags = []
+    row.priority = priority
     row.created_at = datetime.now(timezone.utc)
     row.updated_at = datetime.now(timezone.utc)
     row.created_by = None
@@ -491,9 +543,11 @@ def _make_db_attachment_row(attachment_id="att-1", policy_name="db-policy", scop
     return row
 
 
-def _prisma_with_attachment_rows(rows):
+def _prisma_with_attachment_rows(rows: list[MagicMock]) -> MagicMock:
     prisma = MagicMock()
-    prisma.db.litellm_policyattachmenttable.find_many = AsyncMock(return_value=rows)
+    prisma.configure_mock(
+        **{"db.litellm_policyattachmenttable.find_many": AsyncMock(return_value=rows)}
+    )
     return prisma
 
 
@@ -534,6 +588,15 @@ class TestConfigAttachmentsPreservedAcrossDbSync:
         await registry.sync_attachments_from_db(_prisma_with_attachment_rows([]))
 
         assert len(registry.get_all_attachments()) == 1
+
+    @pytest.mark.asyncio
+    async def test_sync_round_trips_db_attachment_priority(self):
+        registry = AttachmentRegistry()
+        db_row = _make_db_attachment_row(priority=7)
+
+        await registry.sync_attachments_from_db(_prisma_with_attachment_rows([db_row]))
+
+        assert registry.get_all_attachments()[0].priority == 7
 
     @pytest.mark.asyncio
     async def test_clear_removes_config_snapshot_so_sync_does_not_resurrect(self):
