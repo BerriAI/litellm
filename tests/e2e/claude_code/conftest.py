@@ -575,6 +575,7 @@ from claude_code._compat_models import (  # noqa: E402
     CompatDeployment,
     load_all_deployments,
 )
+from claude_code import _compat_aliases  # noqa: E402
 
 
 def _build_control_plane_client(proxy_config: ProxyConfig):
@@ -666,3 +667,29 @@ def _compat_models_registered() -> Any:
                 # ``delete_model`` already; swallowing here so one flaky
                 # delete does not mask real test failures.
                 pass
+
+
+@pytest.fixture(autouse=True)
+def _compat_alias_registry(request: pytest.FixtureRequest) -> Any:
+    """Give this cell its own copies of the compat deployments.
+
+    The session-scoped registrations above are shared by every cell and every
+    xdist worker, so they carry no owner and their provider calls are forwarded
+    live. A copy registered here belongs to this test, which is what makes its
+    calls cacheable across builds. Registration is lazy, so a test that drives
+    no model registers nothing."""
+    proxy_config = resolve_proxy()
+    if proxy_config is None:
+        yield
+        return
+
+    deployments = {d.model_name: d for d in load_all_deployments()}
+    registry = _compat_aliases.AliasRegistry(
+        _build_control_plane_client(proxy_config), deployments, request.node.nodeid
+    )
+    _compat_aliases.install(registry)
+    try:
+        yield
+    finally:
+        _compat_aliases.install(None)
+        registry.teardown()

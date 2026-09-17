@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
+from claude_code._compat_aliases import resolve as resolve_compat_alias
 from claude_code.rate_limiter import (
     RateLimiter,
     get_default_limiter,
@@ -277,7 +278,7 @@ def run_claude(
         "stream-json",
         "--verbose",
         "--model",
-        model,
+        resolve_compat_alias(model),
         "--session-id",
         _FIXED_CLI_SESSION_ID,
         "--no-session-persistence",
