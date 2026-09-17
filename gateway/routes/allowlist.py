@@ -85,6 +85,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/aws/",
     "/bedrock/",
     "/comprehendmedical",
+    "/transcribe",
     "/cohere/",
     "/gemini/",
     "/gigachat/",
