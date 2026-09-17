@@ -49,11 +49,17 @@ def parse_trusted_proxy_ranges(
     return networks
 
 
+def _unmapped(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return addr.ipv4_mapped
+    return addr
+
+
 def ip_in_networks(client_ip: str | None, networks: list[TrustedProxyNetwork]) -> bool:
     if not client_ip or not networks:
         return False
     try:
-        addr: Final = ipaddress.ip_address(client_ip.strip())
+        addr: Final = _unmapped(ipaddress.ip_address(client_ip.strip()))
     except ValueError:
         return False
     return any(addr in network for network in networks)
