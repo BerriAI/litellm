@@ -39,17 +39,21 @@ export const parseSupportedTeamAdminEditableFields = (uiSettingsFieldSchema: unk
   return items.success ? fieldListSchema.parse(items.data.enum) : [];
 };
 
-const TEAM_ADMIN_FIELD_LABELS: ReadonlyMap<string, string> = new Map([["tpm_limit", "Tokens per minute Limit (TPM)"]]);
+export const TEAM_ADMIN_SETTINGS_FIELDS = ["tpm_limit", "rpm_limit", "max_budget"] as const;
+
+export type TeamAdminSettingsField = (typeof TEAM_ADMIN_SETTINGS_FIELDS)[number];
+
+const TEAM_ADMIN_FIELD_LABELS: ReadonlyMap<string, string> = new Map([
+  ["tpm_limit", "Tokens per minute Limit (TPM)"],
+  ["rpm_limit", "Requests per minute Limit (RPM)"],
+  ["max_budget", "Max Budget (USD)"],
+]);
 
 export const teamAdminFieldLabel = (field: string): string => TEAM_ADMIN_FIELD_LABELS.get(field) ?? field;
 
-export interface TeamAdminSettingsValues {
-  readonly tpm_limit?: string | number | null;
-}
+export type TeamAdminSettingsValues = { readonly [F in TeamAdminSettingsField]?: string | number | null };
 
-export interface TeamAdminSettingsChanges {
-  readonly tpm_limit?: number | null;
-}
+export type TeamAdminSettingsChanges = { readonly [F in TeamAdminSettingsField]?: number | null };
 
 const numberOrNull = (value: string | number | null | undefined): number | null => {
   if (value === null || value === undefined || String(value).trim() === "") return null;
@@ -61,12 +65,13 @@ export const teamAdminSettingsChanges = (
   values: TeamAdminSettingsValues,
   initialValues: TeamAdminSettingsValues,
   editableFields: ReadonlySet<string>,
-): TeamAdminSettingsChanges => {
-  const tpmLimit = numberOrNull(values.tpm_limit);
-  return editableFields.has("tpm_limit") && tpmLimit !== numberOrNull(initialValues.tpm_limit)
-    ? { tpm_limit: tpmLimit }
-    : {};
-};
+): TeamAdminSettingsChanges =>
+  Object.fromEntries(
+    TEAM_ADMIN_SETTINGS_FIELDS.flatMap((field) => {
+      const value = numberOrNull(values[field]);
+      return editableFields.has(field) && value !== numberOrNull(initialValues[field]) ? [[field, value]] : [];
+    }),
+  );
 
 export const parseTeamEditAccess = (callerEditAccess: unknown): TeamEditAccess => {
   const parsed = callerEditAccessSchema.safeParse(callerEditAccess);

@@ -21,6 +21,7 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings", () => ({
 }));
 
 const TPM_LABEL = "Tokens per minute Limit (TPM)";
+const MAX_BUDGET_LABEL = "Max Budget (USD)";
 
 const mockSettings = (supported: readonly string[], enabled: readonly string[]) =>
   mockUseUISettings.mockReturnValue({
@@ -80,7 +81,7 @@ describe("TeamAdminEditableFieldsSettings", () => {
     expect(screen.getByText("Team admin editable fields")).toBeInTheDocument();
     expect(screen.getByText("1 field enabled")).toBeInTheDocument();
     expect(screen.getByText("Fields a team admin may change")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "max_budget" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: MAX_BUDGET_LABEL })).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: TPM_LABEL })).toBeChecked();
     expect(saveButton()).toBeDisabled();
   });
@@ -90,9 +91,9 @@ describe("TeamAdminEditableFieldsSettings", () => {
     const mutate = mockSave({});
 
     renderWithProviders(<TeamAdminEditableFieldsSettings />);
-    fireEvent.click(screen.getByRole("checkbox", { name: "max_budget" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: MAX_BUDGET_LABEL }));
 
-    expect(screen.getByRole("checkbox", { name: "max_budget" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: MAX_BUDGET_LABEL })).toBeChecked();
     expect(mutate).not.toHaveBeenCalled();
 
     fireEvent.click(saveButton());
