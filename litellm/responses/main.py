@@ -31,6 +31,7 @@ from litellm.llms.openai_like.responses.transformation import OpenAILikeResponse
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
+from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PromptObject,
@@ -331,6 +332,9 @@ async def aresponses_api_with_mcp(
                 litellm_call_id=kwargs.get("litellm_call_id"),
                 litellm_trace_id=kwargs.get("litellm_trace_id"),
                 request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
+                guardrail_context=MCPRequestContext.resolve_guardrail_context(
+                    MappingProxyType({**kwargs, "metadata": metadata, "model": model})
+                ),
             )
 
             if tool_results:

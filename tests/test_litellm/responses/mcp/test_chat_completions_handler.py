@@ -1387,3 +1387,94 @@ async def test_acompletion_with_mcp_forwards_unserved_external_mcp_tool_to_the_p
     assert isinstance(result, ModelResponse)
     assert result.id == "chatcmpl-zapier"
     assert json.loads(provider.calls.last.request.content)["tools"] == [zapier_tool]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("selection_source", ["metadata", "litellm_metadata", "body"])
+@pytest.mark.parametrize("logging_failure", [False, True])
+async def test_request_selected_mcp_guardrail_blocks_before_upstream(monkeypatch, selected, stream, selection_source, logging_failure):
+    from fastapi import HTTPException
+    from mcp.types import Tool
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_ObjectPermissionTable
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager, server, tool_registry
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import GuardrailEventHooks
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    class BlockSelected(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            if self.should_run_guardrail(data, GuardrailEventHooks.pre_mcp_call):
+                raise HTTPException(status_code=400, detail="request-selected MCP block")
+            return data
+
+    guardrail = BlockSelected(guardrail_name="block-all", event_hook="pre_mcp_call", default_on=False)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    manager = mcp_server_manager.MCPServerManager()
+    manager.registry = {"observer": MCPServer(
+        server_id="observer", name="observer", server_name="observer", transport="http",
+        url="https://observer.example/mcp", spec_path="observer.json", auth_type="none",
+    )}
+    manager.tool_name_to_mcp_server_name_mapping = {"observer-execute": "observer"}
+    upstream = AsyncMock(return_value={"executed": True})
+    registry = tool_registry.MCPToolRegistry()
+    registry.register_tool("observer-execute", "Execute", {"type": "object"}, upstream)
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    monkeypatch.setattr(server, "_get_tools_from_mcp_servers", AsyncMock(return_value=AggregateToolListing(
+        tools=[Tool(name="observer-execute", inputSchema={"type": "object"})], outcomes={}
+    )))
+    responses = [
+        ModelResponse(choices=[{"message": {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call-1", "type": "function", "function": {"name": "observer-execute", "arguments": "{}"}}
+        ]}, "finish_reason": "tool_calls"}]),
+        ModelResponse(choices=[{"message": {"role": "assistant", "content": "done"}}]),
+    ]
+    if stream:
+        from litellm.types.utils import ModelResponseStream
+        responses = [
+            await litellm.acompletion(
+                model="openai/gpt-5", messages=[{"role": "user", "content": "execute"}], stream=True,
+                mock_response=ModelResponseStream(choices=[{"index": 0, "delta": {
+                    "role": "assistant", "content": None, "tool_calls": [{
+                        "index": 0, "id": "call-1", "type": "function",
+                        "function": {"name": "observer-execute", "arguments": "{}"},
+                    }],
+                }, "finish_reason": "tool_calls"}]),
+            ),
+            await litellm.acompletion(
+                model="openai/gpt-5", messages=[{"role": "user", "content": "done"}],
+                stream=True, mock_response="done",
+            ),
+        ]
+    if logging_failure:
+        from litellm.responses.mcp import litellm_proxy_mcp_handler
+        def fail_logging(*args, **kwargs):
+            raise RuntimeError("logging initialization failed")
+        monkeypatch.setattr(litellm_proxy_mcp_handler, "function_setup", fail_logging)
+    model_call = AsyncMock(side_effect=responses)
+    monkeypatch.setattr(litellm, "acompletion", model_call)
+    result = await acompletion_with_mcp(
+        model="test-model", messages=[{"role": "user", "content": "execute"}],
+        tools=[{"type": "mcp", "server_url": "litellm_proxy/observer", "require_approval": "never"}],
+        stream=stream,
+        user_api_key_auth=UserAPIKeyAuth(
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="test", mcp_servers=["observer"])
+        ),
+        **({"guardrails": ["block-all"] if selected else []} if selection_source == "body" else {
+            selection_source: {"guardrails": ["block-all"] if selected else []}
+        }),
+    )
+    if stream:
+        chunks = [chunk async for chunk in result]
+        assert chunks
+    assert model_call.await_count == 2
+    assert upstream.await_count == (0 if selected else 1)
+    tool_message = model_call.await_args.kwargs["messages"][-1]
+    assert ("request-selected MCP block" in tool_message["content"]) is selected

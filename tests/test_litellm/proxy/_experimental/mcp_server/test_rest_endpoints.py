@@ -2839,7 +2839,8 @@ class TestCallToolRestAPI:
         assert not any("relaying upstream" in m for m in info_messages)
 
     @pytest.mark.parametrize("raise_site", ["pre_call_hook", "execute_mcp_tool"])
-    async def test_guardrail_block_runs_failure_logging_before_http_translation(self, monkeypatch, raise_site):
+    @pytest.mark.parametrize("custom_code", [False, True])
+    async def test_guardrail_block_runs_failure_logging_before_http_translation(self, monkeypatch, raise_site, custom_code):
         """A pre_mcp_call guardrail block, whether raised by the pre-call hook or from inside
         execute_mcp_tool, must reach proxy_logging_obj.post_call_failure_hook (the only path that
         writes the failure spend-log row) with the logging object's failure payload already built,
@@ -2869,6 +2870,11 @@ class TestCallToolRestAPI:
             status_code=400,
             detail={"error": "Content blocked: keyword 'confidential' detected", "keyword": "confidential"},
         )
+
+        if custom_code:
+            guardrail_error = rest_endpoints.ModifyResponseException(
+                message="Content blocked", model="mcp-tool-call", request_data={}, guardrail_name="block-all"
+            )
 
         async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
             return data
@@ -2924,7 +2930,13 @@ class TestCallToolRestAPI:
         with pytest.raises(HTTPException) as exc_info:
             await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=user_api_key_dict)
 
-        assert exc_info.value is guardrail_error
+        assert exc_info.value.status_code == 400
+        if custom_code:
+            assert exc_info.value.detail == {
+                "error": "guardrail_violation", "message": "Content blocked", "guardrail_name": "block-all"
+            }
+        else:
+            assert exc_info.value is guardrail_error
 
         post_call_failure_hook.assert_awaited_once()
         hook_kwargs = post_call_failure_hook.await_args.kwargs
