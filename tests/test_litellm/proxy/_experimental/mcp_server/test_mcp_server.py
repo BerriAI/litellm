@@ -1999,7 +1999,7 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
     stateless_handle: Final = AsyncMock(side_effect=handle_request)
     stateful_handle: Final = AsyncMock(side_effect=handle_request)
     with (
-        patch(
+        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(
@@ -2012,11 +2012,11 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
             ),
         ),
         patch("litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True),
-        patch(
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
             SimpleNamespace(handle_request=stateless_handle),
         ),
-        patch(
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
             SimpleNamespace(handle_request=stateful_handle),
         ),
@@ -2069,13 +2069,17 @@ def _forbidden_client_response(send: AsyncMock) -> tuple[int, dict[str, str]]:
 def _client_allowlist_patches(allowed_clients: object):
     settings: Final = {} if allowed_clients is None else {"mcp_allowed_clients": allowed_clients}
     with (
-        patch(
+        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(UserAPIKeyAuth(user_id="allowlist-user"), None, None, None, None, {}),
         ),
-        patch("litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True),
-        patch("litellm.proxy.proxy_server.general_settings", settings),
+        patch(  # test-quality-ok: module flag guarding lazy session-manager startup; no injection seam
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True
+        ),
+        patch(  # test-quality-ok: the allowlist is read off this module global; no injection seam
+            "litellm.proxy.proxy_server.general_settings", settings
+        ),
     ):
         yield
 
@@ -2111,15 +2115,17 @@ async def test_streamable_http_rejects_initialize_from_unlisted_client_before_se
 
     with (
         _client_allowlist_patches(["antigravity-cli"]),
-        patch(
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
             SimpleNamespace(handle_request=stateful_handle),
         ),
-        patch(
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
             SimpleNamespace(handle_request=stateless_handle),
         ),
-        patch("litellm.proxy._experimental.mcp_server.server._enforce_stateful_session_cap_for_owner", session_cap),
+        patch(  # test-quality-ok: module-level cap check; asserting it is never reached is the point
+            "litellm.proxy._experimental.mcp_server.server._enforce_stateful_session_cap_for_owner", session_cap
+        ),
     ):
         await mcp_module.handle_streamable_http_mcp(scope, receive, send)
 
@@ -2164,11 +2170,11 @@ async def test_streamable_http_admits_listed_or_unrestricted_initialize_and_repl
 
     with (
         _client_allowlist_patches(allowed_clients),
-        patch(
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
             SimpleNamespace(handle_request=stateful_handle),
         ),
-        patch(
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
             SimpleNamespace(handle_request=stateless_handle),
         ),
@@ -2196,7 +2202,7 @@ async def test_streamable_http_empty_or_malformed_allowlist_admits_nobody(allowe
 
     with (
         _client_allowlist_patches(allowed_clients),
-        patch(
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
             SimpleNamespace(handle_request=stateful_handle),
         ),
@@ -2225,7 +2231,7 @@ async def test_streamable_http_allowlist_only_inspects_initialize_requests() -> 
 
     with (
         _client_allowlist_patches(["antigravity-cli"]),
-        patch(
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
             SimpleNamespace(handle_request=AsyncMock(side_effect=handle_request)),
         ),
@@ -2247,7 +2253,12 @@ async def test_sse_endpoint_applies_the_same_client_allowlist(request_body: byte
     from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp/sse", "headers": []}
-    receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": request_body, "more_body": False}])
+    receive: Final = AsyncMock(
+        side_effect=[
+            {"type": "http.request", "body": request_body, "more_body": False},
+            {"type": "http.request", "body": b"not-the-replayed-initialize", "more_body": False},
+        ]
+    )
     send: Final = AsyncMock()
     downstream_bodies: Final[list[bytes]] = []
 
@@ -2256,15 +2267,17 @@ async def test_sse_endpoint_applies_the_same_client_allowlist(request_body: byte
 
     with (
         _client_allowlist_patches(["antigravity-cli"]),
-        patch(
+        patch(  # test-quality-ok: module-level pre-auth probe unrelated to the allowlist under test; no injection seam
             "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
             new_callable=AsyncMock,
         ),
-        patch(
+        patch(  # test-quality-ok: module-level upstream auth probe unrelated to the allowlist under test; no injection seam
             "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
             new_callable=AsyncMock,
         ),
-        patch.object(mcp_module.sse_session_manager, "handle_request", side_effect=handle_request),
+        patch.object(  # test-quality-ok: SSE manager is a module singleton; the downstream call is the observable
+            mcp_module.sse_session_manager, "handle_request", side_effect=handle_request
+        ),
     ):
         await mcp_module.handle_sse_mcp(scope, receive, send)
 
@@ -2326,7 +2339,7 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
         stateful_called.append(1)
 
     with (
-        patch(
+        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(MagicMock(), None, ["progress_test"], None, None, None),
@@ -2438,7 +2451,7 @@ async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
         raise AssertionError("non-initialize POST should not reach stateful manager")
 
     with (
-        patch(
+        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(MagicMock(), None, ["progress_test"], None, None, None),
@@ -2587,7 +2600,7 @@ async def test_mcp_routing_initialize_rejected_when_owner_at_session_cap():
         stateful_called.append(1)
 
     with (
-        patch(
+        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(MagicMock(), None, ["progress_test"], None, None, None),
@@ -2679,7 +2692,7 @@ async def test_stateful_mcp_requests_refresh_session_auth_context():
         captured_context = callback_context.run(get_auth_context)
 
     with (
-        patch(
+        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(
@@ -3215,7 +3228,7 @@ async def test_stateful_mcp_session_owner_mismatch_returns_403():
     handle_request_mock = AsyncMock()
 
     with (
-        patch(
+        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(intruder_auth, None, None, None, None, None),

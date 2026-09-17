@@ -26620,6 +26620,11 @@ export interface components {
              */
             maximum_spend_logs_retention_period?: string | null;
             /**
+             * Mcp Allowed Clients
+             * @description MCP client applications admitted by the gateway, matched exactly against the clientInfo.name the client sends in its initialize request (for example 'claude-code'). When set, an initialize from any other client, or one that does not identify itself, is rejected with 403. Unset means every client is admitted. The name is client-supplied, so this is a policy control rather than a security boundary.
+             */
+            mcp_allowed_clients?: string[] | null;
+            /**
              * Mcp Internal Ip Ranges
              * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
              */

@@ -7428,18 +7428,10 @@ async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to
         request.query_params = {}
         return request
 
-    settings: Final = patch(
-        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]}
-    )  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch(
-        "litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint]
-    )  # test-quality-ok: module global holding the YAML endpoints the fix merges in
-    initialize: Final = patch(
-        "litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock()
-    )  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
-    master_key: Final = patch(
-        "litellm.proxy.proxy_server.master_key", "sk-master"
-    )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 
@@ -7487,18 +7479,10 @@ async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_e
     request.headers = {}
     request.query_params = {}
 
-    settings: Final = patch(
-        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]}
-    )  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch(
-        "litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint]
-    )  # test-quality-ok: module global holding the YAML endpoints the fix merges in
-    initialize: Final = patch(
-        "litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock()
-    )  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
-    master_key: Final = patch(
-        "litellm.proxy.proxy_server.master_key", "sk-master"
-    )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 
@@ -8613,7 +8597,9 @@ async def test_increment_spend_counters_finalizes_after_unreserved_increments():
     async def assert_reservation_not_finalized_yet(**kwargs):
         assert budget_reservation["finalized"] is False
         incremented_counters.append(kwargs["counter_key"])
-        return ps.PendingSpendIncrement(counter_key=kwargs["counter_key"], increment=kwargs["increment"])
+        return ps.PendingSpendIncrement(
+            counter_key=kwargs["counter_key"], increment=kwargs["increment"]
+        )
 
     import litellm.proxy.proxy_server as ps
 
@@ -10158,15 +10144,9 @@ async def _lit6973_drive_realtime_session(
         side_effect=pre_call_error, return_value=({"model": "vertex_ai/gemini-live-2.5-flash"}, logging_obj)
     )
     ws: Final = websocket if websocket is not None else _lit6973_fake_realtime_ws()
-    can_call = patch.object(
-        ps, "can_key_call_resolved_model", new=AsyncMock(side_effect=model_access_error)
-    )  # test-quality-ok: no HTTP boundary; fakes in-process auth to reach the exit under test
-    pre = patch.object(
-        ps.ProxyBaseLLMRequestProcessing, "common_processing_pre_call_logic", new=pre_call
-    )  # test-quality-ok: fakes phase-1 wiring; assertion checks observable reservation state
-    route = patch.object(
-        ps, "route_request", new=AsyncMock(return_value=fake_llm_call())
-    )  # test-quality-ok: fakes the relay whose success/refusal outcome the endpoint reads off the logging object
+    can_call = patch.object(ps, "can_key_call_resolved_model", new=AsyncMock(side_effect=model_access_error))  # test-quality-ok: no HTTP boundary; fakes in-process auth to reach the exit under test
+    pre = patch.object(ps.ProxyBaseLLMRequestProcessing, "common_processing_pre_call_logic", new=pre_call)  # test-quality-ok: fakes phase-1 wiring; assertion checks observable reservation state
+    route = patch.object(ps, "route_request", new=AsyncMock(return_value=fake_llm_call()))  # test-quality-ok: fakes the relay whose success/refusal outcome the endpoint reads off the logging object
     with can_call, pre, route:
         await ps.realtime_websocket_endpoint(
             websocket=ws,
@@ -10298,9 +10278,13 @@ async def _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
     from litellm.proxy.utils import InternalUsageCache
 
     dual_cache: Final = DualCache()
-    await dual_cache.async_set_cache(key=_LIT6463_COUNTER_KEY, value={"slot-1": 1.0, "slot-2": 2.0}, local_only=True)
+    await dual_cache.async_set_cache(
+        key=_LIT6463_COUNTER_KEY, value={"slot-1": 1.0, "slot-2": 2.0}, local_only=True
+    )
     limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache))
-    stash: Final = RequestRateLimiterStash(parallel_slot={"slot_id": "slot-1", "counter_keys": [_LIT6463_COUNTER_KEY]})
+    stash: Final = RequestRateLimiterStash(
+        parallel_slot={"slot_id": "slot-1", "counter_keys": [_LIT6463_COUNTER_KEY]}
+    )
     reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
 
     stash_token: Final = _request_stash.set(stash)
@@ -10352,7 +10336,9 @@ async def test_successful_realtime_session_leaves_the_max_parallel_slot_for_the_
     limiter's integer in-memory fallback, double-decrement the counter so the key
     admits more sessions than max_parallel_requests allows. With the success stamp
     present the route leaves the slot and the stash alone."""
-    dual_cache, stash = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(backend_logged_success=True)
+    dual_cache, stash = await _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
+        backend_logged_success=True
+    )
 
     assert await dual_cache.async_get_cache(key=_LIT6463_COUNTER_KEY, local_only=True) == {
         "slot-1": 1.0,
@@ -10398,12 +10384,8 @@ async def test_release_or_invalidate_falls_back_to_invalidating_the_counters():
     async def _record(counter_key: str) -> None:
         invalidated.append(counter_key)
 
-    failing_release = patch.object(
-        br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down"))
-    )  # test-quality-ok: forces the failure branch; assertion observes which counter key got invalidated
-    sink = patch.object(
-        ps, "_invalidate_spend_counter", new=_record
-    )  # test-quality-ok: fakes the counter-store sink so the invalidated key is observable
+    failing_release = patch.object(br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down")))  # test-quality-ok: forces the failure branch; assertion observes which counter key got invalidated
+    sink = patch.object(ps, "_invalidate_spend_counter", new=_record)  # test-quality-ok: fakes the counter-store sink so the invalidated key is observable
     with failing_release, sink:
         await br.release_or_invalidate_budget_reservation(budget_reservation=reservation)
 
@@ -10419,12 +10401,8 @@ async def test_release_or_invalidate_finalizes_even_when_the_invalidate_fallback
     from litellm.proxy.spend_tracking import budget_reservation as br
 
     reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
-    failing_release = patch.object(
-        br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down"))
-    )  # test-quality-ok: forces the fallback branch
-    failing_invalidate = patch.object(
-        br, "invalidate_budget_reservation_counters", new=AsyncMock(side_effect=RuntimeError("still down"))
-    )  # test-quality-ok: forces the fallback itself to fail
+    failing_release = patch.object(br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down")))  # test-quality-ok: forces the fallback branch
+    failing_invalidate = patch.object(br, "invalidate_budget_reservation_counters", new=AsyncMock(side_effect=RuntimeError("still down")))  # test-quality-ok: forces the fallback itself to fail
 
     with failing_release, failing_invalidate:
         await br.release_or_invalidate_budget_reservation(budget_reservation=reservation)
@@ -13009,15 +12987,9 @@ async def test_moderations_response_carries_litellm_call_id_header():
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", spend=0.0)
 
     with (
-        patch.object(
-            proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data
-        ),  # test-quality-ok: the route reads this module global, no injection point
-        patch.object(
-            proxy_server_module, "route_request", new=AsyncMock(return_value=fake_llm_call())
-        ),  # test-quality-ok: fakes the provider call so the response headers assembled by the real route are observable
-        patch.object(
-            proxy_server_module, "proxy_logging_obj"
-        ) as mock_logging,  # test-quality-ok: module global, no injection point
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(proxy_server_module, "route_request", new=AsyncMock(return_value=fake_llm_call())),  # test-quality-ok: fakes the provider call so the response headers assembled by the real route are observable
+        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global, no injection point
     ):
         mock_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
         mock_logging.update_request_status = AsyncMock()
@@ -13054,15 +13026,9 @@ async def test_moderations_failure_log_carries_the_callers_litellm_call_id(caplo
     verbose_proxy_logger.propagate = True
     try:
         with (
-            patch.object(
-                proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data
-            ),  # test-quality-ok: the route reads this module global, no injection point
-            patch.object(
-                proxy_server_module, "route_request", new=AsyncMock(side_effect=Exception("bad key"))
-            ),  # test-quality-ok: fakes the provider failure so the real route's error log is observable
-            patch.object(
-                proxy_server_module, "proxy_logging_obj", new=fake_logging
-            ),  # test-quality-ok: module global, no injection point
+            patch.object(proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data),  # test-quality-ok: the route reads this module global, no injection point
+            patch.object(proxy_server_module, "route_request", new=AsyncMock(side_effect=Exception("bad key"))),  # test-quality-ok: fakes the provider failure so the real route's error log is observable
+            patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
             pytest.raises(ProxyException) as raised,
         ):
@@ -13095,9 +13061,7 @@ async def test_moderations_unparseable_body_bills_the_callers_litellm_call_id():
     fake_logging.post_call_failure_hook = AsyncMock()
 
     with (
-        patch.object(
-            proxy_server_module, "proxy_logging_obj", new=fake_logging
-        ),  # test-quality-ok: module global, no injection point
+        patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
         pytest.raises(ProxyException) as raised,
     ):
         await proxy_server_module.moderations(
@@ -13125,12 +13089,8 @@ async def test_moderations_already_shaped_failure_answers_with_the_callers_litel
     fake_logging.post_call_failure_hook = AsyncMock()
 
     with (
-        patch.object(
-            proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)
-        ),  # test-quality-ok: the route reads this module global, no injection point
-        patch.object(
-            proxy_server_module, "proxy_logging_obj", new=fake_logging
-        ),  # test-quality-ok: module global, no injection point
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
         pytest.raises(ProxyException) as raised,
     ):
         await proxy_server_module.moderations(
@@ -13165,12 +13125,8 @@ async def test_audio_speech_already_shaped_failure_answers_with_the_callers_lite
     fake_logging.post_call_failure_hook = AsyncMock()
 
     with (
-        patch.object(
-            proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)
-        ),  # test-quality-ok: the route reads this module global, no injection point
-        patch.object(
-            proxy_server_module, "proxy_logging_obj", new=fake_logging
-        ),  # test-quality-ok: module global, no injection point
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
         pytest.raises(type(exc)) as raised,
     ):
         await proxy_server_module.audio_speech(
@@ -13872,7 +13828,9 @@ async def test_update_general_settings_propagates_mcp_allowed_clients(db_general
 
     proxy_config = ProxyConfig()
 
-    with patch("litellm.proxy.proxy_server.general_settings", {"mcp_allowed_clients": ["claude-code"]}):
+    with patch(  # test-quality-ok: the method writes this module global; no injection seam
+        "litellm.proxy.proxy_server.general_settings", {"mcp_allowed_clients": ["claude-code"]}
+    ):
         await proxy_config._update_general_settings(db_general_settings=db_general_settings)
 
         import litellm.proxy.proxy_server as ps
@@ -13887,7 +13845,9 @@ async def test_update_general_settings_keeps_yaml_mcp_allowed_clients():
     proxy_config = ProxyConfig()
     proxy_config._yaml_general_settings_keys = {"mcp_allowed_clients"}
 
-    with patch("litellm.proxy.proxy_server.general_settings", {"mcp_allowed_clients": ["claude-code"]}):
+    with patch(  # test-quality-ok: the method writes this module global; no injection seam
+        "litellm.proxy.proxy_server.general_settings", {"mcp_allowed_clients": ["claude-code"]}
+    ):
         await proxy_config._update_general_settings(db_general_settings={"mcp_allowed_clients": ["codex-mcp-client"]})
 
         import litellm.proxy.proxy_server as ps
@@ -13936,18 +13896,14 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
                 {
                     "model_name": "self-hosted",
                     "litellm_params": {"model": "openai/self-hosted-model", "api_base": "http://localhost:8080/v1"},
-                    "model_info": {
-                        "custom_tokenizer": {"identifier": "my-org/tokenizer", "revision": "main", "auth_token": None}
-                    },
+                    "model_info": {"custom_tokenizer": {"identifier": "my-org/tokenizer", "revision": "main", "auth_token": None}},
                 }
             ]
         ),
     )
 
     response, took, lags = await timed_with_loop_lags(
-        lambda: proxy_server_module.token_counter(
-            TokenCountRequest(model="self-hosted", prompt="count me off the loop")
-        )
+        lambda: proxy_server_module.token_counter(TokenCountRequest(model="self-hosted", prompt="count me off the loop"))
     )
 
     assert response.tokenizer_type == "huggingface_tokenizer"
