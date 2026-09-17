@@ -54,9 +54,16 @@ impl OcrClient {
             match call.resume(result.take()).await? {
                 OcrCallStep::Host(OcrHostOperation::ProjectRequest) => {
                     result = Some(OcrHostResult::Request(Ok((
-                        Box::new(request.take().ok_or_else(|| {
-                            Error::InvalidRequest("OCR request was already projected".into())
-                        })?),
+                        Box::new(
+                            request
+                                .take()
+                                .ok_or_else(|| {
+                                    Error::InvalidRequest(
+                                        "OCR request was already projected".into(),
+                                    )
+                                })?
+                                .into(),
+                        ),
                         false,
                     ))))
                 }

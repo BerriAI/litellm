@@ -102,6 +102,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     UpstreamCredentialProvider,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+    prepare_mcp_client,
     raise_public,
     raise_token_exchange_challenge,
     raise_user_oauth_challenge,
@@ -2804,6 +2805,8 @@ class MCPServerManager:
                         headers=headers,
                         server_label=server.name or server.server_name or server.alias or server.server_id,
                         relays_upstream_auth=server.is_client_forwarded_token,
+                        auth_type=server.auth_type,
+                        upstream_token_header=server.upstream_token_header,
                     )
                     tool_func.__name__ = prefixed_tool_name
                     tool_func.__doc__ = description
@@ -4259,15 +4262,20 @@ class MCPServerManager:
                     user_api_key_auth=user_api_key_auth,
                     extra_headers=extra_headers,
                 )
-                return MCPClient(
-                    server_url=server_url,
-                    transport_type=transport,
-                    auth_type=resolved_server.auth_type,
-                    timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
-                    extra_headers=extra_headers,
-                    resolved_auth=resolved_auth,
-                    sampling_callback=sampling_cb,
-                    elicitation_callback=elicitation_cb,
+                return await prepare_mcp_client(
+                    resolved_server,
+                    MCPClient(
+                        server_url=server_url,
+                        transport_type=transport,
+                        auth_type=resolved_server.auth_type,
+                        timeout=(
+                            resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT
+                        ),
+                        extra_headers=extra_headers,
+                        resolved_auth=resolved_auth,
+                        sampling_callback=sampling_cb,
+                        elicitation_callback=elicitation_cb,
+                    ),
                 )
 
             # Create SigV4 auth if configured
@@ -4297,17 +4305,20 @@ class MCPServerManager:
                 else AuthResolution.no_auth
             )
             record_auth_resolution(server.server_id, legacy_source)
-            return MCPClient(
-                server_url=server_url,
-                transport_type=transport,
-                auth_type=resolved_server.auth_type,
-                auth_value=auth_value,
-                auth_header_name=auth_header_name,
-                timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
-                extra_headers=extra_headers,
-                aws_auth=aws_auth,
-                sampling_callback=sampling_cb,
-                elicitation_callback=elicitation_cb,
+            return await prepare_mcp_client(
+                resolved_server,
+                MCPClient(
+                    server_url=server_url,
+                    transport_type=transport,
+                    auth_type=resolved_server.auth_type,
+                    auth_value=auth_value,
+                    auth_header_name=auth_header_name,
+                    timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
+                    extra_headers=extra_headers,
+                    aws_auth=aws_auth,
+                    sampling_callback=sampling_cb,
+                    elicitation_callback=elicitation_cb,
+                ),
             )
 
     async def _get_tools_from_server(
