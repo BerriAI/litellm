@@ -1584,7 +1584,7 @@ class Logging(LiteLLMLoggingBaseClass):
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):
-                    response: Final[MCPPostCallResponseObject | None] = await callback.async_post_mcp_tool_call_hook(
+                    response: MCPPostCallResponseObject | None = await callback.async_post_mcp_tool_call_hook(
                         kwargs=kwargs,
                         response_obj=post_mcp_tool_call_response_obj,
                         start_time=start_time,
@@ -1594,7 +1594,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     # if any of the callbacks modify the response, use the modified response
                     # current implementation returns the first modified response
                     ######################################################################
-                    hook_content: Final = self._parse_post_mcp_call_hook_response(response=response)
+                    hook_content = self._parse_post_mcp_call_hook_response(response=response)
                     if hook_content is not None:
                         return hook_content
             except Exception as e:
