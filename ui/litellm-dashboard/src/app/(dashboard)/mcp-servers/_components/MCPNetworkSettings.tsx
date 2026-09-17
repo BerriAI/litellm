@@ -30,8 +30,10 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [privateRanges, setPrivateRanges] = useState<string[]>([]);
+  const [allowedClients, setAllowedClients] = useState<string[]>([]);
   const [currentIp, setCurrentIp] = useState<string | null>(null);
   const [rangeDraft, setRangeDraft] = useState("");
+  const [clientDraft, setClientDraft] = useState("");
 
   useEffect(() => {
     loadSettings();
@@ -46,6 +48,9 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
       for (const field of settings) {
         if (field.field_name === "mcp_internal_ip_ranges" && field.field_value) {
           setPrivateRanges(field.field_value);
+        }
+        if (field.field_name === "mcp_allowed_clients" && field.field_value) {
+          setAllowedClients(field.field_value);
         }
       }
     } catch (error) {
@@ -72,6 +77,11 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
       } else {
         await deleteConfigFieldSetting(accessToken, "mcp_internal_ip_ranges");
       }
+      if (allowedClients.length > 0) {
+        await updateConfigFieldSetting(accessToken, "mcp_allowed_clients", allowedClients);
+      } else {
+        await deleteConfigFieldSetting(accessToken, "mcp_allowed_clients");
+      }
     } catch (error) {
       console.error("Failed to save MCP network settings:", error);
     } finally {
@@ -86,15 +96,26 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   };
 
   // Commas separate entries, matching the old tokenised input.
-  const commitDraft = () => {
-    const added = rangeDraft
+  const splitDraft = (draft: string, existing: string[]) =>
+    draft
       .split(",")
       .map((r) => r.trim())
-      .filter((r) => r !== "" && !privateRanges.includes(r));
+      .filter((r) => r !== "" && !existing.includes(r));
+
+  const commitDraft = () => {
+    const added = splitDraft(rangeDraft, privateRanges);
     if (added.length > 0) {
       setPrivateRanges([...privateRanges, ...added]);
     }
     setRangeDraft("");
+  };
+
+  const commitClientDraft = () => {
+    const added = splitDraft(clientDraft, allowedClients);
+    if (added.length > 0) {
+      setAllowedClients([...allowedClients, ...added]);
+    }
+    setClientDraft("");
   };
 
   if (loading) {
@@ -175,6 +196,56 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
         />
         <p className="mt-2 text-xs text-muted-foreground">
           Enter CIDR ranges (e.g., 10.0.0.0/8). When empty, standard private IP ranges are used.
+        </p>
+      </Card>
+
+      <div>
+        <p className="text-lg font-semibold">Allowed Client Applications</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Only the MCP client applications listed here can connect to the gateway. Names are matched exactly against
+          the clientInfo.name each client sends in its MCP initialize request (for example claude-code or
+          codex-mcp-client). Leave empty to allow every client. Clients choose the name they send, so treat this as a
+          policy control rather than a security boundary.
+        </p>
+      </div>
+
+      <Card className="p-6">
+        <div className="mb-2 flex items-center">
+          <p className="text-sm font-medium">Allowed Client Names</p>
+        </div>
+        {allowedClients.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {allowedClients.map((client) => (
+              <Badge key={client} variant="secondary" className="font-mono">
+                {client}
+                <button
+                  type="button"
+                  aria-label={`Remove ${client}`}
+                  onClick={() => setAllowedClients(allowedClients.filter((c) => c !== client))}
+                  className="ml-1 cursor-pointer"
+                >
+                  <X className="size-3" />
+                </button>
+              </Badge>
+            ))}
+          </div>
+        )}
+        <Input
+          aria-label="Allowed client names"
+          value={clientDraft}
+          placeholder="Leave empty to allow every client, e.g. claude-code, codex-mcp-client"
+          onChange={(e) => setClientDraft(e.target.value)}
+          onBlur={commitClientDraft}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === ",") {
+              e.preventDefault();
+              commitClientDraft();
+            }
+          }}
+        />
+        <p className="mt-2 text-xs text-muted-foreground">
+          Enter the clientInfo.name values to admit. Any other client, or one that does not identify itself, gets a
+          403 on its MCP initialize request.
         </p>
       </Card>
 

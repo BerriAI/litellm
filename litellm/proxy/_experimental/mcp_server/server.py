@@ -463,6 +463,11 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
     )
+    from litellm.proxy._experimental.mcp_server.client_allowlist import (
+        MCP_ALLOWED_CLIENTS_SETTING,
+        check_mcp_client_allowed,
+        parse_allowed_mcp_clients,
+    )
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
         SERVER_OUTCOMES_META_KEY,
         AggregateToolListing,
@@ -3810,6 +3815,43 @@ if MCP_AVAILABLE:
         except (json.JSONDecodeError, TypeError):
             return False
 
+    def _load_allowed_mcp_clients() -> frozenset[str] | None:
+        from litellm.proxy.proxy_server import general_settings
+
+        return parse_allowed_mcp_clients(general_settings.get(MCP_ALLOWED_CLIENTS_SETTING))
+
+    async def _reject_initialize_from_disallowed_client(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        body: bytes,
+        client_ip: str | None,
+    ) -> bool:
+        """Send a 403 and return True when the initialize body names a client the gateway does not admit."""
+        rejection: Final = check_mcp_client_allowed(body, _load_allowed_mcp_clients())
+        if rejection is None:
+            return False
+        verbose_logger.warning(
+            "Rejecting MCP initialize from client %r (ip=%s): not listed in %s",
+            rejection.client_name,
+            client_ip,
+            MCP_ALLOWED_CLIENTS_SETTING,
+        )
+        forbidden: Final = JSONResponse(
+            status_code=403,
+            content={"error": "Forbidden", "details": rejection.details},
+        )
+        await forbidden(scope, receive, send)
+        return True
+
+    def _replay_consumed_messages(consumed_messages: list[Message], receive: Receive) -> Receive:
+        async def wrapped_receive() -> Message:
+            if consumed_messages:
+                return consumed_messages.pop(0)
+            return await receive()
+
+        return wrapped_receive
+
     async def _read_request_body_for_routing(
         receive: Receive,
     ) -> tuple[list[Message], bytes]:
@@ -4510,6 +4552,10 @@ if MCP_AVAILABLE:
             if scope.get("method") == "POST":
                 consumed_messages, body = await _read_request_body_for_routing(receive)
                 is_initialize = _is_initialize_request(body)
+                if is_initialize and await _reject_initialize_from_disallowed_client(
+                    scope, receive, send, body, _client_ip
+                ):
+                    return
 
             use_stateful: Final = bool(session_id or is_initialize)
             target_manager: Final = session_manager_stateful if use_stateful else session_manager_stateless
@@ -4540,15 +4586,8 @@ if MCP_AVAILABLE:
                     return
 
             # Replay body messages if we consumed them for peeking
-            original_receive: Final = receive
             if consumed_messages:
-
-                async def wrapped_receive():
-                    if consumed_messages:
-                        return consumed_messages.pop(0)
-                    return await original_receive()
-
-                receive = wrapped_receive
+                receive = _replay_consumed_messages(consumed_messages, receive)
 
             # Serialize requests on the same stateful session so concurrent
             # callers don't clobber each other's auth context mid-flight.
@@ -4785,6 +4824,15 @@ if MCP_AVAILABLE:
                 await initialize_session_managers()
                 await asyncio.sleep(0.1)
 
+            sse_consumed_messages, sse_body = (
+                await _read_request_body_for_routing(receive) if scope.get("method") == "POST" else ([], b"")
+            )
+            if _is_initialize_request(sse_body) and await _reject_initialize_from_disallowed_client(
+                scope, receive, send, sse_body, _sse_client_ip
+            ):
+                return
+            sse_receive: Final = _replay_consumed_messages(sse_consumed_messages, receive)
+
             async with _gateway_initialize_instructions_request_scope(
                 user_api_key_auth,
                 mcp_servers,
@@ -4792,7 +4840,7 @@ if MCP_AVAILABLE:
                 scoped_server_endpoint=scoped_server_endpoint,
                 is_initialize=scope.get("method") == "GET",
             ):
-                await sse_session_manager.handle_request(scope, receive, send)
+                await sse_session_manager.handle_request(scope, sse_receive, send)
         except MCPUpstreamAuthError as e:
             # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
