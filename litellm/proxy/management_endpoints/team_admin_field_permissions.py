@@ -148,7 +148,7 @@ def _only_changes(data: UpdateTeamRequest, changed: frozenset[str]) -> UpdateTea
     """The request without the values it resends unchanged, which would otherwise still trigger derived writes
     such as a resent budget_duration pushing budget_reset_at back."""
     sent: Final = frozenset(data.model_fields_set)
-    via_metadata: Final = frozenset({"metadata"}) if changed - sent else frozenset()
+    via_metadata: Final = frozenset({"metadata"}) if changed - sent else frozenset[str]()
     kept: Final = frozenset({"team_id"}) | (changed & sent) | via_metadata
     return UpdateTeamRequest.model_validate(data.model_dump(include=MappingProxyType({field: True for field in kept})))
 
@@ -169,8 +169,8 @@ def team_admin_edit_verdict(
 
 def team_admin_request_or_raise(verdict: TeamAdminEditVerdict) -> UpdateTeamRequest:
     match verdict:
-        case TeamAdminEditAllowed(request=request):
-            return request
+        case TeamAdminEditAllowed():
+            return verdict.request
         case TeamAdminEditingDisabled():
             raise HTTPException(
                 status_code=403,
