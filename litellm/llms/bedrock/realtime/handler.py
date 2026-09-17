@@ -139,11 +139,12 @@ def _installed_sdk_version() -> str | None:
 def _sdk_import_error(installed_version: str | None, cause: ImportError) -> ImportError:
     install_hint: Final = "pip install 'litellm[bedrock-realtime]'"
     requirement: Final = f"{BEDROCK_REALTIME_SDK_DISTRIBUTION}[awscrt]{BEDROCK_REALTIME_SDK_SUPPORTED_RANGE}"
+    verbose_proxy_logger.error("Bedrock Realtime: SDK import failed (installed=%s): %s", installed_version, cause)
     if installed_version is None:
         return ImportError(f"Missing aws_sdk_bedrock_runtime: {install_hint} ({requirement})")
     return ImportError(
         f"{BEDROCK_REALTIME_SDK_DISTRIBUTION} {installed_version} is installed but Bedrock realtime needs "
-        f"[awscrt]{BEDROCK_REALTIME_SDK_SUPPORTED_RANGE}: {install_hint}. Import failed with: {cause}"
+        f"[awscrt]{BEDROCK_REALTIME_SDK_SUPPORTED_RANGE}: {install_hint}"
     )
 
 
