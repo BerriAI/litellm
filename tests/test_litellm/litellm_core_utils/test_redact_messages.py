@@ -493,6 +493,23 @@ class TestPerformRedaction:
         assert redacted["output"][0]["arguments"] == "redacted-by-litellm"
         assert redacted["output"][0]["name"] == "get_weather"
 
+    def test_redacts_responses_api_custom_tool_input_dict(self):
+        result = {
+            "output": [
+                {
+                    "type": "custom_tool_call",
+                    "name": "apply_patch",
+                    "input": "*** Begin Patch\nsecret content\n*** End Patch",
+                    "call_id": "call_1",
+                }
+            ]
+        }
+
+        redacted = perform_redaction({}, result)
+
+        assert redacted["output"][0]["input"] == "redacted-by-litellm"
+        assert redacted["output"][0]["name"] == "apply_patch"
+
     def test_redacts_every_tool_call_in_multi_element_list(self):
         result = litellm.ModelResponse(
             id="resp-multi",
@@ -562,6 +579,19 @@ class TestPerformRedaction:
 
         assert output_item.arguments == "redacted-by-litellm"
         assert output_item.name == "get_weather"
+
+    def test_redacts_responses_api_custom_tool_input_object(self):
+        output_item = SimpleNamespace(
+            type="custom_tool_call",
+            name="apply_patch",
+            input="*** Begin Patch\nsecret content\n*** End Patch",
+            call_id="call_1",
+        )
+
+        _redact_responses_api_output([output_item])
+
+        assert output_item.input == "redacted-by-litellm"
+        assert output_item.name == "apply_patch"
 
     def test_redacts_response_output_objects_with_top_level_text(self):
         output_items = [
