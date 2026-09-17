@@ -825,7 +825,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Latency overhead (milliseconds) added by LiteLLM processing",
+      "description": "Latency overhead (seconds) added by LiteLLM processing",
       "fieldConfig": {
         "defaults": {
           "color": {
