@@ -1,5 +1,6 @@
 import asyncio
 import time
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_router_logger
@@ -15,22 +16,36 @@ else:
     LitellmRouter = Any
 
 
-class DeploymentSemaphore(asyncio.Semaphore):
+class DeploymentSemaphore:
     """A deployment's max_parallel_requests slots. ``queue_size=None`` parks callers without bound, like a plain
     ``asyncio.Semaphore``; otherwise a caller arriving while all slots are busy and ``queue_size`` callers already
     wait gets a 429 instead of being parked."""
 
     def __init__(self, max_parallel_requests: int, model_id: str, model_group: str, queue_size: int | None) -> None:
-        super().__init__(max_parallel_requests)
-        self.max_parallel_requests = max_parallel_requests
-        self.model_id = model_id
-        self.model_group = model_group
+        self._slots: Final = asyncio.Semaphore(max_parallel_requests)
+        self.max_parallel_requests: Final = max_parallel_requests
+        self.model_id: Final = model_id
+        self.model_group: Final = model_group
         self.queue_size = queue_size
         self.waiting = 0
 
+    def locked(self) -> bool:
+        return self._slots.locked()
+
+    def release(self) -> None:
+        self._slots.release()
+
+    async def __aenter__(self) -> None:
+        await self.acquire()
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
+        self._slots.release()
+
     async def acquire(self) -> bool:
-        if not self.locked():
-            return await super().acquire()
+        if not self._slots.locked():
+            return await self._slots.acquire()
         if self.queue_size is not None and self.waiting >= self.queue_size:
             raise RateLimitError(
                 message=(
@@ -57,7 +72,7 @@ class DeploymentSemaphore(asyncio.Semaphore):
             self.queue_size,
         )
         try:
-            return await super().acquire()
+            return await self._slots.acquire()
         finally:
             self.waiting -= 1
             verbose_router_logger.debug(

@@ -148,7 +148,7 @@ from litellm.router_utils.batch_utils import (
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
 )
-from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
+from litellm.router_utils.client_initalization_utils import DeploymentSemaphore, InitalizeCachedClient
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
     is_clientside_credential,
@@ -3640,7 +3640,7 @@ class Router:
                 client_type="max_parallel_requests",
             )
             async with contextlib.AsyncExitStack() as deployment_slot:
-                if isinstance(rpm_semaphore, asyncio.Semaphore):
+                if isinstance(rpm_semaphore, DeploymentSemaphore):
                     await deployment_slot.enter_async_context(rpm_semaphore)
                 await self.async_routing_strategy_pre_call_checks(
                     deployment=deployment,
@@ -8512,7 +8512,7 @@ class Router:
             client_type="max_parallel_requests",
         )
         async with contextlib.AsyncExitStack() as slot:
-            if isinstance(rpm_semaphore, asyncio.Semaphore):
+            if isinstance(rpm_semaphore, DeploymentSemaphore):
                 await slot.enter_async_context(rpm_semaphore)
             await self.async_routing_strategy_pre_call_checks(deployment=deployment, parent_otel_span=parent_otel_span)
             yield

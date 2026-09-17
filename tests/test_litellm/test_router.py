@@ -47,6 +47,7 @@ from litellm.router import (
     _is_retriable_anthropic_status,
 )
 from litellm.router_strategy import simple_shuffle
+from litellm.router_utils.client_initalization_utils import DeploymentSemaphore
 from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
@@ -1520,7 +1521,9 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
             },
         }
 
-        mock_semaphore = asyncio.Semaphore(1)
+        mock_semaphore = DeploymentSemaphore(
+            max_parallel_requests=1, model_id="deployment-1", model_group="gpt-3.5-turbo", queue_size=None
+        )
 
         with patch.object(
             router, "_update_kwargs_with_deployment"
