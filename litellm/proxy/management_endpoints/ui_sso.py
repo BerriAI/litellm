@@ -3308,7 +3308,7 @@ class SSOAuthenticationHandler:
         if ui_access_mode.get("type") == "restricted_sso_group":
             restricted_sso_group: Final = ui_access_mode.get("restricted_sso_group")
             restricted_sso_groups: Final = (
-                (restricted_sso_group,) if isinstance(restricted_sso_group, str) else tuple(restricted_sso_group)
+                (restricted_sso_group,) if isinstance(restricted_sso_group, str) else tuple(restricted_sso_group or ())
             )
             if not any(group in team_ids for group in restricted_sso_groups):
                 raise ProxyException(
