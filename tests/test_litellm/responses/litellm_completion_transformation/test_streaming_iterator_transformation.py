@@ -957,3 +957,121 @@ def test_streamed_unrecognized_tool_choice_is_echoed_as_auto() -> None:
     ]
 
     assert [event.response.tool_choice for event in response_events] == ["auto", "auto", "auto"]
+
+
+def _reasoning_chunk(reasoning: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-4-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", reasoning_content=reasoning),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+async def _collect_events(iterator: LiteLLMCompletionStreamingIterator, sync_mode: bool) -> list:
+    if sync_mode:
+        return list(iterator)
+    return [event async for event in iterator]
+
+
+def _is_message_item(event) -> bool:
+    return getattr(getattr(event, "item", None), "type", None) == "message"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_tool_only_stream_emits_no_message_item_events(sync_mode):
+    """
+    A turn that only calls tools must not announce or close a message output item:
+    Vercel AI SDK clients reject text/item events that reference a message id they
+    never saw in response.output_item.added.
+    """
+    iterator: Final = _build_iterator([_tool_call_chunk(), _chunk("", finish_reason="tool_calls")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    message_item_events = [
+        event
+        for event in events
+        if getattr(event, "type", None)
+        in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+        and _is_message_item(event)
+    ]
+    assert message_item_events == []
+    assert [
+        event
+        for event in events
+        if str(getattr(event, "type", "")).startswith("response.output_text")
+        or getattr(event, "type", None)
+        in (ResponsesAPIStreamEvents.CONTENT_PART_ADDED, ResponsesAPIStreamEvents.CONTENT_PART_DONE)
+    ] == []
+    assert any(getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED for event in events)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_then_text_announces_message_item_before_text_events(sync_mode):
+    """
+    When reasoning is announced first, a later text delta still has to be preceded by
+    the message output_item.added/content_part.added, and every text-scoped event must
+    reference that announced message item id.
+    """
+    iterator: Final = _build_iterator(
+        [
+            _reasoning_chunk("let me think"),
+            _chunk("Hello"),
+            _chunk("!", finish_reason="stop"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    announced_message_ids: set[str] = set()
+    content_part_added_seen = False
+    saw_text_delta = False
+    for event in events:
+        event_type = getattr(event, "type", None)
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and _is_message_item(event):
+            announced_message_ids.add(event.item.id)
+        elif event_type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED:
+            content_part_added_seen = True
+        elif event_type in (
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+        ):
+            assert event.item_id in announced_message_ids
+            if event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA:
+                assert content_part_added_seen
+                saw_text_delta = True
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _is_message_item(event):
+            assert event.item.id in announced_message_ids
+    assert saw_text_delta
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode):
+    iterator: Final = _build_iterator([_chunk("Hel"), _chunk("lo", finish_reason="stop")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    message_item_adds = [
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and _is_message_item(event)
+    ]
+    assert len(message_item_adds) == 1
+    for event in events:
+        if getattr(event, "type", None) in (
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+        ):
+            assert event.item_id == message_item_adds[0].item.id

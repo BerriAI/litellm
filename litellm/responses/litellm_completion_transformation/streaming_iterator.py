@@ -102,6 +102,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_response_created_event: bool = False
         self.sent_response_in_progress_event: bool = False
         self.sent_output_item_added_event: bool = False
+        self.sent_message_item_added_event: bool = False
         self.sent_content_part_added_event: bool = False
         self.sent_output_text_done_event: bool = False
         self.sent_output_content_part_done_event: bool = False
@@ -592,6 +593,29 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         event.__dict__["sequence_number"] = self._sequence_number
         return event
 
+    def _queue_message_item_added_events(self) -> None:
+        if self._cached_item_id is None:
+            self._cached_item_id = f"msg_{uuid.uuid4()}"
+        self.sent_message_item_added_event = True
+        self.sent_content_part_added_event = True
+        self._sequence_number += 1
+        event: Final = OutputItemAddedEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            output_index=0,
+            item=BaseLiteLLMOpenAIResponseObject(
+                **{
+                    "id": self._cached_item_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "in_progress",
+                    "content": [],
+                }
+            ),
+        )
+        event.__dict__["sequence_number"] = self._sequence_number
+        self._pending_response_events.append(event)
+        self._pending_response_events.append(self.create_content_part_added_event())
+
     def _merge_provider_specific_fields(self, src: dict) -> None:
         """Merge provider_specific_fields using last-value-wins for lists.
 
@@ -832,6 +856,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def return_default_done_events(
         self, litellm_complete_object: ModelResponse
     ) -> BaseLiteLLMOpenAIResponseObject | None:
+        if self.sent_message_item_added_event is False:
+            final_content: Final = litellm_complete_object.choices[0].message.content or ""
+            if not final_content:
+                self.sent_output_text_done_event = True
+                self.sent_output_content_part_done_event = True
+                self.sent_output_item_done_event = True
+                return None
+            self._queue_message_item_added_events()
+            return self._pending_response_events.pop(0)
         if self.sent_output_text_done_event is False:
             self.sent_output_text_done_event = True
             return self.create_output_text_done_event(litellm_complete_object)
@@ -898,6 +931,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _ensure_output_item_for_chunk(self, chunk: ModelResponseStream) -> None:
         # Change: Never return a value, just enqueue output item events
         if self.sent_output_item_added_event:
+            if (
+                not self.sent_message_item_added_event
+                and chunk.choices
+                and self._get_delta_string_from_streaming_choices(chunk.choices)
+            ):
+                self._queue_message_item_added_events()
             return
         if not chunk.choices:
             return
@@ -936,31 +975,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
 
         # Default: message
-        self._cached_item_id = self._cached_item_id or f"msg_{uuid.uuid4()}"
-        event = OutputItemAddedEvent(
-            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-            output_index=0,
-            item=BaseLiteLLMOpenAIResponseObject(
-                **{
-                    "id": self._cached_item_id,
-                    "type": "message",
-                    "role": "assistant",
-                    "status": "in_progress",
-                    "content": [],
-                }
-            ),
-        )
-        event.__dict__["sequence_number"] = self._sequence_number
-        self._pending_response_events.append(event)
-
-        # Emit content_part.added immediately after output_item.added for message
-        # items. The OpenAI Responses spec requires this event before any
-        # output_text.delta events so downstream parsers can initialize the
-        # text part structure.
-        if not self.sent_content_part_added_event:
-            self.sent_content_part_added_event = True
-            content_part_event: Final = self.create_content_part_added_event()
-            self._pending_response_events.append(content_part_event)
+        self._queue_message_item_added_events()
         return
 
     async def __anext__(
@@ -1189,6 +1204,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # Priority 2: Handle text deltas
         delta_content: Final = self._get_delta_string_from_streaming_choices(chunk.choices)
         if delta_content:
+            if not self.sent_message_item_added_event:
+                self._queue_message_item_added_events()
             self._sequence_number += 1
             text_delta_event: Final = OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
