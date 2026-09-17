@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { DeprecationBanner } from "@/components/DeprecationBanner";
+import { toast } from "@/lib/toast";
 import {
   getGeneralSettingsCall,
   updateConfigFieldSetting,
@@ -26,11 +27,15 @@ function ipToSlash24(ip: string): string {
   return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
 }
 
+const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((value, i) => value === b[i]);
+
 const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [privateRanges, setPrivateRanges] = useState<string[]>([]);
   const [allowedClients, setAllowedClients] = useState<string[]>([]);
+  const [storedRanges, setStoredRanges] = useState<string[]>([]);
+  const [storedClients, setStoredClients] = useState<string[]>([]);
   const [currentIp, setCurrentIp] = useState<string | null>(null);
   const [rangeDraft, setRangeDraft] = useState("");
   const [clientDraft, setClientDraft] = useState("");
@@ -48,9 +53,11 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
       for (const field of settings) {
         if (field.field_name === "mcp_internal_ip_ranges" && field.field_value) {
           setPrivateRanges(field.field_value);
+          setStoredRanges(field.field_value);
         }
         if (field.field_name === "mcp_allowed_clients" && field.field_value) {
           setAllowedClients(field.field_value);
+          setStoredClients(field.field_value);
         }
       }
     } catch (error) {
@@ -68,25 +75,42 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     }
   };
 
+  const persistList = async (
+    token: string,
+    fieldName: "mcp_internal_ip_ranges" | "mcp_allowed_clients",
+    { value, stored, setStored }: { value: string[]; stored: string[]; setStored: (value: string[]) => void },
+  ) => {
+    if (sameList(value, stored)) return;
+    if (value.length > 0) {
+      await updateConfigFieldSetting(token, fieldName, value);
+    } else {
+      await deleteConfigFieldSetting(token, fieldName);
+    }
+    setStored(value);
+  };
+
   const handleSave = async () => {
     if (!accessToken) return;
     setSaving(true);
-    try {
-      if (privateRanges.length > 0) {
-        await updateConfigFieldSetting(accessToken, "mcp_internal_ip_ranges", privateRanges);
-      } else {
-        await deleteConfigFieldSetting(accessToken, "mcp_internal_ip_ranges");
-      }
-      if (allowedClients.length > 0) {
-        await updateConfigFieldSetting(accessToken, "mcp_allowed_clients", allowedClients);
-      } else {
-        await deleteConfigFieldSetting(accessToken, "mcp_allowed_clients");
-      }
-    } catch (error) {
-      console.error("Failed to save MCP network settings:", error);
-    } finally {
-      setSaving(false);
+    const results = await Promise.allSettled([
+      persistList(accessToken, "mcp_internal_ip_ranges", {
+        value: privateRanges,
+        stored: storedRanges,
+        setStored: setStoredRanges,
+      }),
+      persistList(accessToken, "mcp_allowed_clients", {
+        value: allowedClients,
+        stored: storedClients,
+        setStored: setStoredClients,
+      }),
+    ]);
+    setSaving(false);
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failures.length === 0) {
+      toast.success("MCP network settings saved");
+      return;
     }
+    failures.forEach((failure) => toast.fromError(failure.reason));
   };
 
   const addSuggestedRange = (range: string) => {
@@ -202,10 +226,10 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
       <div>
         <p className="text-lg font-semibold">Allowed Client Applications</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Only the MCP client applications listed here can connect to the gateway. Names are matched exactly against
-          the clientInfo.name each client sends in its MCP initialize request (for example claude-code or
-          codex-mcp-client). Leave empty to allow every client. Clients choose the name they send, so treat this as a
-          policy control rather than a security boundary.
+          Only the MCP client applications listed here can connect to the gateway. Names are matched exactly against the
+          clientInfo.name each client sends in its MCP initialize request (for example claude-code or codex-mcp-client).
+          Leave empty to allow every client. Clients choose the name they send, so treat this as a policy control rather
+          than a security boundary.
         </p>
       </div>
 
@@ -244,8 +268,8 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
           }}
         />
         <p className="mt-2 text-xs text-muted-foreground">
-          Enter the clientInfo.name values to admit. Any other client, or one that does not identify itself, gets a
-          403 on its MCP initialize request.
+          Enter the clientInfo.name values to admit. Any other client, or one that does not identify itself, gets a 403
+          on its MCP initialize request.
         </p>
       </Card>
 

@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import MCPNetworkSettings from "./MCPNetworkSettings";
+import { toast } from "@/lib/toast";
 import {
   getGeneralSettingsCall,
   updateConfigFieldSetting,
@@ -14,6 +15,10 @@ vi.mock("@/components/networking", () => ({
   updateConfigFieldSetting: vi.fn(),
   deleteConfigFieldSetting: vi.fn(),
   fetchMCPClientIp: vi.fn(),
+}));
+
+vi.mock("@/lib/toast", () => ({
+  toast: { success: vi.fn(), fromError: vi.fn() },
 }));
 
 const renderSettings = () => render(<MCPNetworkSettings accessToken="tok" />);
@@ -82,25 +87,44 @@ describe("MCPNetworkSettings", () => {
     expect(screen.getByText("203.0.113.0/24")).toBeInTheDocument();
   });
 
-  it("saves the configured ranges", async () => {
+  it("saves the configured ranges once they change", async () => {
+    vi.mocked(fetchMCPClientIp).mockResolvedValue("203.0.113.45");
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
       { field_name: "mcp_internal_ip_ranges", field_value: ["10.0.0.0/8"] },
     ]);
 
     renderSettings();
+    await userEvent.click(await screen.findByText("203.0.113.0/24"));
     await userEvent.click(await screen.findByRole("button", { name: /Save/ }));
 
     await waitFor(() =>
-      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges", ["10.0.0.0/8"]),
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges", [
+        "10.0.0.0/8",
+        "203.0.113.0/24",
+      ]),
     );
     expect(deleteConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges");
   });
 
-  it("clears the setting instead of saving an empty list", async () => {
+  it("clears a stored range setting instead of saving an empty list", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_internal_ip_ranges", field_value: ["10.0.0.0/8"] },
+    ]);
+
+    renderSettings();
+    await userEvent.click(await screen.findByRole("button", { name: "Remove 10.0.0.0/8" }));
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(deleteConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges"));
+    expect(updateConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
+  it("does not write settings that were never stored and are still empty", async () => {
     renderSettings();
     await userEvent.click(await screen.findByRole("button", { name: /Save/ }));
 
-    await waitFor(() => expect(deleteConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges"));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("MCP network settings saved"));
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
     expect(updateConfigFieldSetting).not.toHaveBeenCalled();
   });
 
@@ -159,12 +183,38 @@ describe("MCPNetworkSettings", () => {
     ]);
 
     renderSettings();
-    await userEvent.click(await screen.findByRole("button", { name: /Save/ }));
+    await userEvent.type(
+      await screen.findByRole("textbox", { name: "Allowed client names" }),
+      "codex-mcp-client{Enter}",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() =>
-      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", ["antigravity-cli"]),
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", [
+        "antigravity-cli",
+        "codex-mcp-client",
+      ]),
     );
-    expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges", ["10.0.0.0/8"]);
+    expect(updateConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges", expect.anything());
     expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
+  it("still saves the allowed clients when the private range write fails, and reports the failure", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_internal_ip_ranges", field_value: ["10.0.0.0/8"] },
+    ]);
+    const rangeFailure = new Error("Field name=mcp_internal_ip_ranges not in config");
+    vi.mocked(deleteConfigFieldSetting).mockRejectedValue(rangeFailure);
+
+    renderSettings();
+    await userEvent.click(await screen.findByRole("button", { name: "Remove 10.0.0.0/8" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Allowed client names" }), "codex-mcp-client{Enter}");
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() =>
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", ["codex-mcp-client"]),
+    );
+    await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith(rangeFailure));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });
