@@ -685,6 +685,7 @@ class TestSnowflakeCortexClaudeFixes:
 
         assert thinking.choices[0].delta.reasoning_content == "391"
         assert signature.choices[0].delta.thinking_blocks[0]["signature"] == "Eto"
+        assert final.usage.cache_read_input_tokens == 1323
         assert final.usage.prompt_tokens_details.cached_tokens == 1323
 
 

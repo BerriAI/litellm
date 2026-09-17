@@ -66,6 +66,8 @@ class _AnthropicContentBlock(TypedDict, total=False):
 class _AnthropicUsageBlock(TypedDict, total=False):
     input_tokens: ReadOnly[int]
     output_tokens: ReadOnly[int]
+    cache_creation_input_tokens: ReadOnly[int]
+    cache_read_input_tokens: ReadOnly[int]
 
 
 class _AnthropicMessagesResponse(TypedDict, total=False):

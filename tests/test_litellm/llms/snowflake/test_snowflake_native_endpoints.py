@@ -446,8 +446,46 @@ class TestAnthropicConfigResponse:
             encoding=None,
         )
         assert result.usage.prompt_tokens == 1341
+        assert result.usage.cache_creation_input_tokens == 1323
+        assert result.usage.cache_read_input_tokens == 0
         assert result.usage.prompt_tokens_details.cache_creation_tokens == 1323
         assert result.usage.prompt_tokens_details.cached_tokens == 0
+
+    def test_prompt_cache_read_usage_is_surfaced(self):
+        raw = httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "model": "claude-opus-4-5",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "usage": {
+                    "input_tokens": 2,
+                    "output_tokens": 256,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 2941,
+                },
+            },
+        )
+        result = self.cfg.transform_response(
+            model="snowflake/claude-opus-4-5",
+            raw_response=raw,
+            model_response=ModelResponse(),
+            logging_obj=_mock_logging(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+        assert result.usage.prompt_tokens == 2943
+        assert result.usage.completion_tokens == 256
+        assert result.usage.cache_creation_input_tokens == 0
+        assert result.usage.cache_read_input_tokens == 2941
+        assert result.usage.prompt_tokens_details.cached_tokens == 2941
+        dumped = result.usage.model_dump()
+        assert dumped["cache_creation_input_tokens"] == 0
+        assert dumped["cache_read_input_tokens"] == 2941
 
     def test_thinking_block_and_signature_are_preserved(self):
         """The signature must survive so a client can echo the thinking block on the next turn."""
