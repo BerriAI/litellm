@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Final
 
 from dotenv import load_dotenv
-from fixture_mode import deterministic_marker, parse_fixture_mode
+from fixture_mode import current_test_key, deterministic_marker, parse_fixture_mode
 from provider_edge import provider_edge_api_base
 
 # Local runs keep provider / DataDog keys in tests/e2e/.env (see CONTRIBUTING.md).
@@ -200,13 +200,15 @@ def datadog_mcp_url(*, toolsets: str = "core") -> str:
 def provider_edge_base(mount: str) -> str | None:
     """The api_base an edge-wired deployment should register with, using this
     process's fixture-mode and edge-host configuration: None in live mode, the
-    shared edge server's mount URL in record and replay."""
+    shared edge server's mount URL in record and replay, and with the shared
+    cache on, the cache edge's mount URL scoped to the running test."""
     return provider_edge_api_base(
         mount,
         mode_raw=FIXTURE_MODE_RAW,
         bundle_dir=FIXTURE_DIR,
         bind_host=PROVIDER_EDGE_BIND_HOST,
         advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
+        test_key=current_test_key(),
         forward_timeout=REQUEST_TIMEOUT,
     )
 

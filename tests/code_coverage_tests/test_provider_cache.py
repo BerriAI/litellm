@@ -26,6 +26,7 @@ from e2e_http import NetworkError, PreparedForward, RawResponse, StreamChunk, St
 from models import LiteLLMParamsBody, ModelMode
 from botocore.credentials import Credentials
 from botocore.eventstream import EventStreamBuffer
+from fixture_bundle import slug_for_test
 from provider_cache import (
     SIGNATURE_HEADERS,
     CacheEdge,
@@ -35,7 +36,9 @@ from provider_cache import (
     ResponseStore,
     cacheable_endpoint,
     request_identity,
+    scoped_edge_base,
     slotted_key,
+    split_test_segment,
     successful_response,
 )
 from provider_cache_redis import PUBLISH, RedisCommands, RedisResponseStore, configured_cache, redis_store
@@ -47,7 +50,13 @@ from provider_cache_routing import (
     route_cache_model,
 )
 from fixture_mode import SESSION_TEST_KEY
-from provider_edge import EDGE_MOUNTS, configured_cache_backend, resolve_mount, start_provider_edge
+from provider_edge import (
+    EDGE_MOUNTS,
+    configured_cache_backend,
+    provider_edge_api_base,
+    resolve_mount,
+    start_provider_edge,
+)
 from provider_edge_bedrock import bedrock_signer
 from redis.exceptions import ConnectionError as RedisConnectionError
 
@@ -57,6 +66,7 @@ SUCCESS: Final = b'{"id":"provider-fixed-id","choices":[{"message":{"content":"h
 HEADERS: Final = {"content-type": "application/json", "authorization": "Bearer synthetic-account-one"}
 TEST_KEY: Final = "tests/e2e/synthetic_suite.py::TestCase::test_case"
 OTHER_TEST_KEY: Final = "tests/e2e/synthetic_suite.py::TestCase::test_other_case"
+TEST_SLUG: Final = slug_for_test(TEST_KEY)
 
 
 def marked(marker: str) -> bytes:
@@ -173,11 +183,11 @@ def store(redis_url: str) -> RedisResponseStore:
     return redis_store(redis_url, "test-" + uuid.uuid4().hex)
 
 
-def cache_edge(store: ResponseStore, test_key: str = TEST_KEY) -> CacheEdge:
+def cache_edge(store: ResponseStore) -> CacheEdge:
     """A cache edge standing in for one pytest process. A fresh instance over the
     same store is the next build running the same test: the recordings survive,
     the per-test FIFO slot counters start over."""
-    return CacheEdge(store, SECRET, test_key=lambda: test_key)
+    return CacheEdge(store, SECRET)
 
 
 def slot_key(
@@ -186,12 +196,13 @@ def slot_key(
 ) -> str:
     prepared: Final = prepare_forward("POST", url, headers, body)
     assert isinstance(prepared, PreparedForward)
-    return slotted_key(SECRET, request_identity(SECRET, test_key, "POST", url, prepared.headers, body), slot)
+    identity: Final = request_identity(SECRET, slug_for_test(test_key), "POST", url, prepared.headers, body)
+    return slotted_key(SECRET, identity, slot)
 
 
-def bedrock_cache_edge(store: ResponseStore, test_key: str = TEST_KEY) -> CacheEdge:
+def bedrock_cache_edge(store: ResponseStore) -> CacheEdge:
     return CacheEdge(
-        store, SECRET, test_key=lambda: test_key,
+        store, SECRET,
         policies={BEDROCK_MOUNT: MountPolicy(
             sign=bedrock_signer("us-east-1", lambda: STATIC_CREDENTIALS), unkeyed_headers=SIGNATURE_HEADERS,
         )},
@@ -199,11 +210,14 @@ def bedrock_cache_edge(store: ResponseStore, test_key: str = TEST_KEY) -> CacheE
 
 
 @contextmanager
-def edge(cache: CacheEdge, provider: Provider) -> Generator[str, None, None]:
+def edge(cache: CacheEdge, provider: Provider, test_key: str | None = TEST_KEY) -> Generator[str, None, None]:
+    """The URL a deployment registered by ``test_key`` would carry, or the bare
+    mount URL for None, which is what a registration made outside any test gets."""
     upstream: Final = f"http://127.0.0.1:{provider.server_port}"
     running: Final = start_provider_edge(cache, mounts={"openai": upstream})
+    base: Final = running.edge.api_base("openai")
     try:
-        yield running.edge.api_base("openai") + "/v1/chat/completions"
+        yield f"{base if test_key is None else scoped_edge_base(base, test_key)}/v1/chat/completions"
     finally:
         running.shutdown()
 
@@ -213,7 +227,7 @@ def bedrock_edge(cache: CacheEdge, provider: Provider, action: str = "converse")
     upstream: Final = f"http://127.0.0.1:{provider.server_port}"
     running: Final = start_provider_edge(cache, mounts={BEDROCK_MOUNT: upstream})
     try:
-        yield f"{running.edge.api_base(BEDROCK_MOUNT)}/model/{BEDROCK_MODEL}/{action}"
+        yield f"{scoped_edge_base(running.edge.api_base(BEDROCK_MOUNT), TEST_KEY)}/model/{BEDROCK_MODEL}/{action}"
     finally:
         running.shutdown()
 
@@ -288,7 +302,7 @@ def test_expiry_does_not_slide(store: RedisResponseStore, provider: Provider) ->
     url: Final = f"http://127.0.0.1:{provider.server_port}/v1/chat/completions"
 
     def drain() -> None:
-        head = cache_edge(short).forward("openai", "POST", url, dict(HEADERS), BODY, 5)
+        head = cache_edge(short).forward("openai", "POST", url, dict(HEADERS), BODY, 5, test_key=TEST_SLUG)
         assert isinstance(head, StreamHead)
         assert b"".join(step.data for step in head.steps if isinstance(step, StreamChunk)) == SUCCESS
 
@@ -312,7 +326,7 @@ def test_concurrent_builds_publish_one_recording_atomically(
     edges: Final = tuple(cache_edge(store) for _ in range(5))
 
     def drain(cache: CacheEdge) -> bytes:
-        head = cache.forward("openai", "POST", url, dict(HEADERS), BODY, 5)
+        head = cache.forward("openai", "POST", url, dict(HEADERS), BODY, 5, test_key=TEST_SLUG)
         assert isinstance(head, StreamHead)
         return b"".join(step.data for step in head.steps if isinstance(step, StreamChunk))
 
@@ -401,7 +415,7 @@ def test_corrupt_entry_is_replaced_by_same_successful_request(store: RedisRespon
     assert store.publish(key, lease, payload)
     caches: Final = tuple(cache_edge(store) for _ in range(2))
     for cache in caches:
-        head = cache.forward("openai", "POST", upstream, dict(HEADERS), BODY, 5)
+        head = cache.forward("openai", "POST", upstream, dict(HEADERS), BODY, 5, test_key=TEST_SLUG)
         assert isinstance(head, StreamHead)
         assert b"".join(step.data for step in head.steps if isinstance(step, StreamChunk)) == SUCCESS
     assert len(provider.hits) == 1
@@ -471,28 +485,101 @@ def test_another_test_never_reuses_this_tests_recording(
     with edge(cache_edge(store), provider) as url:
         call(url)
     assert len(provider.hits) == 1
-    with edge(cache_edge(store, OTHER_TEST_KEY), provider) as url:
+    with edge(cache_edge(store), provider, OTHER_TEST_KEY) as url:
         call(url)
     assert len(provider.hits) == 2
-    with edge(cache_edge(store, OTHER_TEST_KEY), provider) as url:
+    with edge(cache_edge(store), provider, OTHER_TEST_KEY) as url:
         call(url)
     assert len(provider.hits) == 2
 
 
-def test_calls_outside_any_test_are_never_cached(
-    store: RedisResponseStore, provider: Provider,
+def test_a_request_without_a_test_segment_is_never_cached(
+    store: RedisResponseStore, provider: Provider, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    url: Final = f"http://127.0.0.1:{provider.server_port}/v1/chat/completions"
-    cache: Final = CacheEdge(store, SECRET, test_key=lambda: SESSION_TEST_KEY)
-    for _ in range(2):
-        head = cache.forward("openai", "POST", url, dict(HEADERS), BODY, 5)
-        assert isinstance(head, StreamHead)
-        assert b"".join(step.data for step in head.steps if isinstance(step, StreamChunk)) == SUCCESS
+    """The bare mount URL is what a deployment registered outside any test would
+    carry. The serving process is inside a test here, and that must not count:
+    the edge never names the test from its own process state."""
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", f"{TEST_KEY} (call)")
+    cache: Final = cache_edge(store)
+    with edge(cache, provider, test_key=None) as url:
+        assert call(url).body == SUCCESS
+        assert call(url).body == SUCCESS
     assert len(provider.hits) == 2
     assert dict(cache.counters.counts) == {
         "bypass": 2, "mount:openai:bypass": 2,
         "upstream_attempts": 2, "mount:openai:upstream_attempts": 2,
     }
+    with edge(cache_edge(store), provider) as url:
+        assert call(url).body == SUCCESS
+    assert len(provider.hits) == 3
+
+
+def test_attribution_comes_from_the_deployment_path_not_the_serving_process(
+    store: RedisResponseStore, provider: Provider, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under xdist the process serving a call is unrelated to the test that made
+    it: the proxy is a separate pod, and the compat matrix's shared aliases had
+    every worker's edge answering every other worker's cells. The recording must
+    land under the test whose deployment the request came through, whatever
+    ``PYTEST_CURRENT_TEST`` says in the edge's own process."""
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", f"{OTHER_TEST_KEY} (call)")
+    monkeypatch.setenv("E2E_PROVIDER_CACHE_METRICS_DIR", "unused-but-enables-the-probe")
+    first: Final = cache_edge(store)
+    with edge(first, provider) as url:
+        assert call(url).body == SUCCESS
+    assert len(provider.hits) == 1
+    assert dict(first.probe.rows[0])["test_key"] == TEST_SLUG
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", f"{TEST_KEY} (call)")
+    with edge(cache_edge(store), provider, OTHER_TEST_KEY) as url:
+        assert call(url).body == SUCCESS
+    assert len(provider.hits) == 2
+    with edge(cache_edge(store), provider) as url:
+        assert call(url).body == SUCCESS
+    assert len(provider.hits) == 2
+
+
+@pytest.mark.parametrize("upstream_path,expected", [
+    (f"t/{TEST_SLUG}/v1/chat/completions", (TEST_SLUG, "v1/chat/completions")),
+    (f"t/{TEST_SLUG}/model/{BEDROCK_MODEL}/converse-stream", (TEST_SLUG, f"model/{BEDROCK_MODEL}/converse-stream")),
+    ("v1/chat/completions", (None, "v1/chat/completions")),
+    (f"model/{BEDROCK_MODEL}/invoke", (None, f"model/{BEDROCK_MODEL}/invoke")),
+    ("t//v1/chat/completions", (None, "v1/chat/completions")),
+    ("t", (None, "")),
+])
+def test_the_test_segment_is_read_off_the_path_and_never_reaches_the_provider(
+    upstream_path: str, expected: tuple[str | None, str],
+) -> None:
+    assert split_test_segment(upstream_path) == expected
+    assert split_test_segment(scoped_edge_base("", TEST_KEY).lstrip("/") + "/v1/chat/completions") == (
+        TEST_SLUG, "v1/chat/completions",
+    )
+
+
+def test_the_cache_edge_base_is_scoped_to_the_registering_test(
+    redis_url: str, monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    monkeypatch.setenv("E2E_PROVIDER_CACHE", "1")
+    monkeypatch.setenv("E2E_PROVIDER_CACHE_REDIS_URL", redis_url)
+    monkeypatch.setenv("E2E_PROVIDER_CACHE_HMAC_KEY", SECRET.decode())
+    monkeypatch.setenv("E2E_PROVIDER_CACHE_NAMESPACE", "environment-" + uuid.uuid4().hex)
+    configured_cache.cache_clear()
+
+    def base_for(test_key: str) -> str | None:
+        return provider_edge_api_base(
+            "openai", mode_raw="live", bundle_dir=tmp_path, bind_host="127.0.0.1", advertise_host="127.0.0.1",
+            test_key=test_key,
+        )
+
+    try:
+        scoped: Final = base_for(TEST_KEY)
+        assert scoped is not None and scoped.endswith(f"/openai/t/{TEST_SLUG}")
+        assert base_for(OTHER_TEST_KEY) != scoped
+        assert base_for(SESSION_TEST_KEY) is None
+        monkeypatch.setenv("E2E_PROVIDER_CACHE", "0")
+        configured_cache.cache_clear()
+        assert base_for(TEST_KEY) is None
+    finally:
+        configured_cache.cache_clear()
 
 
 def test_counters_attribute_every_outcome_to_its_mount(
@@ -505,8 +592,8 @@ def test_counters_attribute_every_outcome_to_its_mount(
     cache: Final = cache_edge(store)
     running: Final = start_provider_edge(cache, mounts={"openai": upstream, "anthropic": upstream})
     try:
-        call(running.edge.api_base("openai") + "/v1/chat/completions")
-        call(running.edge.api_base("anthropic") + "/v1/messages")
+        call(scoped_edge_base(running.edge.api_base("openai"), TEST_KEY) + "/v1/chat/completions")
+        call(scoped_edge_base(running.edge.api_base("anthropic"), TEST_KEY) + "/v1/messages")
     finally:
         running.shutdown()
     counts: Final = dict(cache.counters.counts)
@@ -531,7 +618,7 @@ def test_a_rejection_says_whether_the_body_was_cut_short_or_simply_unfinished(
     provider.response = b'data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
     running: Final = start_provider_edge(cut_short, mounts={"openai": upstream})
     try:
-        forward("POST", running.edge.api_base("openai") + "/v1/chat/completions",
+        forward("POST", scoped_edge_base(running.edge.api_base("openai"), TEST_KEY) + "/v1/chat/completions",
                 headers=HEADERS, body=MARKED, timeout=5)
     finally:
         running.shutdown()
@@ -542,7 +629,7 @@ def test_a_rejection_says_whether_the_body_was_cut_short_or_simply_unfinished(
     provider.response = b'{"choices":[{"index":0,"message":{"content":"hi"}}]}'
     second: Final = start_provider_edge(unfinished, mounts={"openai": upstream})
     try:
-        call(second.edge.api_base("openai") + "/v1/chat/completions", MARKED)
+        call(scoped_edge_base(second.edge.api_base("openai"), TEST_KEY) + "/v1/chat/completions", MARKED)
     finally:
         second.shutdown()
 
@@ -551,7 +638,7 @@ def test_a_rejection_says_whether_the_body_was_cut_short_or_simply_unfinished(
     provider.response = b'{"message":"Too many requests"}'
     third: Final = start_provider_edge(refused, mounts={"openai": upstream})
     try:
-        call(third.edge.api_base("openai") + "/v1/chat/completions", MARKED)
+        call(scoped_edge_base(third.edge.api_base("openai"), TEST_KEY) + "/v1/chat/completions", MARKED)
     finally:
         third.shutdown()
 
@@ -586,7 +673,7 @@ def openai_edge(cache: CacheEdge, provider: Provider, path: str) -> Generator[st
     upstream: Final = f"http://127.0.0.1:{provider.server_port}"
     running: Final = start_provider_edge(cache, mounts={"openai": upstream})
     try:
-        yield running.edge.api_base("openai") + path
+        yield scoped_edge_base(running.edge.api_base("openai"), TEST_KEY) + path
     finally:
         running.shutdown()
 
@@ -787,7 +874,7 @@ class TestBedrockSigning:
 
         def signing_edge() -> CacheEdge:
             return CacheEdge(
-                store, SECRET, test_key=lambda: TEST_KEY,
+                store, SECRET,
                 policies={BEDROCK_MOUNT: MountPolicy(sign=varying, unkeyed_headers=SIGNATURE_HEADERS)},
             )
 
@@ -1065,7 +1152,8 @@ def test_connection_failure_releases_capture_lease(store: RedisResponseStore) ->
         unavailable.bind(("127.0.0.1", 0))
         url: Final = f"http://127.0.0.1:{unavailable.getsockname()[1]}/v1/chat/completions"
         cache: Final = cache_edge(store)
-        assert isinstance(cache.forward("openai", "POST", url, dict(HEADERS), BODY, 0.2), NetworkError)
+        head: Final = cache.forward("openai", "POST", url, dict(HEADERS), BODY, 0.2, test_key=TEST_SLUG)
+        assert isinstance(head, NetworkError)
         key: Final = slot_key(url)
         lease: Final = store.lookup(key)
         assert isinstance(lease, CaptureLease)
@@ -1076,7 +1164,7 @@ def test_connection_failure_releases_capture_lease(store: RedisResponseStore) ->
 def test_close_before_first_chunk_releases_lease(store: RedisResponseStore, provider: Provider) -> None:
     url: Final = f"http://127.0.0.1:{provider.server_port}/v1/chat/completions"
     cache: Final = cache_edge(store)
-    head: Final = cache.forward("openai", "POST", url, dict(HEADERS), BODY, 5)
+    head: Final = cache.forward("openai", "POST", url, dict(HEADERS), BODY, 5, test_key=TEST_SLUG)
     assert isinstance(head, StreamHead)
     head.steps.close()
     key: Final = slot_key(url)
@@ -1094,7 +1182,7 @@ def test_effective_account_change_cannot_reuse_cache(
         netrc = tmp_path / account
         netrc.write_text(f"machine 127.0.0.1 login {account} password synthetic\n")
         monkeypatch.setenv("NETRC", str(netrc))
-        head = cache.forward("openai", "POST", url, dict(HEADERS), BODY, 5)
+        head = cache.forward("openai", "POST", url, dict(HEADERS), BODY, 5, test_key=TEST_SLUG)
         assert isinstance(head, StreamHead)
         assert b"".join(step.data for step in head.steps if isinstance(step, StreamChunk)) == SUCCESS
     assert len(provider.hits) == 2
