@@ -30441,6 +30441,8 @@ export interface components {
             max_budget?: number | null;
             /** Max File Size Mb */
             max_file_size_mb?: number | null;
+            /** Max Parallel Requests Queue Size */
+            max_parallel_requests_queue_size?: number | null;
             /** Max Retries */
             max_retries?: number | null;
             /**
@@ -40893,6 +40895,8 @@ export interface components {
             max_budget?: number | null;
             /** Max File Size Mb */
             max_file_size_mb?: number | null;
+            /** Max Parallel Requests Queue Size */
+            max_parallel_requests_queue_size?: number | null;
             /** Max Retries */
             max_retries?: number | null;
             /**

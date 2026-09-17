@@ -2,6 +2,7 @@ import asyncio
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm import Router
@@ -111,6 +112,37 @@ def _router_semaphore(router: Router, model_name: str) -> DeploymentSemaphore:
     return client
 
 
+@pytest.mark.parametrize("invalid_queue_size", [-1, 2.5, True, "3"])
+def test_invalid_queue_sizes_are_rejected_instead_of_coerced(invalid_queue_size: object):
+    """A negative bound would reject every busy request and a fraction would be truncated, so
+    neither may reach a semaphore, the router default, or a live update of that default."""
+    with pytest.raises(ValidationError):
+        _semaphore(queue_size=invalid_queue_size)
+    model_list: Final = [{"model_name": "gpt-5.6", "litellm_params": {"model": "openai/gpt-5.6", "rpm": 1}}]
+    with pytest.raises(ValidationError):
+        Router(model_list=model_list, default_max_parallel_requests_queue_size=invalid_queue_size)
+    with pytest.raises(ValidationError):
+        Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5.6",
+                    "litellm_params": {
+                        "model": "openai/gpt-5.6",
+                        "rpm": 1,
+                        "max_parallel_requests_queue_size": invalid_queue_size,
+                    },
+                }
+            ]
+        )
+
+    router: Final = Router(model_list=model_list, default_max_parallel_requests_queue_size=4)
+    semaphore: Final = _router_semaphore(router, "gpt-5.6")
+    with pytest.raises(ValidationError):
+        router.update_settings(default_max_parallel_requests_queue_size=invalid_queue_size)
+    assert router.default_max_parallel_requests_queue_size == 4
+    assert semaphore.queue_size == 4
+
+
 @pytest.mark.asyncio
 async def test_deployment_queue_size_overrides_router_default_and_zero_is_honored():
     router: Final = Router(
@@ -170,7 +202,7 @@ async def test_update_settings_applies_default_queue_size_to_live_semaphores_wit
     pinned: Final = _router_semaphore(router, "pinned")
     assert router.get_settings()["default_max_parallel_requests_queue_size"] is None
 
-    router.update_settings(default_max_parallel_requests_queue_size="0")
+    router.update_settings(default_max_parallel_requests_queue_size=0)
     assert router.get_settings()["default_max_parallel_requests_queue_size"] == 0
     assert (inherits.queue_size, pinned.queue_size) == (0, 5)
 
