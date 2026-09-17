@@ -3027,7 +3027,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     cost_for_built_in_tools_cost_usd_dollar=0.0,
                 )
 
-            if litellm.store_batch_line_items_in_callbacks:
+            if litellm.store_batch_line_items_in_callbacks and (has_explicit_batch_data or should_compute_batch_data):
                 from litellm.batches.batch_line_item_logging import log_batch_line_items
 
                 await log_batch_line_items(

@@ -15,6 +15,7 @@ import json
 import uuid
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -220,6 +221,29 @@ async def test_flag_off_emits_only_aggregate(recorder):
     assert len(recorder.success_events) == 1
     assert len(recorder.failure_events) == 0
     file_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_in_progress_batch_poll_emits_no_line_events(recorder):
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    in_progress: Final = LiteLLMBatch(
+        id="batch_wip",
+        object="batch",
+        endpoint="/v1/chat/completions",
+        input_file_id="input-file-1",
+        output_file_id=None,
+        error_file_id=None,
+        status="in_progress",
+        completion_window="24h",
+        created_at=1,
+    )
+    file_mock: Final = AsyncMock(side_effect=_file_content)
+    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        await _parent_logging().async_success_handler(result=in_progress)
+
+    file_mock.assert_not_called()
+    assert all(_hidden(e).get("batch_custom_id") is None for e in recorder.success_events)
+    assert len(recorder.failure_events) == 0
 
 
 @pytest.mark.asyncio
