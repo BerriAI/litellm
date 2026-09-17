@@ -70,7 +70,6 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
-    NULLABLE_RUNTIME_ROUTER_SETTINGS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
@@ -776,7 +775,6 @@ from litellm.types.router import (
     RoutingPlugin,
     SearchToolTypedDict,
     updateDeployment,
-    validate_max_parallel_requests_queue_size,
 )
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.scheduler import DefaultPriorities
@@ -6902,20 +6900,13 @@ class ProxyConfig:
             ):
                 from litellm.utils import _update_dictionary
 
-                db_settings: Final = db_router_settings.param_value
                 db_overlay_deferring_empty_lists_to_config: Final = {
                     k: v
-                    for k, v in db_settings.items()
+                    for k, v in db_router_settings.param_value.items()
                     if not (k in config_router_settings and isinstance(v, list) and len(v) == 0)
                 }
-                cleared_nullable_settings: Final = MappingProxyType(
-                    {k: None for k in NULLABLE_RUNTIME_ROUTER_SETTINGS if k in db_settings and db_settings[k] is None}
-                )
-                combined_router_settings = MappingProxyType(
-                    {
-                        **_update_dictionary(config_router_settings, db_overlay_deferring_empty_lists_to_config),
-                        **cleared_nullable_settings,
-                    }
+                combined_router_settings = _update_dictionary(
+                    config_router_settings, db_overlay_deferring_empty_lists_to_config
                 )
             elif config_router_settings is not None and isinstance(config_router_settings, dict):
                 combined_router_settings = config_router_settings
@@ -16937,17 +16928,6 @@ async def update_config(
                         )
                     },
                 )
-            raw_queue_size: Final = raw_router_settings.get("default_max_parallel_requests_queue_size")
-            try:
-                validate_max_parallel_requests_queue_size(raw_queue_size)
-            except ValueError as invalid_queue_size:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"default_max_parallel_requests_queue_size={raw_queue_size!r} is not valid, "
-                        "it must be a non-negative integer or null"
-                    ),
-                ) from invalid_queue_size
 
         if prisma_client is None:
             raise Exception("No DB Connected")
@@ -17059,7 +17039,7 @@ async def update_config(
             raw_router_settings_without_none: Final = {
                 key: value
                 for key, value in raw_router_settings.items()
-                if key not in typed_router_settings and (value is not None or key in NULLABLE_RUNTIME_ROUTER_SETTINGS)
+                if key not in typed_router_settings and value is not None
             }
             router_settings_updates: Final = {**typed_router_settings, **raw_router_settings_without_none}
             new_router_settings: Final = {**existing, **router_settings_updates}

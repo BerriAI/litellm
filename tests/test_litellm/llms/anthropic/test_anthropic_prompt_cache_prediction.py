@@ -181,15 +181,6 @@ async def test_environment_credential_matches_native_count_and_observed_scope(
     assert observed.scope == cache_scope(_CALLER, _DEPLOYMENT, target.api_key, target.model)
 
 
-def test_deployment_concurrency_knobs_keep_native_prediction_supported() -> None:
-    target: Final = resolve_prediction_target(LiteLLM_Params(
-        model=f"anthropic/{_MODEL}", api_key=_KEY, api_base="https://api.anthropic.com",
-        max_parallel_requests=1, max_parallel_requests_queue_size=0,
-    ))
-    assert isinstance(target, NativePredictionTarget)
-    assert (target.model, target.api_key) == (_MODEL, _KEY)
-
-
 @pytest.mark.parametrize("inline_key", [None, _KEY])
 @pytest.mark.asyncio
 async def test_named_credential_is_explicitly_unsupported_before_count(

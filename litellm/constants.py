@@ -30,10 +30,8 @@ RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
         "enable_tag_filtering",
         "tag_routing_prefix",
         "optional_pre_call_checks",
-        "default_max_parallel_requests_queue_size",
     }
 )
-NULLABLE_RUNTIME_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset({"default_max_parallel_requests_queue_size"})
 ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
     {
         "model_list",

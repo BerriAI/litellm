@@ -88,7 +88,6 @@ ignored_function_names = [
     "_resolve_claude_code_session_router",  # Tested through Claude Code session routing in test_router.py
     "_get_claude_code_session_router_binding",  # Tested through the two-worker session routing test in test_router.py
     "_apply_updated_routing_strategy_args",  # Tested via update_settings in test_lowest_latency.py (file lacks "router" in name)
-    "default_max_parallel_requests_queue_size",
 ]
 
 

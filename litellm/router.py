@@ -148,7 +148,7 @@ from litellm.router_utils.batch_utils import (
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
 )
-from litellm.router_utils.client_initalization_utils import DeploymentSemaphore, InitalizeCachedClient
+from litellm.router_utils.client_initalization_utils import InitalizeCachedClient, MaxParallelRequestsLimit
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
     is_clientside_credential,
@@ -263,7 +263,6 @@ from litellm.types.router import (
     RoutingStrategy,
     SearchToolTypedDict,
     TaggedPreRoutingStrategy,
-    validate_max_parallel_requests_queue_size,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -739,7 +738,6 @@ class Router:
         stream_timeout: float | None = None,
         default_litellm_params: dict | None = None,  # default params for Router.chat.completion.create
         default_max_parallel_requests: int | None = None,
-        default_max_parallel_requests_queue_size: int | None = None,
         set_verbose: bool = False,
         debug_level: Literal["DEBUG", "INFO"] = "INFO",
         default_fallbacks: list[str] | None = None,  # generic fallbacks, works across all deployments
@@ -937,9 +935,6 @@ class Router:
             None  # use this to track the users default deployment, when they want to use model = *
         )
         self.default_max_parallel_requests = default_max_parallel_requests
-        self._default_max_parallel_requests_queue_size = validate_max_parallel_requests_queue_size(
-            default_max_parallel_requests_queue_size
-        )
         self.provider_default_deployment_ids: list[str] = []
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
@@ -3637,14 +3632,14 @@ class Router:
 
             logging_obj: Final[LiteLLMLogging | None] = kwargs.get("litellm_logging_obj", None)
 
-            rpm_semaphore: Final = self._get_client(
+            max_parallel_requests_limit: Final = self._get_client(
                 deployment=deployment,
                 kwargs=kwargs,
                 client_type="max_parallel_requests",
             )
             async with contextlib.AsyncExitStack() as deployment_slot:
-                if isinstance(rpm_semaphore, DeploymentSemaphore):
-                    await deployment_slot.enter_async_context(rpm_semaphore)
+                if isinstance(max_parallel_requests_limit, MaxParallelRequestsLimit):
+                    deployment_slot.enter_context(max_parallel_requests_limit)
                 await self.async_routing_strategy_pre_call_checks(
                     deployment=deployment,
                     logging_obj=logging_obj,
@@ -8509,14 +8504,14 @@ class Router:
     ) -> AsyncGenerator[None, None]:
         """Holds the deployment's max_parallel_requests slot, if it has one, around the provider call. Routing
         strategy pre-call checks run inside the slot so their rpm accounting stays concurrency-safe."""
-        rpm_semaphore: Final = self._get_client(
+        max_parallel_requests_limit: Final = self._get_client(
             deployment=deployment,
             kwargs=kwargs,
             client_type="max_parallel_requests",
         )
         async with contextlib.AsyncExitStack() as slot:
-            if isinstance(rpm_semaphore, DeploymentSemaphore):
-                await slot.enter_async_context(rpm_semaphore)
+            if isinstance(max_parallel_requests_limit, MaxParallelRequestsLimit):
+                slot.enter_context(max_parallel_requests_limit)
             await self.async_routing_strategy_pre_call_checks(deployment=deployment, parent_otel_span=parent_otel_span)
             yield
 
@@ -11846,19 +11841,7 @@ class Router:
                 _settings_to_return[var] = self.lowestlatency_logger.routing_args.json()
 
         _settings_to_return["routing_groups"] = [group.model_dump() for group in self._routing_groups.values()]
-        _settings_to_return["default_max_parallel_requests_queue_size"] = self.default_max_parallel_requests_queue_size
         return _settings_to_return
-
-    @property
-    def default_max_parallel_requests_queue_size(self) -> int | None:
-        return self._default_max_parallel_requests_queue_size
-
-    @default_max_parallel_requests_queue_size.setter
-    def default_max_parallel_requests_queue_size(self, queue_size: int | None) -> None:
-        self._default_max_parallel_requests_queue_size = validate_max_parallel_requests_queue_size(queue_size)
-        InitalizeCachedClient.apply_default_max_parallel_requests_queue_size(
-            litellm_router_instance=self, queue_size=self._default_max_parallel_requests_queue_size
-        )
 
     def update_settings(self, **kwargs):
         """
