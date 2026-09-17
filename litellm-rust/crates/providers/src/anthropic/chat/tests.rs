@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use super::*;
-use crate::chat_completions::Error;
+use crate::chat::Error;
 
 fn messages(value: Value) -> Vec<ChatMessage> {
     serde_json::from_value(value).expect("valid messages")

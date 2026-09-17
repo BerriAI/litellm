@@ -1,15 +1,15 @@
 use serde_json::{Map, Value, json};
 
-use crate::chat_completions::Error;
-use crate::chat_completions::conversation::{Conversation, TurnRole, build_conversation};
-use crate::chat_completions::response_utils::{finish_reason_for, unix_now, usage_from_parts};
-use crate::chat_completions::types::{
+use crate::base_llm::chat::transformation::{
+    BaseConfig, ChatCompletionsAuth, Unsupported, unsupported_message, unsupported_param,
+};
+use crate::chat::Error;
+use crate::chat::conversation::{Conversation, TurnRole, build_conversation};
+use crate::chat::response_utils::{finish_reason_for, unix_now, usage_from_parts};
+use crate::chat::types::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
     ChatCompletionsUsage, ChatMessage, ChatMessageContent, ProviderChatRequestData,
     ProviderChatResponseData,
-};
-use crate::llms::base_llm::chat::transformation::{
-    BaseConfig, ChatCompletionsAuth, Unsupported, unsupported_message, unsupported_param,
 };
 use litellm_auth_aws::constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE};
 use litellm_auth_aws::{bedrock_model_id_and_region, resolve_bedrock_region};
