@@ -911,6 +911,17 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         for param, value in non_default_params.items():
+            if param == "reasoning_effort" and isinstance(value, dict):
+                # Accept both the string form ("low") and the dict form
+                # ({"effort": "low", "summary": "concise"}). The Responses->Chat
+                # parser keeps the full dict whenever `summary` is set, so a dict
+                # is the standard shape Responses-bridge callers send. Every
+                # `reasoning_effort` branch below gates on `isinstance(value, str)`,
+                # so without this the dict matches nothing and is dropped silently.
+                # Same shape-tolerance the direct Anthropic chat path already does.
+                effort_value = value.get("effort")
+                if isinstance(effort_value, str):
+                    value = effort_value
             if param == "response_format" and isinstance(value, dict):
                 optional_params = self._translate_response_format_param(
                     value=value,
