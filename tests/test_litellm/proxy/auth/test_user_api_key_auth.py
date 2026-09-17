@@ -8612,6 +8612,7 @@ async def test_websocket_auth_without_master_key_accepts_a_keyless_client(header
     "headers",
     [
         pytest.param({"authorization": "Bearer sk-master-key"}, id="bearer token"),
+        pytest.param({"authorization": "Bearer  sk-master-key"}, id="bearer token with extra space"),
         pytest.param({"api-key": "sk-master-key"}, id="api-key header"),
         pytest.param(
             {"sec-websocket-protocol": "realtime, openai-insecure-api-key.sk-master-key"},
