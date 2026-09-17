@@ -124,8 +124,7 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
-        "cli_determinism: drives the real claude CLI for several seconds, which widens the window in which "
-        "another test's in-flight upstream call is attributed to it; deselected unless E2E_CLI_DETERMINISM is set",
+        "cli_determinism: drives the real claude CLI for several seconds; deselected unless E2E_CLI_DETERMINISM is set",
     )
     config.addinivalue_line(
         "markers",

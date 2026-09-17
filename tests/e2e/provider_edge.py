@@ -88,13 +88,21 @@ from fixture_canonical import (
 )
 from fixture_mode import (
     FIXTURE_MODES,
+    SESSION_TEST_KEY,
     InvalidFixtureMode,
     ReplayMiss,
     current_test_key,
     parse_fixture_mode,
 )
 from fixture_profile import IneligibleRequest, MatchProfile, match_profile, strict_identity
-from provider_cache import SIGNATURE_HEADERS, CacheEdge, MountPolicy, is_bedrock
+from provider_cache import (
+    SIGNATURE_HEADERS,
+    CacheEdge,
+    MountPolicy,
+    is_bedrock,
+    scoped_edge_base,
+    split_test_segment,
+)
 from provider_cache_routing import LIVE_PROVIDER_REQUIRED
 from pydantic import JsonValue, TypeAdapter
 
@@ -778,14 +786,14 @@ def _handle_record(
 
 def _handle_live(
     method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float,
-    cache: CacheEdge | None = None, mount: str = "",
+    cache: CacheEdge | None = None, mount: str = "", test_key: str | None = None,
 ) -> EdgeOutcome:
     forwarded: Final = {
         name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
     }
     head: Final = (
         forward_stream(method, url, headers=forwarded, body=body, timeout=timeout)
-        if cache is None else cache.forward(mount, method, url, forwarded, body, timeout)
+        if cache is None else cache.forward(mount, method, url, forwarded, body, timeout, test_key=test_key)
     )
     match head:
         case NetworkError(message=message):
@@ -826,7 +834,7 @@ def handle_edge_request(
         return _text_reply(404, f"unknown provider mount {unknown!r}; known mounts: {', '.join(sorted(mounts))}")
     mount: Final = resolved.mount
     upstream_base: Final = resolved.upstream_base
-    upstream_path: Final = resolved.upstream_path
+    test_key, upstream_path = split_test_segment(resolved.upstream_path)
     profile: Final = (
         backend.recorder.profile
         if isinstance(backend, RecordEdge)
@@ -858,7 +866,7 @@ def handle_edge_request(
         case CacheEdge():
             return _handle_live(
                 method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
-                backend, mount,
+                backend, mount, test_key,
             )
         case LiveEdge():
             return _handle_live(
@@ -1093,19 +1101,25 @@ def provider_edge_api_base(
     bundle_dir: Path,
     bind_host: str,
     advertise_host: str,
+    test_key: str,
     forward_timeout: float = 60.0,
 ) -> str | None:
     """The api_base a suite gives an edge-wired deployment: None in live mode
     (the deployment keeps its real provider api_base) and the process-wide edge
-    server's mount URL in record and replay, booting the server on first use."""
+    server's mount URL in record and replay, booting the server on first use.
+    With the shared cache configured, live mode answers with the cache edge's
+    mount URL scoped to ``test_key``, the test registering the deployment, and
+    None outside any test, since a call nobody can attribute is never cached."""
     mode: Final = parse_fixture_mode(mode_raw)
     match mode:
         case InvalidFixtureMode(value=value):
             raise ValueError(f"E2E_FIXTURE_MODE={value!r} is not one of {', '.join(FIXTURE_MODES)}")
         case "live":
-            if configured_cache_backend() is not None:
-                return _shared_cache_edge(bind_host, advertise_host, forward_timeout).api_base(mount)
-            return None
+            if configured_cache_backend() is None or test_key == SESSION_TEST_KEY:
+                return None
+            return scoped_edge_base(
+                _shared_cache_edge(bind_host, advertise_host, forward_timeout).api_base(mount), test_key
+            )
         case "record" | "replay":
             if is_bedrock(mount):
                 return None
