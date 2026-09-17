@@ -6423,6 +6423,7 @@ class TestAzureSpeechRawBodyThroughRealAuth:
     ) -> httpx.Response:
         from litellm.proxy.proxy_server import app
 
+        monkeypatch.delitem(app.dependency_overrides, user_api_key_auth, raising=False)
         monkeypatch.setenv("AZURE_SPEECH_API_KEY", "server-subscription-key")
         monkeypatch.setenv("AZURE_SPEECH_REGION", "eastus")
         monkeypatch.delenv("AZURE_SPEECH_API_BASE", raising=False)
