@@ -487,7 +487,12 @@ def _run_teardowns(state: _LangfuseLifecycleState, clients: tuple[Langfuse, ...]
 
 
 def _evict_if_stale_locked(
-    *, public_key: object, secret_key: object, base_url: object
+    *,
+    public_key: object,
+    secret_key: object,
+    base_url: object,
+    mock_mode: bool | None = None,
+    sample_rate: float | None = None,
 ) -> LangfuseResourceManager | None:
     """Assumes ``LangfuseResourceManager._lock`` is held; returns the still-valid bundle, evicting a stale one."""
     if not public_key:
@@ -495,7 +500,16 @@ def _evict_if_stale_locked(
     cached: Final = LangfuseResourceManager._instances.get(public_key)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
     if cached is None:
         return None
-    if getattr(cached, "secret_key", None) == secret_key and getattr(cached, "base_url", None) == base_url:
+    same_exporter_kind: Final = mock_mode is None or (
+        isinstance(getattr(cached, "span_exporter", None), DiscardingSpanExporter) == mock_mode
+    )
+    same_sample_rate: Final = sample_rate is None or getattr(cached, "sample_rate", None) == sample_rate
+    if (
+        getattr(cached, "secret_key", None) == secret_key
+        and getattr(cached, "base_url", None) == base_url
+        and same_exporter_kind
+        and same_sample_rate
+    ):
         return cached
     LangfuseResourceManager._instances.pop(public_key, None)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
     return None
@@ -611,6 +625,8 @@ def acquire_langfuse_client(
             public_key=public_key,
             secret_key=parameters.get("secret_key"),
             base_url=parameters.get("base_url"),
+            mock_mode=mock_mode,
+            sample_rate=sample_rate,
         )
         client: Final = Langfuse(
             **parameters,  # pyright: ignore[reportArgumentType]  # kwargs-ok: dict mirrors the typed ctor, values resolved by the callers

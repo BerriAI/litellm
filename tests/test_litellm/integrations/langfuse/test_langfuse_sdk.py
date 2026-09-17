@@ -1230,3 +1230,38 @@ def test_second_client_on_the_same_key_does_not_build_another_provider():
         assert len(_litellm_built_providers) == providers_after_first
     finally:
         LangfuseResourceManager._instances.pop(pk, None)
+
+
+def test_leaving_mock_mode_on_the_same_key_stops_using_the_discarding_exporter():
+    from litellm.integrations.langfuse.langfuse_sdk import DiscardingSpanExporter
+
+    pk = "pk-mock-to-live-test"
+    LangfuseResourceManager._instances.pop(pk, None)
+    parameters = {"public_key": pk, "secret_key": "sk-live", "base_url": "http://127.0.0.1:1"}
+    try:
+        mocked = acquire_langfuse_client(parameters=parameters, environment=None, release=None, mock_mode=True)
+        assert isinstance(mocked._resources.span_exporter, DiscardingSpanExporter)
+
+        live = acquire_langfuse_client(parameters=parameters, environment=None, release=None, mock_mode=False)
+        assert live._resources is not mocked._resources
+        assert not isinstance(live._resources.span_exporter, DiscardingSpanExporter)
+        assert LangfuseResourceManager._instances.get(pk) is live._resources
+    finally:
+        LangfuseResourceManager._instances.pop(pk, None)
+
+
+def test_a_changed_sample_rate_on_the_same_key_rebuilds_the_bundle(monkeypatch: pytest.MonkeyPatch):
+    pk = "pk-resample-test"
+    LangfuseResourceManager._instances.pop(pk, None)
+    parameters = {"public_key": pk, "secret_key": "sk-resample", "base_url": "http://127.0.0.1:1"}
+    try:
+        monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", "0.25")
+        quarter = acquire_langfuse_client(parameters=parameters, environment=None, release=None, mock_mode=True)
+        monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", "1")
+        full = acquire_langfuse_client(parameters=parameters, environment=None, release=None, mock_mode=True)
+
+        assert quarter._resources.sample_rate == 0.25
+        assert full._resources is not quarter._resources
+        assert full._resources.sample_rate == 1.0
+    finally:
+        LangfuseResourceManager._instances.pop(pk, None)
