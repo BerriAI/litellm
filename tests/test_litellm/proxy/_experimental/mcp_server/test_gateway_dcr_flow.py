@@ -2324,13 +2324,16 @@ async def test_token_exchange_refuses_a_malformed_request_before_touching_the_id
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", ["unsupported_grant_type", "invalid_request"])
-async def test_token_exchange_relays_the_idp_refusal_and_never_mints(error):
+@pytest.mark.parametrize(
+    "error, status",
+    [("unsupported_grant_type", 400), ("invalid_request", 400), ("temporarily_unavailable", 503)],
+)
+async def test_token_exchange_relays_the_idp_refusal_and_never_mints(error, status):
     client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
     minter = _Minter()
     exchanger = _Exchanger(SubjectTokenRefusal(error=error, description="subject_token was rejected: bad signature"))
     response = await _exchange_native(client_id, minter, exchanger)
-    assert response.status_code == 400
+    assert response.status_code == status
     body = json.loads(response.body)
     assert (body["error"], body["error_description"]) == (error, "subject_token was rejected: bad signature")
     assert minter.calls == []

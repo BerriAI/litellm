@@ -15,9 +15,13 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import SubjectIdentity, SubjectTokenRefusal
 from litellm.proxy._types import JWTAuthBuilderResult, ProxyException
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
 EXCHANGE_ROUTE: Final = "/token"
 REJECTED_SUBJECT_TOKEN: Final = "subject_token was rejected by the gateway's JWT auth"
+SUBJECT_TOKEN_CHECK_UNAVAILABLE: Final = (
+    "the gateway could not verify subject_token because its identity provider or database is unavailable; retry"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,9 +145,12 @@ async def identity_from_subject_token(
 ) -> SubjectIdentity | SubjectTokenRefusal:
     """Apply the same gates ``user_api_key_auth`` applies to a JWT bearer, then let the
     proxy's JWT auth prove the token. A rejection comes back as ``invalid_request``, which
-    RFC 8693 section 2.2.2 prescribes for an invalid or unacceptable subject token. The
-    reason stays in the proxy log: this endpoint is public and JWT auth's own wording can
-    name the JWKS URL it fetched or quote the IdP's response."""
+    RFC 8693 section 2.2.2 prescribes for an invalid or unacceptable subject token, and a
+    check the gateway could not complete (the IdP's JWKS unreachable with no cached copy,
+    the auth database down) as ``temporarily_unavailable``, so the client retries instead
+    of treating a valid token as bad. The reason stays in the proxy log: this endpoint is
+    public and JWT auth's own wording can name the JWKS URL it fetched or quote the IdP's
+    response."""
     unmet: Final = prerequisites.refusal()
     if unmet is not None:
         return unmet
@@ -152,17 +159,39 @@ async def identity_from_subject_token(
     try:
         result: Final = await authorize(subject_token, request_headers)
     except HTTPException as denied:
-        return _rejected_by_jwt_auth(denied.detail)
+        return _refusal_for(denied, denied.detail)
     except ProxyException as denied:
-        return _rejected_by_jwt_auth(denied.message)
+        return _refusal_for(denied, denied.message)
     except Exception as denied:  # noqa: BLE001  # auth_jwt raises a plain Exception on signature and claim failures
-        return _rejected_by_jwt_auth(denied)
+        return _refusal_for(denied, denied)
     user_id: Final = result["user_id"]
     if user_id is None:
         return SubjectTokenRefusal(error="invalid_request", description="subject_token names no user the gateway knows")
     return SubjectIdentity(user_id=user_id, team_id=result["team_id"])
 
 
-def _rejected_by_jwt_auth(reason: object) -> SubjectTokenRefusal:
+def _refusal_for(denied: Exception, reason: object) -> SubjectTokenRefusal:
+    if _gateway_could_not_verify(denied):
+        verbose_proxy_logger.error("token exchange could not verify a subject_token, retryable: %s", reason)
+        return SubjectTokenRefusal(error="temporarily_unavailable", description=SUBJECT_TOKEN_CHECK_UNAVAILABLE)
     verbose_proxy_logger.warning("token exchange refused a subject_token: %s", reason)
     return SubjectTokenRefusal(error="invalid_request", description=REJECTED_SUBJECT_TOKEN)
+
+
+def _gateway_could_not_verify(denied: Exception) -> bool:
+    """A 5xx from JWT auth (the IdP's JWKS unreachable with no cached copy) or a database
+    outage anywhere in the chain (``get_user_object`` wraps prisma failures in a bare
+    ``ValueError``) is the gateway failing, not the token."""
+    if _is_server_error(denied):
+        return True
+    return PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(denied) is not None
+
+
+def _is_server_error(denied: Exception) -> bool:
+    match denied:
+        case HTTPException(status_code=status_code):
+            return status_code >= 500
+        case ProxyException(code=code):
+            return code.isdigit() and int(code) >= 500
+        case _:
+            return False
