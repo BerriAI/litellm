@@ -23,7 +23,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
     to_subject,
     validate_static_credential,
 )
-from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
@@ -57,6 +57,22 @@ def test_static_credential_preserves_supported_api_key_and_raw_headers(
 ) -> None:
     result: Final = validate_static_credential(auth_type, {header: value}, upstream_token_header=header)
     assert isinstance(result, Ok)
+
+
+@pytest.mark.parametrize("auth_type,headers,static_header_names,expected", [
+    (MCPAuth.api_key, {"apikey": "static-key"}, ("apikey",), Ok),
+    (MCPAuth.api_key, {"apikey": "static-key", "X-API-Key": ""}, ("apikey",), Ok),
+    (MCPAuth.api_key, {"apikey": ""}, ("apikey",), Error),
+    (MCPAuth.api_key, {"apikey": "static-key"}, (), Error),
+    (MCPAuth.api_key, {"apikey": "static-key"}, ("X-Tenant",), Error),
+    (MCPAuth.bearer_token, {"apikey": "static-key"}, ("apikey",), Error),
+    (MCPAuth.token, {"apikey": "static-key"}, ("apikey",), Error),
+])
+def test_static_credential_counts_api_key_static_headers_only(
+    auth_type: MCPAuthType, headers: dict[str, str], static_header_names: tuple[str, ...], expected: type,
+) -> None:
+    result: Final = validate_static_credential(auth_type, headers, static_header_names=static_header_names)
+    assert isinstance(result, expected)
 
 
 def _server(**kwargs) -> MCPServer:
