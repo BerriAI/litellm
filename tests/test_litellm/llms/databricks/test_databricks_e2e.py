@@ -72,11 +72,6 @@ pytestmark = pytest.mark.skip(
     "python tests/test_litellm/llms/databricks/test_databricks_e2e.py"
 )
 
-# Add the litellm package to path
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-)
-
 # Config file path - can be overridden with DATABRICKS_TEST_CONFIG env var
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.databricks_litellm_config.txt")
 CONFIG_FILE = os.environ.get("DATABRICKS_TEST_CONFIG", DEFAULT_CONFIG_PATH)

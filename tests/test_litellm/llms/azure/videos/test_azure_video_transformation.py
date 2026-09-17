@@ -1,21 +1,9 @@
-import json
-import os
-import sys
-from typing import Any, Dict, Optional
-from unittest.mock import MagicMock, patch, Mock, mock_open
+from unittest.mock import MagicMock, patch, mock_open
 import pytest
-import httpx
 
-# Add the parent directory to the system path
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
-)
-
-import litellm
 from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.types.videos.main import (
     VideoObject,
-    VideoResponse,
     VideoCreateOptionalRequestParams,
 )
 from litellm.types.router import GenericLiteLLMParams

@@ -8,13 +8,6 @@ C. Empty text content
 """
 
 import pytest
-import sys
-import os
-
-# Add the parent directory to the path so we can import litellm
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-)
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
