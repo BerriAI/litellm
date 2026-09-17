@@ -6315,6 +6315,28 @@ class TestAccessGroupModelSync:
             assert 'WHERE $1 = ANY("models") AND NOT ($2 = ANY("models"))' in update_call.args[0]
             assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
 
+    @pytest.mark.asyncio
+    async def test_unchanged_name_never_touches_allowlists(self):
+        from litellm.proxy.management_helpers.model_allowlist_rename_sync import (
+            sync_model_allowlists_for_renamed_model,
+        )
+
+        mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=0)
+        evict = AsyncMock()
+
+        with patch(self._EVICT, new=evict):
+            await sync_model_allowlists_for_renamed_model(
+                prisma_client=mock_prisma,
+                model_id="m-rename",
+                old_name="gpt-5.6",
+                new_name="gpt-5.6",
+                llm_router=None,
+                user_api_key_cache=MagicMock(),
+            )
+
+        assert self._allowlist_updates(mock_prisma) == {}
+        evict.assert_not_awaited()
+
 
 class TestTeamMemberAutoRouterWrites:
     @pytest.fixture(autouse=True)
