@@ -372,10 +372,9 @@ class LLMCallSpanData:
     tools: tuple[ToolDefinition, ...] = ()
     # Raw messages and response, needed by vendor mappers (OpenInference,
     # Langfuse, Weave) that stamp message-level attributes. ``messages_in`` is
-    # the request payload; ``choices_out`` mirrors chat choices from the
-    # StandardLoggingPayload, including normalized Responses API output items.
-    # Both are tuples of immutable mappings so the dataclass stays hashable and
-    # frozen.
+    # the request payload; ``choices_out`` mirrors ``response.choices`` from
+    # the StandardLoggingPayload. Both are tuples of immutable mappings so the
+    # dataclass stays hashable and frozen.
     messages_in: tuple[Mapping[str, object], ...] = ()
     choices_out: tuple[Mapping[str, object], ...] = ()
     system_fingerprint: str | None = None
@@ -402,18 +401,11 @@ class LLMCallSpanData:
         # model split, the response model, api base, and identity all come from
         # here rather than being re-derived from the raw payload dicts.
         context: Final = RequestContext.from_standard_logging_payload(payload)
-        # Normalize ``response`` to a mapping once so the content/id reads below
-        # are plain ``.get`` calls — no repeated type guards.
         raw_response: Final[object] = payload.get("response")
         response: Final = _as_mapping(raw_response) or {}
         regular_choices: Final = _dicts(response.get("choices"))
         responses_choices: Final = _responses_choices(response.get("output"))
         choices_out: Final = regular_choices or responses_choices
-        # ``finish_reasons`` is metadata, not content, so derive it from
-        # ``choices_out`` before gating. The raw message/choice bodies are only
-        # retained when content capture is enabled (see ``capture_span_content``);
-        # otherwise the content-bearing mappers receive empty sequences and emit
-        # no prompt/response text.
         finish_reasons: Final = (
             _finish_reasons(regular_choices)
             if regular_choices
@@ -699,55 +691,65 @@ def _responses_choices(output: object) -> tuple[Mapping[str, object], ...]:
     if not isinstance(output, list):
         return ()
 
-    choices: list[Mapping[str, object]] = []
-    tool_calls: list[Mapping[str, object]] = []
-    for raw_item in cast(list[object], output):
-        item = _as_mapping(raw_item)
-        if item is None:
-            continue
-        item_type = as_str(item.get("type"))
-        if item_type == "message":
-            content_parts = item.get("content")
-            if not isinstance(content_parts, list):
-                continue
-            text_parts: list[str] = []
-            for raw_content in cast(list[object], content_parts):
-                content = _as_mapping(raw_content)
-                if content is None or content.get("type") != "output_text":
-                    continue
-                text = as_str(content.get("text"))
-                if text:
-                    text_parts.append(text)
-            choices.append(
-                {
-                    "message": {
-                        "role": as_str(item.get("role")) or "assistant",
-                        "content": "".join(text_parts),
-                    }
-                }
-            )
-        elif item_type in ("function_call", "custom_tool_call"):
-            arguments = item.get("input") if item_type == "custom_tool_call" else item.get("arguments")
-            tool_calls.append(
-                {
-                    "id": as_str(item.get("call_id")) or as_str(item.get("id")) or "",
-                    "type": "function",
-                    "function": {
-                        "name": as_str(item.get("name")) or ("custom_tool" if item_type == "custom_tool_call" else ""),
-                        "arguments": as_str(arguments) or "",
-                    },
-                }
-            )
-    if tool_calls:
-        choices.append(
+    response_items: Final = tuple(
+        item for raw_item in cast(list[object], output) if (item := _as_mapping(raw_item)) is not None
+    )
+    message_choices: Final = tuple(
+        choice
+        for item in response_items
+        if as_str(item.get("type")) == "message"
+        if (choice := _responses_message_choice(item)) is not None
+    )
+    tool_calls: Final = tuple(
+        _responses_tool_call(item)
+        for item in response_items
+        if as_str(item.get("type")) in ("function_call", "custom_tool_call")
+    )
+    tool_choices: Final = (
+        (
             {
                 "message": {
                     "role": "assistant",
-                    "tool_calls": tool_calls,
+                    "tool_calls": list(tool_calls),
                 }
-            }
+            },
         )
-    return tuple(choices)
+        if tool_calls
+        else ()
+    )
+    return message_choices + tool_choices
+
+
+def _responses_message_choice(item: Mapping[str, object]) -> Mapping[str, object] | None:
+    content_parts: Final[object] = item.get("content")
+    if not isinstance(content_parts, list):
+        return None
+    content: Final[str] = "".join(
+        text
+        for raw_content in cast(list[object], content_parts)
+        if (content_item := _as_mapping(raw_content)) is not None and content_item.get("type") == "output_text"
+        if (text := as_str(content_item.get("text"))) is not None
+    )
+    return {
+        "message": {
+            "role": as_str(item.get("role")) or "assistant",
+            "content": content,
+        }
+    }
+
+
+def _responses_tool_call(item: Mapping[str, object]) -> Mapping[str, object]:
+    item_type: Final = as_str(item.get("type"))
+    arguments: Final[object] = item.get("input") if item_type == "custom_tool_call" else item.get("arguments")
+    name: Final[str] = as_str(item.get("name")) or ("custom_tool" if item_type == "custom_tool_call" else "")
+    return {
+        "id": as_str(item.get("call_id")) or as_str(item.get("id")) or "",
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": as_str(arguments) or "",
+        },
+    }
 
 
 def _responses_finish_reasons(
