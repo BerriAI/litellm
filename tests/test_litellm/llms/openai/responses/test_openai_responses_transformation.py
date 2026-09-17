@@ -328,8 +328,7 @@ class TestOpenAIResponsesAPIConfig:
             "required": ["city"],
         }
 
-    def test_transform_decodes_json_string_tool_parameters_on_compact_request(self):
-        """The compact request path builds the same wire body, so it must decode too."""
+    def test_transform_compact_omits_json_string_tool_parameters(self):
         _url, data = self.config.transform_compact_response_api_request(
             model=self.model,
             input="weather in Paris",
@@ -341,7 +340,7 @@ class TestOpenAIResponsesAPIConfig:
             headers={},
         )
 
-        assert data["tools"][0]["parameters"] == {"type": "object"}
+        assert "tools" not in data
 
     @pytest.mark.parametrize("raw_parameters", ['"just a string"', "not json at all", "[1, 2, 3]", 42])
     def test_transform_rejects_tool_parameters_that_are_not_an_object(self, raw_parameters: object):
@@ -386,13 +385,12 @@ class TestOpenAIResponsesAPIConfig:
         assert "parameters" not in result["tools"][2]
         assert result["tools"][3] == {"type": "web_search_preview"}
 
-    def test_transform_compact_drops_foreign_tool_call_item_ids(self):
-        """The compact request path replays input the same way, so it must
-        apply the same id drop."""
+    @pytest.mark.parametrize("item_id, retained", [("toolu_01Foreign", False), ("fc_native", True)])
+    def test_transform_compact_sanitizes_tool_call_item_ids(self, item_id: str, retained: bool) -> None:
         replayed_input = [
             {
                 "type": "function_call",
-                "id": "toolu_01Foreign",
+                "id": item_id,
                 "call_id": "toolu_01Foreign",
                 "name": "get_weather",
                 "arguments": "{}",
@@ -408,7 +406,9 @@ class TestOpenAIResponsesAPIConfig:
             headers={},
         )
 
-        assert "id" not in data["input"][0]
+        assert ("id" in data["input"][0]) is retained
+        if retained:
+            assert data["input"][0]["id"] == item_id
         assert data["input"][0]["call_id"] == "toolu_01Foreign"
 
     def test_transform_streaming_response(self):
@@ -1915,7 +1915,7 @@ class TestFlattenToolSchemaCombinatorsWiring:
         assert set(nested_parameters["properties"]) == {"id", "enabled", "schedule"}
         assert json.loads(json.dumps(result["tools"])) == result["tools"]
 
-    def test_openai_compact_request_flattens_top_level_anyof(self):
+    def test_openai_compact_request_omits_anyof_tools(self):
         _, data = OpenAIResponsesAPIConfig().transform_compact_response_api_request(
             model="gpt-4o",
             input="hi",
@@ -1925,7 +1925,7 @@ class TestFlattenToolSchemaCombinatorsWiring:
             headers={},
         )
 
-        assert "anyOf" not in data["tools"][0]["parameters"]
+        assert "tools" not in data
 
     def test_openai_leaves_tools_without_rejected_keys_alone(self):
         clean_tool = {
@@ -2077,7 +2077,7 @@ class TestToolSchemaRegexPatternWiring:
 
         assert result["tools"][0]["tools"][0]["parameters"]["properties"]["field"] == {"type": "string"}
 
-    def test_openai_compact_request_drops_patterns(self):
+    def test_openai_compact_request_omits_pattern_tools(self):
         _, data = OpenAIResponsesAPIConfig().transform_compact_response_api_request(
             model="gpt-5.6",
             input="hi",
@@ -2087,7 +2087,7 @@ class TestToolSchemaRegexPatternWiring:
             headers={},
         )
 
-        assert data["tools"][0]["parameters"]["properties"]["field"] == {"type": "string"}
+        assert "tools" not in data
 
     def test_non_openai_subclass_keeps_patterns(self):
         from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
@@ -2208,3 +2208,34 @@ class TestReasoningFollowsModelSupport:
             drop_params=True,
         )
         assert mapped["reasoning"] == {"effort": "medium"}
+
+
+def test_native_compact_request_allowlist_preserves_input_and_caller_params() -> None:
+    from copy import deepcopy
+    from openai.types.responses import ResponseInputParam
+
+    model: Final = "native-compact-test"
+    native_input: Final[ResponseInputParam] = [
+        {"id": "cmp_test", "type": "compaction", "encrypted_content": "opaque"},
+        {"role": "user", "content": "latest question"},
+    ]
+    allowed: Final = {
+        "instructions": "keep these rules", "previous_response_id": "resp_previous",
+        "prompt_cache_key": "cache-prefix", "prompt_cache_retention": "24h",
+    }
+    params: Final[dict[str, object]] = {
+        **allowed, "metadata": {"trace": "caller-owned"}, "stream": True,
+        "tools": [{"type": "function", "name": "lookup", "parameters": '{"type":"object"}'}],
+        "reasoning": {"effort": "medium"}, "max_output_tokens": 128,
+    }
+    original: Final = deepcopy((native_input, params))
+    _, data = OpenAIResponsesAPIConfig().transform_compact_response_api_request(
+        model=model,
+        input=native_input,
+        response_api_optional_request_params=params,
+        api_base="https://api.openai.com/v1/responses",
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert data == {"model": model, "input": original[0], **allowed}
+    assert (native_input, params) == original

@@ -10,7 +10,7 @@ import time
 from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Final, List, Optional
 
 import pytest
 from fastapi import HTTPException
@@ -27,6 +27,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _request_stash,
     get_or_create_request_stash,
     get_request_stash,
+    isolated_summary_request_stash,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
@@ -6066,6 +6067,104 @@ def test_internal_call_origin_success_ops_are_skipped():
 
     assert charged
     assert skipped == []
+    summary = handler._build_success_event_pipeline_operations(
+        kwargs=_kwargs({INTERNAL_CALL_ORIGIN_METADATA_KEY: "context_compaction"}),
+        response_obj=response,
+        rate_limit_type="output",
+    )
+    assert summary == charged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parent_owner", ["parent", "unrelated", None])
+async def test_summary_borrows_only_live_direct_parent_and_preserves_rpm(parent_owner):
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(InternalUsageCache(cache))
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-summary"), max_parallel_requests=1, rpm_limit=2)
+    parent_data = {"model": "target", "litellm_call_id": "parent"}
+    await handler.async_pre_call_hook(auth, cache, parent_data, "acompletion")
+    parent = get_request_stash()
+    acquisition = parent.parallel_slot
+    counter_key = acquisition["counter_keys"][0]
+    child_data = {"model": "summary", "litellm_call_id": "child"}
+    async with isolated_summary_request_stash(parent, parent_owner, "child") as child:
+        assert child is not parent
+        if parent_owner == "parent":
+            await handler.async_pre_call_hook(auth, cache, child_data, "acompletion")
+            assert child.parallel_slot is None
+            await handler.async_post_call_success_hook(child_data, auth, ModelResponse())
+            with pytest.raises(HTTPException):
+                async with isolated_summary_request_stash(child, "child", "grandchild"):
+                    await handler.async_pre_call_hook(
+                        auth, cache, {"model": "summary", "litellm_call_id": "grandchild"}, "acompletion"
+                    )
+        else:
+            with pytest.raises(HTTPException):
+                await handler.async_pre_call_hook(auth, cache, child_data, "acompletion")
+        assert parent.parallel_slot is acquisition
+        assert handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=counter_key)) == 1
+    assert get_request_stash() is parent
+    await handler.async_post_call_success_hook(parent_data, auth, ModelResponse())
+    assert handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=counter_key)) == 0
+    with pytest.raises(HTTPException):
+        await handler.async_pre_call_hook(auth, cache, {"model": "summary"}, "acompletion")
+
+
+@pytest.mark.asyncio
+async def test_summary_lifetime_keeps_parent_release_locked():
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(InternalUsageCache(cache))
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-summary-lock"), max_parallel_requests=1)
+    data = {"model": "target", "litellm_call_id": "parent"}
+    await handler.async_pre_call_hook(auth, cache, data, "acompletion")
+    parent = get_request_stash()
+    async with isolated_summary_request_stash(parent, "parent", "child"):
+        release = asyncio.create_task(handler._release_stashed_parallel_slot(parent, None))
+        await asyncio.sleep(0)
+        assert not release.done()
+        assert parent.parallel_slot is not None
+    await release
+    assert parent.parallel_slot is None
+
+
+def test_summary_gauge_exclusion_retains_new_model_gauge_and_windowed_limits():
+    handler = _PROXY_MaxParallelRequestsHandler(InternalUsageCache(DualCache()))
+    descriptors = (
+        {"key": "api_key", "value": "caller", "rate_limit": {
+            "max_parallel_requests": 1, "requests_per_unit": 5, "tokens_per_unit": 100,
+        }},
+        {"key": "model_per_key", "value": "summary:caller", "rate_limit": {"max_parallel_requests": 1}},
+    )
+    all_keys, all_metadata, all_gauges = handler._collect_windowed_keys_and_gauges(descriptors, False)
+    keys, metadata, gauges = handler._collect_windowed_keys_and_gauges(
+        descriptors, False, frozenset({all_gauges[0]["counter_key"]})
+    )
+    assert keys == all_keys
+    assert metadata == all_metadata
+    assert gauges == [all_gauges[1]]
+
+
+@pytest.mark.asyncio
+async def test_summary_origin_reconciles_actual_key_and_team_tpm():
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(InternalUsageCache(cache))
+    key = hash_token("sk-summary-accounting")
+    stash = get_or_create_request_stash()
+    stash.owner_litellm_call_id = "summary-child"
+    stash.reserved_tokens = 40
+    stash.reserved_scopes = frozenset({("api_key", key), ("team", "team")})
+    for scope, value in stash.reserved_scopes:
+        await cache.async_set_cache(handler.create_rate_limit_keys(scope, value, "tokens"), 40, ttl=60)
+    response = ModelResponse(usage=Usage(prompt_tokens=7, completion_tokens=5, total_tokens=12))
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_call_id": "summary-child", "model": "summary",
+            "standard_logging_object": {"metadata": {"user_api_key_hash": key, "user_api_key_team_id": "team"}},
+            "litellm_params": {"metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: "context_compaction"}},
+        }, response_obj=response, start_time=None, end_time=None,
+    )
+    for scope, value in stash.reserved_scopes:
+        assert await cache.async_get_cache(handler.create_rate_limit_keys(scope, value, "tokens")) == 12
 
 
 def _conflicting_budget_bodies() -> Dict[str, Dict[str, object]]:
@@ -6607,6 +6706,58 @@ class _DelayedCapacityUsageCache:
         else:
             self.releasing.set()
             await self.finish_release.wait()
+
+
+@pytest.mark.asyncio
+async def test_summary_admission_cancellation_releases_only_child_slots_despite_repeated_cancel():
+    cache: Final = _DelayedCapacityUsageCache()
+    parent_handler: Final = _PROXY_MaxParallelRequestsHandler(cache.delegate)
+    child_handler: Final = _PROXY_MaxParallelRequestsHandler(cache)
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-summary-cancel-admission"), max_parallel_requests=1)
+    parent_data: Final = {"model": "target", "litellm_call_id": "parent"}
+    await parent_handler.async_pre_call_hook(auth, cache.dual_cache, parent_data, "acompletion")
+    parent: Final = get_request_stash()
+    assert parent is not None and parent.parallel_slot is not None
+    parent_acquisition: Final = parent.parallel_slot
+    parent_key: Final = parent_acquisition["counter_keys"][0]
+    child_key: Final = child_handler.create_rate_limit_keys("model_per_key", "summary:caller", "max_parallel_requests")
+    descriptors: Final = (
+        {"key": "api_key", "value": auth.api_key, "rate_limit": {"max_parallel_requests": 1}},
+        {"key": "model_per_key", "value": "summary:caller", "rate_limit": {"max_parallel_requests": 1}},
+    )
+
+    async def admit_child() -> None:
+        async with isolated_summary_request_stash(parent, "parent", "child"):
+            await child_handler._admit_request_capacity(
+                descriptors, auth, "child-slot", (child_key,), frozenset(parent_acquisition["counter_keys"])
+            )
+            pytest.fail("cancelled summary admission entered provider body")
+
+    task: Final = asyncio.create_task(admit_child())
+    try:
+        await asyncio.wait_for(cache.acquired.wait(), timeout=2)
+        task.cancel()
+        await asyncio.sleep(0)
+        cache.finish_admission.set()
+        await asyncio.wait_for(cache.releasing.wait(), timeout=2)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        cache.finish_release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+        assert get_request_stash() is parent
+        assert parent.parallel_slot is parent_acquisition
+        assert parent_handler._gauge_in_flight_from_cache_value(await cache.dual_cache.async_get_cache(parent_key)) == 1
+        assert child_handler._gauge_in_flight_from_cache_value(await cache.dual_cache.async_get_cache(child_key)) == 0
+    finally:
+        cache.finish_admission.set()
+        cache.finish_release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await parent_handler.async_post_call_success_hook(parent_data, auth, ModelResponse())
 
 
 @pytest.mark.asyncio

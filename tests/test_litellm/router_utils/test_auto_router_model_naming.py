@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from typing import Final
 
 import pytest
 
@@ -262,6 +263,39 @@ def test_strategy_router_dependencies(litellm_params, expected):
     assert tuple((d.model_name, d.role) for d in found) == expected
 
 
+@pytest.mark.parametrize("classifier_type", ["heuristic", "llm"])
+@pytest.mark.parametrize("escalation_enabled", [False, True])
+@pytest.mark.parametrize("compaction_model", [None, "summary-model", "tier-model"])
+def test_compaction_dependency_is_independent_of_classification_and_escalation(
+    classifier_type: str, escalation_enabled: bool, compaction_model: str | None
+) -> None:
+    found: Final = strategy_router_dependencies(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "tiers": {"SIMPLE": "tier-model"},
+                "classifier_type": classifier_type,
+                "classifier_llm_config": {"model": "classifier-model"},
+                "enable_context_window_escalation": escalation_enabled,
+                "context_window_compaction_model": compaction_model,
+            },
+        }
+    )
+    assert tuple(dependency.model_name for dependency in found if dependency.role == "compaction") == (
+        (compaction_model,) if compaction_model else ()
+    )
+    assert tuple(dependency.model_name for dependency in found if dependency.role == "tier") == ("tier-model",)
+
+
+@pytest.mark.parametrize("value", ["", " ", "\t\n", 17, {"model": "summary-model"}])
+def test_config_write_rejects_invalid_compaction_model(value: object) -> None:
+    violation: Final = validate_complexity_router_config_write(
+        complexity_router_config={"tiers": {"SIMPLE": "tier-model"}, "context_window_compaction_model": value}
+    )
+    assert violation is not None
+    assert "context_window_compaction_model" in violation
+
+
 def test_complexity_default_model_param_wins_over_the_config_field():
     """ComplexityRouter overwrites config.default_model with the litellm_params one, so the
     config field is dead whenever the param is set and must not be able to red the router."""
@@ -333,6 +367,7 @@ def test_complexity_embedding_model_is_a_dependency_only_when_semantic_matching_
         ("tier_boundaries",),
         ("token_thresholds", "dimension_weights"),
         ("reasoning_override_min_score",),
+        ("context_window_compaction_model",),
         ("tiers",),
     ],
 )

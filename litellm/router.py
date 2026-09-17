@@ -118,6 +118,21 @@ from litellm.llms.openai_like.model_info import (
     get_openai_compatible_model_info,
 )
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.router_strategy.complexity_router.context_compaction import (
+    COMPACTION_STATE_KEY,
+    CompactedRequest,
+    CompactionFailure,
+    CompactionState,
+    ModelBudget,
+    NativeRequest,
+    compaction_state,
+    current_native_request,
+    current_summary_executor,
+    defers_context_filter,
+    prepare_compaction,
+    raise_compaction_failure,
+    validate_native_recipient,
+)
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -459,10 +474,19 @@ def _silent_experiment_targets(silent_model: object) -> tuple[str, ...]:
 
 
 def _silent_experiment_kwargs_snapshot(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    snapshot: Final = MappingProxyType({key: value for key, value in kwargs.items() if key != "messages"})
     metadata: Final = kwargs.get("metadata")
     if not isinstance(metadata, Mapping):
-        return MappingProxyType({**kwargs})
-    return MappingProxyType({**kwargs, "metadata": dict(metadata)})
+        return snapshot
+    return MappingProxyType({**snapshot, "metadata": TypeAdapter(dict[str, object]).validate_python(metadata)})
+
+
+def _compaction_deployment_id(deployment: DeploymentTypedDict) -> str:
+    info: Final = TypeAdapter(Mapping[str, object]).validate_python(
+        deployment.get("model_info") or MappingProxyType({})
+    )
+    identifier: Final = info.get("id")
+    return identifier if isinstance(identifier, str) else ""
 
 
 def _with_router_resolved_session_model(session: object, model_name: str) -> Mapping[str, Mapping[str, object]]:
@@ -2617,7 +2641,7 @@ class Router:
         return silent_kwargs
 
     async def _run_silent_experiment(
-        self, silent_model: str, messages: Sequence[Mapping[str, str]], silent_kwargs: Mapping[str, object]
+        self, silent_model: str, messages: Sequence[Mapping[str, object]], silent_kwargs: Mapping[str, object]
     ) -> None:
         remaining_kwargs: Final = MappingProxyType(
             {key: value for key, value in silent_kwargs.items() if key != "stream"}
@@ -2709,6 +2733,7 @@ class Router:
             kwargs["messages"] = messages
             kwargs["stream"] = stream
             kwargs["original_function"] = self._acompletion
+            kwargs[COMPACTION_STATE_KEY] = CompactionState()  # rebind-ok: share request-local state across retries
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             request_priority: Final = kwargs.get("priority") or self.default_priority
@@ -3532,7 +3557,9 @@ class Router:
         wrapper_ref: Final = weakref.ref(wrapped_response)
         return wrapped_response
 
-    async def _silent_experiment_acompletion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
+    async def _silent_experiment_acompletion(
+        self, silent_model: str, messages: Sequence[Mapping[str, object]], **kwargs
+    ):
         """
         Run a silent experiment in the background.
         """
@@ -3572,12 +3599,30 @@ class Router:
 
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
             start_time: Final = time.time()
-            deployment = await self.async_get_available_deployment(
+            selected_deployment: Final = await self.async_get_available_deployment(
                 model=model,
                 messages=messages,
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
+            compacted_request: Final = await self._aprepare_selected_deployment(
+                deployment=cast(  # cast-ok: Router registration validates deployments
+                    DeploymentTypedDict, selected_deployment
+                ),
+                model=model,
+                request_kwargs=kwargs,
+                messages=messages,
+                protocol="chat",
+            )
+            deployment = selected_deployment  # rebind-ok: only prepared deployments count as provider attempts
+            kwargs.pop(COMPACTION_STATE_KEY, None)
+            effective_messages: Final = (
+                TypeAdapter(list[dict[str, object]]).validate_python(compacted_request.value)
+                if compacted_request is not None
+                else messages
+            )
+            if compacted_request is not None:
+                kwargs[compacted_request.field] = effective_messages  # rebind-ok: rewrite only this dispatch attempt
             self._drop_unsupported_classifier_reasoning_effort(
                 deployment=cast(DeploymentTypedDict, deployment),  # cast-ok: selection returns a router deployment
                 model=model,
@@ -3615,12 +3660,12 @@ class Router:
                 asyncio.create_task(
                     self._silent_experiment_acompletion(
                         silent_model=silent_target,
-                        messages=messages,  # Use messages instead of *args
+                        messages=effective_messages,
                         **_silent_experiment_kwargs_snapshot(kwargs),
                     )
                 )
 
-            kwargs.setdefault("messages", messages)
+            kwargs.setdefault("messages", effective_messages)
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
 
@@ -3634,7 +3679,7 @@ class Router:
 
             input_kwargs: Final = {
                 **litellm_params,
-                "messages": messages,
+                "messages": effective_messages,
                 "caching": self.cache_responses,
                 "client": model_client,
                 **kwargs,
@@ -5259,6 +5304,10 @@ class Router:
             kwargs["model"] = model
             kwargs["original_generic_function"] = original_function
             kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
+            if original_function in (litellm.aresponses, litellm.anthropic_messages):
+                kwargs[COMPACTION_STATE_KEY] = (  # rebind-ok: preserve trusted state across generic streaming retries
+                    compaction_state(kwargs) or CompactionState()
+                )
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs, metadata_variable_name="litellm_metadata")
             verbose_router_logger.debug(
                 "Inside ageneric_api_call_with_fallbacks() - model: %s; kwargs: %s", model, kwargs
@@ -5318,13 +5367,34 @@ class Router:
         try:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
             try:
-                deployment = await self.async_get_available_deployment(  # rebind-ok: set on success, see pre-init above
+                selected_deployment: Final = await self.async_get_available_deployment(
                     model=model,
                     request_kwargs=kwargs,
                     messages=kwargs.get("messages", None),
                     input=kwargs.get("input", None),
                     specific_deployment=kwargs.pop("specific_deployment", None),
                 )
+                compacted_request: Final = await self._aprepare_selected_deployment(
+                    deployment=cast(  # cast-ok: Router registration validates deployments
+                        DeploymentTypedDict, selected_deployment
+                    ),
+                    model=model,
+                    request_kwargs=kwargs,
+                    messages=kwargs.get("messages"),
+                    input=kwargs.get("input"),
+                    protocol="responses" if kwargs.get("input") is not None else "messages",
+                )
+                deployment = selected_deployment  # rebind-ok: only prepared deployments count as provider attempts
+                kwargs.pop(COMPACTION_STATE_KEY, None)
+                if compacted_request is not None:
+                    prepared_history: Final = TypeAdapter(list[dict[str, object]]).validate_python(
+                        compacted_request.value
+                    )
+                    kwargs[compacted_request.field] = prepared_history  # rebind-ok: rewrite only this dispatch attempt
+                    if compacted_request.extra_headers:
+                        kwargs["extra_headers"] = TypeAdapter(dict[str, str]).validate_python(
+                            compacted_request.extra_headers
+                        )
             except Exception as e:
                 if passthrough_on_no_deployment:
                     return await original_generic_function(model=model, **kwargs)
@@ -5441,6 +5511,7 @@ class Router:
         # bucket, so the post-call carry-over below always has somewhere to read and write.
         kwargs.setdefault("litellm_metadata", {})  # mutable-ok: shared bucket  # rebind-ok: stamp must be readable here
 
+        kwargs[COMPACTION_STATE_KEY] = CompactionState()  # rebind-ok: share trusted request state with the snapshot
         fallback_kwargs: Final[dict[str, object]] = kwargs.copy()
         if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
             fallback_kwargs["litellm_metadata"] = safe_deep_copy(fallback_kwargs["litellm_metadata"])
@@ -5764,6 +5835,7 @@ class Router:
         # bucket, so the post-call carry-over below always has somewhere to read and write.
         kwargs.setdefault("litellm_metadata", {})  # mutable-ok: shared bucket  # rebind-ok: stamp must be readable here
 
+        kwargs[COMPACTION_STATE_KEY] = CompactionState()  # rebind-ok: share trusted request state with the snapshot
         fallback_kwargs: Final[dict[str, object]] = kwargs.copy()  # mutable-ok: mutated below before re-entry
         if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
             fallback_kwargs["litellm_metadata"] = safe_deep_copy(fallback_kwargs["litellm_metadata"])
@@ -12278,11 +12350,231 @@ class Router:
                 client = self.cache.get_cache(key=cache_key, parent_otel_span=parent_otel_span)
                 return client
 
+    def _compaction_model_budget(
+        self,
+        deployment: DeploymentTypedDict,
+        request_defaults: Mapping[str, object] = MappingProxyType({}),
+    ) -> ModelBudget | CompactionFailure:
+        try:
+            info: Final = self.get_router_model_info(
+                deployment=TypeAdapter(dict[str, object]).validate_python(deployment),
+                received_model_name=deployment["model_name"],
+            )
+        except Exception:  # noqa: BLE001  # model-map resolution failures are explicit compaction failures
+            return CompactionFailure("Context compaction requires known token limits for the selected deployment")
+        input_limit: Final = info.get("max_input_tokens")
+        output_limit: Final = info.get("max_output_tokens")
+        if type(input_limit) is not int or type(output_limit) is not int or min(input_limit, output_limit) <= 0:
+            return CompactionFailure(
+                "Context compaction requires positive input and output limits for the selected deployment"
+            )
+        wire_model: Final = deployment["litellm_params"].get("model")
+        if not isinstance(wire_model, str):
+            return CompactionFailure("Context compaction requires a concrete deployment model")
+        return ModelBudget(
+            wire_model,
+            input_limit,
+            output_limit,
+            request_defaults=request_defaults,
+            deployment_id=_compaction_deployment_id(deployment),
+        )
+
+    async def _acount_compaction_tokens(self, model: str, payload: Mapping[str, object]) -> int:
+        messages: Final = payload.get("messages")
+        input_value: Final = payload.get("input")
+        instructions: Final = payload.get("instructions")
+        return await offload_token_count(self._count_pre_call_check_tokens)(
+            model=model,
+            messages=TypeAdapter(list[dict[str, object]]).validate_python(
+                (
+                    *(
+                        (MappingProxyType({"role": "system", "content": instructions}),)
+                        if isinstance(instructions, str) and instructions
+                        else ()
+                    ),
+                    *messages,
+                )
+            )
+            if isinstance(messages, (list, tuple))
+            else None,
+            input=TypeAdapter(str | list[object]).validate_python(input_value)
+            if isinstance(input_value, (str, list))
+            else None,
+            request_kwargs=payload,
+        )
+
+    def _compaction_request_payload(
+        self,
+        deployment: DeploymentTypedDict,
+        request_kwargs: Mapping[str, object],
+        messages: Sequence[Mapping[str, object]] | None = None,
+        input: str | Sequence[object] | None = None,
+    ) -> Mapping[str, object]:
+        deployment_params: Final = TypeAdapter(dict[str, object]).validate_python(deployment)
+        overridden_marker_keys: Final = self._forwarded_alias_marker_keys_the_deployment_sets(
+            deployment=deployment_params,
+            forwarded_keys=request_kwargs.get(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ()),
+        )
+        effective_kwargs: Final = TypeAdapter(dict[str, object]).validate_python(
+            MappingProxyType(
+                {
+                    **(MappingProxyType({"messages": messages}) if messages is not None else MappingProxyType({})),
+                    **(MappingProxyType({"input": input}) if input is not None else MappingProxyType({})),
+                    **MappingProxyType(
+                        {key: value for key, value in request_kwargs.items() if key not in overridden_marker_keys}
+                    ),
+                    "metadata": TypeAdapter(dict[str, object]).validate_python(
+                        request_kwargs.get("metadata") or MappingProxyType({})
+                    ),
+                }
+            )
+        )
+        self._merge_tools_from_deployment(deployment=deployment_params, kwargs=effective_kwargs)
+        self._update_kwargs_with_default_litellm_params(kwargs=effective_kwargs)
+        return MappingProxyType({**deployment["litellm_params"], **effective_kwargs})
+
+    async def _aprepare_selected_deployment(
+        self,
+        deployment: DeploymentTypedDict,
+        model: str,
+        request_kwargs: Mapping[str, object],
+        messages: Sequence[Mapping[str, object]] | None = None,
+        input: str | Sequence[object] | None = None,
+        protocol: Literal["chat", "responses", "messages"] = "chat",
+    ) -> CompactedRequest | None:
+        state: Final = compaction_state(request_kwargs)
+        native_request: Final = current_native_request()
+        if native_request is None and (state is None or state.model is None):
+            return None
+        payload: Final = self._compaction_request_payload(deployment, request_kwargs, messages, input)
+        timeout: Final = self._get_non_stream_timeout(
+            kwargs=TypeAdapter(dict[str, object]).validate_python(request_kwargs),
+            data=TypeAdapter(dict[str, object]).validate_python(deployment["litellm_params"]),
+        )
+        if state is not None and isinstance(timeout, (int, float)):
+            state.limit_timeout(float(timeout))
+        target: Final = self._compaction_model_budget(deployment, request_defaults=payload)
+        if isinstance(target, CompactionFailure):
+            raise_compaction_failure(target, model)
+        if native_request is not None:
+            native_failure: Final = await validate_native_recipient(
+                native_request, target, payload, float(timeout) if isinstance(timeout, (int, float)) else 120.0
+            )
+            if native_failure is not None:
+                raise_compaction_failure(native_failure, model)
+            return None
+        if state is None or state.model is None:
+            return None
+        from litellm.litellm_core_utils.internal_call_metadata import (
+            effective_turn_off_message_logging,
+            forwarded_internal_call_metadata,
+            parent_session_kwargs,
+        )
+
+        metadata_source: Final = MappingProxyType(
+            {
+                key: TypeAdapter(dict[str, object]).validate_python(request_kwargs[key])
+                for key in ("metadata", "litellm_metadata")
+                if isinstance(request_kwargs.get(key), Mapping)
+            }
+        )
+        summary_metadata: Final = MappingProxyType(
+            forwarded_internal_call_metadata(
+                TypeAdapter(dict[str, object]).validate_python(
+                    get_litellm_metadata_from_kwargs(
+                        TypeAdapter(dict[str, object]).validate_python(
+                            MappingProxyType({"litellm_params": metadata_source})
+                        )
+                    )
+                ),
+                "context_compaction",
+            )
+        )
+        summary_request: Final = MappingProxyType({"metadata": summary_metadata})
+
+        async def sdk_summary(model: str, request: NativeRequest, timeout: float) -> Mapping[str, object]:
+            if request_kwargs.get("proxy_server_request") is not None:
+                raise_compaction_failure(
+                    CompactionFailure("The authenticated compaction executor is unavailable"), model
+                )
+            native_kwargs: Final = MappingProxyType(
+                {
+                    **request.payload,
+                    **parent_session_kwargs(request_kwargs),
+                    **MappingProxyType(
+                        {key: request_kwargs[key] for key in ("allowed_model_region", "tags") if key in request_kwargs}
+                    ),
+                    "model": model,
+                    **(MappingProxyType({"stream": False}) if request.protocol == "messages" else MappingProxyType({})),
+                    "timeout": timeout,
+                    "num_retries": 0,
+                    "max_retries": 0,
+                    "disable_fallbacks": True,
+                    "metadata": TypeAdapter(dict[str, object]).validate_python(summary_metadata),
+                    "turn_off_message_logging": effective_turn_off_message_logging(request_kwargs),
+                }
+            )
+            response: Final[object] = (
+                await self.acompact_responses(**native_kwargs)
+                if request.protocol == "responses"
+                else await self.aanthropic_messages(**native_kwargs)
+            )
+            return TypeAdapter(dict[str, object]).validate_python(
+                response.model_dump(exclude_none=True) if isinstance(response, BaseModel) else response
+            )
+
+        candidates: Final = cast(  # cast-ok: access-group owner only filters Router-validated deployments
+            tuple[DeploymentTypedDict, ...],
+            tuple(
+                self._filter_deployments_by_model_access_groups(
+                    model=self._get_model_from_alias(state.model) or state.model,
+                    healthy_deployments=TypeAdapter(list[object]).validate_python(
+                        self.deployments_for_request(state.model, summary_request)
+                    ),
+                    request_kwargs=TypeAdapter(dict[str, object]).validate_python(summary_request),
+                    request_team_id=get_request_team_id(summary_request),
+                ),
+            ),
+        )
+        budgets: Final = tuple(
+            self._compaction_model_budget(
+                candidate,
+                request_defaults=self._compaction_request_payload(
+                    candidate,
+                    MappingProxyType(
+                        {
+                            "messages": (),
+                            "stream": False,
+                            "num_retries": 0,
+                            "max_retries": 0,
+                            "disable_fallbacks": True,
+                        }
+                    ),
+                ),
+            )
+            for candidate in candidates
+            if not self._is_strategy_marker_deployment(candidate)
+        )
+        summary_budgets: Final = tuple(budget for budget in budgets if isinstance(budget, ModelBudget))
+        prepared: Final = await prepare_compaction(
+            payload=payload,
+            target=target,
+            state=state,
+            summary_budgets=summary_budgets if len(summary_budgets) == len(candidates) else (),
+            executor=current_summary_executor() or sdk_summary,
+            counter=self._acount_compaction_tokens,
+            protocol=protocol,
+        )
+        if isinstance(prepared, CompactionFailure):
+            raise_compaction_failure(prepared, model)
+        return prepared
+
     def _count_pre_call_check_tokens(
         self,
-        messages: list[dict[str, str]] | None,
-        input: str | list | None,
+        messages: Sequence[Mapping[str, object]] | None,
+        input: str | Sequence[object] | None,
         request_kwargs: Mapping[str, object] | None = None,
+        model: str = "",
     ) -> int:
         """
         Count input tokens for context-window pre-call checks.
@@ -12301,7 +12593,7 @@ class Router:
             anthropic_system_to_openai_message,
         )
 
-        extras: Final = request_kwargs if request_kwargs is not None else MappingProxyType({})
+        extras: Final[Mapping[str, object]] = request_kwargs if request_kwargs is not None else MappingProxyType({})
         raw_instructions: Final = extras.get("instructions")
         instructions: Final = raw_instructions if isinstance(raw_instructions, str) else None
         raw_tools: Final = extras.get("tools")
@@ -12313,7 +12605,7 @@ class Router:
         system_message: Final = anthropic_system_to_openai_message(extras.get("system"))
         if messages is not None:
             counted_messages: Final = (system_message, *messages) if system_message is not None else messages
-            return litellm.token_counter(messages=counted_messages, tools=tools)
+            return litellm.token_counter(model=model, messages=counted_messages, tools=tools)
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
@@ -12327,6 +12619,7 @@ class Router:
                 responses_api_request={"instructions": instructions} if instructions is not None else {},
             )
             return litellm.token_counter(
+                model=model,
                 messages=cast(list, input_messages),  # cast-ok: transformed chat messages
                 tools=tools,
             )
@@ -12452,7 +12745,11 @@ class Router:
                 model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
 
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
-                if isinstance(max_input_tokens, int) and has_countable_input:
+                if (
+                    isinstance(max_input_tokens, int)
+                    and has_countable_input
+                    and not defers_context_filter(request_kwargs)
+                ):
                     if input_tokens is None:
                         if skip_inline_token_count:
                             return _returned_deployments
@@ -12745,6 +13042,22 @@ class Router:
         _access_group_filter_emptied_candidates = (
             _pre_model_access_group_filter_len > 0 and len(healthy_deployments) == 0
         )
+        native_request: Final = current_native_request()
+        if native_request is not None:
+            native_deployments: Final = cast(  # cast-ok: normal admission filters Router-validated deployments
+                Sequence[DeploymentTypedDict], healthy_deployments
+            )
+            healthy_deployments = TypeAdapter(
+                list[dict[str, object]]
+            ).validate_python(  # rebind-ok: constrain normal admission
+                tuple(
+                    deployment
+                    for deployment in native_deployments
+                    if _compaction_deployment_id(deployment) in native_request.allowed_deployment_ids
+                )
+            )
+            if not healthy_deployments:
+                raise_compaction_failure(CompactionFailure("No eligible native compactor remains available"), model)
 
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
@@ -13174,6 +13487,23 @@ class Router:
             and self.routing_strategy != "latency-based-routing"
             and self.routing_strategy != "least-busy"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
+            from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
+
+            legacy_strategy: Final = self._select_pre_routing_strategy(
+                model=self._get_model_from_alias(model) or model, request_kwargs=request_kwargs
+            )
+            if (
+                legacy_strategy is not None
+                and isinstance(legacy_strategy.strategy, ComplexityRouter)
+                and legacy_strategy.strategy.config.context_window_compaction_model is not None
+            ):
+                raise_compaction_failure(
+                    CompactionFailure(
+                        "Context compaction is unsupported with legacy synchronous deployment selection; "
+                        "use simple-shuffle or usage-based-routing-v2"
+                    ),
+                    model,
+                )
             return self.get_available_deployment(
                 model=model,
                 messages=messages,
@@ -13704,6 +14034,16 @@ class Router:
         selected_strategy: Final = self._select_pre_routing_strategy(
             model=registered_model_name, request_kwargs=request_kwargs
         )
+        from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
+
+        context_state: Final = compaction_state(request_kwargs)
+        if (
+            context_state is not None
+            and selected_strategy is not None
+            and isinstance(selected_strategy.strategy, ComplexityRouter)
+            and selected_strategy.strategy.config.context_window_compaction_model is not None
+        ):
+            context_state.arm(selected_strategy.strategy.config.context_window_compaction_model)
         if selected_strategy is None:
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
             self._stamp_or_clear_metadata_key(

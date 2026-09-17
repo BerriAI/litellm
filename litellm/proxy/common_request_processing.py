@@ -75,6 +75,11 @@ from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
+from litellm.proxy.common_utils.context_compaction import (
+    mark_summary_provider_completed,
+    proxy_summary_executor_scope,
+    summary_request_is_private,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     get_client_requested_model,
     get_tags_from_request_body,
@@ -2336,7 +2341,7 @@ class ProxyBaseLLMRequestProcessing:
 
     def _debug_log_request_payload(self) -> None:
         """Log request payload at DEBUG level, truncating if too large."""
-        if not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
+        if summary_request_is_private() or not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
             return
         _payload_str: Final = json.dumps(self.data, default=str)
         if len(_payload_str) > MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG:
@@ -2517,20 +2522,24 @@ class ProxyBaseLLMRequestProcessing:
             user_model=user_model,
             user_api_key_dict=user_api_key_dict,
         )
-        llm_call_task: Final = asyncio.create_task(llm_call)
-        tasks.append(llm_call_task)
+        with proxy_summary_executor_scope(
+            request, self.data, getattr(proxy_logging_obj, "max_parallel_request_limiter", None)
+        ):
+            llm_call_task: Final = asyncio.create_task(llm_call)
+            tasks.append(llm_call_task)
 
-        llm_responses: Final = asyncio.gather(*tasks)  # run the moderation check in parallel to the actual llm api call
+            llm_responses: Final = asyncio.gather(*tasks)
 
-        try:
-            if general_settings.get("cancel_on_disconnect", False):
-                responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
-            else:
-                responses = await llm_responses
-        finally:
-            await _cancel_pending_gather_tasks(tasks)
+            try:
+                if general_settings.get("cancel_on_disconnect", False):
+                    responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
+                else:
+                    responses = await llm_responses
+            finally:
+                await _cancel_pending_gather_tasks(tasks)
 
         response = responses[1]
+        mark_summary_provider_completed()
 
         _exception_raised = False
         try:

@@ -35906,6 +35906,11 @@ export interface components {
              */
             code_keywords?: string[] | null;
             /**
+             * Context Window Compaction Model
+             * @description Ordinary Router model group used for provider-native compaction when an asynchronous Responses/OpenAI or Messages/Anthropic request exceeds its selected deployment's input budget. The compactor must fit the input and its native output must fit the unchanged answering deployment. Unsupported overflow routes fail explicitly. Compaction takes precedence over context window escalation and incurs a separate billable call under normal access and limits. Nested Auto Routers are not supported. Omit or set null to keep existing routing behavior.
+             */
+            context_window_compaction_model?: string | null;
+            /**
              * Context Window Escalation Buffer
              * @description Fraction of a model's declared context window the estimated prompt must fit within. The token count is an estimate, so fitting against the full window would dispatch prompts that the provider's own tokenizer then rejects; 0.95 leaves room for that drift plus the response tokens.
              * @default 0.95

@@ -69,6 +69,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "tool_choice",
             "thinking",
             "context_management",
+            "compaction",
             "output_format",
             "inference_geo",
             "speed",

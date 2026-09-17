@@ -389,6 +389,11 @@ AllAnthropicPassThroughMessageValues: TypeAlias = (
 )
 
 
+class AnthropicCompactionRequest(TypedDict):
+    type: ReadOnly[Literal["summarize"]]
+    instructions: ReadOnly[NotRequired[str]]
+
+
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     max_tokens: int | None
     metadata: AnthropicMetadata | dict | None
@@ -410,6 +415,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     output_config: AnthropicOutputConfig | None  # Configuration for Claude's output behavior
     cache_control: dict[str, Any] | None  # Automatic prompt caching
     reasoning_effort: str | None
+    compaction: ReadOnly[AnthropicCompactionRequest | None]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -568,6 +574,7 @@ class CompactionBlock(TypedDict, total=False):
 
     type: Required[Literal["compaction"]]
     content: str | None
+    signature: ReadOnly[str]
 
 
 class UsageIteration(TypedDict, total=False):

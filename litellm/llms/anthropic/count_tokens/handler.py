@@ -4,17 +4,29 @@ Anthropic CountTokens API handler.
 Uses httpx for HTTP requests instead of the Anthropic SDK.
 """
 
-from typing import Any, Final
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Annotated, Any, Final
 
 import httpx
+from pydantic import Field, StrictStr, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+from litellm.litellm_core_utils.prompt_templates.compaction import compaction_headers
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
+from litellm.llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+
+_NATIVE_COUNT_FIELDS: Final = frozenset({"messages", "system", "tools", "tool_choice", "thinking"})
+_NATIVE_HEADERS: Final = TypeAdapter(dict[StrictStr, StrictStr])
+_NATIVE_OBJECT: Final = TypeAdapter(dict[str, object])
+_NATIVE_MESSAGES: Final = TypeAdapter(list[dict[str, object]])
+_NATIVE_COUNT: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(strict=True, ge=0)])
 
 
 class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
@@ -23,6 +35,76 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
 
     Uses httpx for HTTP requests, following the same pattern as BedrockCountTokensHandler.
     """
+
+    async def count_native_tokens(
+        self,
+        model: str,
+        payload: Mapping[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> int:
+        handler: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
+        try:
+            body: Final = _NATIVE_OBJECT.validate_python(
+                MappingProxyType(
+                    {
+                        "model": model,
+                        **MappingProxyType(
+                            {
+                                key: value
+                                for key, value in payload.items()
+                                if key in _NATIVE_COUNT_FIELDS and value is not None
+                            }
+                        ),
+                    }
+                )
+            )
+            config: Final = AnthropicMessagesConfig()
+            messages_url: Final = httpx.URL(
+                config.get_complete_url(
+                    api_base=api_base or litellm.api_base,
+                    api_key=api_key,
+                    model=model,
+                    optional_params=_NATIVE_OBJECT.validate_python(MappingProxyType({})),
+                    litellm_params=_NATIVE_OBJECT.validate_python(MappingProxyType({})),
+                )
+            )
+            compact_headers: Final = compaction_headers(headers)
+            beta_headers: Final = _NATIVE_HEADERS.validate_python(
+                MappingProxyType(
+                    {
+                        **compact_headers,
+                        "anthropic-beta": ",".join(
+                            dict.fromkeys(
+                                (*compact_headers["anthropic-beta"].split(","), ANTHROPIC_TOKEN_COUNTING_BETA_VERSION)
+                            )
+                        ),
+                    }
+                )
+            )
+            anthropic_headers: Final = _NATIVE_HEADERS.validate_python(
+                config.validate_anthropic_messages_environment(
+                    headers=beta_headers,
+                    model=model,
+                    messages=_NATIVE_MESSAGES.validate_python(payload.get("messages")),
+                    optional_params=body,
+                    litellm_params=_NATIVE_OBJECT.validate_python(MappingProxyType({})),
+                    api_key=api_key or litellm.anthropic_key or litellm.api_key,
+                    api_base=str(messages_url),
+                )[0]
+            )
+            response: Final = await handler.client.post(
+                str(messages_url.copy_with(path=f"{messages_url.path.rstrip('/')}/count_tokens")),
+                headers=anthropic_headers,
+                json=body,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            return _NATIVE_COUNT.validate_python(_NATIVE_OBJECT.validate_json(response.content).get("input_tokens"))
+        except (httpx.HTTPError, ValueError):
+            raise ValueError("Provider-native token counting failed") from None
 
     async def handle_count_tokens_request(
         self,

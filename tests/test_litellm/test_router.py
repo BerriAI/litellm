@@ -42,11 +42,380 @@ from litellm.router import (
     _anthropic_stream_raised_error_status,
     _anthropic_stream_should_decline_fallback,
     _anthropic_stream_should_drop_pre_content_ping,
+    _compaction_deployment_id,
     _is_retriable_anthropic_status,
 )
 from litellm.router_strategy import simple_shuffle
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
+
+
+
+from collections.abc import AsyncIterator, Sequence
+from types import MappingProxyType
+
+import pytest_asyncio
+from pydantic import TypeAdapter
+
+from litellm.router_strategy.complexity_router.context_compaction import ModelBudget, NativeRequest, native_request_scope
+from litellm.types.llms.openai import AllMessageValues
+
+
+_NATIVE_MODELS: Final = {"responses": "openai/gpt-5.6-luna", "messages": "anthropic/claude-sonnet-5"}
+_NATIVE_PREFIX: Final = (
+    {"role": "user", "content": "historical record " * 5000},
+    {"role": "assistant", "content": "Recorded"},
+)
+_NATIVE_CANONICAL: Final = (
+    {"role": "user", "content": "Provider-retained canonical message"},
+    {"type": "compaction", "id": "cmp_native", "encrypted_content": "opaque-native-state"},
+)
+_NATIVE_BLOCK: Final = {"type": "compaction", "content": "Native state", "signature": "signed-native-state"}
+_NATIVE_JSON: Final = TypeAdapter(dict[str, object])
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def overflow_io(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[respx.MockRouter]:
+    from litellm import anthropic_beta_headers_manager
+    from litellm.litellm_core_utils import logging_worker
+
+    worker: Final = logging_worker.LoggingWorker(timeout=0.5)
+    monkeypatch.setattr(
+        anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG",
+        anthropic_beta_headers_manager.GetAnthropicBetaHeadersConfig.load_local_beta_headers_config(),
+    )
+    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", worker)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.delenv("LITELLM_LICENSE", raising=False)
+    for provider in ("openai", "anthropic"):
+        monkeypatch.delenv(f"{provider.upper()}_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, f"{provider}_key", None)
+    monkeypatch.setattr(litellm, "api_key", None)
+    try:
+        with respx.mock(assert_all_called=False) as transport:
+            transport.route(path__regex=r".*/(input_tokens|count_tokens)$").mock(side_effect=_native_wire_response)
+            transport.route(
+                host="native-compact.invalid", path__regex=r"/v1/(responses/compact|messages)$"
+            ).mock(side_effect=_native_wire_response)
+            yield transport
+        await asyncio.wait_for(worker.flush(), timeout=5)
+    finally:
+        await worker.stop()
+
+
+def _native_history(protocol: str) -> list[Mapping[str, object]]:
+    tail: Final = (
+        (
+            {"type": "function_call", "call_id": "call_lookup", "name": "lookup", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_lookup", "output": "MARIGOLD-482"},
+        )
+        if protocol == "responses"
+        else (
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "lookup", "name": "lookup", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "lookup", "content": "MARIGOLD-482"}]},
+        )
+    )
+    return [*_NATIVE_PREFIX, {"role": "user", "content": "What is the launch code?"}, *tail]
+
+
+def _native_router(
+    protocol: str, *, scenario: str = "normal", pre_checks: bool = True, backup_limit: int = 64000
+) -> Router:
+    wire_model: Final = _NATIVE_MODELS[protocol]
+    deployments: Final = (
+        ("target", "a", 4096, wire_model), ("target", "b", 4096, wire_model),
+        ("backup", "backup", backup_limit, wire_model),
+        ("compact", "unfit" if scenario == "count" else "compact", 32000, wire_model),
+        ("compact", "small", 4096, wire_model),
+        ("compact", "foreign", 64000, _NATIVE_MODELS["messages" if protocol == "responses" else "responses"]),
+        ("compact", "denied", 0, wire_model),
+    )
+    return Router(
+        model_list=[
+            {
+                "model_name": "native-auto",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {tier: "native-target" for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")},
+                        "context_window_compaction_model": "native-compact",
+                        "max_tokens_from_tier_model": False,
+                        "deployment_affinity": True,
+                    },
+                },
+            },
+            *(
+                {
+                    "model_name": f"native-{group}",
+                    "litellm_params": {
+                        "model": model,
+                        "api_base": f"https://native-{host}.invalid" + ("/v1" if model.startswith("openai/") else ""),
+                        "api_key": "" if scenario == "credentials" and host == "compact" else f"test-{host}",
+                        "region_name": "us" if scenario == "region" and group == "compact" else "eu",
+                        **({"max_tokens": 32000} if scenario == "max-default" and host == "compact" else {}),
+                        **(
+                            {"instructions" if protocol == "responses" else "system": "Injected default"}
+                            if scenario == "prompt-default" and host == "compact" else {}
+                        ),
+                    },
+                    "model_info": {
+                        "id": host, "max_input_tokens": limit, "max_output_tokens": 8192,
+                        "access_groups": (
+                            ["denied" if host == "denied" else "compact-access"] if group == "compact" else []
+                        ),
+                    },
+                }
+                for group, host, limit, model in deployments
+            ),
+        ],
+        num_retries=0,
+        enable_pre_call_checks=pre_checks,
+        fallbacks=[{"native-target": ["native-backup"]}],
+    )
+
+
+def _native_wire_response(request: httpx.Request) -> httpx.Response:
+    body: Final = _NATIVE_JSON.validate_json(request.content)
+    host: Final = request.url.host.removeprefix("native-").removesuffix(".invalid")
+    protocol: Final = "messages" if "/messages" in request.url.path else "responses"
+    credential: Final = request.headers.get("x-api-key") or request.headers.get("authorization", "").removeprefix(
+        "Bearer "
+    )
+    assert credential == f"test-{host}"
+    if request.url.path.endswith(("/input_tokens", "/count_tokens")):
+        tokens: Final = 40000 if host == "unfit" else 12000 if "historical record" in json.dumps(body) else 128
+        return httpx.Response(200, json={"input_tokens": tokens})
+    compact: Final = request.url.path.endswith("/compact") or body.get("compaction") == {"type": "summarize"}
+    if host == "compact":
+        assert compact, tuple(body)
+    if protocol == "responses" and compact:
+        assert not set(body).difference(
+            {"model", "input", "instructions", "previous_response_id", "prompt_cache_key", "prompt_cache_retention"}
+        )
+    response: Final = (
+        {
+            "id": "cmp_native" if compact else "resp_native", "created_at": 1, "model": body["model"],
+            "object": "response.compaction" if compact else "response",
+            "output": list(_NATIVE_CANONICAL) if compact else [{
+                "id": "msg_native", "type": "message", "role": "assistant", "status": "completed",
+                "content": [{"type": "output_text", "text": "MARIGOLD-482", "annotations": []}],
+            }],
+            "usage": {
+                "input_tokens": 12000 if compact else 128, "output_tokens": 8, "total_tokens": 12008 if compact else 136
+            },
+        }
+        if protocol == "responses" else {
+            "id": "msg_native", "type": "message", "role": "assistant", "model": body["model"],
+            "content": [_NATIVE_BLOCK] if compact else [{"type": "text", "text": "MARIGOLD-482"}],
+            "stop_reason": "compaction" if compact else "end_turn",
+            "usage": {
+                "input_tokens": 0, "output_tokens": 0,
+                "iterations": [{"type": "compaction", "input_tokens": 12000, "output_tokens": 8}],
+            } if compact else {"input_tokens": 128, "output_tokens": 8},
+        }
+    )
+    events: Final = (
+        (
+            {"type": "response.created", "sequence_number": 0, "response": {**response, "output": []}},
+            {"type": "response.output_text.delta", "sequence_number": 1, "item_id": "msg_native",
+             "output_index": 0, "content_index": 0, "delta": "MARIGOLD-482"},
+            {"type": "response.completed", "sequence_number": 2, "response": response},
+        )
+        if protocol == "responses" else (
+            {"type": "message_start", "message": {**response, "content": [], "stop_reason": None}},
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "MARIGOLD-482"}},
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 8}},
+            {"type": "message_stop"},
+        )
+    )
+    if not body.get("stream"):
+        return httpx.Response(200, json=response)
+    return httpx.Response(
+        200, headers={"content-type": "text/event-stream"},
+        content="".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events),
+    )
+
+
+async def _native_call(
+    router: Router,
+    protocol: str,
+    history: Sequence[Mapping[str, object]],
+    params: Mapping[str, object] = MappingProxyType({}),
+) -> object:
+    kwargs: Final = {
+        "metadata": {"session_id": "native-pin", "user_api_key_auth": UserAPIKeyAuth(team_models=["compact-access"])},
+        **params,
+    }
+    if protocol == "responses":
+        return await router.aresponses(model="native-auto", input=list(history), max_output_tokens=128, **kwargs)
+    if protocol == "chat":
+        messages: Final = TypeAdapter(list[AllMessageValues]).validate_python(history)
+        return await router.acompletion(model="native-auto", messages=messages, max_tokens=128, **kwargs)
+    return await router.aanthropic_messages(model="native-auto", messages=list(history), max_tokens=128, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_autorouter_native_unarmed_helpers() -> None:
+    router: Final = Router(model_list=[])
+    deployment: Final[DeploymentTypedDict] = {
+        "model_name": "target", "litellm_params": {"model": "openai/gpt-5.6-luna"},
+        "model_info": {"id": "selected", "max_input_tokens": 4096, "max_output_tokens": 128},
+    }
+    assert _compaction_deployment_id(deployment) == "selected"
+    assert _compaction_deployment_id({}) == ""
+    assert _compaction_deployment_id({"model_info": {}}) == ""
+    assert _compaction_deployment_id({"model_info": {"id": 123}}) == ""
+    budget: Final = router._compaction_model_budget(deployment)
+    assert isinstance(budget, ModelBudget) and budget.deployment_id == "selected"
+    payload: Final = router._compaction_request_payload(deployment, {"input": "Hello"})
+    assert payload["input"] == "Hello" and await router._acount_compaction_tokens(budget.model, payload) > 0
+    assert await router._aprepare_selected_deployment(
+        deployment, "target", {"_context_window_compaction_state": {"model": "forged"}}
+    ) is None
+    selected: Final = Router(model_list=[deployment])
+    native: Final = NativeRequest("responses", {}, frozenset({"unavailable"}))
+    with native_request_scope(native), pytest.raises(litellm.ContextWindowExceededError, match="No eligible"):
+        selected._common_checks_available_deployment("target", request_kwargs={})
+    legacy: Final = Router(model_list=_native_router("responses").model_list, routing_strategy="usage-based-routing")
+    with pytest.raises(litellm.ContextWindowExceededError, match="legacy synchronous deployment selection"):
+        await legacy.async_get_available_deployment(model="native-auto", request_kwargs={})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", ("responses", "messages"))
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("pre_checks", (False, True))
+async def test_autorouter_native_pinned_wire(
+    protocol: str, stream: bool, pre_checks: bool, overflow_io: respx.MockRouter
+) -> None:
+    router: Final = _native_router(protocol, pre_checks=pre_checks, scenario="max-default" if pre_checks else "normal")
+    history: Final = _native_history(protocol)
+    original: Final = copy.deepcopy(history)
+    parameters: Final = {"type": "object", "properties": {}}
+    context: Final = {
+        "instructions" if protocol == "responses" else "system": "Retain request instructions",
+        "tools": [
+            {"type": "function", "name": "lookup", "parameters": parameters}
+            if protocol == "responses" else {"name": "lookup", "input_schema": parameters}
+        ],
+    }
+    targets: Final = overflow_io.route(
+        host__regex=r"native-[ab]\.invalid", path__regex=r"/v1/(responses|messages)$"
+    ).mock(side_effect=_native_wire_response)
+    for request_history in ([{"role": "user", "content": "Hello"}], history):
+        result: Final = await _native_call(
+            router, protocol, request_history, {**context, "stream": stream, "disable_fallbacks": True}
+        )
+        if isinstance(result, AsyncIterator):
+            assert [chunk async for chunk in result]
+        assert sum(call.request.url.host == "native-compact.invalid" for call in overflow_io.calls) == (
+            2 if request_history is history else 0
+        )
+    assert targets.call_count == 2 and targets.calls[0].request.url.host == targets.calls[1].request.url.host
+    field: Final = "input" if protocol == "responses" else "messages"
+    canonical: Final = (
+        list(_NATIVE_CANONICAL) if protocol == "responses" else [{"role": "assistant", "content": [_NATIVE_BLOCK]}]
+    )
+    sent: Final = _NATIVE_JSON.validate_json(targets.calls[-1].request.content)
+    assert sent[field] == [*canonical, *history[2:]] and history == original
+    assert all(sent[key] == value for key, value in context.items())
+    assert "_context_window_compaction_state" not in sent
+    calls: Final = tuple(call.request for call in overflow_io.calls)
+    compact: Final = next(
+        request for request in calls if request.url.host == "native-compact.invalid"
+        and not request.url.path.endswith(("/input_tokens", "/count_tokens"))
+    )
+    compact_payload: Final = _NATIVE_JSON.validate_json(compact.content)
+    assert compact_payload[field] == history[:2]
+    assert compact_payload.get("tools") == (context["tools"] if protocol == "messages" else None)
+    assert {request.url.host for request in calls} == {targets.calls[0].request.url.host, "native-compact.invalid"}
+    counted: Final = [request for request in calls if request.url.path.endswith(("/input_tokens", "/count_tokens"))]
+    assert len(counted) == 3 and _NATIVE_JSON.validate_json(counted[-1].content)[field] == sent[field]
+    assert all(_NATIVE_JSON.validate_json(counted[-1].content)[key] == sent[key] for key in context)
+    if protocol == "messages":
+        assert compact_payload["max_tokens"] == 4096
+        assert compact_payload["compaction"] == {"type": "summarize"}
+        assert compact_payload["stream"] is False and compact_payload["system"] == context["system"]
+        for request in (*counted, compact, targets.calls[-1].request):
+            assert "compact-2026-09-04" in request.headers.get("anthropic-beta", ""), str(request.url)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", ("responses", "messages"))
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("backup_limit", (4096, 64000))
+async def test_autorouter_native_retry_fallback_original_history(
+    protocol: str, stream: bool, backup_limit: int, overflow_io: respx.MockRouter
+) -> None:
+    error: Final = {
+        "type": "error", "sequence_number": 0,
+        "error": {"type": "server_error" if protocol == "responses" else "overloaded_error" if stream else "api_error",
+                  "code": "server_error", "message": "retry"},
+    }
+    targets: Final = overflow_io.route(
+        host__regex=r"native-[ab]\.invalid", path__regex=r"/v1/(responses|messages)$"
+    ).respond(
+        200 if stream else 503 if protocol == "responses" else 500,
+        headers={"content-type": "text/event-stream" if stream else "application/json"},
+        content=f"event: error\ndata: {json.dumps(error)}\n\n" if stream else json.dumps(error),
+    )
+    backup: Final = overflow_io.route(host="native-backup.invalid", path__regex=r"/v1/(responses|messages)$").mock(
+        side_effect=_native_wire_response
+    )
+    history: Final = _native_history(protocol)
+    result: Final = await _native_call(
+        _native_router(protocol, backup_limit=backup_limit), protocol, history,
+        {"stream": stream, "num_retries": int(not stream), "max_retries": 0,
+         "model_group_retry_policy": {
+             "native-auto": RetryPolicy(ServiceUnavailableErrorRetries=1, InternalServerErrorRetries=1)
+         }},
+    )
+    if isinstance(result, AsyncIterator):
+        assert [chunk async for chunk in result]
+    field: Final = "input" if protocol == "responses" else "messages"
+    compacted: Final = _NATIVE_JSON.validate_json(targets.calls[0].request.content)[field]
+    assert targets.call_count == (1 if stream else 2) and backup.call_count == 1
+    assert _NATIVE_JSON.validate_json(targets.calls[-1].request.content)[field] == compacted
+    assert _NATIVE_JSON.validate_json(backup.calls[0].request.content)[field] == (
+        history if backup_limit == 64000 else compacted
+    )
+    assert sum(call.request.url.host == "native-compact.invalid" for call in overflow_io.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", ("responses", "messages"))
+@pytest.mark.parametrize("reason", ("credentials", "region", "prompt-default", "count", "access"))
+async def test_autorouter_native_compactor_admission(
+    protocol: str, reason: str, overflow_io: respx.MockRouter
+) -> None:
+    router: Final = _native_router(protocol, scenario=reason)
+    params: Final = {
+        "disable_fallbacks": True,
+        **({"allowed_model_region": "eu"} if reason == "region" else {}),
+        **(
+            {"metadata": {"user_api_key_auth": UserAPIKeyAuth(team_models=["unrelated"])}}
+            if reason == "access" else {}
+        ),
+    }
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await _native_call(router, protocol, _native_history(protocol), params)
+    assert all(call.request.url.path.endswith(("/input_tokens", "/count_tokens")) for call in overflow_io.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "protocol,provider", (("chat", "responses"), ("responses", "messages"), ("messages", "responses"))
+)
+async def test_autorouter_native_unsupported_overflow(
+    protocol: str, provider: str, overflow_io: respx.MockRouter
+) -> None:
+    history: Final = [*_NATIVE_PREFIX, {"role": "user", "content": "Hello"}]
+    with pytest.raises(litellm.ContextWindowExceededError, match="unsupported"):
+        await _native_call(_native_router(provider), protocol, history, {"disable_fallbacks": True})
+    assert not overflow_io.calls
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():

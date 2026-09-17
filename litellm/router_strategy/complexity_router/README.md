@@ -362,6 +362,60 @@ response = litellm.completion(
 
 ## Special Behaviors
 
+### Compact history on context overflow
+
+Set `context_window_compaction_model` to an ordinary Router model group that supports native
+compaction and has enough context for the input. It receives older conversation history, so choose
+a recipient appropriate for that data. The group must already exist in `model_list`; another Auto
+Router cannot serve as the compaction model
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        tiers:
+          SIMPLE: small-model
+          COMPLEX: large-model
+        context_window_compaction_model: conversation-summary
+```
+
+Here `small-model`, `large-model`, and `conversation-summary` refer to your configured model groups.
+Omitting the setting or using `null` keeps existing behavior. Empty and whitespace-only names are
+rejected. When configured, compaction takes precedence over `enable_context_window_escalation`
+
+Supported overflow routes are asynchronous Responses with native OpenAI deployments and Messages
+with native Anthropic deployments, including streaming answers. OpenAI uses `/responses/compact`;
+Anthropic uses on-demand compaction with the `compact-2026-09-04` beta. The producer must support
+that provider's compaction API. Native state is not translated between providers or APIs
+
+The answering deployment, including its session pin, stays unchanged. Completed older history goes
+to the native compactor; the newest actual user request and its active tool tail stay untouched.
+OpenAI's complete returned window or Anthropic's exact signed block is preserved, then the target's
+native token-count endpoint checks compatibility and fit before answering. Requests that already
+fit use their original history. Unsupported overflow routes, including Chat Completions, fail
+explicitly rather than falling back to a custom summary. Synchronous SDK calls and raw passthrough
+are outside this feature. The legacy `usage-based-routing` selector is unsupported; use an
+async-native selector such as `simple-shuffle` or `usage-based-routing-v2`
+
+Native compaction can omit details. It adds latency and a separately billable model call. There is
+no exact upfront cost promise, automatic cost comparison, or guarantee it costs less than choosing
+a larger model. The caller needs normal access to the configured compactor; its call remains
+subject to normal budgets, rate limits, deployment restrictions, and spend accounting
+
+The input budget reserves the effective output limit and a safety margin. Omitting the output limit
+conservatively reserves the deployment's maximum output capability. Only one compaction call is
+allowed within 120 seconds, further bounded by the request timeout. Anthropic compaction requests
+reserve 4,096 output tokens; OpenAI's compact endpoint does not accept an output-token cap. Retries
+can reuse the native result within the same request. A delayed streaming fallback cannot start new
+proxy compaction calls after the initial response scope closes
+
+If there is no eligible compactor, no closed older prefix, unavailable `previous_response_id`
+history, or incompatible or oversized native output, the request fails with an explicit context
+error. Token-count failures never fall back to a local estimate for native-state validation.
+Original caller history is retained on failure; nothing is silently truncated
+
 ### Modality-based capability routing
 
 The classifier reads text alone, so a request carrying an image can classify cheap and land on a

@@ -10,7 +10,7 @@ import logging
 import os
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Set
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -66,6 +66,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.utils import (
+    CONTEXT_COMPACTION_CALL_ORIGIN,
     CallTypes,
     EmbeddingResponse,
     ModelResponse,
@@ -428,8 +429,8 @@ class ParallelRequestGauge(TypedDict):
 
 
 class ParallelSlotAcquisition(TypedDict):
-    slot_id: str
-    counter_keys: list[str]
+    slot_id: ReadOnly[str]
+    counter_keys: ReadOnly[Sequence[str]]
 
 
 class RateLimitStatus(TypedDict):
@@ -557,6 +558,76 @@ _request_stash: Final[ContextVar[RequestRateLimiterStash | None]] = ContextVar(
 
 def get_request_stash() -> RequestRateLimiterStash | None:
     return _request_stash.get()
+
+
+@dataclass(frozen=True, slots=True)
+class _BorrowedParallelSlots:
+    stash: RequestRateLimiterStash
+    call_id: str
+    counter_keys: frozenset[str]
+    consumed: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+_borrowed_parallel_slots: Final[ContextVar[_BorrowedParallelSlots | None]] = ContextVar(
+    "litellm_summary_borrowed_parallel_slots", default=None
+)
+
+
+@asynccontextmanager
+async def isolated_summary_request_stash(
+    parent_stash: RequestRateLimiterStash | None,
+    parent_call_id: str | None,
+    child_call_id: str,
+) -> AsyncGenerator[RequestRateLimiterStash, None]:
+    async with AsyncExitStack() as stack:
+        eligible_parent: Final = (
+            parent_stash
+            if parent_stash is not None
+            and parent_call_id is not None
+            and parent_stash.owner_litellm_call_id == parent_call_id
+            and _borrowed_parallel_slots.get() is None
+            else None
+        )
+        if eligible_parent is not None:
+            await stack.enter_async_context(eligible_parent.parallel_slot_release_lock)
+        acquisition: Final = eligible_parent.parallel_slot if eligible_parent is not None else None
+        stash: Final = RequestRateLimiterStash(owner_litellm_call_id=child_call_id)
+        stash_token: Final = _request_stash.set(stash)
+        borrow_token: Final = _borrowed_parallel_slots.set(
+            _BorrowedParallelSlots(
+                stash=stash,
+                call_id=child_call_id,
+                counter_keys=frozenset(acquisition["counter_keys"]) if acquisition is not None else frozenset(),
+            )
+        )
+        try:
+            yield stash
+        finally:
+            _borrowed_parallel_slots.reset(borrow_token)
+            _request_stash.reset(stash_token)
+
+
+def _consume_borrowed_parallel_keys(stash: RequestRateLimiterStash) -> frozenset[str]:
+    borrowed: Final = _borrowed_parallel_slots.get()
+    if (
+        borrowed is None
+        or borrowed.stash is not stash
+        or borrowed.call_id != stash.owner_litellm_call_id
+        or borrowed.consumed.is_set()
+    ):
+        return frozenset()
+    borrowed.consumed.set()
+    return borrowed.counter_keys
+
+
+async def finish_summary_cleanup(cleanup: Awaitable[None]) -> None:
+    task: Final = asyncio.ensure_future(cleanup)
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+    task.result()
 
 
 def get_or_create_request_stash() -> RequestRateLimiterStash:
@@ -1262,6 +1333,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         read_only: bool = False,
         skip_tpm_check: bool = False,
         parallel_slot_id: str | None = None,
+        borrowed_parallel_keys: frozenset[str] = frozenset(),
     ) -> RateLimitResponse:
         """
         Check if any of the rate limit descriptors should be rate limited.
@@ -1297,6 +1369,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         keys_to_fetch, key_metadata, gauges = self._collect_windowed_keys_and_gauges(
             descriptors=descriptors,
             skip_tpm_check=skip_tpm_check,
+            borrowed_parallel_keys=borrowed_parallel_keys,
         )
 
         windowed_response = RateLimitResponse(overall_code="OK", statuses=[])
@@ -1385,6 +1458,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         descriptors: Sequence[RateLimitDescriptor],
         skip_tpm_check: bool,
+        borrowed_parallel_keys: frozenset[str] = frozenset(),
     ) -> tuple[list[str], dict[str, WindowKeyMetadata], list[ParallelRequestGauge]]:
         """
         Split descriptors into the windowed (window_key, counter_key) fetch
@@ -1407,7 +1481,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             window_key = f"{{{descriptor_key}:{descriptor_value}}}:window"
 
-            if max_parallel_requests_limit is not None:
+            if (
+                max_parallel_requests_limit is not None
+                and self.create_rate_limit_keys(descriptor_key, descriptor_value, "max_parallel_requests")
+                not in borrowed_parallel_keys
+            ):
                 gauges.append(
                     ParallelRequestGauge(
                         counter_key=self.create_rate_limit_keys(
@@ -3492,6 +3570,31 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if response["overall_code"] == "OK":
             await self._release_parallel_request_slots(acquisition, user_api_key_dict.parent_otel_span)
 
+    async def _admit_request_capacity(
+        self,
+        descriptors: Sequence[RateLimitDescriptor],
+        auth: UserAPIKeyAuth,
+        slot_id: str | None,
+        counter_keys: Sequence[str],
+        borrowed_parallel_keys: frozenset[str],
+    ) -> RateLimitResponse:
+        admission: Final = self.should_rate_limit(
+            descriptors=descriptors,
+            parent_otel_span=auth.parent_otel_span,
+            skip_tpm_check=self.tpm_reservation_enabled,
+            parallel_slot_id=slot_id,
+            borrowed_parallel_keys=borrowed_parallel_keys,
+        )
+        if _borrowed_parallel_slots.get() is None:
+            return await admission
+        task: Final = asyncio.create_task(admission)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            acquisition: Final = ParallelSlotAcquisition(slot_id=slot_id or "", counter_keys=tuple(counter_keys))
+            await finish_summary_cleanup(self._release_request_capacity_when_admitted(task, acquisition, auth))
+            raise
+
     @asynccontextmanager
     async def request_capacity(
         self,
@@ -3552,6 +3655,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
         stash: Final = claim_request_stash_for_data(data)
+        borrowed_parallel_keys: Final = _consume_borrowed_parallel_keys(stash)
 
         #########################################################
         # Check if the call type has a specific rate limiter
@@ -3595,6 +3699,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
                 for d in descriptors
                 if (d.get("rate_limit") or {}).get("max_parallel_requests") is not None
+                and self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
+                not in borrowed_parallel_keys
             ]
             parallel_slot_id: Final = uuid.uuid4().hex if parallel_counter_keys else None
 
@@ -3605,11 +3711,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     d for d in descriptors if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
                 )
             )
-            response: Final = await self.should_rate_limit(
+            response: Final = await self._admit_request_capacity(
                 descriptors=first_pass_descriptors,
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-                skip_tpm_check=self.tpm_reservation_enabled,
-                parallel_slot_id=parallel_slot_id,
+                auth=user_api_key_dict,
+                slot_id=parallel_slot_id,
+                counter_keys=parallel_counter_keys,
+                borrowed_parallel_keys=borrowed_parallel_keys,
             )
 
             if response["overall_code"] == "OVER_LIMIT":
@@ -4429,7 +4536,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # 'metadata' and 'litellm_metadata' fields from litellm_params
         standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
         request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
-        if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
+        call_origin: Final = request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+        if call_origin and call_origin != CONTEXT_COMPACTION_CALL_ORIGIN:
             # Internal sub-calls bill spend to the caller but are not the caller's
             # traffic; charging them here would let background evals eat TPM headroom.
             return []
@@ -4811,9 +4919,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if popped is not None:
                 await self.batch_enqueued_token_store.refund(reservation=popped, litellm_parent_otel_span=span)
 
+    async def release_summary_request_capacity(
+        self, auth: UserAPIKeyAuth, request_data: Mapping[str, object], provider_completed: bool
+    ) -> None:
+        await self._release_stashed_parallel_slot(get_request_stash(), auth.parent_otel_span)
+        if not provider_completed:
+            await self.async_post_call_failure_hook(
+                request_data=request_data,
+                original_exception=TimeoutError("Context compaction summary cancelled"),
+                user_api_key_dict=auth,
+            )
+
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: Mapping[str, object],
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,

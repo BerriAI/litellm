@@ -2194,6 +2194,10 @@ async def add_litellm_data_to_request(
     if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
         _strip_client_message_redaction_opt_out(data)
 
+    from litellm.proxy.common_utils.context_compaction import summary_request_is_private, summary_request_updates
+
+    data.update(summary_request_updates(request, user_api_key_dict, data, _metadata_variable_name))
+
     # Fill in the proxy_server_request body snapshot now that metadata has
     # been parsed. Consumers (standard_logging_payload, lago,
     # spend_tracking_utils, streaming_iterator) read `body` to audit the
@@ -2491,7 +2495,8 @@ async def add_litellm_data_to_request(
         user_api_key_dict=user_api_key_dict,
     )
 
-    verbose_proxy_logger.debug("[PROXY] returned data from litellm_pre_call_utils: %s", data)
+    if not summary_request_is_private():
+        verbose_proxy_logger.debug("[PROXY] returned data from litellm_pre_call_utils: %s", data)
 
     # Team/Project credential overrides from model_config
     # Placed after the debug log to avoid leaking credential secrets in logs

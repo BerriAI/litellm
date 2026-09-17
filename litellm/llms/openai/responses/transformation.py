@@ -898,11 +898,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: Mapping[str, object],
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the compact response API request into a URL and data
 
@@ -914,16 +914,29 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         compact_path: Final = parsed_url.path.rstrip("/") + "/compact"
         url: Final = str(parsed_url.copy_with(path=compact_path))
 
-        replay_safe_input, sanitized_tools = self._prepared_input_and_tools(
+        replay_safe_input, _ = self._prepared_input_and_tools(
             model=model,
             input=input,
-            tools=response_api_optional_request_params.get("tools"),
+            tools=None,
             litellm_params=litellm_params,
         )
-        if sanitized_tools is not None:
-            response_api_optional_request_params["tools"] = sanitized_tools
-        data: Final = dict(
-            ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
+        compact_fields: Final = frozenset(
+            {"instructions", "previous_response_id", "prompt_cache_key", "prompt_cache_retention"}
+        )
+        data: Final = TypeAdapter(dict[str, object]).validate_python(
+            MappingProxyType(
+                {
+                    "model": model,
+                    "input": replay_safe_input,
+                    **MappingProxyType(
+                        {
+                            key: value
+                            for key, value in response_api_optional_request_params.items()
+                            if key in compact_fields
+                        }
+                    ),
+                }
+            )
         )
 
         return url, data

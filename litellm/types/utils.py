@@ -2954,6 +2954,7 @@ RoutingDecisionCause = Literal[
 
 
 InternalCallOrigin = Literal[
+    "context_compaction",
     "autorouter_classifier",
     "shadow_eval_router",
     "shadow_eval_judge",
@@ -2964,6 +2965,7 @@ InternalCallOrigin = Literal[
 records that it is not traffic the caller sent."""
 
 AUTOROUTER_CLASSIFIER_CALL_ORIGIN: Final[InternalCallOrigin] = "autorouter_classifier"
+CONTEXT_COMPACTION_CALL_ORIGIN: Final[InternalCallOrigin] = "context_compaction"
 SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
 SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
 LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN: Final[InternalCallOrigin] = "llm_as_a_judge_guardrail"

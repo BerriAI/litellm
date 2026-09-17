@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 from fastapi import HTTPException
@@ -10,6 +10,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LitellmUserRoles,
     Member,
+    ProxyException,
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_helpers.auto_router_permissions import (
@@ -120,6 +121,29 @@ def test_all_tier_parameter_representations_reject_privileged_overrides(
     assert denied.value.status_code == 400
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("denied_scope", [None, "team", "key"])
+async def test_compaction_recipient_requires_normal_model_access(
+    catalog: Router, denied_scope: Literal["team", "key"] | None
+) -> None:
+    operation: Final = authorize_member_auto_router_dependencies(
+        config=validate_member_auto_router_config(
+            {"tiers": {"SIMPLE": "allowed"}, "context_window_compaction_model": "other"}
+        ),
+        default_model=None,
+        user_api_key_dict=_actor(models=["allowed"] if denied_scope == "key" else ["allowed", "other"]),
+        team=_team(models=["allowed"] if denied_scope == "team" else ["allowed", "other"]),
+        prisma_client=_Client(),
+        llm_router=catalog,
+    )
+    if denied_scope is None:
+        await operation
+        return
+    with pytest.raises(ProxyException, match="other") as denied:
+        await operation
+    assert str(denied.value.code) == "403"
+
+
 def test_tier_config_is_normalized_and_unknown_router_extras_are_rejected() -> None:
     validated: Final = validate_member_auto_router_config(
         {"tiers": {"SIMPLE": [{"model_name": "allowed", "litellm_params": {"reasoning_effort": "low"}}]}}
@@ -183,7 +207,10 @@ async def test_member_updates_restrict_fields_and_preserve_an_inherited_default(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target", ["missing", "nested"])
-async def test_member_dependencies_require_plain_configured_models(target: str) -> None:
+@pytest.mark.parametrize("role", ["tier", "compaction"])
+async def test_member_dependencies_require_plain_configured_models(
+    target: str, role: Literal["tier", "compaction"]
+) -> None:
     catalog: Final = Router(
         model_list=[
             {"model_name": "allowed", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake"}},
@@ -198,10 +225,14 @@ async def test_member_dependencies_require_plain_configured_models(target: str) 
     )
     with pytest.raises(HTTPException) as denied:
         await authorize_member_auto_router_dependencies(
-            config=validate_member_auto_router_config({"tiers": {"SIMPLE": target}}),
+            config=validate_member_auto_router_config(
+                {"tiers": {"SIMPLE": target}}
+                if role == "tier"
+                else {"tiers": {"SIMPLE": "allowed"}, "context_window_compaction_model": target}
+            ),
             default_model=None,
-            user_api_key_dict=_actor(models=[target]),
-            team=_team(models=[target]),
+            user_api_key_dict=_actor(models=["allowed", target]),
+            team=_team(models=["allowed", target]),
             prisma_client=_Client(),
             llm_router=catalog,
         )

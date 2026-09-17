@@ -13454,6 +13454,14 @@ def _tier_config(**overrides) -> Dict:
     return {"tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"}, **overrides}
 
 
+class TestContextWindowCompactionConfig:
+    @pytest.mark.parametrize("value", ["", " ", "\t\n", "\u2003", 17, {"model": "summary-model"}])
+    def test_rejects_blank_or_non_string_model_groups(self, value: object) -> None:
+        with pytest.raises(ValidationError, match="context_window_compaction_model"):
+            ComplexityRouterConfig.model_validate(
+                {"tiers": {"SIMPLE": "small-model"}, "context_window_compaction_model": value}
+            )
+
 class TestContextWindowEscalation:
     """A tier decided on complexity alone must still hold the prompt, or the provider 400s.
 
@@ -13620,6 +13628,38 @@ class TestContextWindowEscalation:
         assert result is not None
         assert result.model == "small-model"
         assert "context_escalated" not in result.routing_decision
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("compaction_model", [None, "summary-model"])
+    @pytest.mark.parametrize("session_affinity", [False, True])
+    async def test_compaction_keeps_the_selected_group_on_overflow(
+        self, compaction_model: str | None, session_affinity: bool
+    ) -> None:
+        router: Final = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=_windowed_router(_SMALL, _BIG),
+            complexity_router_config={
+                "tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"},
+                "session_affinity": session_affinity,
+                "context_window_compaction_model": compaction_model,
+            },
+        )
+        request_kwargs: Final = {"metadata": {"session_id": "compaction-session"}}
+        context_fit: Final = await router._request_context_fit(_OVERSIZED_TURNS, request_kwargs)
+        assert context_fit.accepts("small-model") is (compaction_model is not None)
+        original: Final = await router.async_pre_routing_hook(
+            model="test-router", request_kwargs=request_kwargs, messages=[{"role": "user", "content": "ok continue"}]
+        )
+        oversized: Final = await router.async_pre_routing_hook(
+            model="test-router", request_kwargs=request_kwargs, messages=_OVERSIZED_TURNS
+        )
+
+        assert original is not None and original.model == "small-model"
+        assert oversized is not None
+        assert oversized.model == (original.model if compaction_model else "big-model")
+        assert oversized.routing_decision.get("context_escalated", False) is (compaction_model is None)
+        if session_affinity:
+            assert oversized.routing_decision["cause"] == "session_affinity_pin"
 
     @pytest.mark.asyncio
     async def test_out_of_band_system_and_tools_count_against_the_window(self):

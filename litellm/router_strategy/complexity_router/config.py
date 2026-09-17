@@ -1254,6 +1254,20 @@ class ComplexityRouterConfig(BaseModel):
         ),
     )
 
+    context_window_compaction_model: str | None = Field(
+        default=None,
+        min_length=1,
+        pattern=r"\S",
+        description=(
+            "Ordinary Router model group used for provider-native compaction when an asynchronous "
+            "Responses/OpenAI or Messages/Anthropic request exceeds its selected deployment's "
+            "input budget. The compactor must fit the input and its native output must fit the "
+            "unchanged answering deployment. Unsupported overflow routes fail explicitly. "
+            "Compaction takes precedence over context window escalation and incurs a separate "
+            "billable call under normal access and limits. Nested Auto Routers are not supported. "
+            "Omit or set null to keep existing routing behavior."
+        ),
+    )
     enable_context_window_escalation: bool = Field(
         default=True,
         description=(
