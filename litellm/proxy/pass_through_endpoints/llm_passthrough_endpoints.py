@@ -534,7 +534,7 @@ async def typesafe_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)"""
     base_target_url: Final = get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
