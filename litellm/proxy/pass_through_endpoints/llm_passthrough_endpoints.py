@@ -2773,7 +2773,7 @@ async def tinyfish_proxy_route(
             status_code=403,
             detail=f"{request.method} {encoded_endpoint} is not an allowed TinyFish Agent passthrough endpoint. "
             "Allowed: POST /v1/automation/run, POST /v1/automation/run-async, POST /v1/automation/run-sse, "
-            "GET /v1/runs, GET /v1/runs/{id}, POST /v1/runs/{id}/cancel.",
+            "GET /v1/runs/{id}, POST /v1/runs/{id}/cancel.",
         )
 
     if request.method == "POST" and encoded_endpoint.startswith("/v1/automation/"):
