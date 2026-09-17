@@ -9,12 +9,13 @@ use tokio::sync::{Notify, mpsc, oneshot};
 
 use super::handler::perform_ocr_request;
 use super::hooks::{
-    OcrCallContext, OcrCallTiming, OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrLogFuture,
-    OcrPostCallRequest, OcrPreCallRequest,
+    OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrLogFuture, OcrPostCallRequest,
+    OcrPreCallRequest,
 };
 use super::types::{OcrDocumentInput, OcrFileContent};
 use super::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
 use crate::ocr::Error;
+use litellm_callbacks::context::{CallContext, CallTiming};
 use litellm_callbacks::protocol::{
     HostFailure, HostLifecycle, HostPhase, NativeCall, NativeCallFuture, NativeCallStep,
 };
@@ -58,14 +59,14 @@ pub enum OcrHostOperation {
     ConstructResponse(Arc<LiteLLMOcrResponse>),
     MapFailure(Error),
     Success {
-        context: OcrCallContext,
+        context: CallContext,
         response: Arc<LiteLLMOcrResponse>,
-        timing: OcrCallTiming,
+        timing: CallTiming,
     },
     Failure {
-        context: OcrCallContext,
+        context: CallContext,
         error: Error,
-        timing: OcrCallTiming,
+        timing: CallTiming,
     },
     AcquireAzureAdToken,
     PreCall(OcrPreCallRequest),
@@ -324,7 +325,7 @@ struct OcrExecution {
     blocking_preparation: Arc<BlockingPreparation>,
     completed: bool,
     azure_ad_token_provider: bool,
-    terminal: Arc<std::sync::Mutex<Option<(OcrCallContext, OcrCallTiming)>>>,
+    terminal: Arc<std::sync::Mutex<Option<(CallContext, CallTiming)>>>,
 }
 
 impl OcrExecution {
@@ -513,7 +514,7 @@ impl Drop for OcrExecution {
 struct ProtocolHooks {
     operations: mpsc::UnboundedSender<PendingOperation>,
     intercepts_requests: bool,
-    terminal: Arc<std::sync::Mutex<Option<(OcrCallContext, OcrCallTiming)>>>,
+    terminal: Arc<std::sync::Mutex<Option<(CallContext, CallTiming)>>>,
 }
 
 #[derive(Debug)]
@@ -602,31 +603,29 @@ impl OcrHooks for ProtocolHooks {
 
     fn success<'a>(
         &'a self,
-        context: &'a OcrCallContext,
+        context: &'a CallContext,
         _response: &'a LiteLLMOcrResponse,
-        timing: &'a OcrCallTiming,
+        timing: &'a CallTiming,
     ) -> OcrLogFuture<'a> {
         Box::pin(async move {
             *self
                 .terminal
                 .lock()
-                .unwrap_or_else(|error| error.into_inner()) =
-                Some((context.clone(), *timing));
+                .unwrap_or_else(|error| error.into_inner()) = Some((context.clone(), *timing));
         })
     }
 
     fn failure<'a>(
         &'a self,
-        context: &'a OcrCallContext,
+        context: &'a CallContext,
         _error: &'a Error,
-        timing: &'a OcrCallTiming,
+        timing: &'a CallTiming,
     ) -> OcrLogFuture<'a> {
         Box::pin(async move {
             *self
                 .terminal
                 .lock()
-                .unwrap_or_else(|error| error.into_inner()) =
-                Some((context.clone(), *timing));
+                .unwrap_or_else(|error| error.into_inner()) = Some((context.clone(), *timing));
         })
     }
 }

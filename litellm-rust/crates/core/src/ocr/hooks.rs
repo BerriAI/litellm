@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrDocument, ResolvedOcrRequest};
 use crate::ocr::Error;
+use litellm_callbacks::context::{CallContext, CallTiming};
 
 pub type OcrHookFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 pub type OcrLogFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
@@ -35,20 +36,6 @@ pub struct OcrPostCallRequest {
     pub original_response: Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OcrCallContext {
-    pub call_type: String,
-    pub model: String,
-    pub custom_llm_provider: String,
-    pub litellm_call_id: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct OcrCallTiming {
-    pub start_time: f64,
-    pub end_time: f64,
-}
-
 pub trait OcrHooks: Send + Sync {
     fn intercepts_requests(&self) -> bool {
         false
@@ -67,17 +54,17 @@ pub trait OcrHooks: Send + Sync {
     }
     fn success<'a>(
         &'a self,
-        _context: &'a OcrCallContext,
+        _context: &'a CallContext,
         _response: &'a LiteLLMOcrResponse,
-        _timing: &'a OcrCallTiming,
+        _timing: &'a CallTiming,
     ) -> OcrLogFuture<'a> {
         Box::pin(async {})
     }
     fn failure<'a>(
         &'a self,
-        _context: &'a OcrCallContext,
+        _context: &'a CallContext,
         _error: &'a Error,
-        _timing: &'a OcrCallTiming,
+        _timing: &'a CallTiming,
     ) -> OcrLogFuture<'a> {
         Box::pin(async {})
     }

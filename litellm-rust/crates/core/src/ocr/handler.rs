@@ -1,16 +1,17 @@
 use std::sync::Arc;
 
 use super::OcrClient;
-use super::hooks::{OcrCallContext, OcrCallTiming, OcrHooks, OcrPostCallRequest};
+use super::hooks::{OcrHooks, OcrPostCallRequest};
 use super::types::{LiteLLMOcrResponse, PreparedOcrRequest, ResolvedOcrRequest};
 use crate::llms::base_llm::ocr::transformation::OcrResponseContext;
+use litellm_callbacks::context::{CallContext, CallTiming};
 
 pub(crate) async fn perform_ocr_request(
     client: &OcrClient,
     request: ResolvedOcrRequest,
 ) -> Result<LiteLLMOcrResponse, super::Error> {
     request.response_format()?;
-    let context = OcrCallContext {
+    let context = CallContext {
         call_type: "ocr".into(),
         model: request.model.clone(),
         custom_llm_provider: request.provider_name().to_owned(),
@@ -30,7 +31,7 @@ pub(crate) async fn perform_ocr_request(
             .await
     }
     .await;
-    let timing = OcrCallTiming {
+    let timing = CallTiming {
         start_time,
         end_time: epoch_seconds(),
     };

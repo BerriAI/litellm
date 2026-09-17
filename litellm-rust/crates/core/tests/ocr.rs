@@ -5,8 +5,8 @@ use serde_json::{Value, json};
 
 use super::OcrClient;
 use super::hooks::{
-    OcrCallContext, OcrCallTiming, OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrLogFuture,
-    OcrPostCallRequest, OcrPreCallRequest,
+    OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrLogFuture, OcrPostCallRequest,
+    OcrPreCallRequest,
 };
 use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
 use super::wire::{OcrWireRequest, decode_request};
@@ -14,6 +14,7 @@ use super::{
     NativeOutcome, NoopOcrHost, OcrAdmission, OcrCall, OcrCallStep, OcrDecline, OcrHost,
     OcrHostOperation, OcrHostResult,
 };
+use litellm_callbacks::context::{CallContext, CallTiming};
 
 #[rstest]
 #[case::mistral("mistral/model", json!({}))]
@@ -222,9 +223,9 @@ impl OcrHooks for RecordingHooks {
 
     fn success<'a>(
         &'a self,
-        _context: &'a OcrCallContext,
+        _context: &'a CallContext,
         _response: &'a super::LiteLLMOcrResponse,
-        _timing: &'a OcrCallTiming,
+        _timing: &'a CallTiming,
     ) -> OcrLogFuture<'a> {
         Box::pin(async move {
             self.events.lock().unwrap().push("success");
@@ -233,9 +234,9 @@ impl OcrHooks for RecordingHooks {
 
     fn failure<'a>(
         &'a self,
-        _context: &'a OcrCallContext,
+        _context: &'a CallContext,
         _error: &'a crate::ocr::Error,
-        _timing: &'a OcrCallTiming,
+        _timing: &'a CallTiming,
     ) -> OcrLogFuture<'a> {
         Box::pin(async move {
             self.events.lock().unwrap().push("failure");

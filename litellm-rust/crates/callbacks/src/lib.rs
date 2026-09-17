@@ -4,4 +4,5 @@
 //! another runtime later. Core implements [`protocol::NativeCall`] and never learns which
 //! host is on the other end; a bridge crate drives it against one.
 
+pub mod context;
 pub mod protocol;
