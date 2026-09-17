@@ -189,6 +189,37 @@ class TestGetAttachedPolicies:
 
         assert registry.get_attached_policies(context) == ["model-policy", "team-policy"]
 
+    def test_equal_priority_attachments_fall_back_to_scope_tier_order(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "model-policy", "models": ["gpt-4"], "priority": 1},
+                {"policy": "tag-policy", "tags": ["prod"], "priority": 1},
+                {"policy": "global-policy", "scope": "*", "priority": 1},
+            ]
+        )
+
+        context = PolicyMatchContext(model="gpt-4", tags=["prod"])
+
+        assert registry.get_attached_policies(context) == ["global-policy", "tag-policy", "model-policy"]
+
+    def test_duplicate_policy_uses_highest_priority_attachment(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "shared-policy", "scope": "*"},
+                {"policy": "global-policy", "scope": "*"},
+                {"policy": "shared-policy", "models": ["gpt-4"], "priority": 0},
+            ]
+        )
+
+        context = PolicyMatchContext(model="gpt-4")
+
+        assert registry.get_attached_policies_with_reasons(context) == [
+            {"policy_name": "shared-policy", "matched_via": "model:gpt-4"},
+            {"policy_name": "global-policy", "matched_via": "scope:*"},
+        ]
+
     def test_combined_team_and_model_attachment_uses_model_specificity(self):
         registry = AttachmentRegistry()
         registry.load_attachments(

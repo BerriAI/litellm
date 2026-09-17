@@ -1,5 +1,5 @@
 import React from "react";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -178,6 +178,61 @@ describe("AddAttachmentForm", () => {
     await enterTeam(user, "healthcare-*");
     await submitAndSettle(user);
     expect(screen.queryByText(TEAMS_ERROR)).not.toBeInTheDocument();
+  });
+
+  const selectPolicy = async (user: UserEvent, policyName: string) => {
+    await screen.findByText("Create Policy Attachment");
+    const input = screen.getByLabelText("Policies");
+    await user.click(input);
+    await user.type(input, `${policyName}{Enter}`);
+  };
+
+  const setPriority = (value: string) => {
+    fireEvent.change(screen.getByLabelText("Priority"), { target: { value } });
+  };
+
+  const submit = async (user: UserEvent) => {
+    await user.click(screen.getByRole("button", { name: /create attachment/i }));
+  };
+
+  it("sends the entered priority with the attachment", async () => {
+    const user = userEvent.setup();
+    const createAttachment = vi.fn().mockResolvedValue({});
+    renderWithProviders(<AddAttachmentForm {...defaultProps} createAttachment={createAttachment} />);
+    await selectPolicy(user, "policy-alpha");
+    setPriority("10");
+    await submit(user);
+    await waitFor(() => expect(createAttachment).toHaveBeenCalledTimes(1));
+    expect(createAttachment).toHaveBeenCalledWith("test-token", {
+      policy_name: "policy-alpha",
+      scope: "*",
+      priority: 10,
+    });
+  });
+
+  it("omits priority from the attachment when the field is left blank", async () => {
+    const user = userEvent.setup();
+    const createAttachment = vi.fn().mockResolvedValue({});
+    renderWithProviders(<AddAttachmentForm {...defaultProps} createAttachment={createAttachment} />);
+    await selectPolicy(user, "policy-alpha");
+    await submit(user);
+    await waitFor(() => expect(createAttachment).toHaveBeenCalledTimes(1));
+    expect(createAttachment).toHaveBeenCalledWith("test-token", { policy_name: "policy-alpha", scope: "*" });
+  });
+
+  it.each([
+    ["2147483648", /at most 2147483647/i],
+    ["-2147483649", /at least -2147483648/i],
+    ["1.5", /whole number/i],
+  ])("blocks submit with a field error when priority is %s", async (value, error) => {
+    const user = userEvent.setup();
+    const createAttachment = vi.fn();
+    renderWithProviders(<AddAttachmentForm {...defaultProps} createAttachment={createAttachment} />);
+    await selectPolicy(user, "policy-alpha");
+    setPriority(value);
+    await submit(user);
+    expect(await screen.findByText(error)).toBeInTheDocument();
+    expect(createAttachment).not.toHaveBeenCalled();
   });
 
   it("defers to the backend (does not flag) when the team list failed to load", async () => {
