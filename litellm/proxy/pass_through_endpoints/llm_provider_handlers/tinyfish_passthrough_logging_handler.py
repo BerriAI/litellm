@@ -59,7 +59,7 @@ _SSE_POLLER_SPAWNED_KEY: Final = "tinyfish_sse_poller_spawned"
 
 
 def mark_sse_poller_spawned(logging_obj: LiteLLMLoggingObj) -> None:
-    logging_obj.model_call_details[_SSE_POLLER_SPAWNED_KEY] = True
+    logging_obj.model_call_details[_SSE_POLLER_SPAWNED_KEY] = True  # rebind-ok: model_call_details is the request's shared scratch dict
 
 
 def sse_poller_spawned(logging_obj: LiteLLMLoggingObj) -> bool:
