@@ -5,7 +5,7 @@ use futures_util::future::{AbortHandle, Abortable};
 #[cfg(test)]
 use litellm_callbacks::protocol::NativeCallFuture;
 use litellm_callbacks::protocol::{HostFailure, HostPhase, HostStep, NativeCall, NativeCallStep};
-pub(crate) use litellm_callbacks_legacy::{PythonCallState, PythonLogger, missing_state, now};
+pub(crate) use litellm_callbacks_legacy::{PythonCallState, PythonLogger, missing_state};
 use pyo3::exceptions::{PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
@@ -68,7 +68,7 @@ pub(crate) fn run_call<R: PythonHost + 'static>(
     call: R::Call,
     route: R,
 ) -> PyResult<Py<PyAny>> {
-    let asynchronous = route.state().asynchronous;
+    let asynchronous = route.state().asynchronous();
     let mut lifecycle = PythonLifecycle {
         route,
         call: Some(Arc::new(Mutex::new(NativeCallState { call, result: None }))),
@@ -108,7 +108,7 @@ impl<R: PythonHost> PythonLifecycle<R> {
             call.result = Some(result);
             Ok(())
         };
-        if self.route.state().asynchronous {
+        if self.route.state().asynchronous() {
             let mut future = Box::pin(future);
             if let Poll::Ready(()) = poll_async_value(py, future.as_mut())? {
                 return Ok(HostStep::Ready(self.take_native_result()?));
@@ -424,12 +424,12 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         }
 
         fn invoke(&mut self, py: Python<'_>, _: ()) -> PyResult<()> {
-            self.0.response = Some(
+            self.0.record_response(
+                py,
                 pyo3::types::PyString::new(py, "shared lifecycle")
                     .into_any()
                     .unbind(),
-            );
-            Ok(())
+            )
         }
 
         fn cleanup(&mut self) {}

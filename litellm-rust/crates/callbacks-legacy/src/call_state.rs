@@ -16,16 +16,16 @@ pub fn missing_state() -> PyErr {
 }
 
 pub struct PythonCallState {
-    pub args: Py<PyTuple>,
-    pub kwargs: Py<PyDict>,
-    pub logger: Option<PythonLogger>,
-    pub start: Py<PyAny>,
-    pub end: Option<Py<PyAny>>,
-    pub response: Option<Py<PyAny>>,
-    pub error: Option<Py<PyBaseException>>,
-    pub asynchronous: bool,
-    pub internal: bool,
-    pub call_type: &'static str,
+    args: Py<PyTuple>,
+    kwargs: Py<PyDict>,
+    logger: Option<PythonLogger>,
+    start: Py<PyAny>,
+    end: Option<Py<PyAny>>,
+    response: Option<Py<PyAny>>,
+    error: Option<Py<PyBaseException>>,
+    asynchronous: bool,
+    internal: bool,
+    call_type: &'static str,
 }
 
 pub fn now(py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -128,6 +128,24 @@ impl PythonCallState {
             internal: false,
             call_type,
         })
+    }
+
+    pub fn kwargs(&self) -> &Py<PyDict> {
+        &self.kwargs
+    }
+
+    pub fn asynchronous(&self) -> bool {
+        self.asynchronous
+    }
+
+    pub fn error(&self) -> Option<&Py<PyBaseException>> {
+        self.error.as_ref()
+    }
+
+    pub fn record_response(&mut self, py: Python<'_>, response: Py<PyAny>) -> PyResult<()> {
+        self.end = Some(now(py)?);
+        self.response = Some(response);
+        Ok(())
     }
 
     pub fn logger(&self) -> PyResult<&PythonLogger> {

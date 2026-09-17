@@ -13,7 +13,7 @@ use litellm_callbacks_legacy::legacy::logger::LegacyCallbacks;
 use super::callbacks::{self, OcrLogger};
 use super::errors::to_pyerr as ocr_error_to_pyerr;
 use super::project::{ProjectedOcrFields, admitted_call, project_request};
-use crate::lifecycle::{OperationClass, PythonCallState, PythonHost, missing_state, now, run_call};
+use crate::lifecycle::{OperationClass, PythonCallState, PythonHost, missing_state, run_call};
 
 struct PythonOcrHost {
     state: PythonCallState,
@@ -54,7 +54,7 @@ impl PythonOcrHost {
         py: Python<'_>,
         request: OcrPreCallRequest,
     ) -> PyResult<OcrPreCallRequest> {
-        let kwargs = self.state.kwargs.bind(py);
+        let kwargs = self.state.kwargs().bind(py);
         let retained_fields = PyDict::new(py);
         for name in request
             .optional_params
@@ -106,7 +106,7 @@ impl PythonOcrHost {
         let pre_call = projected.pre_call.as_ref().ok_or_else(missing_state)?;
         self.state.logger()?.update_ocr(
             py,
-            &self.state.kwargs,
+            self.state.kwargs(),
             pre_call,
             &projected.fields.secret_fields,
             &request.url,
@@ -207,7 +207,7 @@ impl PythonHost for PythonOcrHost {
                 let OcrHostData::Unprojected { request } = &self.data else {
                     return Err(missing_state());
                 };
-                let projected = project_request(request.bind(py), self.state.kwargs.bind(py))?;
+                let projected = project_request(request.bind(py), self.state.kwargs().bind(py))?;
                 let has_token_provider = projected.fields.azure_ad_token_provider.is_some();
                 let request = projected.request;
                 self.data = OcrHostData::Projected(Box::new(ProjectedOcrHost {
@@ -233,14 +233,14 @@ impl PythonHost for PythonOcrHost {
                 OcrHostResult::PostCall(Ok(self.python_post_call(py, request)?))
             }
             OcrHostOperation::ConstructResponse(response) => {
-                self.state.end = Some(now(py)?);
-                self.state.response = Some(callbacks::response(py, response.as_ref())?);
+                self.state
+                    .record_response(py, callbacks::response(py, response.as_ref())?)?;
                 OcrHostResult::Lifecycle(Ok(()))
             }
             OcrHostOperation::MapFailure(error) => {
                 self.state
                     .record_failure(py, ocr_error_to_pyerr(error), false, None);
-                let error = self.state.error.as_ref().ok_or_else(missing_state)?;
+                let error = self.state.error().ok_or_else(missing_state)?;
                 let (request, provider) = match &self.data {
                     OcrHostData::Unprojected { request } => (request.bind(py), ""),
                     OcrHostData::Projected(projected) => (
