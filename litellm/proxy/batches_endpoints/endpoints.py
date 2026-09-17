@@ -7,6 +7,7 @@
 import asyncio
 import os
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -17,7 +18,11 @@ from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    log_llm_api_exception,
+    request_litellm_call_id,
+)
 from litellm.proxy.common_utils.callback_utils import sanitize_openai_provider_metadata
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
@@ -383,8 +388,9 @@ async def create_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_batch(): Exception occured - %s", e)
-        raise handle_exception_on_proxy(e)
+        litellm_call_id: Final = request_litellm_call_id(data)
+        log_llm_api_exception(e, litellm_call_id)
+        raise handle_exception_on_proxy(e, litellm_call_id)
 
 
 @router.get(
@@ -674,8 +680,9 @@ async def retrieve_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.retrieve_batch(): Exception occured - %s", e)
-        raise handle_exception_on_proxy(e)
+        litellm_call_id: Final = request_litellm_call_id(data)
+        log_llm_api_exception(e, litellm_call_id)
+        raise handle_exception_on_proxy(e, litellm_call_id)
 
 
 @router.get(
@@ -725,6 +732,7 @@ async def list_batches(
     )
 
     verbose_proxy_logger.debug("GET /v1/batches after=%s limit=%s", after, limit)
+    data: Mapping[str, object] = MappingProxyType({})
     try:
         if llm_router is None:
             raise HTTPException(
@@ -854,10 +862,11 @@ async def list_batches(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
-            request_data={"after": after, "limit": limit},
+            request_data={**data, "after": after, "limit": limit},
         )
-        verbose_proxy_logger.error("litellm.proxy.proxy_server.retrieve_batch(): Exception occured - %s", e)
-        raise handle_exception_on_proxy(e)
+        litellm_call_id: Final = request_litellm_call_id(data)
+        log_llm_api_exception(e, litellm_call_id)
+        raise handle_exception_on_proxy(e, litellm_call_id)
 
 
 @router.post(
@@ -1079,8 +1088,9 @@ async def cancel_batch(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.create_batch(): Exception occured - %s", e)
-        raise handle_exception_on_proxy(e)
+        litellm_call_id: Final = request_litellm_call_id(data)
+        log_llm_api_exception(e, litellm_call_id)
+        raise handle_exception_on_proxy(e, litellm_call_id)
 
 
 ######################################################################
