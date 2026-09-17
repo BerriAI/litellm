@@ -180,6 +180,7 @@ from litellm.types.llms.openai import (
     ToolMessageContentPart,
 )
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
+from litellm.utils import supports_mid_conversation_system
 
 from .streaming_iterator import AnthropicStreamWrapper
 
@@ -188,6 +189,12 @@ if TYPE_CHECKING:
     from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
 ToolResultContent: TypeAlias = str | list[ToolMessageContentPart]
+
+
+def target_supports_mid_conversation_system(model: str | None, custom_llm_provider: str | None) -> bool:
+    if not model:
+        return False
+    return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
 
 
 class AnthropicAdapter:
@@ -423,6 +430,7 @@ class LiteLLMAnthropicMessagesAdapter:
         messages: list[AllAnthropicPassThroughMessageValues],
         model: str | None = None,
         *,
+        custom_llm_provider: str | None = None,
         preserve_midturn_system: bool = False,
     ) -> list:
         new_messages: Final[list[AllMessageValues]] = []
@@ -431,13 +439,16 @@ class LiteLLMAnthropicMessagesAdapter:
             (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
             len(replayable_messages),
         )
+        trailing_messages: Final = replayable_messages[leading_count:]
+        keeps_midturn_system: Final = (
+            preserve_midturn_system
+            or not any(is_system_role_message(m) for m in trailing_messages)
+            or target_supports_mid_conversation_system(model, custom_llm_provider)
+        )
         ordered_messages: Final = (
             replayable_messages
-            if preserve_midturn_system
-            else (
-                *replayable_messages[:leading_count],
-                *convert_mid_conversation_system_turns(replayable_messages[leading_count:]),
-            )
+            if keeps_midturn_system
+            else (*replayable_messages[:leading_count], *convert_mid_conversation_system_turns(trailing_messages))
         )
         for m in ordered_messages:
             user_message: ChatCompletionUserMessage | None = None
@@ -1194,6 +1205,7 @@ class LiteLLMAnthropicMessagesAdapter:
         new_messages = self.translate_anthropic_messages_to_openai(
             messages=messages_list,
             model=anthropic_message_request.get("model"),
+            custom_llm_provider=custom_llm_provider,
             preserve_midturn_system=preserve_midturn_system,
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
