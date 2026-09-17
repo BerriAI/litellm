@@ -8,6 +8,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypesLiteral
 
 
 def test_has_post_call_response_headers_callbacks_ignores_empty_callbacks(
@@ -609,7 +610,12 @@ class _RejectsInModeration(CustomLogger):
         super().__init__()
         self.moderated: list[str] = []
 
-    async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+    async def async_moderation_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> None:
         self.moderated.append(call_type)
         raise HTTPException(status_code=400, detail={"error": "rejected"})
 
