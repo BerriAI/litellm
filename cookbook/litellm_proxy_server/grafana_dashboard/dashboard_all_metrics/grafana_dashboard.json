@@ -5155,7 +5155,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "max by (state) (litellm_redis_circuit_breaker_state)",
+          "expr": "sum by (state) (litellm_redis_circuit_breaker_state)",
           "legendFormat": "{{state}}",
           "range": true,
           "refId": "A"
