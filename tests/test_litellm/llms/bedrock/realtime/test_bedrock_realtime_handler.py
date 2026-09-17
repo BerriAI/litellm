@@ -8,7 +8,11 @@ from unittest.mock import MagicMock
 import pytest
 
 import litellm
-from litellm.constants import REALTIME_SESSION_SUCCESS_LOGGED_KEY
+from litellm.constants import (
+    BEDROCK_REALTIME_SDK_SUPPORTED_RANGE,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+    WEBSOCKET_CLOSE_REASON_MAX_BYTES,
+)
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
@@ -969,6 +973,9 @@ class TestBedrockRealtimeSdkImportErrors:
         assert message.startswith("Missing aws_sdk_bedrock_runtime")
         assert "litellm[bedrock-realtime]" in message
         assert "is installed but" not in message
+        close_reason = message.encode()[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode()
+        assert BEDROCK_REALTIME_SDK_SUPPORTED_RANGE in close_reason
+        assert "pip install 'litellm[bedrock-realtime]'" in close_reason
 
     @pytest.mark.asyncio
     async def test_incompatible_sdk_names_installed_version_and_supported_range(self, monkeypatch):
@@ -988,6 +995,9 @@ class TestBedrockRealtimeSdkImportErrors:
         assert "aws-sdk-bedrock-runtime 0.7.0 is installed but" in message
         assert ">=0.10.0,<0.12.0" in message
         assert not message.startswith("Missing aws_sdk_bedrock_runtime")
+        close_reason = message.encode()[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode()
+        assert "0.7.0 is installed" in close_reason
+        assert BEDROCK_REALTIME_SDK_SUPPORTED_RANGE in close_reason
 
 
 if __name__ == "__main__":
