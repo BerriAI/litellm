@@ -75,14 +75,14 @@ class GunzipRequestMiddleware:
             nonlocal body_sent
             if not body_sent:
                 body_sent = True
-                return {"type": "http.request", "body": body, "more_body": False}
+                return {"type": "http.request", "body": body, "more_body": False}  # mutable-ok: ASGI message dict
             return await receive()
 
         await self.app(scope, receive_replaced, send)
 
     @staticmethod
     async def _read_body(receive: Receive) -> bytes | None:
-        chunks: list[bytes] = []
+        chunks: list[bytes] = []  # mutable-ok: buffering request body chunks
         while True:
             message = await receive()
             if message["type"] == "http.request":
@@ -96,7 +96,7 @@ class GunzipRequestMiddleware:
     @staticmethod
     def _decompress(compressed: bytes) -> bytes | None | bool:
         decompressor = zlib.decompressobj(wbits=zlib.MAX_WBITS | 16)
-        decompressed_chunks: list[bytes] = []
+        decompressed_chunks: list[bytes] = []  # mutable-ok: buffering decompressed chunks
         total_decompressed = 0
         offset = 0
         chunk_size = 65536

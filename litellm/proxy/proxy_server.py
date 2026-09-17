@@ -4885,7 +4885,7 @@ class ProxyConfig:
             # _encrypt_env_variables_for_db is idempotent — a caller that
             # already encrypted the values (or re-submitted ciphertext read
             # back from the DB) will not get a stacked second layer.
-            if config_to_save.get("environment_variables"):
+            if "environment_variables" in config_to_save and config_to_save["environment_variables"]:
                 config_to_save["environment_variables"] = self._encrypt_env_variables_for_db(
                     environment_variables=config_to_save["environment_variables"]
                 )
@@ -11220,11 +11220,11 @@ async def completion(
         if _data.get("stream", None) is not None and _data["stream"] is True:
             _text_response: Final = litellm.ModelResponse()
             # Set text attribute dynamically for text completion format
-            _text_response.choices[0].text = e.message
+            setattr(_text_response.choices[0], "text", e.message)
             _text_response.model = e.model
             _usage = _blocked_response_usage(e.original_response)
             # Set usage attribute dynamically (ModelResponse accepts usage in __init__ but it's not in type definition)
-            _text_response.usage = _usage
+            setattr(_text_response, "usage", _usage)
             _iterator = litellm.utils.ModelResponseIterator(model_response=_text_response, convert_to_delta=True)
             _streaming_response = litellm.TextCompletionStreamWrapper(
                 completion_stream=_iterator,
@@ -16329,15 +16329,17 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
     response: Final = await generate_key_helper_fn(
         llm_router=llm_router,
         request_type="key",
-        user_role=user_obj.user_role,
-        duration=LITELLM_UI_SESSION_DURATION,
-        key_max_budget=litellm.max_ui_session_budget,
-        models=[],
-        aliases={},
-        config={},
-        spend=0,
-        user_id=user_obj.user_id,
-        team_id=UI_TEAM_ID,
+        **{
+            "user_role": user_obj.user_role,
+            "duration": LITELLM_UI_SESSION_DURATION,
+            "key_max_budget": litellm.max_ui_session_budget,
+            "models": [],
+            "aliases": {},
+            "config": {},
+            "spend": 0,
+            "user_id": user_obj.user_id,
+            "team_id": UI_TEAM_ID,
+        },
     )
     key: Final = response["token"]
 
