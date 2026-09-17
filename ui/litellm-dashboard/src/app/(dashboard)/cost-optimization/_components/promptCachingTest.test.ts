@@ -84,12 +84,13 @@ describe("runPromptCachingTest", () => {
       return responses[seenBodies.length - 1];
     });
 
-    const result = await runPromptCachingTest({
+    const testOptions = {
       accessToken: "token-123",
       model: "claude-haiku-4-5",
       baseUrl: "http://proxy:4000",
       fetchImpl,
-    });
+    };
+    const result = await runPromptCachingTest(testOptions);
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
@@ -112,13 +113,12 @@ describe("runPromptCachingTest", () => {
   it("rejects with status and error message on non-2xx", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ error: { message: "boom" } }, { status: 400 }));
 
-    await expect(
-      runPromptCachingTest({
-        accessToken: "token-123",
-        model: "claude-haiku-4-5",
-        baseUrl: "http://proxy:4000",
-        fetchImpl,
-      }),
-    ).rejects.toThrow(/400.*boom|boom.*400/);
+    const testOptions = {
+      accessToken: "token-123",
+      model: "claude-haiku-4-5",
+      baseUrl: "http://proxy:4000",
+      fetchImpl,
+    };
+    await expect(runPromptCachingTest(testOptions)).rejects.toThrow(/400.*boom|boom.*400/);
   });
 });

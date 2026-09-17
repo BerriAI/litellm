@@ -76,7 +76,8 @@ const PromptCachingTestCard: React.FC<PromptCachingTestCardProps> = ({
     setOutcome(null);
     setError(null);
     try {
-      setOutcome(await runTestImpl({ accessToken, model, baseUrl: getProxyBaseUrl(), onCallStart: setRunningCall }));
+      const testOptions = { accessToken, model, baseUrl: getProxyBaseUrl(), onCallStart: setRunningCall };
+      setOutcome(await runTestImpl(testOptions));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

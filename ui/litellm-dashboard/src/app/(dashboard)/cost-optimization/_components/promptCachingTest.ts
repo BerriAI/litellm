@@ -65,15 +65,15 @@ const tokenDetailsSchema = z
   })
   .nullish();
 
-const usageSchema = z
-  .object({
-    prompt_tokens: z.number().nullish(),
-    cache_creation_input_tokens: z.number().nullish(),
-    cache_read_input_tokens: z.number().nullish(),
-    prompt_tokens_details: tokenDetailsSchema,
-    input_tokens_details: tokenDetailsSchema,
-  })
-  .nullish();
+const usageFields = {
+  prompt_tokens: z.number().nullish(),
+  cache_creation_input_tokens: z.number().nullish(),
+  cache_read_input_tokens: z.number().nullish(),
+  prompt_tokens_details: tokenDetailsSchema,
+  input_tokens_details: tokenDetailsSchema,
+};
+
+const usageSchema = z.object(usageFields).nullish();
 
 const chatCompletionResponseSchema = z.object({
   model: z.string().nullish(),
