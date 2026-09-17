@@ -10789,3 +10789,26 @@ def test_a_deployment_with_a_batch_control_plane_endpoint_keeps_it_out_of_chat_r
 
     assert response.choices[0].message.content == "ok"
     assert "aws_bedrock_control_plane_endpoint" not in route.calls[0].request.content.decode()
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "bedrock/converse/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ],
+)
+def test_reasoning_effort_dict_is_coerced_converse(model):
+    """The Responses->Chat parser keeps `reasoning_effort` as a dict whenever
+    `summary` is set. Every branch gates on `isinstance(value, str)`, so without
+    coercion the dict matches nothing and thinking is dropped silently."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": {"effort": "low", "summary": "concise"}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params.get("thinking") == {"type": "enabled", "budget_tokens": 1024}
