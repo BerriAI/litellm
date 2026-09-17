@@ -8,9 +8,110 @@ configuration works correctly.
 Related issue: https://github.com/BerriAI/litellm/issues/18221
 """
 
-from typing import get_args
+import json
+import re
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Final, get_args
 
 import pytest
+from prometheus_client import REGISTRY
+from prometheus_client.registry import Collector
+
+import litellm
+from litellm.caching.redis_cache import _BreakerMetrics
+from litellm.integrations.prometheus import PrometheusLogger
+from litellm.integrations.prometheus_services import PrometheusServicesLogger
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import SpendLogCleanupMetrics
+from litellm.proxy.middleware.admission_control_middleware import create_prometheus_admission_metrics
+from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
+
+_GRAFANA_DIR: Final = Path(__file__).parents[3] / "cookbook" / "litellm_proxy_server" / "grafana_dashboard"
+_ALL_METRICS_DASHBOARD: Final = _GRAFANA_DIR / "dashboard_all_metrics" / "grafana_dashboard.json"
+_LITELLM_DASHBOARDS: Final = (_ALL_METRICS_DASHBOARD, _GRAFANA_DIR / "dashboard_v2" / "grafana_dashboard.json")
+_METRIC_TOKEN_RE: Final = re.compile(r"\blitellm_[a-z0-9_]+")
+_BY_CLAUSE_RE: Final = re.compile(r"\bby\s*\([^)]*\)")
+_EXPOSITION_SUFFIXES: Final = ("", "_total", "_bucket", "_sum", "_count", "_created")
+
+
+def _lazily_registered_collectors() -> tuple[Collector, ...]:
+    SpendLogCleanupMetrics._ensure_initialized()
+    collectors: Final = (
+        InFlightRequestsMiddleware._get_gauge(),
+        SpendLogCleanupMetrics.rows_deleted,
+        SpendLogCleanupMetrics.batch_duration,
+        SpendLogCleanupMetrics.rows_remaining,
+        SpendLogCleanupMetrics.batch_failures,
+        SpendLogCleanupMetrics.runs,
+    )
+    assert all(collector is not None for collector in collectors)
+    return tuple(collector for collector in collectors if collector is not None)
+
+
+@pytest.fixture
+def emitted_metric_families(monkeypatch: pytest.MonkeyPatch) -> Iterator[frozenset[str]]:
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        REGISTRY.unregister(collector)
+    monkeypatch.setattr(litellm, "prometheus_metrics_config", None)
+    PrometheusLogger()
+    PrometheusServicesLogger()
+    _BreakerMetrics()
+    assert create_prometheus_admission_metrics() is not None
+    families: Final = frozenset(
+        metric.name for collector in (REGISTRY, *_lazily_registered_collectors()) for metric in collector.collect()
+    )
+    yield families
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        REGISTRY.unregister(collector)
+
+
+def _dashboard_expressions(path: Path) -> tuple[str, ...]:
+    dashboard: Final = json.loads(path.read_text())
+    return tuple(target["expr"] for panel in dashboard["panels"] for target in panel.get("targets", ()))
+
+
+def _referenced_metric_tokens(path: Path) -> frozenset[str]:
+    return frozenset(
+        token
+        for expr in _dashboard_expressions(path)
+        for token in _METRIC_TOKEN_RE.findall(_BY_CLAUSE_RE.sub("", expr))
+    )
+
+
+def _family_of(token: str, families: frozenset[str]) -> str | None:
+    candidates: Final = (token.removesuffix(suffix) for suffix in _EXPOSITION_SUFFIXES if token.endswith(suffix))
+    return next((candidate for candidate in candidates if candidate in families), None)
+
+
+def test_all_metrics_dashboard_charts_every_emitted_metric_family(emitted_metric_families: frozenset[str]):
+    referenced: Final = _referenced_metric_tokens(_ALL_METRICS_DASHBOARD)
+    charted: Final = frozenset(
+        family for token in referenced for family in (_family_of(token, emitted_metric_families),) if family
+    )
+    assert emitted_metric_families - charted == frozenset()
+
+
+@pytest.mark.parametrize("dashboard_path", _LITELLM_DASHBOARDS, ids=lambda p: p.parent.name)
+def test_dashboards_only_reference_emitted_metrics(dashboard_path: Path, emitted_metric_families: frozenset[str]):
+    dead: Final = frozenset(
+        token
+        for token in _referenced_metric_tokens(dashboard_path)
+        if _family_of(token, emitted_metric_families) is None
+    )
+    assert dead == frozenset()
+
+
+@pytest.mark.parametrize("dashboard_path", _LITELLM_DASHBOARDS, ids=lambda p: p.parent.name)
+def test_dashboards_use_templated_prometheus_datasource(dashboard_path: Path):
+    dashboard: Final = json.loads(dashboard_path.read_text())
+    datasource_variables: Final = tuple(
+        variable["name"] for variable in dashboard["templating"]["list"] if variable["type"] == "datasource"
+    )
+    assert datasource_variables == ("DS_PROMETHEUS",)
+    panel_datasource_uids: Final = frozenset(
+        panel["datasource"]["uid"] for panel in dashboard["panels"] if panel["type"] != "row"
+    )
+    assert panel_datasource_uids == frozenset({"${DS_PROMETHEUS}"})
 
 
 def test_remaining_requests_metric_name_in_defined_metrics():
