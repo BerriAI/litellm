@@ -1,19 +1,23 @@
 import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import pytest
 
 import litellm
+from litellm.responses import dispatch as responses_dispatch
 from litellm.responses import main as python_responses
 from litellm.responses.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
+from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, Rule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.responses.entrypoints import (
+    NATIVE_ARESPONSES,
+    NATIVE_RESPONSES,
     LiteLLMResponsesRequest,
     NativeAresponses,
     NativeResponses,
@@ -253,3 +257,66 @@ def test_binding_errors_delegate_unchanged_to_python(
         is response
     )
     assert captured == [(args, kwargs)]
+
+
+def test_public_responses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final[list[LiteLLMResponsesRequest]] = []
+    expected: Final = _response()
+
+    def native(
+        request: LiteLLMResponsesRequest,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> ResponsesAPIResponse:
+        captured.append(request)
+        return expected
+
+    NATIVE_RESPONSES.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_responses: Final = cast(Callable[..., ResponsesAPIResponse], litellm.responses)
+    try:
+        result: Final = public_responses(input=INPUT, model="gpt-4o")
+    finally:
+        NATIVE_RESPONSES.reset()
+    assert result is expected
+    assert [request.model for request in captured] == ["gpt-4o"]
+
+
+@pytest.mark.asyncio
+async def test_public_aresponses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final[list[LiteLLMResponsesRequest]] = []
+    expected: Final = _response()
+
+    async def native(
+        request: LiteLLMResponsesRequest,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> ResponsesAPIResponse:
+        captured.append(request)
+        return expected
+
+    NATIVE_ARESPONSES.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_aresponses: Final = cast(Callable[..., Awaitable[ResponsesAPIResponse]], litellm.aresponses)
+    try:
+        result: Final = await public_aresponses(input=INPUT, model="gpt-4o")
+    finally:
+        NATIVE_ARESPONSES.reset()
+    assert result is expected
+    assert [request.model for request in captured] == ["gpt-4o"]
+
+
+def test_responses_with_retries_uses_the_dispatch_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: Final[list[Mapping[str, object]]] = []
+    expected: Final = _response()
+
+    def dispatch_responses(*args: object, **kwargs: object) -> ResponsesAPIResponse:  # kwargs-ok: records call shape
+        calls.append(kwargs)
+        return expected
+
+    monkeypatch.setattr(responses_dispatch, "responses", dispatch_responses)
+    retry: Final = cast(Callable[..., ResponsesAPIResponse], litellm.responses_with_retries)
+    result: Final = retry(input=INPUT, model="gpt-4o", num_retries=1)
+    assert result is expected
+    assert calls[0]["num_retries"] == 0
+    assert calls[0]["max_retries"] == 0

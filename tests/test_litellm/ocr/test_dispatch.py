@@ -1,18 +1,26 @@
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
+from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, Rule, Rules
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest, NativeAocr, NativeOcr
+from litellm.rust_bridge.ocr.entrypoints import (
+    NATIVE_AOCR,
+    NATIVE_OCR,
+    LiteLLMOcrRequest,
+    NativeAocr,
+    NativeOcr,
+)
 
 PYTHON_RULES: Final[Rules] = (Rule(Route.OCR, Rollout.PYTHON_ONLY),)
 RUST_RULES: Final[Rules] = (Rule(Route.OCR, Rollout.RUST_REQUIRED),)
@@ -324,3 +332,58 @@ async def test_aocr_parser_errors_before_python_or_native(
             native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
             rules=RUST_RULES,
         )
+
+
+def test_public_ocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    document: Final[Mapping[str, object]] = {
+        "type": "document_url",
+        "document_url": "https://example.invalid/document.pdf",
+    }
+    captured: Final[list[LiteLLMOcrRequest]] = []
+    expected: Final = response()
+
+    def native(
+        request: LiteLLMOcrRequest,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> OCRResponse:
+        captured.append(request)
+        return expected
+
+    NATIVE_OCR.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_ocr: Final = cast(Callable[..., OCRResponse], litellm.ocr)
+    try:
+        result: Final = public_ocr(model="mistral/mistral-ocr-latest", document=document)
+    finally:
+        NATIVE_OCR.reset()
+    assert result is expected
+    assert [request.model for request in captured] == ["mistral/mistral-ocr-latest"]
+
+
+@pytest.mark.asyncio
+async def test_public_aocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    document: Final[Mapping[str, object]] = {
+        "type": "document_url",
+        "document_url": "https://example.invalid/document.pdf",
+    }
+    captured: Final[list[LiteLLMOcrRequest]] = []
+    expected: Final = response()
+
+    async def native(
+        request: LiteLLMOcrRequest,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> OCRResponse:
+        captured.append(request)
+        return expected
+
+    NATIVE_AOCR.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_aocr: Final = cast(Callable[..., Awaitable[OCRResponse]], litellm.aocr)
+    try:
+        result: Final = await public_aocr(model="mistral/mistral-ocr-latest", document=document)
+    finally:
+        NATIVE_AOCR.reset()
+    assert result is expected
+    assert [request.model for request in captured] == ["mistral/mistral-ocr-latest"]

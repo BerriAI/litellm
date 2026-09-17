@@ -1,5 +1,5 @@
 import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import pytest
@@ -10,10 +10,13 @@ from litellm.messages.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
+from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, Rule, Rules
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.messages.entrypoints import (
+    NATIVE_AMESSAGES,
+    NATIVE_MESSAGES,
     LiteLLMMessagesRequest,
     NativeAmessages,
     NativeMessages,
@@ -235,3 +238,50 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
     )
     assert result is expected
     assert captured == [(args, kwargs)]
+
+
+def test_anthropic_create_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final[list[LiteLLMMessagesRequest]] = []
+    expected: Final = response()
+
+    def native(
+        request: LiteLLMMessagesRequest,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> AnthropicMessagesResponse:
+        captured.append(request)
+        return expected
+
+    NATIVE_MESSAGES.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_create: Final = cast(Callable[..., AnthropicMessagesResponse], litellm.anthropic.create)
+    try:
+        result: Final = public_create(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5")
+    finally:
+        NATIVE_MESSAGES.reset()
+    assert result is expected
+    assert [request.model for request in captured] == ["claude-sonnet-4-5"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_acreate_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final[list[LiteLLMMessagesRequest]] = []
+    expected: Final = response()
+
+    async def native(
+        request: LiteLLMMessagesRequest,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> AnthropicMessagesResponse:
+        captured.append(request)
+        return expected
+
+    NATIVE_AMESSAGES.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_acreate: Final = cast(Callable[..., Awaitable[AnthropicMessagesResponse]], litellm.anthropic.acreate)
+    try:
+        result: Final = await public_acreate(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5")
+    finally:
+        NATIVE_AMESSAGES.reset()
+    assert result is expected
+    assert [request.model for request in captured] == ["claude-sonnet-4-5"]

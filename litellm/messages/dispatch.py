@@ -30,13 +30,15 @@ PythonAmessages: TypeAlias = Callable[..., Awaitable[MessagesResult]]
 
 def _python_messages() -> PythonMessages:
     return cast(  # cast-ok: forward the original call shape through the legacy handler
-        PythonMessages, main.anthropic_messages_handler
+        PythonMessages,
+        main.anthropic_messages_handler,  # noqa: TID251  # dispatch boundary owns this Python fallback
     )
 
 
 def _python_amessages() -> PythonAmessages:
     return cast(  # cast-ok: forward the original call shape through the Python @client decorator
-        PythonAmessages, main.anthropic_messages
+        PythonAmessages,
+        main.anthropic_messages,  # noqa: TID251  # dispatch boundary owns this Python fallback
     )
 
 

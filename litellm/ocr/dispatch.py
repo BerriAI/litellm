@@ -43,10 +43,12 @@ def _public_request(name: str, args: tuple[object, ...], kwargs: Mapping[str, ob
 
 
 _PYTHON_OCR: Final = cast(  # cast-ok: forward the original call shape through the Python @client decorator
-    Callable[..., OCRResponse | Coroutine[object, object, OCRResponse]], main.ocr
+    Callable[..., OCRResponse | Coroutine[object, object, OCRResponse]],
+    main.ocr,  # noqa: TID251  # dispatch boundary owns this Python fallback
 )
 _PYTHON_AOCR: Final = cast(  # cast-ok: forward the original call shape through the Python @client decorator
-    Callable[..., Awaitable[OCRResponse]], main.aocr
+    Callable[..., Awaitable[OCRResponse]],
+    main.aocr,  # noqa: TID251  # dispatch boundary owns this Python fallback
 )
 
 

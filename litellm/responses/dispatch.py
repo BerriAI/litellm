@@ -24,13 +24,15 @@ PythonAresponses: TypeAlias = Callable[..., Awaitable[ResponsesResult]]
 
 def _python_responses() -> PythonResponses:
     return cast(  # cast-ok: forward the original call shape through the Python @client decorator
-        PythonResponses, main.responses
+        PythonResponses,
+        main.responses,  # noqa: TID251  # dispatch boundary owns this Python fallback
     )
 
 
 def _python_aresponses() -> PythonAresponses:
     return cast(  # cast-ok: forward the original call shape through the Python @client decorator
-        PythonAresponses, main.aresponses
+        PythonAresponses,
+        main.aresponses,  # noqa: TID251  # dispatch boundary owns this Python fallback
     )
 
 

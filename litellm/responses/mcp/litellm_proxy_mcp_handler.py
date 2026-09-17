@@ -16,7 +16,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
-from litellm.responses.main import aresponses
+from litellm.responses.main import aresponses  # noqa: TID251  # inner call must skip the MCP gateway that invoked it
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     ResponseInputParam,

@@ -1,5 +1,5 @@
 import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import pytest
@@ -10,9 +10,12 @@ from litellm.chat_completions.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
+from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, Rule
 from litellm.rust_bridge.chat_completions.entrypoints import (
+    NATIVE_ACOMPLETION,
+    NATIVE_COMPLETION,
     LiteLLMChatCompletionsRequest,
     NativeAcompletion,
     NativeCompletion,
@@ -219,3 +222,50 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
         is response
     )
     assert captured == [(args, kwargs)]
+
+
+def test_public_completion_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final[list[LiteLLMChatCompletionsRequest]] = []
+    expected: Final = ModelResponse()
+
+    def native(
+        request: LiteLLMChatCompletionsRequest,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> ModelResponse:
+        captured.append(request)
+        return expected
+
+    NATIVE_COMPLETION.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_completion: Final = cast(Callable[..., ModelResponse], litellm.completion)
+    try:
+        result: Final = public_completion(model="gpt-4o", messages=MESSAGES)
+    finally:
+        NATIVE_COMPLETION.reset()
+    assert result is expected
+    assert [request.model for request in captured] == ["gpt-4o"]
+
+
+@pytest.mark.asyncio
+async def test_public_acompletion_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final[list[LiteLLMChatCompletionsRequest]] = []
+    expected: Final = ModelResponse()
+
+    async def native(
+        request: LiteLLMChatCompletionsRequest,
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object],
+    ) -> ModelResponse:
+        captured.append(request)
+        return expected
+
+    NATIVE_ACOMPLETION.override(native)
+    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    public_acompletion: Final = cast(Callable[..., Awaitable[ModelResponse]], litellm.acompletion)
+    try:
+        result: Final = await public_acompletion(model="gpt-4o", messages=MESSAGES)
+    finally:
+        NATIVE_ACOMPLETION.reset()
+    assert result is expected
+    assert [request.model for request in captured] == ["gpt-4o"]
