@@ -970,6 +970,8 @@ def _format_object_parameters(parameters, indent):
     required_params: Final = parameters.get("required", [])
     lines: Final = []
     for key, props in properties.items():
+        if not isinstance(props, dict):
+            continue
         description = props.get("description")
         if description:
             lines.append(f"// {description}")

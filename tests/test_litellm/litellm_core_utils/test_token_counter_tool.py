@@ -99,3 +99,20 @@ def test_token_counter_tool_array_schema_without_items():
     messages = [{"role": "user", "content": "Hello"}]
     tokens = token_counter(model="gpt-3.5-turbo", messages=messages, tools=tools)
     assert tokens > 0
+
+
+def test_token_counter_tool_non_dict_property_schema():
+    """Test that malformed string-valued property schemas do not crash token counting (#40344)."""
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "f",
+                "description": "d",
+                "parameters": {"type": "object", "properties": {"s": "string"}},
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "Hello"}]
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages, tools=tools)
+    assert tokens > 0
