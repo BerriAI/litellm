@@ -435,3 +435,51 @@ EXPECTED: Final[Mapping[str, ExpectedCell]] = MappingProxyType(
 
 def expected_key(model: FrontierModel, case: Case) -> str:
     return f"{model.map_key}|{case.name}"
+
+
+def matrix_data_errors() -> tuple[str, ...]:
+    """Freshness findings for the data files, as human-readable strings.
+
+    Called at collection time by the e2e suite; also usable from
+    generate_expected.py's context without importing pytest.
+    """
+    derived: Final = {
+        expected_key(model, case)
+        for model in FRONTIER_MODELS
+        for case in cases_for(model)
+        if case.exact_spend
+    }
+    golden: Final = set(EXPECTED)
+    unknown_deployments: Final = sorted(
+        spec.map_key for spec in CASES_FILE.deployments if spec.map_key not in COST_MAP
+    )
+    unknown_rates: Final = sorted(
+        {field for case in CASES for field in case.requires_rates} - set(CostMapEntry.model_fields)
+    )
+    input_rates: Final = tuple(entry.input_cost_per_token for entry in COST_MAP.values())
+    findings: Final = (
+        (
+            "expected.json is out of sync with the derived matrix; run "
+            "uv run python tests/e2e/cost_calculation/generate_expected.py "
+            f"(missing: {sorted(derived - golden)}; stale: {sorted(golden - derived)})"
+        )
+        if derived != golden
+        else None,
+        (
+            f"deployments entries name map keys absent from cost_map.json: {unknown_deployments}"
+            if unknown_deployments
+            else None
+        ),
+        (
+            f"requires_rates names that are not CostMapEntry fields: {unknown_rates}"
+            if unknown_rates
+            else None
+        ),
+        (
+            "two cost_map entries share input_cost_per_token; the suite relies on "
+            "distinct rates so a wrong-model bill can never coincidentally match"
+            if len(input_rates) != len(set(input_rates))
+            else None
+        ),
+    )
+    return tuple(finding for finding in findings if finding is not None)
