@@ -10739,10 +10739,18 @@ class Router:
             # Use the original model from litellm_params
             model = _model
 
-        if not model.startswith(f"{custom_llm_provider}/"):
-            model_info_name = f"{custom_llm_provider}/{model}"
-        else:
+        if custom_llm_provider == "azure" and model.startswith("azure/"):
+            # Azure `base_model` values may already carry the provider prefix.
             model_info_name = model
+        else:
+            # Every other provider keys the cost map as "<provider>/<model>", and
+            # `model` is the provider-stripped id here.  Some providers namespace
+            # their own meta-models with their provider name (e.g. OpenRouter's
+            # "openrouter/free", configured as "openrouter/openrouter/free"), so the
+            # prefix is added unconditionally instead of assuming such an id is
+            # already prefixed - that assumption looked up a key no other part of
+            # LiteLLM produces.
+            model_info_name = f"{custom_llm_provider}/{model}"
 
         model_info: Final = litellm.get_model_info(model=model_info_name)
         if model_info is None:
