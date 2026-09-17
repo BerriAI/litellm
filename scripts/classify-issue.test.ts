@@ -4,6 +4,7 @@ import type { GitHubApi } from "./auto-close-duplicates";
 import {
   BODY_CAP_CHARS,
   BUG_SECTIONS,
+  EDIT_WINDOW_MS,
   FORM_HEADINGS,
   SECTION_CAP_CHARS,
   FEATURE_SECTIONS,
@@ -15,6 +16,7 @@ import {
   readConfig,
   routesOf,
   sections,
+  shouldReclassify,
   userMessage,
   type ChatRequest,
   type IssueForClassification,
@@ -53,8 +55,12 @@ const issue = (overrides: Partial<IssueForClassification> = {}): IssueForClassif
   title: "[Bug]: Bedrock streaming drops the last chunk with tools",
   body: bugBody(),
   author_association: "NONE",
+  labels: [],
+  created_at: "2026-09-17T12:00:00Z",
   ...overrides,
 });
+
+const label = (...names: readonly string[]): readonly { readonly name: string }[] => names.map((name) => ({ name }));
 
 const modelAnswer = (overrides: Record<string, unknown> = {}): string =>
   JSON.stringify({
@@ -322,8 +328,34 @@ describe("parseClassification", () => {
   });
 });
 
+describe("shouldReclassify", () => {
+  const now = new Date("2026-09-17T12:10:00Z");
+
+  test("an issue that already carries a domain label is left alone, whatever else it has", () => {
+    expect(shouldReclassify(issue({ labels: label("domain:caching", "kind:bug") }), now)).toBe(false);
+    expect(shouldReclassify(issue({ labels: label("needs:template", "domain:caching") }), now)).toBe(false);
+  });
+
+  test("a gated issue is re-run however old it is", () => {
+    const old = new Date(Date.parse("2026-09-17T12:00:00Z") + EDIT_WINDOW_MS * 48);
+    expect(shouldReclassify(issue({ labels: label("bug", "needs:template") }), old)).toBe(true);
+  });
+
+  test("an unlabelled issue is re-run inside the edit window and ignored after it", () => {
+    expect(shouldReclassify(issue({ labels: label("bug") }), now)).toBe(true);
+    const later = new Date(Date.parse("2026-09-17T12:00:00Z") + EDIT_WINDOW_MS);
+    expect(shouldReclassify(issue({ labels: label("bug") }), later)).toBe(false);
+  });
+});
+
 describe("classifyIssue", () => {
-  const config = { repo: "BerriAI/litellm", issueNumber: 41700, model: "gpt-5.6-luna" };
+  const config = {
+    repo: "BerriAI/litellm",
+    issueNumber: 41700,
+    model: "gpt-5.6-luna",
+    action: "opened",
+    now: new Date("2026-09-17T12:10:00Z"),
+  };
 
   function fakeApi(fetched: IssueForClassification): GitHubApi {
     return {
@@ -377,6 +409,39 @@ describe("classifyIssue", () => {
     );
     expect(requests).toEqual([]);
   });
+
+  test("an edit to an issue that was classified while the edit was pending is ignored", async () => {
+    const { llm, requests } = fakeLlm(modelAnswer());
+    const edited = { ...config, action: "edited" };
+    const labelled = issue({ labels: label("domain:llm-translation", "kind:bug", "priority:p1", "lift:small") });
+    expect(await classifyIssue(fakeApi(labelled), llm, edited, "PROMPT", schema)).toBeNull();
+    expect(requests).toEqual([]);
+  });
+
+  test("an edit that fixes a gated issue is classified against the new body", async () => {
+    const { llm, requests } = fakeLlm(modelAnswer());
+    const edited = { ...config, action: "edited" };
+    const verdict = await classifyIssue(fakeApi(issue({ labels: label("bug", "needs:template") })), llm, edited, "PROMPT", schema);
+    expect(verdict).toMatchObject({ gate: "pass", domain: "llm-translation" });
+    expect(requests).toHaveLength(1);
+  });
+
+  test("an edit during the first run, before any label landed, is classified instead of dropped", async () => {
+    const { llm, requests } = fakeLlm(modelAnswer());
+    const edited = { ...config, action: "edited" };
+    expect(await classifyIssue(fakeApi(issue({ labels: label("bug") })), llm, edited, "PROMPT", schema)).toMatchObject({
+      gate: "pass",
+    });
+    expect(requests).toHaveLength(1);
+  });
+
+  test("a manual run classifies an old unlabelled issue that an edit would ignore", async () => {
+    const { llm, requests } = fakeLlm(modelAnswer());
+    const old = issue({ labels: label("bug"), created_at: "2020-01-01T00:00:00Z" });
+    expect(await classifyIssue(fakeApi(old), llm, { ...config, action: "edited" }, "PROMPT", schema)).toBeNull();
+    expect(await classifyIssue(fakeApi(old), llm, { ...config, action: "" }, "PROMPT", schema)).toMatchObject({ gate: "pass" });
+    expect(requests).toHaveLength(1);
+  });
 });
 
 describe("readConfig", () => {
@@ -389,24 +454,29 @@ describe("readConfig", () => {
     ISSUE_CLASSIFIER_MODEL: "gpt-5.6-luna",
   };
 
-  test("reads the six settings", () => {
-    expect(readConfig(env)).toEqual({
+  const now = new Date("2026-09-17T12:10:00Z");
+
+  test("reads the six settings, and the event action when the workflow passes one", () => {
+    expect(readConfig(env, now)).toEqual({
       token: "t",
       repo: "BerriAI/litellm",
       issueNumber: 41700,
       apiBase: "https://llm.example.com",
       apiKey: "sk-test",
       model: "gpt-5.6-luna",
+      action: "",
+      now,
     });
+    expect(readConfig({ ...env, GITHUB_EVENT_ACTION: "edited" }, now)).toMatchObject({ action: "edited" });
   });
 
   test("refuses a missing or malformed setting by name", () => {
-    expect(() => readConfig({ ...env, GITHUB_TOKEN: undefined })).toThrow("GITHUB_TOKEN");
-    expect(() => readConfig({ ...env, GITHUB_REPOSITORY: "nope" })).toThrow("GITHUB_REPOSITORY");
-    expect(() => readConfig({ ...env, ISSUE_NUMBER: "0" })).toThrow("ISSUE_NUMBER");
-    expect(() => readConfig({ ...env, LITELLM_API_BASE: "" })).toThrow("LITELLM_API_BASE");
-    expect(() => readConfig({ ...env, LITELLM_API_BASE: "llm.example.com" })).toThrow("LITELLM_API_BASE");
-    expect(() => readConfig({ ...env, LITELLM_API_KEY: "" })).toThrow("LITELLM_API_KEY");
-    expect(() => readConfig({ ...env, ISSUE_CLASSIFIER_MODEL: undefined })).toThrow("ISSUE_CLASSIFIER_MODEL");
+    expect(() => readConfig({ ...env, GITHUB_TOKEN: undefined }, now)).toThrow("GITHUB_TOKEN");
+    expect(() => readConfig({ ...env, GITHUB_REPOSITORY: "nope" }, now)).toThrow("GITHUB_REPOSITORY");
+    expect(() => readConfig({ ...env, ISSUE_NUMBER: "0" }, now)).toThrow("ISSUE_NUMBER");
+    expect(() => readConfig({ ...env, LITELLM_API_BASE: "" }, now)).toThrow("LITELLM_API_BASE");
+    expect(() => readConfig({ ...env, LITELLM_API_BASE: "llm.example.com" }, now)).toThrow("LITELLM_API_BASE");
+    expect(() => readConfig({ ...env, LITELLM_API_KEY: "" }, now)).toThrow("LITELLM_API_KEY");
+    expect(() => readConfig({ ...env, ISSUE_CLASSIFIER_MODEL: undefined }, now)).toThrow("ISSUE_CLASSIFIER_MODEL");
   });
 });

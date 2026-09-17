@@ -25,9 +25,10 @@ on:
 
 permissions: {}
 
+# Runs for one issue queue instead of cancelling, so an edit during the first run never cuts the label step short
 concurrency:
   group: issue-classifier-${{ github.event.issue.number || github.event.inputs.issue_number || github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   classifier-tests:
@@ -51,16 +52,13 @@ jobs:
         run: bun test scripts/classify-issue.test.ts scripts/label-issue.test.ts
 
   classify:
-    # An edit only re-runs while the issue is still gated and no domain label has been applied by hand
+    # An edit to a labelled issue is dropped here; the script decides the rest against the live labels
     if: >-
       github.event_name != 'pull_request'
       && github.repository == 'BerriAI/litellm'
       && (
         github.event.action != 'edited'
-        || (
-          contains(github.event.issue.labels.*.name, 'needs:template')
-          && !contains(join(github.event.issue.labels.*.name, ','), 'domain:')
-        )
+        || !contains(join(github.event.issue.labels.*.name, ','), 'domain:')
       )
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -104,6 +102,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+          GITHUB_EVENT_ACTION: ${{ github.event.action }}
           LITELLM_API_BASE: ${{ vars.LITELLM_API_BASE }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           ISSUE_CLASSIFIER_MODEL: ${{ vars.ISSUE_CLASSIFIER_MODEL }}
@@ -123,6 +122,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Keep the verdict
+        if: steps.classify.outputs.verdict != ''
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: classification-${{ github.event.issue.number || github.event.inputs.issue_number }}
