@@ -4789,13 +4789,6 @@ def test_get_litellm_params_keys_never_reach_the_provider():
 
 
 def test_addressed_response_id_never_reaches_the_provider():
-    """The ResponsesIDSecurity hook keeps the id a client addressed under
-    `_litellm_addressed_response_id` in the request body so internal retries re-authorize
-    it. A bridged Responses call (no native Responses config, e.g. azure_ai Claude)
-    forwards that body as `completion()` kwargs, and the provider rejects the unknown
-    key: `_litellm_addressed_response_id: Extra inputs are not permitted`, a 400 on
-    every follow-up turn that carries `previous_response_id`.
-    """
     kwargs = {
         "a_real_provider_specific_param": 1,
         ADDRESSED_RESPONSE_ID_FIELD: "resp_addressed-by-the-client",
