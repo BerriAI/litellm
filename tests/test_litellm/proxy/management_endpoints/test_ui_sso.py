@@ -454,7 +454,6 @@ async def test_get_user_groups_uses_configured_graph_endpoint(monkeypatch):
     assert requested_urls == ["https://graph.microsoft.us/v1.0/me/memberOf"]
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "authority_host, expected_url",
     [
@@ -463,25 +462,11 @@ async def test_get_user_groups_uses_configured_graph_endpoint(monkeypatch):
         ("https://login.chinacloudapi.cn/", "https://microsoftgraph.chinacloudapi.cn/v1.0/me/memberOf"),
     ],
 )
-async def test_get_user_groups_derives_graph_endpoint_from_authority_host(monkeypatch, authority_host, expected_url):
+def test_user_groups_endpoint_derives_graph_host_from_authority_host(monkeypatch, authority_host, expected_url):
     monkeypatch.delenv("MICROSOFT_GRAPH_ENDPOINT", raising=False)
     monkeypatch.setenv("AZURE_AUTHORITY_HOST", authority_host)
 
-    requested_urls: list[str] = []
-
-    async def mock_get(url, *args, **kwargs):
-        requested_urls.append(url)
-        mock = MagicMock()
-        mock.json.return_value = {"value": []}
-        return mock
-
-    with patch("litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client") as mock_client:
-        mock_client.return_value = MagicMock()
-        mock_client.return_value.get = mock_get
-
-        await MicrosoftSSOHandler.get_user_groups_from_graph_api(access_token="mock_token")
-
-    assert requested_urls == [expected_url]
+    assert MicrosoftSSOHandler.get_graph_api_user_groups_endpoint() == expected_url
 
 
 def test_get_graph_api_base_url_prefers_explicit_endpoint_over_authority_host(monkeypatch):
