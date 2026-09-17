@@ -44,7 +44,6 @@ from litellm.proxy.agent_endpoints.agent_search import (
     global_agent_search_index,
     search_agents,
 )
-from litellm.proxy.agent_endpoints.auth.agent_access_groups import evict_agent_access_group_ids
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import accessible_agents
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
@@ -697,7 +696,6 @@ async def update_agent(
             prisma_client=prisma_client,
             updated_by=updated_by,
         )
-        await evict_agent_access_group_ids((agent_id,))
 
         # deregister in memory
         AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))
@@ -801,7 +799,6 @@ async def patch_agent(
             prisma_client=prisma_client,
             updated_by=updated_by,
         )
-        await evict_agent_access_group_ids((agent_id,))
 
         # deregister in memory
         AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))
@@ -864,7 +861,6 @@ async def delete_agent(
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found in DB.")
 
         await AGENT_REGISTRY.delete_agent_from_db(agent_id=agent_id, prisma_client=prisma_client)
-        await evict_agent_access_group_ids((agent_id,))
 
         AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))
 

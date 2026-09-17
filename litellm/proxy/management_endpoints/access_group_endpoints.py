@@ -16,7 +16,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-from litellm.proxy.agent_endpoints.auth.agent_access_groups import evict_agent_access_group_ids
 from litellm.proxy.auth.auth_checks import (
     _cache_access_object,
     _cache_key_object,
@@ -783,7 +782,6 @@ async def delete_access_group(
 
         await invalidate_access_group_cache(access_group_id)
         _detach_access_group_from_agent_registry(detached_agent_ids, access_group_id)
-        await evict_agent_access_group_ids(detached_agent_ids)
         await _patch_team_caches_remove_access_group(
             affected_team_ids, access_group_id, user_api_key_cache, proxy_logging_obj
         )

@@ -1,16 +1,11 @@
-from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Final
 
 import pytest
 from fastapi import HTTPException
 
-from litellm.caching.dual_cache import DualCache
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
     AgentAccessGroupCeiling,
-    agent_access_group_ids_cache_key,
-    load_agent_access_group_ids,
     resolve_agent_access_group_ceiling,
 )
 from litellm.types.agents import AgentResponse
@@ -110,86 +105,20 @@ async def test_only_unloadable_groups_is_an_empty_ceiling_not_unrestricted():
     assert ceiling.agent_ids == frozenset()
 
 
-@dataclass(frozen=True, slots=True)
-class _AgentRow:
-    access_group_ids: Sequence[str] | None
-
-
-class _FakeAgentTable:
-    def __init__(self, rows: dict[str, _AgentRow], failing: bool = False) -> None:
-        self._rows: Final = rows
-        self._failing: Final = failing
-        self.reads = 0
-
-    async def find_agent(self, agent_id: str) -> _AgentRow | None:
-        self.reads += 1
-        if self._failing:
-            raise RuntimeError("db down")
-        return self._rows.get(agent_id)
-
-
-async def _registry_snapshot(agent_id: str) -> tuple[str, ...]:
-    return ("registry-group",)
-
-
 @pytest.mark.asyncio
-async def test_agent_row_is_read_once_then_served_from_cache():
-    cache: Final = DualCache()
-    table: Final = _FakeAgentTable({"agent-1": _AgentRow(["g1", "g2"])})
+async def test_default_agent_loader_reads_the_attached_groups_from_the_registry():
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
-    first: Final = await load_agent_access_group_ids("agent-1", cache, table.find_agent, _registry_snapshot)
-    second: Final = await load_agent_access_group_ids("agent-1", cache, table.find_agent, _registry_snapshot)
+    _, load_group = _loaders(None, {"g1": _group("g1", models=("gpt-5",))})
+    global_agent_registry.register_agent(_agent(["g1"]))
+    try:
+        ceiling: Final = await resolve_agent_access_group_ceiling("agent-1", load_access_group=load_group)
+    finally:
+        global_agent_registry.deregister_agent("agent")
 
-    assert (first, second, table.reads) == (("g1", "g2"), ("g1", "g2"), 1)
-
-
-@pytest.mark.asyncio
-async def test_agent_with_no_row_or_no_groups_caches_an_empty_answer():
-    cache: Final = DualCache()
-    table: Final = _FakeAgentTable({"bare": _AgentRow(None)})
-
-    bare: Final = await load_agent_access_group_ids("bare", cache, table.find_agent, _registry_snapshot)
-    missing: Final = await load_agent_access_group_ids("missing", cache, table.find_agent, _registry_snapshot)
-    again: Final = await load_agent_access_group_ids("missing", cache, table.find_agent, _registry_snapshot)
-
-    assert (bare, missing, again, table.reads) == ((), (), (), 2)
-
-
-@pytest.mark.asyncio
-async def test_evicted_cache_entry_picks_up_the_patched_row():
-    cache: Final = DualCache()
-    rows: Final = {"agent-1": _AgentRow(["g1"])}
-    table: Final = _FakeAgentTable(rows)
-    await load_agent_access_group_ids("agent-1", cache, table.find_agent, _registry_snapshot)
-
-    rows["agent-1"] = _AgentRow(["g2"])
-    stale: Final = await load_agent_access_group_ids("agent-1", cache, table.find_agent, _registry_snapshot)
-    await cache.async_delete_cache(key=agent_access_group_ids_cache_key("agent-1"))
-    fresh: Final = await load_agent_access_group_ids("agent-1", cache, table.find_agent, _registry_snapshot)
-
-    assert (stale, fresh) == (("g1",), ("g2",))
-
-
-@pytest.mark.asyncio
-async def test_unreadable_row_falls_back_to_the_registry_without_caching():
-    cache: Final = DualCache()
-    table: Final = _FakeAgentTable({}, failing=True)
-
-    answer: Final = await load_agent_access_group_ids("agent-1", cache, table.find_agent, _registry_snapshot)
-
-    assert answer == ("registry-group",)
-    assert await cache.async_get_cache(key=agent_access_group_ids_cache_key("agent-1")) is None
-
-
-@pytest.mark.asyncio
-async def test_garbage_in_the_cache_is_treated_as_a_miss():
-    cache: Final = DualCache()
-    await cache.async_set_cache(key=agent_access_group_ids_cache_key("agent-1"), value={"not": "a list"})
-    table: Final = _FakeAgentTable({"agent-1": _AgentRow(["g1"])})
-
-    answer: Final = await load_agent_access_group_ids("agent-1", cache, table.find_agent, _registry_snapshot)
-
-    assert (answer, table.reads) == (("g1",), 1)
+    assert ceiling == AgentAccessGroupCeiling(
+        access_group_ids=("g1",), models=frozenset({"gpt-5"}), mcp_server_ids=frozenset(), agent_ids=frozenset()
+    )
 
 
 @pytest.mark.asyncio
