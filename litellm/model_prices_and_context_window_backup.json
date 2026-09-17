@@ -63653,7 +63653,7 @@
     "bedrock_mantle/us-gov-west-1/xai.grok-4.3": {
         "use_openai_responses_path": true,
         "litellm_provider": "bedrock_mantle",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
