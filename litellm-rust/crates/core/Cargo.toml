@@ -30,6 +30,7 @@ subtle.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-tungstenite.workspace = true
 thiserror.workspace = true
+time.workspace = true
 sha2.workspace = true
 url.workspace = true
 veil.workspace = true
