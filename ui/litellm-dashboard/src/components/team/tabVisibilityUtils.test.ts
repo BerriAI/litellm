@@ -32,6 +32,7 @@ describe("team_info_tabs", () => {
         TEAM_INFO_TAB_KEYS.MY_USER,
         TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
         TEAM_INFO_TAB_KEYS.MEMBERS,
+        TEAM_INFO_TAB_KEYS.AGENTS,
         TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS,
         TEAM_INFO_TAB_KEYS.SETTINGS,
       ]);

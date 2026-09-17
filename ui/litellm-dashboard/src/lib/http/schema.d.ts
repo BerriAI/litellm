@@ -17631,6 +17631,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/agents/{agent_id}/team": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Assign Agent Team */
+        put: operations["assign_agent_team_v1_agents__agent_id__team_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/assistants": {
         parameters: {
             query?: never;
@@ -23481,6 +23498,11 @@ export interface components {
             type: "archive";
             /** Url */
             url: string;
+        };
+        /** AgentTeamAssignment */
+        AgentTeamAssignment: {
+            /** Team Id */
+            team_id: string | null;
         };
         /**
          * AlertType
@@ -62952,6 +62974,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentMakePublicResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assign_agent_team_v1_agents__agent_id__team_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentTeamAssignment"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentResponse"];
                 };
             };
             /** @description Validation Error */

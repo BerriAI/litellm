@@ -36,9 +36,14 @@ def agent_identity(params: Mapping[str, object] | None) -> EntraAgentIdentity | 
 
 
 def preserve_identity(incoming: Mapping[str, object], existing: Mapping[str, object]) -> Mapping[str, object]:
-    if "identity" in incoming or "identity" not in existing:
-        return incoming
-    return MappingProxyType({**incoming, "identity": existing["identity"]})
+    return MappingProxyType(
+        {
+            **MappingProxyType(
+                {key: existing[key] for key in ("identity", "team_id") if key in existing and key not in incoming}
+            ),
+            **incoming,
+        }
+    )
 
 
 def validate_identity_binding(

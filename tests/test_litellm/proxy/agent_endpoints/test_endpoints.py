@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -1225,3 +1226,45 @@ def test_identity_providers_honor_issuer_specific_audiences_and_global_fallback(
     assert client.get("/v1/agents/identity/providers").json() == (["https://scoped.example", "https://global.example"] if enabled else [])
     monkeypatch.setenv("JWT_ISSUER", "https://unscoped.example")
     assert client.get("/v1/agents/identity/providers").json() == (["https://scoped.example"] if enabled else [])
+
+
+class MembershipAgentRow(BaseModel):
+    agent_id: str = "agent-123"
+    agent_name: str = "Test Agent"
+    litellm_params: dict[str, object]
+
+
+@pytest.mark.parametrize("team_id", ["assigned-team", None])
+def test_assign_agent_team_preserves_identity_and_runtime_params(mock_prisma_client, monkeypatch, team_id: str | None) -> None:
+    existing: Final = _sample_agent_response().model_copy(update={"litellm_params": {"model": "runtime-model", "team_id": None}})
+    mock_prisma_client.db.litellm_agentstable.find_unique = AsyncMock(return_value=MembershipAgentRow(litellm_params=existing.litellm_params))
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value={"team_id": "assigned-team"})
+    registry: Final = MagicMock()
+    registry.patch_agent_in_db = AsyncMock(return_value=existing.model_copy(update={"litellm_params": {"model": "runtime-model", "team_id": team_id}}))
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    response: Final = client.put("/v1/agents/agent-123/team", json={"team_id": team_id})
+    assert response.status_code == 200
+    assert response.json()["litellm_params"] == {"model": "runtime-model", "team_id": team_id}
+    payload: Final = registry.patch_agent_in_db.await_args.kwargs["agent"]
+    assert payload == {"litellm_params": {"model": "runtime-model", "team_id": team_id}}
+    registry.register_agent.assert_called_once()
+
+
+def test_assign_agent_team_rejects_missing_team_agent_and_conflicting_membership(mock_prisma_client) -> None:
+    existing: Final = _sample_agent_response().model_copy(update={"litellm_params": {"team_id": "current-team"}})
+    mock_prisma_client.db.litellm_agentstable.find_unique = AsyncMock(return_value=MembershipAgentRow(litellm_params=existing.litellm_params))
+    conflict: Final = client.put("/v1/agents/agent-123/team", json={"team_id": "different-team"})
+    assert conflict.status_code == 409
+    mock_prisma_client.db.litellm_agentstable.find_unique.return_value = MembershipAgentRow(litellm_params={})
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    assert client.put("/v1/agents/agent-123/team", json={"team_id": "missing"}).status_code == 404
+    mock_prisma_client.db.litellm_agentstable.find_unique.return_value = None
+    assert client.put("/v1/agents/missing/team", json={"team_id": "team"}).status_code == 404
+    assert client.put("/v1/agents/agent-123/team", json={"team_id": ""}).status_code == 422
+
+
+def test_team_assignment_requires_admin_and_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    forbidden: Final = _make_app_with_role(LitellmUserRoles.INTERNAL_USER).put("/v1/agents/agent/team", json={"team_id": "team"})
+    assert forbidden.status_code == 403
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    assert client.put("/v1/agents/agent/team", json={"team_id": "team"}).status_code == 500

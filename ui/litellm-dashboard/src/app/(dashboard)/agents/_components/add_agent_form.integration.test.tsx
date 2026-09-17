@@ -121,10 +121,9 @@ describe("AddAgentForm submit payload", () => {
       identity: { provider: "microsoft_entra", tenant_id: tenant, client_id: clientId },
     });
     expect(networking.keyCreateForAgentCall).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: "Open Teams" })).toHaveAttribute("href", "/ui/?page=teams");
     expect(
-      screen.getByText(
-        "Microsoft Entra ID is configured. Send an authenticated agent request to verify the connection.",
-      ),
+      screen.getByText("Microsoft Entra ID is configured. JWT requests require an assigned team."),
     ).toBeInTheDocument();
   });
 

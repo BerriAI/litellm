@@ -53,6 +53,7 @@ from litellm.proxy.agent_endpoints.identity import (
     identity_evidence_key,
     validate_identity_binding,
 )
+from litellm.proxy.agent_endpoints.team_membership import AgentIdFilter, AgentTeamAssignment, validate_agent_team
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -536,6 +537,7 @@ async def create_agent(
         validate_identity_binding(
             request.get("litellm_params"), AGENT_REGISTRY.get_agent_list(), _trusted_agent_issuers()
         )
+        await validate_agent_team(request.get("litellm_params"), prisma_client)
 
         # check for naming conflicts
         existing_agent: Final = AGENT_REGISTRY.get_agent_by_name(agent_name=request.get("agent_name"))
@@ -565,8 +567,15 @@ async def create_agent(
             )
             agent_to_create = {**request, "agent_card_params": merged_card}
 
+        registration: Final[AgentConfig] = {
+            **agent_to_create,
+            "litellm_params": {
+                **({"team_id": None} if agent_identity(agent_to_create.get("litellm_params")) else {}),
+                **(agent_to_create.get("litellm_params") or {}),
+            },
+        }
         result: Final = await AGENT_REGISTRY.add_agent_to_db(
-            agent=agent_to_create,
+            agent=registration,
             prisma_client=prisma_client,
             created_by=created_by,
             agent_id=new_agent_id,
@@ -737,6 +746,7 @@ async def update_agent(
         validate_identity_binding(
             request.get("litellm_params"), AGENT_REGISTRY.get_agent_list(), _trusted_agent_issuers(), agent_id
         )
+        await validate_agent_team(request.get("litellm_params"), prisma_client)
 
         # Get the user ID from the API key auth
         updated_by: Final = user_api_key_dict.user_id or "unknown"
@@ -843,6 +853,7 @@ async def patch_agent(
         validate_identity_binding(
             request.get("litellm_params"), AGENT_REGISTRY.get_agent_list(), _trusted_agent_issuers(), agent_id
         )
+        await validate_agent_team(request.get("litellm_params"), prisma_client)
 
         # Get the user ID from the API key auth
         updated_by: Final = user_api_key_dict.user_id or "unknown"
@@ -886,6 +897,35 @@ async def patch_agent(
     except Exception as e:
         verbose_proxy_logger.exception("Error updating agent: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/v1/agents/{agent_id}/team", response_model=AgentResponse, tags=("[beta] A2A Agents",))
+async def assign_agent_team(
+    agent_id: str,
+    request: AgentTeamAssignment,
+    http_request: Request,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> AgentResponse:
+    from litellm.proxy.proxy_server import prisma_client
+
+    _check_agent_management_permission(user_api_key_dict)
+    if prisma_client is None:
+        raise HTTPException(500, "Database is not connected")
+    agent_filter: Final[AgentIdFilter] = {"agent_id": agent_id}
+    existing: Final = await agents_table(prisma_client).find_unique(where=agent_filter)
+    if existing is None:
+        raise HTTPException(404, "Agent not found")
+    params: Final = parse_agent_litellm_params(existing.litellm_params)
+    current_team: Final = params.get("team_id")
+    if current_team and request.team_id and current_team != request.team_id:
+        raise HTTPException(409, "Remove the agent from its current team before assigning another")
+    payload: Final[PatchAgentRequest] = {"litellm_params": {**params, "team_id": request.team_id}}
+    return await patch_agent(
+        agent_id=agent_id,
+        request=payload,
+        http_request=http_request,
+        user_api_key_dict=user_api_key_dict,
+    )
 
 
 @router.delete(
