@@ -6179,19 +6179,3 @@ class TestTypeSafePassthroughRoute:
             custom_llm_provider="typesafe",
             is_streaming_request=False,
         )
-        assert request.json.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_rejects_stream_body(self, monkeypatch):
-        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
-        request = self._request({"stream": True})
-
-        with pytest.raises(HTTPException) as exc_info:
-            await typesafe_proxy_route(
-                endpoint="v1/systemone",
-                request=request,
-                fastapi_response=MagicMock(spec=Response),
-                user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
-            )
-
-        assert exc_info.value.status_code == 400

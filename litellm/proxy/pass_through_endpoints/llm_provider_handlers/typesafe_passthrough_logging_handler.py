@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Final, cast
+from typing import Final
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -24,8 +24,13 @@ class _TypeSafeResponse(BaseModel):
     usage: _TypeSafeUsage | None = None
 
 
+class _RegistryPricing(BaseModel):
+    input_cost_per_token: float = 0.0
+    output_cost_per_token: float = 0.0
+
+
 _TYPESAFE_RESPONSE_ADAPTER: Final = TypeAdapter(_TypeSafeResponse)
-_MODEL_COST_ENTRY_ADAPTER: Final = TypeAdapter(dict[str, object])
+_REGISTRY_PRICING_ADAPTER: Final = TypeAdapter(_RegistryPricing)
 
 
 def _parse_typesafe_response(response_body: Mapping[str, object]) -> _TypeSafeResponse:
@@ -35,13 +40,17 @@ def _parse_typesafe_response(response_body: Mapping[str, object]) -> _TypeSafeRe
         return _TypeSafeResponse()
 
 
-def _get_model_cost_entry(model_key: str) -> Mapping[str, object] | None:
-    model_cost: Final[Mapping[str, object]] = cast(Mapping[str, object], litellm.model_cost)
-    entry: Final[object] = model_cost.get(model_key)
-    try:
-        return _MODEL_COST_ENTRY_ADAPTER.validate_python(entry)
-    except ValidationError:
-        return None
+def _pricing_for(model_keys: tuple[str, ...]) -> _RegistryPricing:
+    for model_key in model_keys:
+        if model_key not in litellm.model_cost:  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+            continue
+        try:
+            return _REGISTRY_PRICING_ADAPTER.validate_python(
+                litellm.model_cost[model_key]  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+            )
+        except ValidationError:
+            continue
+    return _RegistryPricing()
 
 
 class TypeSafePassthroughLoggingHandler:
@@ -70,20 +79,9 @@ class TypeSafePassthroughLoggingHandler:
         candidate_model_keys: Final = tuple(
             f"typesafe/{model}" for model in (response_model, request_model) if model is not None
         )
-        cost_entry: Final = next(
-            (entry for model_key in candidate_model_keys if (entry := _get_model_cost_entry(model_key)) is not None),
-            None,
-        )
-        input_cost_per_token: Final = (
-            cost_entry.get("input_cost_per_token", 0.0) if isinstance(cost_entry, Mapping) else 0.0
-        )
-        output_cost_per_token: Final = (
-            cost_entry.get("output_cost_per_token", 0.0) if isinstance(cost_entry, Mapping) else 0.0
-        )
+        pricing: Final = _pricing_for(candidate_model_keys)
         response_cost: Final = (
-            input_tokens * float(input_cost_per_token) + output_tokens * float(output_cost_per_token)
-            if isinstance(input_cost_per_token, (int, float)) and isinstance(output_cost_per_token, (int, float))
-            else 0.0
+            input_tokens * pricing.input_cost_per_token + output_tokens * pricing.output_cost_per_token
         )
         usage_object: Final = Usage(
             prompt_tokens=input_tokens,
