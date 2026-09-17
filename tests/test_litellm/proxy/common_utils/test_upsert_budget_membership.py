@@ -243,6 +243,34 @@ async def test_create_from_temp_budget_pair_only(mock_tx, fake_user):
     mock_tx.litellm_teammembership.update.assert_not_called()
 
 
+# TEST: a member with no budget row who falls back to the team default at
+# enforcement time must keep that default cap on the new private row, or the
+# temporary increase has nothing to add to.
+@pytest.mark.asyncio
+async def test_create_from_temp_pair_keeps_team_default_cap(mock_tx, fake_user):
+    expiry = datetime(2100, 1, 1, tzinfo=timezone.utc)
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(
+        return_value=budget_row(budget_id="team-default-budget-1", max_budget=0.4, allowed_models=[])
+    )
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-default",
+        user_id="user-unlinked",
+        existing_budget_id=None,
+        user_api_key_dict=fake_user,
+        budget_patch={"temp_budget_increase": 1.0, "temp_budget_expiry": expiry},
+        team_default_budget_id="team-default-budget-1",
+    )
+
+    mock_tx.litellm_budgettable.find_unique.assert_awaited_once_with(where={"budget_id": "team-default-budget-1"})
+    data = mock_tx.litellm_budgettable.create.await_args.kwargs["data"]
+    assert data["max_budget"] == 0.4
+    assert data["temp_budget_increase"] == 1.0
+    assert data["temp_budget_expiry"] == expiry
+    assert "allowed_models" not in data
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once()
+
+
 # TEST: clone-on-write when the membership still points at the team's shared
 # default budget. Editing this member must fork a private budget instead of
 # mutating the shared row, and cloning a duration must seed a fresh reset time.
