@@ -6,6 +6,8 @@ from pydantic import BaseModel
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
+UNSERIALIZABLE_OBJECT: Final = "Unserializable Object"
+
 
 def strip_null_bytes(value: str) -> str:
     """Strip NUL bytes, which PostgreSQL text/jsonb columns reject (error 22P05)."""
@@ -77,7 +79,7 @@ def safe_json_structure(
             try:
                 return _transform(key, strip_null_bytes(str(obj)))
             except Exception:
-                return "Unserializable Object"
+                return UNSERIALIZABLE_OBJECT
 
     return _serialize(data, set(), 0, key)
 

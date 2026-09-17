@@ -18,7 +18,7 @@ from litellm.constants import (
     MAX_STRING_LENGTH_STDOUT_LOG,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, safe_json_structure
+from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.secret_redaction import (
     redact_internal_details,
@@ -94,11 +94,18 @@ def _scrubbing_changed_nothing(scrubbed: object, original: object) -> bool:
         return False
 
 
+def _plain_text(value: object) -> str:
+    try:
+        return str(value)
+    except Exception:
+        return UNSERIALIZABLE_OBJECT
+
+
 def _redact_extra_value(key: str, value: object) -> object:
     try:
         scrubbed: Final = safe_json_structure(value, value_transform=_redact_structured_value, key=key)
-    except (TypeError, ValueError):
-        return _redact_string(str(value))
+    except Exception:
+        return _redact_string(_plain_text(value))
     return value if _scrubbing_changed_nothing(scrubbed, value) else scrubbed
 
 
@@ -151,7 +158,7 @@ class SecretRedactionFilter(logging.Filter):
     _formatter = logging.Formatter()
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if not _ENABLE_SECRET_REDACTION:
+        if not _ENABLE_SECRET_REDACTION or _is_redacted(record):
             return True
 
         # Runs before args are cleared, and before the extra-field loop below
