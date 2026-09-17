@@ -8477,12 +8477,10 @@ def test_effective_team_member_budget_applies_unexpired_increase() -> None:
 def test_effective_team_member_budget_ignores_expired_increase() -> None:
     from litellm.proxy.auth.auth_checks import _effective_team_member_budget
 
-    budget: Final = LiteLLM_BudgetTable(
-        max_budget=100.0,
-        temp_budget_increase=50.0,
-        temp_budget_expiry=datetime(2020, 1, 1, tzinfo=timezone.utc),
-    )
+    expiry: Final = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    budget: Final = LiteLLM_BudgetTable(max_budget=100.0, temp_budget_increase=50.0, temp_budget_expiry=expiry)
     assert _effective_team_member_budget(budget, now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 100.0
+    assert _effective_team_member_budget(budget, now=expiry) == 100.0
 
 
 def test_effective_team_member_budget_without_increase() -> None:
