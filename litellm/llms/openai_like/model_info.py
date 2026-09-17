@@ -14,6 +14,7 @@ from litellm.utils import _add_path_to_api_base  # pyright: ignore[reportPrivate
 
 MODEL_INFO_REFRESH_SECONDS: Final = 300
 MODEL_INFO_REFRESH_CONCURRENCY: Final = 8
+MODEL_INFO_DISCOVERY_PROVIDERS: Final = frozenset({"hosted_vllm", "openai", "text-completion-openai", "openai_like"})
 _EMPTY_LIMITS: Final[Mapping[str, int]] = MappingProxyType({})
 
 
