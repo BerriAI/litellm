@@ -8050,9 +8050,9 @@ class Router:
         An error carrying ``no_compatible_deployment_available`` reports that
         condition 1 does not hold for this request even though the model group still
         has healthy deployments, because a pre-call check pinned the request to a
-        deployment that cannot serve it yet. Such a request waits out the whole
-        ``Retry-After`` the error advertises, including a window longer than the one
-        minute an ordinary retry honors.
+        deployment that cannot serve it yet. Such an error may also carry
+        ``retry_after_seconds``, the whole window the pin lasts, which is honored in
+        full rather than capped at the one minute an ordinary retry allows.
         """
 
         pinned_to_unavailable_deployment: Final = getattr(e, "no_compatible_deployment_available", False)
@@ -8089,9 +8089,7 @@ class Router:
             )
 
         if pinned_to_unavailable_deployment:
-            advertised_backoff: Final = litellm.utils._get_retry_after_from_exception_header(
-                response_headers=response_headers
-            )
+            advertised_backoff: Final[float] = float(getattr(e, "retry_after_seconds", 0))
             return max(timeout, advertised_backoff)
 
         return timeout

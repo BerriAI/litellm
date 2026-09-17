@@ -15827,6 +15827,7 @@ async def test_a_request_pinned_to_a_cooling_deployment_waits_a_window_longer_th
 
     assert [deployment["model_info"]["id"] for deployment in healthy_deployments] == [_AFFINITY_NON_PEER]
     assert advertised_backoff > 60
+    assert excinfo.value.retry_after_seconds == advertised_backoff
     assert (
         router._time_to_sleep_before_retry(
             e=excinfo.value,

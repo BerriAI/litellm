@@ -431,6 +431,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             )
         )
         unavailable_origin_error.no_compatible_deployment_available = True
+        unavailable_origin_error.retry_after_seconds = retry_after or 0
         return unavailable_origin_error
 
     async def _get_origin_cooldown(
