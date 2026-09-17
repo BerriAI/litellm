@@ -31,13 +31,15 @@ PythonAcompletion: TypeAlias = Callable[..., Awaitable[ChatResult]]
 
 def _python_completion() -> PythonCompletion:
     return cast(  # cast-ok: forward the original call shape through the Python @client decorator
-        PythonCompletion, main.completion
+        PythonCompletion,
+        main.completion,  # noqa: TID251  # dispatch boundary owns this Python fallback
     )
 
 
 def _python_acompletion() -> PythonAcompletion:
     return cast(  # cast-ok: forward the original call shape through the Python @client decorator
-        PythonAcompletion, main.acompletion
+        PythonAcompletion,
+        main.acompletion,  # noqa: TID251  # dispatch boundary owns this Python fallback
     )
 
 

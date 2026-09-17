@@ -1405,10 +1405,22 @@ from .images.main import *
 from .videos.main import *
 from .batch_completion.main import *
 from .rerank_api.main import *
-from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .messages.dispatch import *
-from .responses.main import *
 from .responses.dispatch import *
+from .responses.main import (
+    acancel_responses,
+    acompact_responses,
+    adelete_responses,
+    aget_responses,
+    alist_input_items,
+    aresponses_api_with_mcp,
+    cancel_responses,
+    compact_responses,
+    delete_responses,
+    get_responses,
+    list_input_items,
+    mock_responses_api_response,
+)
 
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
