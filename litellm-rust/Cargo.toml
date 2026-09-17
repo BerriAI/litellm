@@ -11,6 +11,7 @@ repository = "https://github.com/BerriAI/litellm"
 [workspace.dependencies]
 bytes = "1"
 litellm-core = { path = "crates/core" }
+litellm-framing = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
@@ -39,6 +40,7 @@ base64 = "0.22"
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"
+time = { version = "0.3.53", features = ["parsing"] }
 criterion = "0.8.2"
 veil = "0.3.0"
 

@@ -3,7 +3,7 @@ import copy
 import datetime
 import json
 from types import MappingProxyType, SimpleNamespace
-from typing import AsyncGenerator, Callable, Final, Iterator, Optional
+from typing import AsyncGenerator, Callable, Final, Iterator, Optional, Sequence
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -45,9 +45,10 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.router import Router
 
 
 class TestProxyBaseLLMRequestProcessing:
@@ -381,6 +382,316 @@ class TestProxyBaseLLMRequestProcessing:
         # audit body, which needs to stay plain-JSON-serializable end to end.
         assert "litellm_logging_obj" not in persisted_body
         json.dumps(persisted_body)
+
+    @staticmethod
+    def _guardrail_tag_budget_harness(
+        monkeypatch,
+        request_body: dict,
+        guardrail_tags: Sequence[str],
+        route: str = "/v1/chat/completions",
+    ) -> tuple[ProxyBaseLLMRequestProcessing, MagicMock, MagicMock, MagicMock, AsyncMock]:
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        mock_request.scope = {"path": route}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return copy.deepcopy(request_body)
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            data.setdefault("metadata", {}).setdefault("tags", []).extend(guardrail_tags)
+            return data
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        tag_budget_check = AsyncMock()
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+        return processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check
+
+    @staticmethod
+    def _router_with_free_and_paid_models() -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "sk-test"},
+                    "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+                },
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "sk-test"},
+                },
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_enforces_tag_budget_for_guardrail_added_tags(
+        self, monkeypatch
+    ):
+        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check = (
+            self._guardrail_tag_budget_harness(
+                monkeypatch,
+                request_body={
+                    "model": "paid-model",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "metadata": {"tags": ["existing-tag"]},
+                },
+                guardrail_tags=["guardrail-tag"],
+            )
+        )
+        tag_budget_check.side_effect = litellm.BudgetExceededError(current_cost=10.0, max_budget=5.0)
+        user_api_key_dict = ProxyUserAPIKeyAuth(api_key="sk-test")
+
+        with pytest.raises(ProxyException) as exc_info:
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=mock_proxy_logging_obj,
+                proxy_config=mock_proxy_config,
+                route_type="acompletion",
+                llm_router=self._router_with_free_and_paid_models(),
+            )
+
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+        assert exc_info.value.code == "429"
+        tag_budget_check.assert_awaited_once()
+        _, call_kwargs = tag_budget_check.call_args
+        assert call_kwargs["tags"] == ("guardrail-tag",)
+        assert call_kwargs["valid_token"] is user_api_key_dict
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_skips_tag_budget_check_when_guardrails_add_no_tags(
+        self, monkeypatch
+    ):
+        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check = (
+            self._guardrail_tag_budget_harness(
+                monkeypatch,
+                request_body={
+                    "model": "paid-model",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "metadata": {"tags": ["existing-tag"]},
+                },
+                guardrail_tags=[],
+            )
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router_with_free_and_paid_models(),
+        )
+
+        assert returned_data["metadata"]["tags"] == ["existing-tag"]
+        tag_budget_check.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_skips_guardrail_tag_budget_check_for_zero_cost_model(
+        self, monkeypatch
+    ):
+        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check = (
+            self._guardrail_tag_budget_harness(
+                monkeypatch,
+                request_body={"model": "free-model", "messages": [{"role": "user", "content": "hello"}]},
+                guardrail_tags=["guardrail-tag"],
+            )
+        )
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router_with_free_and_paid_models(),
+        )
+
+        assert returned_data["metadata"]["tags"] == ["guardrail-tag"]
+        tag_budget_check.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_skips_guardrail_tag_budget_check_on_budget_exempt_route(
+        self, monkeypatch
+    ):
+        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check = (
+            self._guardrail_tag_budget_harness(
+                monkeypatch,
+                request_body={"model": "paid-model", "text": "hello"},
+                guardrail_tags=["guardrail-tag"],
+                route="/guardrails/apply_guardrail",
+            )
+        )
+
+        await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router_with_free_and_paid_models(),
+        )
+
+        tag_budget_check.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_rechecks_guardrail_added_tag_on_fallback_retry(
+        self, monkeypatch
+    ):
+        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, tag_budget_check = (
+            self._guardrail_tag_budget_harness(
+                monkeypatch,
+                request_body={
+                    "model": "paid-model",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "metadata": {"tags": ["existing-tag"]},
+                },
+                guardrail_tags=["guardrail-tag"],
+            )
+        )
+        first_pass_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router_with_free_and_paid_models(),
+        )
+        assert first_pass_data["metadata"]["tags"] == ["existing-tag", "guardrail-tag"]
+        tag_budget_check.reset_mock()
+
+        async def retry_add_litellm_data_to_request(*args, **kwargs):
+            return first_pass_data
+
+        async def idempotent_pre_call_hook(user_api_key_dict, data, call_type):
+            return data
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            retry_add_litellm_data_to_request,
+        )
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=idempotent_pre_call_hook)
+
+        await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=self._router_with_free_and_paid_models(),
+        )
+
+        tag_budget_check.assert_awaited_once()
+        _, call_kwargs = tag_budget_check.call_args
+        assert call_kwargs["tags"] == ("guardrail-tag",)
+
+    @pytest.mark.asyncio
+    async def test_enforce_guardrail_added_tag_budgets_checks_only_added_tags(self, monkeypatch):
+        from litellm.proxy.common_request_processing import _enforce_guardrail_added_tag_budgets
+
+        tag_budget_check = AsyncMock()
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+
+        user_api_key_dict = ProxyUserAPIKeyAuth(api_key="sk-test")
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+        await _enforce_guardrail_added_tag_budgets(
+            data={"metadata": {"tags": ["existing-tag", "guardrail-tag"]}},
+            tags_before_guardrails=frozenset({"existing-tag"}),
+            route="/v1/chat/completions",
+            llm_router=None,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+        )
+
+        tag_budget_check.assert_awaited_once()
+        _, call_kwargs = tag_budget_check.call_args
+        assert call_kwargs["tags"] == ("guardrail-tag",)
+        assert call_kwargs["valid_token"] is user_api_key_dict
+
+        tag_budget_check.reset_mock()
+        await _enforce_guardrail_added_tag_budgets(
+            data={"metadata": {"tags": ["existing-tag"]}},
+            tags_before_guardrails=frozenset({"existing-tag"}),
+            route="/v1/chat/completions",
+            llm_router=None,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+        )
+        tag_budget_check.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_enforce_guardrail_added_tag_budgets_raises_budget_exceeded_proxy_exception(self, monkeypatch):
+        from litellm.proxy.common_request_processing import _enforce_guardrail_added_tag_budgets
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "tag_max_budget_check_for_tags",
+            AsyncMock(
+                side_effect=litellm.BudgetExceededError(
+                    current_cost=2.0,
+                    max_budget=1.0,
+                    message="Budget has been exceeded! Tag=guardrail-tag Current cost: 2.0, Max budget: 1.0",
+                    entity_type="tag",
+                    entity_id="guardrail-tag",
+                )
+            ),
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _enforce_guardrail_added_tag_budgets(
+                data={"metadata": {"tags": ["guardrail-tag"]}},
+                tags_before_guardrails=frozenset(),
+                route="/v1/chat/completions",
+                llm_router=None,
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=MagicMock(spec=ProxyLogging),
+            )
+
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+        assert exc_info.value.code == "429"
+        assert "guardrail-tag" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_enforce_guardrail_added_tag_budgets_still_checks_when_model_is_unparseable(self, monkeypatch):
+        from litellm.proxy.common_request_processing import _enforce_guardrail_added_tag_budgets
+
+        tag_budget_check = AsyncMock()
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "tag_max_budget_check_for_tags", tag_budget_check)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+
+        await _enforce_guardrail_added_tag_budgets(
+            data={"model": 5, "metadata": {"tags": ["guardrail-tag"]}},
+            tags_before_guardrails=frozenset(),
+            route="/v1/chat/completions",
+            llm_router=None,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+        )
+
+        tag_budget_check.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_arms_auto_router_compression_before_guardrails(

@@ -31,16 +31,23 @@ pub fn complete_anthropic_url(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    let api_base = non_empty(api_base)
-        .map(str::to_string)
-        .or_else(|| env_lookup(ANTHROPIC_API_BASE_ENV).filter(|value| !value.trim().is_empty()))
-        .unwrap_or_else(|| DEFAULT_ANTHROPIC_API_BASE.to_string());
+    let api_base = resolve_anthropic_api_base(api_base, env_lookup);
 
     let api_base = api_base.trim_end_matches('/');
     if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
         return api_base.to_string();
     }
     format!("{api_base}{MESSAGES_PATH_SUFFIX}")
+}
+
+pub fn resolve_anthropic_api_base(
+    api_base: Option<&str>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> String {
+    non_empty(api_base)
+        .map(str::to_string)
+        .or_else(|| env_lookup(ANTHROPIC_API_BASE_ENV).filter(|value| !value.trim().is_empty()))
+        .unwrap_or_else(|| DEFAULT_ANTHROPIC_API_BASE.to_string())
 }
 
 impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {

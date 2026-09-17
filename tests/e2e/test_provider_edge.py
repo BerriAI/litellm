@@ -1264,6 +1264,7 @@ class TestApiBaseSeam:
                     bundle_dir=tmp_path / "bundle",
                     bind_host="127.0.0.1",
                     advertise_host="127.0.0.1",
+                    test_key="tests/e2e/synthetic_suite.py::test_case",
                 )
                 is None
             )
@@ -1276,6 +1277,7 @@ class TestApiBaseSeam:
                 bundle_dir=tmp_path / "bundle",
                 bind_host="127.0.0.1",
                 advertise_host="127.0.0.1",
+                test_key="tests/e2e/synthetic_suite.py::test_case",
             )
 
     def test_unknown_mount_raises_naming_the_known_mounts(self, tmp_path: Path) -> None:
@@ -1286,6 +1288,7 @@ class TestApiBaseSeam:
                 bundle_dir=tmp_path / "bundle",
                 bind_host="127.0.0.1",
                 advertise_host="127.0.0.1",
+                test_key="tests/e2e/synthetic_suite.py::test_case",
             )
 
     @pytest.mark.parametrize("mode_raw", ["record", "replay"])
@@ -1301,15 +1304,18 @@ class TestApiBaseSeam:
             bundle_dir=tmp_path / "bundle",
             bind_host="127.0.0.1",
             advertise_host="127.0.0.1",
+            test_key="tests/e2e/synthetic_suite.py::test_case",
         ) is None
 
     def test_record_mode_boots_one_shared_edge_and_prepares_the_bundle(self, tmp_path: Path) -> None:
         root = tmp_path / "bundle"
         first = provider_edge_api_base(
-            "openai", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1"
+            "openai", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1",
+            test_key="tests/e2e/synthetic_suite.py::test_case",
         )
         second = provider_edge_api_base(
-            "anthropic", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1"
+            "anthropic", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1",
+            test_key="tests/e2e/synthetic_suite.py::test_case",
         )
         assert first is not None and second is not None
         assert first.endswith("/openai")

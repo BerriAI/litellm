@@ -257,7 +257,7 @@ commands:
       - install_rust
       - restore_cache:
           keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
+            - v3-integration-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
@@ -266,7 +266,7 @@ commands:
       - save_cache:
           paths:
             - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
+          key: v3-integration-uv-cache-{{ checksum "uv.lock" }}
 
 jobs:
   # Add Windows testing job
@@ -2955,6 +2955,32 @@ jobs:
     working_directory: ~/project
     steps:
       - setup_litellm_test_deps
+      - when:
+          condition:
+            equal: [browser, << parameters.suite >>]
+          steps:
+            - install_node
+            - restore_cache:
+                keys:
+                  - integration-ui-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+            - run:
+                name: Install locked browser dependencies
+                command: |
+                  cd ui/litellm-dashboard
+                  npm ci
+                  cd ../../tests/e2e/ui
+                  npm ci
+                  sudo env PATH="$PATH" DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l \
+                    timeout --signal=TERM --kill-after=20s 6m node node_modules/@playwright/test/cli.js install-deps chromium
+                  timeout --signal=TERM --kill-after=20s 3m node node_modules/@playwright/test/cli.js install chromium
+            - save_cache:
+                key: integration-ui-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+                paths:
+                  - ~/.npm
+                  - ~/.cache/ms-playwright
+            - run:
+                name: Build the candidate dashboard
+                command: cd ui/litellm-dashboard && NEXT_TELEMETRY_DISABLED=1 npm run build
       - start_postgres:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
       - start_redis
@@ -2983,7 +3009,7 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers]
+              suite: [management, accounting, database, providers, extensions, sdk, browser]
           filters:
             branches:
               only:
