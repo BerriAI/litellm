@@ -346,13 +346,17 @@ class MCPClient:
             self.update_auth_value(auth_value)
 
     async def discovery_auth_fingerprint(self) -> str:
+        return self._hash_discovery_auth(await self.prepare_request_auth())
+
+    async def prepare_request_auth(self) -> httpx.Request:
+        """Preview the authenticated request without sending it, closing the auth flow afterwards."""
         request: Final = httpx.Request("POST", self.server_url or "http://localhost/", headers=self._get_auth_headers())
         if self._resolved_auth is None:
-            return self._hash_discovery_auth(request)
+            return request
         flow: Final = self._resolved_auth.async_auth_flow(request)
         try:
             authenticated: Final = await flow.__anext__()
-            return self._hash_discovery_auth(authenticated)
+            return authenticated
         finally:
             await flow.aclose()
 
