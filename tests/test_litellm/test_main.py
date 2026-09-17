@@ -2431,6 +2431,46 @@ def test_mock_completion_usage_falls_back_to_default_without_admission_count():
     assert response.usage.prompt_tokens == litellm_main.DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT
 
 
+_AZURE_AI_CUSTOM_PRICED_DEPLOYMENT: Final = {
+    "model_name": "azure-ai-custom-priced",
+    "litellm_params": {
+        "model": "azure_ai/gpt-5.6",
+        "api_key": "mock",
+        "api_base": "https://example.services.ai.azure.com",
+        "mock_response": "ok",
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 7e-6,
+        "cache_read_input_token_cost": 1e-7,
+        "cache_creation_input_token_cost": 5e-7,
+    },
+    "model_info": {"id": "azure-ai-custom-priced-deployment-id"},
+}
+
+
+def _expected_custom_price(response: litellm.ModelResponse) -> float:
+    params: Final = _AZURE_AI_CUSTOM_PRICED_DEPLOYMENT["litellm_params"]
+    return (
+        response.usage.prompt_tokens * params["input_cost_per_token"]
+        + response.usage.completion_tokens * params["output_cost_per_token"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", (False, True))
+async def test_mock_completion_prices_azure_ai_router_deployment_with_custom_pricing(use_async: bool):
+    router: Final = litellm.Router(model_list=[_AZURE_AI_CUSTOM_PRICED_DEPLOYMENT])
+    messages: Final = [{"role": "user", "content": "hello"}]
+
+    response: Final = (
+        await router.acompletion(model="azure-ai-custom-priced", messages=messages)
+        if use_async
+        else router.completion(model="azure-ai-custom-priced", messages=messages)
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(_expected_custom_price(response))
+    assert response._hidden_params["custom_llm_provider"] == "azure_ai"
+
+
 _ADMISSION_INPUT_TOKENS: Final = 51234
 
 
