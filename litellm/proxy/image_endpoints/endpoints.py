@@ -6,6 +6,7 @@ from typing import Final, get_type_hints
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import ORJSONResponse
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -294,12 +295,11 @@ async def image_edit_api(
     #########################################################
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
-    data: Final = dict(
-        coerce_numeric_form_fields(
-            parsed_body=await _read_request_body(request=request),
-            numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
-        )
+    parsed_body: Final = coerce_numeric_form_fields(
+        parsed_body=await _read_request_body(request=request),
+        numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
     )
+    data: Final = {key: value for key, value in parsed_body.items() if not isinstance(value, StarletteUploadFile)}
     image_files: Final = await batch_to_bytesio(image)
     mask_files: Final = await batch_to_bytesio(mask)
     if image_files:

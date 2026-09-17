@@ -2,12 +2,13 @@ import asyncio
 import copy
 import logging
 from collections.abc import Iterator, Mapping
+from io import BytesIO
 from types import SimpleNamespace
 from typing import Any, Dict
 
 import orjson
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import Response
@@ -170,6 +171,53 @@ def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
 
     assert response.status_code == 200
     assert captured["n"] == "two"
+
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n"
+MASK_BYTES = b"\x89PNG\r\n\x1a\nmask"
+
+
+def test_image_edit_multipart_array_aliases_do_not_leak_upload_objects_to_the_provider(monkeypatch):
+    """`image[]`/`mask[]` (what the OpenAI SDK sends) used to survive in the body as
+    raw UploadFile objects and get forwarded as text provider params."""
+    captured: dict[str, Any] = {}
+    soap = PNG_BYTES
+    soap_two = PNG_BYTES + b"2"
+    mask = MASK_BYTES
+    mask_two = MASK_BYTES + b"2"
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files=[
+            ("image[]", ("soap.png", soap, "image/png")),
+            ("image[]", ("soap-2.png", soap_two, "image/png")),
+            ("mask[]", ("mask.png", mask, "image/png")),
+            ("mask[]", ("mask-2.png", mask_two, "image/png")),
+            ("reference", ("ref.png", PNG_BYTES, "image/png")),
+        ],
+        data={"model": "gpt-image-1", "prompt": "studio ghibli", "seed": "42"},
+    )
+
+    assert response.status_code == 200
+    assert "image[]" not in captured
+    assert "mask[]" not in captured
+    assert "reference" not in captured
+    assert captured["seed"] == "42"
+    assert not any(isinstance(value, UploadFile) for value in captured.values())
+
+    images = captured["image"]
+    masks = captured["mask"]
+    assert isinstance(images, list) and len(images) == 2
+    assert isinstance(masks, list) and len(masks) == 2
+    for value, name, content in (
+        (images[0], "soap.png", soap),
+        (images[1], "soap-2.png", soap_two),
+        (masks[0], "mask.png", mask),
+        (masks[1], "mask-2.png", mask_two),
+    ):
+        assert isinstance(value, BytesIO)
+        assert value.name == name
+        assert value.getvalue() == content
 
 
 @pytest.mark.asyncio
