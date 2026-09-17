@@ -1,20 +1,21 @@
 use serde_json::Value;
 
-use crate::error::Error;
-use crate::http_utils::has_header;
-use crate::providers::custom_llm_provider::{CustomLlmProvider, get_custom_llm_provider};
-
+use super::Error;
 use super::common_utils::{chat_completions_provider_config, string_headers};
-use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
 use super::types::{
     ChatCompletionsRequest, ChatMessage, ProviderChatCompletionsRequest,
     ResolvedChatCompletionsRequest,
 };
+use crate::http_utils::has_header;
+use crate::litellm_core_utils::get_llm_provider_logic::{
+    CustomLlmProvider, get_custom_llm_provider,
+};
+use crate::llms::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth};
 
 pub(super) fn resolve_provider_config<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
-) -> Result<(String, &'static dyn ChatCompletionsProviderConfig), Error> {
+) -> Result<(String, &'static dyn BaseConfig), Error> {
     let provider_info = get_custom_llm_provider(model, custom_llm_provider)
         .or_else(|| {
             custom_llm_provider.map(|provider| CustomLlmProvider {
@@ -65,7 +66,7 @@ pub(super) fn resolve_request(
 fn validate_environment(
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,
-    config: &dyn ChatCompletionsProviderConfig,
+    config: &dyn BaseConfig,
 ) -> Result<(Vec<(String, String)>, ChatCompletionsAuth), Error> {
     let env_lookup = |key: &str| std::env::var(key).ok();
     let mut headers = string_headers(request.extra_headers.clone())?;
@@ -122,7 +123,7 @@ pub(super) fn prepare_provider_request(
     let model = request.model;
     let config = request.config;
     let env_lookup = |key: &str| std::env::var(key).ok();
-    let url = config.complete_url(
+    let url = config.get_complete_url(
         request.api_base,
         &model,
         &request.optional_params,

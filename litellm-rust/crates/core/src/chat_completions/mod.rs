@@ -6,20 +6,20 @@
 //! credentials, and it resolves the provider, translates the conversation,
 //! calls the provider, and returns a typed OpenAI-shaped response.
 
-use crate::Error;
+mod error;
+pub use error::Error;
 mod client;
 mod common_utils;
 pub mod conversation;
 pub(crate) mod handler;
 mod prepare;
 pub mod response_utils;
-pub mod transformation;
+pub mod streaming;
 pub mod types;
-
-use serde_json::{Map, Value};
 
 use handler::execute_chat_completions_provider_call;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};
+use serde_json::{Map, Value};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
 pub async fn chat_completions(
