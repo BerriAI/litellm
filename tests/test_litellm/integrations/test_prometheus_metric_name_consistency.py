@@ -25,7 +25,7 @@ from litellm.caching.redis_cache import _breaker_metrics
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.prometheus_services import PrometheusServicesLogger
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import SpendLogCleanupMetrics
-from litellm.proxy.middleware.admission_control_middleware import admission_control_state
+from litellm.proxy.middleware.admission_control_middleware import create_prometheus_admission_metrics
 from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
 
 _GRAFANA_DIR: Final = Path(__file__).parents[3] / "cookbook" / "litellm_proxy_server" / "grafana_dashboard"
@@ -40,49 +40,68 @@ def _registered_collectors() -> MappingProxyType[Collector, tuple[str, ...]]:
     return MappingProxyType({collector: tuple(names) for collector, names in REGISTRY._collector_to_names.items()})
 
 
-def _clear_default_registry_and_lazy_owners() -> None:
+def _unregister_everything() -> None:
     for collector in tuple(REGISTRY._collector_to_names):
         REGISTRY.unregister(collector)
-    SpendLogCleanupMetrics._initialized = False
-    InFlightRequestsMiddleware._gauge_init_attempted = False
-    InFlightRequestsMiddleware._gauge = None
-    _breaker_metrics.cache_clear()
-    admission_control_state._metrics_init_attempted = False
-    admission_control_state._metrics = None
+
+
+def _register_if_absent(collectors: tuple[Collector, ...]) -> None:
+    for collector in collectors:
+        if collector not in REGISTRY._collector_to_names and not any(
+            name in REGISTRY._names_to_collectors for name in REGISTRY._get_names(collector)
+        ):
+            REGISTRY.register(collector)
 
 
 def _lazy_owner_collectors() -> tuple[Collector, ...]:
     SpendLogCleanupMetrics._ensure_initialized()
+    assert SpendLogCleanupMetrics.rows_deleted is not None
+    assert SpendLogCleanupMetrics.batch_duration is not None
+    assert SpendLogCleanupMetrics.rows_remaining is not None
+    assert SpendLogCleanupMetrics.batch_failures is not None
     assert SpendLogCleanupMetrics.runs is not None
     in_flight: Final = InFlightRequestsMiddleware._get_gauge()
     assert in_flight is not None
-    admission: Final = admission_control_state._get_metrics()
+    breaker: Final = _breaker_metrics()
+    assert breaker._state_gauge is not None
+    assert breaker._transitions is not None
+    assert breaker._failures is not None
+    return (
+        SpendLogCleanupMetrics.rows_deleted,
+        SpendLogCleanupMetrics.batch_duration,
+        SpendLogCleanupMetrics.rows_remaining,
+        SpendLogCleanupMetrics.batch_failures,
+        SpendLogCleanupMetrics.runs,
+        in_flight,
+        breaker._state_gauge,
+        breaker._transitions,
+        breaker._failures,
+    )
+
+
+def _fresh_admission_collectors() -> tuple[Collector, ...]:
+    admission: Final = create_prometheus_admission_metrics()
     assert admission is not None
-    return (SpendLogCleanupMetrics.runs, in_flight, _breaker_metrics()._state_gauge, admission.admitted_gauge)
+    return (admission.admitted_gauge, admission.queued_gauge, admission.rejected_counter)
 
 
 @contextmanager
 def _isolated_litellm_metric_families(monkeypatch: pytest.MonkeyPatch) -> Iterator[frozenset[str]]:
     previous: Final = _registered_collectors()
-    _clear_default_registry_and_lazy_owners()
+    _unregister_everything()
     monkeypatch.setattr(litellm, "prometheus_metrics_config", None)
     PrometheusLogger()
     PrometheusServicesLogger()
-    logger_collectors: Final = frozenset(REGISTRY._collector_to_names)
-    _lazy_owner_collectors()
-    lazy_owner_names: Final = frozenset(
-        name
-        for collector, names in _registered_collectors().items()
-        if collector not in logger_collectors
-        for name in names
-    )
+    lazy_owned: Final = _lazy_owner_collectors()
+    _register_if_absent(lazy_owned)
+    _fresh_admission_collectors()
     try:
         yield frozenset(metric.name for metric in REGISTRY.collect())
     finally:
-        _clear_default_registry_and_lazy_owners()
-        for collector, names in previous.items():
-            if lazy_owner_names.isdisjoint(names):
-                REGISTRY.register(collector)
+        _unregister_everything()
+        for collector in previous:
+            REGISTRY.register(collector)
+        _register_if_absent(lazy_owned)
 
 
 @pytest.fixture
@@ -92,23 +111,32 @@ def emitted_metric_families(monkeypatch: pytest.MonkeyPatch) -> Iterator[frozens
 
 
 @pytest.fixture
-def unrelated_gauge() -> Iterator[Gauge]:
-    gauge: Final = Gauge("litellm_unrelated_sentinel", "registered by a test outside the isolated block")
-    yield gauge
-    if gauge in REGISTRY._collector_to_names:
-        REGISTRY.unregister(gauge)
+def gauges_registered_by_an_earlier_test() -> Iterator[tuple[Collector, Collector]]:
+    sentinel: Final = Gauge("litellm_unrelated_sentinel", "registered by a test outside the isolated block")
+    already_registered: Final = REGISTRY._names_to_collectors.get("litellm_admission_admitted_requests")
+    admission: Final = already_registered or Gauge(
+        "litellm_admission_admitted_requests", "registered directly, bypassing admission_control_state"
+    )
+    yield (sentinel, admission)
+    for gauge in (sentinel,) if already_registered is not None else (sentinel, admission):
+        if gauge in REGISTRY._collector_to_names:
+            REGISTRY.unregister(gauge)
 
 
-def test_isolated_metric_families_restore_unrelated_collectors_and_lazy_owners(
-    monkeypatch: pytest.MonkeyPatch, unrelated_gauge: Gauge
+def test_isolated_metric_families_restore_the_registry_and_keep_lazy_owners_live(
+    monkeypatch: pytest.MonkeyPatch, gauges_registered_by_an_earlier_test: tuple[Collector, Collector]
 ):
-    stale: Final = _lazy_owner_collectors()
+    before: Final = _registered_collectors()
     with _isolated_litellm_metric_families(monkeypatch) as families:
         assert "litellm_unrelated_sentinel" not in families
-        assert unrelated_gauge not in REGISTRY._collector_to_names
-    assert unrelated_gauge in REGISTRY._collector_to_names
-    assert all(collector not in REGISTRY._collector_to_names for collector in stale)
-    assert all(collector in REGISTRY._collector_to_names for collector in _lazy_owner_collectors())
+        assert "litellm_admission_admitted_requests" in families
+        assert "litellm_in_flight_requests" in families
+        assert not any(gauge in REGISTRY._collector_to_names for gauge in gauges_registered_by_an_earlier_test)
+    after: Final = _registered_collectors()
+    assert all(after[collector] == names for collector, names in before.items())
+    lazy_owned: Final = _lazy_owner_collectors()
+    assert frozenset(after) - frozenset(before) <= frozenset(lazy_owned)
+    assert all(collector in after for collector in lazy_owned)
 
 
 def _dashboard_expressions(path: Path) -> tuple[str, ...]:
