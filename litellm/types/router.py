@@ -497,6 +497,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     order: int | None
     weight: int | None
     max_parallel_requests: int | None
+    max_parallel_requests_queue_size: ReadOnly[int | None]
     api_key: str | None
     api_base: str | None
     api_version: str | None
@@ -647,6 +648,7 @@ class RouterErrors(enum.Enum):
     """
 
     user_defined_ratelimit_error = "Deployment over user-defined ratelimit."
+    max_parallel_requests_queue_full = "Deployment max_parallel_requests queue is full."
     no_deployments_available = "No deployments available for selected model"
     all_deployments_in_cooldown = "All deployments for selected model are in cooldown"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"
