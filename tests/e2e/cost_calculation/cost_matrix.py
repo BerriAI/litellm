@@ -1,18 +1,16 @@
-"""The cost-calculation matrix: frontier model set, the pricing-component cases
-each model runs, and the expected-cost arithmetic.
+"""The cost-calculation matrix: the model set derived from the test cost map,
+the request/response cases from ``cases.json``, and the loaders both use.
 
-Rates come from ``tests/e2e/cost_map.json``, which the proxy under test loads as
-its ENTIRE model cost map (LITELLM_MODEL_COST_MAP_URL), so an entry's rates are
-exactly what the proxy bills and nothing in the suite depends on the bundled
-map. Each model's rates are a distinct multiple of a shared base set, so a
-component billed at the wrong model's rate (or the wrong case's rate) can never
-coincidentally match.
-
-Case applicability is pricing-field-gated AND wire-gated: a case runs for a
-model only when the entry carries the rate the case exercises and the wire can
-report the token kind that rate prices. When the wire cannot report a kind
-(e.g. Anthropic has no reasoning-token field, Responses reports no cache
-creation), the case is absent from the matrix rather than silently zero.
+Three data files drive the suite; nothing in Python lists models or cases:
+- ``tests/e2e/cost_map.json`` is the proxy's ENTIRE model cost map
+  (LITELLM_MODEL_COST_MAP_URL); every entry becomes a deployment under test.
+- ``tests/e2e/cost_calculation/cases.json`` is the case list; each case runs
+  for a model when the entry carries the rates it exercises (``requires_rates``)
+  and the wire can report the token kinds involved (``requires_caps`` /
+  ``wires``).
+- ``tests/e2e/cost_calculation/expected.json`` holds the reviewed goldens; the
+  tests assert them verbatim and never compute a price themselves. The rate
+  arithmetic that proposes goldens lives in ``generate_expected.py``, not here.
 """
 
 from __future__ import annotations
@@ -26,13 +24,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from scripted_provider import Scenario, ScriptedOutput, ScriptedToolCall, ScriptedUsage, Wire
 
 COST_MAP_PATH: Final = Path(__file__).resolve().parent.parent / "cost_map.json"
+CASES_PATH: Final = Path(__file__).resolve().parent / "cases.json"
+EXPECTED_PATH: Final = Path(__file__).resolve().parent / "expected.json"
 
 
 class SearchContextCostPerQuery(BaseModel):
@@ -77,119 +77,90 @@ _COST_MAP: Final[Mapping[str, CostMapEntry]] = MappingProxyType(
 TIER_THRESHOLD_TOKENS: Final = 200_000
 
 
-@dataclass(frozen=True, slots=True)
-class FrontierModel:
-    """One deployment under test: the model_name the suite registers, the
-    provider-prefixed litellm model string, the wire the scripted upstream
-    speaks, its cost-map key, and the sibling map model the response_model
-    override case reports."""
+class DeploymentSpec(BaseModel):
+    """A deployment-level fact from cases.json: when a map key needs a
+    registered deployment name that is not its provider model (or a
+    model_info.base_model pin), the matrix uses these instead of the defaults."""
 
-    model_name: str
-    litellm_model: str
-    wire: Wire
+    model_config = ConfigDict(frozen=True)
+
     map_key: str
-    override_model: str | None = None
-    override_map_key: str | None = None
-    # Registered as model_info.base_model; when set, the provider-reported
-    # model loses to it and every case bills at this deployment's own rates.
+    litellm_model: str | None = None
     base_model: str | None = None
-    # Extra litellm_params merged into the /model/new registration (api_version,
-    # aws_* credentials, vertex_* auth).
-    litellm_params: Mapping[str, str] = MappingProxyType({})
-
-    @property
-    def rates(self) -> CostMapEntry:
-        return _COST_MAP[self.map_key]
-
-    @property
-    def override_rates(self) -> CostMapEntry:
-        if self.base_model is not None or self.override_map_key is None:
-            return self.rates
-        return _COST_MAP[self.override_map_key]
-
-    @property
-    def provider_model(self) -> str:
-        """The bare provider-facing model name: litellm_model minus the provider
-        prefix and any routing segment (converse/, responses/)."""
-        tail: Final = self.litellm_model.split("/")[1:]
-        return "/".join(tail[1:] if tail and tail[0] in ("converse", "responses") else tail)
-
-    @property
-    def provider(self) -> str:
-        return self.rates.litellm_provider
-
-    @property
-    def api_key(self) -> str:
-        # The scripted upstream ignores auth; a fixed bogus key proves the suite
-        # spends zero real provider calls.
-        return "sk-scripted-provider"
 
 
-# Response-model override targets: emit a sibling's bare provider-facing name so
-# the biller's provider-prefixed lookup lands on that sibling's map key.
-_OVERRIDE_MODELS: Final[Mapping[str, str]] = MappingProxyType({
-    "gpt-5.6": "gpt-5.4-mini",
-    "gpt-5.5-pro": "gpt-5.3-codex",
-    "gpt-5.3-codex": "gpt-5.5-pro",
-    "gpt-5.4-mini": "gpt-5.6",
-    "claude-opus-5": "claude-sonnet-5",
-    "claude-sonnet-5": "claude-opus-5",
-    "claude-haiku-4-5": "claude-sonnet-5",
-    "gemini/gemini-3.8-flash": "gemini-3.1-pro-preview",
-    "gemini/gemini-3.1-pro-preview": "gemini-3.8-flash",
-    "together_ai/moonshotai/Kimi-K3": "zai-org/GLM-5.3",
-    "together_ai/zai-org/GLM-5.3": "moonshotai/Kimi-K3",
-    "fireworks_ai/kimi-k3": "qwen3p8-max",
-    "fireworks_ai/qwen3p8-max": "kimi-k3",
-    "fireworks_ai/deepseek-v4p1-flash": "kimi-k3",
-})
+class Case(BaseModel):
+    """One request/response shape from cases.json; gated onto a model by
+    ``requires_rates`` (entry must carry each rate field), ``requires_caps``
+    (the wire must report the token kind) and ``wires`` (shape is wire-specific)."""
 
-_OVERRIDE_MAP_KEYS: Final[Mapping[str, str]] = MappingProxyType({
-    "gpt-5.4-mini": "gpt-5.4-mini",
-    "gpt-5.6": "gpt-5.6",
-    "gpt-5.3-codex": "gpt-5.3-codex",
-    "gpt-5.5-pro": "gpt-5.5-pro",
-    "claude-sonnet-5": "claude-sonnet-5",
-    "claude-opus-5": "claude-opus-5",
-    "gemini-3.1-pro-preview": "gemini/gemini-3.1-pro-preview",
-    "gemini-3.8-flash": "gemini/gemini-3.8-flash",
-    "zai-org/GLM-5.3": "together_ai/zai-org/GLM-5.3",
-    "moonshotai/Kimi-K3": "together_ai/moonshotai/Kimi-K3",
-    "qwen3p8-max": "fireworks_ai/qwen3p8-max",
-    "kimi-k3": "fireworks_ai/kimi-k3",
-})
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    usage: ScriptedUsage
+    stream: bool = False
+    stream_usage: Literal["final_chunk", "absent"] = "final_chunk"
+    service_tier: Literal["flex", "priority"] | None = None
+    response_model_override: bool = False
+    exact_spend: bool = True
+    tool_call: bool = False
+    image_input: bool = False
+    terminal: Literal["completed", "incomplete", "unvalidated", "prompt_blocked"] = "completed"
+    requires_rates: tuple[str, ...] = ()
+    requires_caps: tuple[str, ...] = ()
+    wires: tuple[Wire, ...] | None = None
+
+    def applies_to(self, model: FrontierModel) -> bool:
+        if self.wires is not None and model.wire not in self.wires:
+            return False
+        caps: Final = _WIRE_CAPS[model.wire]
+        if not frozenset(self.requires_caps) <= caps:
+            return False
+        return all(
+            getattr(model.rates, field, None) is not None for field in self.requires_rates
+        )
+
+    def scenario(self, scenario_id: str, model: FrontierModel, text: str) -> Scenario:
+        return Scenario(
+            scenario_id=scenario_id,
+            wire=model.wire,
+            usage=self.usage,
+            model=model.provider_model,
+            output=ScriptedOutput(
+                text=text,
+                response_model=model.override_model if self.response_model_override else None,
+                tool_call=ScriptedToolCall(name="get_weather", arguments=TOOL_CALL_ARGUMENTS)
+                if self.tool_call
+                else None,
+                terminal=self.terminal,
+            ),
+            stream_usage=self.stream_usage,
+            service_tier=self.service_tier,
+        )
 
 
-_FRONTIER_SPECS: Final[tuple[tuple[str, str, Wire], ...]] = (
-    ("gpt-5.6", "openai/gpt-5.6", "openai_chat"),
-    ("gpt-5.5-pro", "openai/gpt-5.5-pro", "openai_responses"),
-    ("gpt-5.3-codex", "openai/gpt-5.3-codex", "openai_responses"),
-    ("gpt-5.4-mini", "openai/gpt-5.4-mini", "openai_chat"),
-    ("claude-opus-5", "anthropic/claude-opus-5", "anthropic_messages"),
-    ("claude-sonnet-5", "anthropic/claude-sonnet-5", "anthropic_messages"),
-    ("claude-haiku-4-5", "anthropic/claude-haiku-4-5", "anthropic_messages"),
-    ("gemini/gemini-3.8-flash", "gemini/gemini-3.8-flash", "gemini_generate"),
-    ("gemini/gemini-3.1-pro-preview", "gemini/gemini-3.1-pro-preview", "gemini_generate"),
-    ("together_ai/moonshotai/Kimi-K3", "together_ai/moonshotai/Kimi-K3", "together_chat"),
-    ("together_ai/zai-org/GLM-5.3", "together_ai/zai-org/GLM-5.3", "together_chat"),
-    ("fireworks_ai/kimi-k3", "fireworks_ai/kimi-k3", "fireworks_chat"),
-    ("fireworks_ai/qwen3p8-max", "fireworks_ai/qwen3p8-max", "fireworks_chat"),
-    ("fireworks_ai/deepseek-v4p1-flash", "fireworks_ai/deepseek-v4p1-flash", "fireworks_chat"),
+class _CasesFile(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    deployments: tuple[DeploymentSpec, ...] = ()
+    cases: tuple[Case, ...] = ()
+
+
+_CASES_FILE: Final = _CasesFile.model_validate(json.loads(CASES_PATH.read_text()))
+CASES: Final[tuple[Case, ...]] = _CASES_FILE.cases
+_DEPLOYMENTS: Final[Mapping[str, DeploymentSpec]] = MappingProxyType(
+    {spec.map_key: spec for spec in _CASES_FILE.deployments}
 )
 
 
 @dataclass(frozen=True, slots=True)
-class _ExtendedSpec:
-    """A frontier entry whose override target, model_info.base_model or extra
-    litellm_params can't be derived from the map key alone."""
+class _ProviderWiring:
+    """How a (litellm_provider, mode) pair maps to a sidecar wire, the provider
+    prefix on the registered litellm model string, and extra litellm_params."""
 
-    map_key: str
-    litellm_model: str
     wire: Wire
-    override_model: str | None = None
-    override_map_key: str | None = None
-    base_model: str | None = None
-    litellm_params: Mapping[str, str] = MappingProxyType({})
+    model_prefix: str | None
+    litellm_params: Mapping[str, str]
 
 
 _AZURE_PARAMS: Final[Mapping[str, str]] = MappingProxyType({"api_version": "2025-04-01-preview"})
@@ -207,87 +178,134 @@ _VERTEX_PARAMS: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
-_EXTENDED_SPECS: Final[tuple[_ExtendedSpec, ...]] = (
-    _ExtendedSpec(
-        map_key="azure/gpt-5.6",
-        litellm_model="azure/gpt-5.6",
-        wire="azure_chat",
-        override_model="gpt-5.4-mini",
-        override_map_key="azure/gpt-5.4-mini",
-        litellm_params=_AZURE_PARAMS,
-    ),
-    _ExtendedSpec(
-        # Deployment name is not a model; base_model pins billing so the
-        # response's model field loses, proving base_model wins.
-        map_key="azure/gpt-5.4-mini",
-        litellm_model="azure/cc-pinned-deployment",
-        wire="azure_chat",
-        override_model="gpt-5.6",
-        override_map_key="azure/gpt-5.6",
-        base_model="azure/gpt-5.4-mini",
-        litellm_params=_AZURE_PARAMS,
-    ),
-    _ExtendedSpec(
-        map_key="anthropic.claude-sonnet-5-v1:0",
-        litellm_model="bedrock/converse/anthropic.claude-sonnet-5-v1:0",
-        wire="bedrock_converse",
-        litellm_params=_BEDROCK_PARAMS,
-    ),
-    _ExtendedSpec(
-        map_key="us.anthropic.claude-opus-5-v1:0",
-        litellm_model="bedrock/converse/us.anthropic.claude-opus-5-v1:0",
-        wire="bedrock_converse",
-        litellm_params=_BEDROCK_PARAMS,
-    ),
-    _ExtendedSpec(
-        map_key="meta.llama4-maverick-17b-instruct-v1:0",
-        litellm_model="bedrock/converse/meta.llama4-maverick-17b-instruct-v1:0",
-        wire="bedrock_converse",
-        litellm_params=_BEDROCK_PARAMS,
-    ),
-    _ExtendedSpec(
-        map_key="gemini-3.8-flash",
-        litellm_model="vertex_ai/gemini-3.8-flash",
-        wire="vertex_generate",
-        override_model="gemini-3.1-pro-preview",
-        override_map_key="gemini-3.1-pro-preview",
-        litellm_params=_VERTEX_PARAMS,
-    ),
-    _ExtendedSpec(
-        map_key="gemini-3.1-pro-preview",
-        litellm_model="vertex_ai/gemini-3.1-pro-preview",
-        wire="vertex_generate",
-        override_model="gemini-3.8-flash",
-        override_map_key="gemini-3.8-flash",
-        litellm_params=_VERTEX_PARAMS,
-    ),
+_PROVIDER_WIRING: Final[Mapping[tuple[str, str], _ProviderWiring]] = MappingProxyType(
+    {
+        ("openai", "chat"): _ProviderWiring("openai_chat", "openai", MappingProxyType({})),
+        ("openai", "responses"): _ProviderWiring(
+            "openai_responses", "openai", MappingProxyType({})
+        ),
+        ("anthropic", "chat"): _ProviderWiring(
+            "anthropic_messages", "anthropic", MappingProxyType({})
+        ),
+        ("gemini", "chat"): _ProviderWiring("gemini_generate", None, MappingProxyType({})),
+        ("together_ai", "chat"): _ProviderWiring("together_chat", None, MappingProxyType({})),
+        ("fireworks_ai", "chat"): _ProviderWiring("fireworks_chat", None, MappingProxyType({})),
+        ("azure", "chat"): _ProviderWiring("azure_chat", None, _AZURE_PARAMS),
+        ("bedrock_converse", "chat"): _ProviderWiring(
+            "bedrock_converse", "bedrock/converse", _BEDROCK_PARAMS
+        ),
+        ("vertex_ai-language-models", "chat"): _ProviderWiring(
+            "vertex_generate", "vertex_ai", _VERTEX_PARAMS
+        ),
+    }
 )
 
 
+@dataclass(frozen=True, slots=True)
+class FrontierModel:
+    """One deployment under test, derived from a cost-map entry: the model_name
+    the suite registers, the provider-prefixed litellm model string, the wire
+    the scripted upstream speaks, and the sibling map model the response_model
+    override case reports."""
+
+    model_name: str
+    litellm_model: str
+    wire: Wire
+    map_key: str
+    override_model: str | None = None
+    override_map_key: str | None = None
+    # Registered as model_info.base_model; when set, the provider-reported
+    # model loses to it and every case bills at this deployment's own rates.
+    base_model: str | None = None
+    litellm_params: Mapping[str, str] = MappingProxyType({})
+
+    @property
+    def rates(self) -> CostMapEntry:
+        return _COST_MAP[self.map_key]
+
+    @property
+    def override_rates(self) -> CostMapEntry:
+        if self.base_model is not None or self.override_map_key is None:
+            return self.rates
+        return _COST_MAP[self.override_map_key]
+
+    @property
+    def provider_model(self) -> str:
+        """The bare provider-facing model name: litellm_model minus the provider
+        prefix and any routing segment (converse/, responses/)."""
+        return _provider_model(self.litellm_model)
+
+    @property
+    def provider(self) -> str:
+        return self.rates.litellm_provider
+
+    @property
+    def api_key(self) -> str:
+        # The scripted upstream ignores auth; a fixed bogus key proves the suite
+        # spends zero real provider calls.
+        return "sk-scripted-provider"
+
+
+def _provider_model(litellm_model: str) -> str:
+    tail: Final = litellm_model.split("/")[1:]
+    return "/".join(tail[1:] if tail and tail[0] in ("converse", "responses") else tail)
+
+
+def _litellm_model_for(map_key: str, wiring: _ProviderWiring) -> str:
+    if wiring.model_prefix is None:
+        return map_key
+    if map_key.startswith(f"{wiring.model_prefix}/"):
+        return map_key
+    return f"{wiring.model_prefix}/{map_key}"
+
+
 def _frontier() -> tuple[FrontierModel, ...]:
-    return tuple(
-        FrontierModel(
-            model_name=f"cc-{map_key.replace('/', '-').lower()}",
-            litellm_model=litellm_model,
-            wire=wire,
-            map_key=map_key,
-            override_model=_OVERRIDE_MODELS[map_key],
-            override_map_key=_OVERRIDE_MAP_KEYS[_OVERRIDE_MODELS[map_key]],
-        )
-        for map_key, litellm_model, wire in _FRONTIER_SPECS
-    ) + tuple(
-        FrontierModel(
-            model_name=f"cc-{spec.map_key.replace('/', '-').replace(':', '-').replace('.', '-').lower()}",
-            litellm_model=spec.litellm_model,
-            wire=spec.wire,
-            map_key=spec.map_key,
-            override_model=spec.override_model,
-            override_map_key=spec.override_map_key,
-            base_model=spec.base_model,
-            litellm_params=spec.litellm_params,
-        )
-        for spec in _EXTENDED_SPECS
+    groups: Final[Mapping[tuple[str, str], tuple[str, ...]]] = MappingProxyType(
+        {
+            pair: tuple(sorted(k for k, e in _COST_MAP.items() if (e.litellm_provider, e.mode) == pair))
+            for pair in {(e.litellm_provider, e.mode) for e in _COST_MAP.values()}
+        }
     )
+    models: list[FrontierModel] = []  # mutable-ok: accumulated once at import into a tuple
+    for map_key in sorted(_COST_MAP):
+        entry: Final = _COST_MAP[map_key]
+        pair: Final = (entry.litellm_provider, entry.mode)
+        wiring: Final = _PROVIDER_WIRING.get(pair)
+        if wiring is None:
+            raise ValueError(
+                f"cost_map entry {map_key} has no wiring for "
+                f"(litellm_provider={pair[0]}, mode={pair[1]}); add a "
+                f"_ProviderWiring row in cost_matrix.py"
+            )
+        siblings: Final = groups[pair]
+        override_key: Final = (
+            siblings[(siblings.index(map_key) + 1) % len(siblings)] if len(siblings) > 1 else None
+        )
+        override_litellm: Final = (
+            _litellm_model_for(override_key, wiring) if override_key is not None else None
+        )
+        deployment: Final = _DEPLOYMENTS.get(map_key)
+        models.append(
+            FrontierModel(
+                model_name=f"cc-{map_key.replace('/', '-').replace(':', '-').replace('.', '-').lower()}",
+                litellm_model=(
+                    deployment.litellm_model
+                    if deployment is not None and deployment.litellm_model is not None
+                    else _litellm_model_for(map_key, wiring)
+                ),
+                wire=wiring.wire,
+                map_key=map_key,
+                override_model=(
+                    _provider_model(override_litellm)
+                    if override_litellm is not None
+                    else None
+                ),
+                override_map_key=override_key,
+                base_model=deployment.base_model if deployment is not None else None,
+                litellm_params=wiring.litellm_params,
+            )
+        )
+    return tuple(models)
 
 
 FRONTIER_MODELS: Final[tuple[FrontierModel, ...]] = _frontier()
@@ -350,71 +368,6 @@ _WIRE_CAPS: Final[Mapping[str, frozenset[str]]] = MappingProxyType({
     ),
 })
 
-CaseName: TypeAlias = Literal[
-    "basic",
-    "cache_read",
-    "cache_write_5m",
-    "cache_write_1h",
-    "reasoning",
-    "audio",
-    "tiered",
-    "service_tier_flex",
-    "service_tier_priority",
-    "web_search",
-    "stream",
-    "stream_no_usage",
-    "response_model_override",
-    "stream_response_model_override",
-    "tool_call",
-    "stream_no_usage_tool_call",
-    "stream_no_usage_image_input",
-    "stream_no_usage_incomplete",
-    "stream_unvalidated",
-    "stream_no_usage_unvalidated",
-    "prompt_blocked",
-    "stream_prompt_blocked",
-]
-
-
-@dataclass(frozen=True, slots=True)
-class Case:
-    name: CaseName
-    usage: ScriptedUsage
-    stream: bool = False
-    stream_usage: Literal["final_chunk", "absent"] = "final_chunk"
-    service_tier: Literal["flex", "priority"] | None = None
-    # For web_search the wire's reported call count is not always what gets
-    # billed: chat-completions surfaces only expose url_citation annotations, so
-    # the biller floors to one call; responses/messages/gemini report a real
-    # count.
-    billed_web_search_calls: int = 0
-    response_model_override: bool = False
-    exact_spend: bool = True
-    tool_call: bool = False
-    image_input: bool = False
-    terminal: Literal["completed", "incomplete", "unvalidated", "prompt_blocked"] = "completed"
-
-    def scenario(self, scenario_id: str, model: FrontierModel, text: str) -> Scenario:
-        return Scenario(
-            scenario_id=scenario_id,
-            wire=model.wire,
-            usage=self.usage,
-            model=model.provider_model,
-            output=ScriptedOutput(
-                text=text,
-                response_model=model.override_model if self.response_model_override else None,
-                tool_call=ScriptedToolCall(name="get_weather", arguments=TOOL_CALL_ARGUMENTS)
-                if self.tool_call
-                else None,
-                terminal=self.terminal,
-            ),
-            stream_usage=self.stream_usage,
-            service_tier=self.service_tier,
-        )
-
-
-_BASIC_USAGE: Final = ScriptedUsage(fresh_input_tokens=120, output_tokens=40)
-
 TOOL_CALL_ARGUMENTS: Final = json.dumps({
     "city": "Berlin",
     "days": 7,
@@ -422,284 +375,9 @@ TOOL_CALL_ARGUMENTS: Final = json.dumps({
     "notes": "filler " * 30,
 })
 
-_PROMPT_BLOCKED_USAGE: Final = ScriptedUsage(fresh_input_tokens=1000, output_tokens=0)
-
-
-def _web_search_case(model: FrontierModel) -> Case:
-    counts_exactly: Final = model.wire in (
-        "openai_responses", "anthropic_messages", "gemini_generate", "vertex_generate"
-    )
-    return Case(
-        name="web_search",
-        usage=ScriptedUsage(fresh_input_tokens=100, output_tokens=30, web_search_calls=3),
-        billed_web_search_calls=3 if counts_exactly else 1,
-    )
-
 
 def cases_for(model: FrontierModel) -> tuple[Case, ...]:
-    rates: Final = model.rates
-    caps: Final = _WIRE_CAPS[model.wire]
-    candidates: Final[tuple[Case | None, ...]] = (
-        Case(name="basic", usage=_BASIC_USAGE),
-        (
-            Case(name="cache_read", usage=ScriptedUsage(fresh_input_tokens=100, cache_read_tokens=50, output_tokens=30))
-            if rates.cache_read_input_token_cost is not None and "cache_read" in caps
-            else None
-        ),
-        (
-            Case(
-                name="cache_write_5m",
-                usage=ScriptedUsage(fresh_input_tokens=90, cache_write_5m_tokens=60, output_tokens=30),
-            )
-            if rates.cache_creation_input_token_cost is not None and "cache_write_5m" in caps
-            else None
-        ),
-        (
-            Case(
-                name="cache_write_1h",
-                usage=ScriptedUsage(
-                    fresh_input_tokens=90,
-                    cache_write_5m_tokens=20,
-                    cache_write_1h_tokens=40,
-                    output_tokens=30,
-                ),
-            )
-            if (
-                rates.cache_creation_input_token_cost_above_1hr is not None
-                and rates.cache_creation_input_token_cost is not None
-                and "cache_write_1h" in caps
-            )
-            else None
-        ),
-        (
-            Case(
-                name="reasoning",
-                usage=ScriptedUsage(fresh_input_tokens=100, output_tokens=30, reasoning_tokens=70),
-            )
-            if rates.output_cost_per_reasoning_token is not None and "reasoning" in caps
-            else None
-        ),
-        (
-            Case(
-                name="audio",
-                usage=ScriptedUsage(
-                    fresh_input_tokens=100, audio_input_tokens=25, output_tokens=30, audio_output_tokens=15
-                ),
-            )
-            if (
-                rates.input_cost_per_audio_token is not None
-                and rates.output_cost_per_audio_token is not None
-                and "audio" in caps
-            )
-            else None
-        ),
-        (
-            Case(
-                name="tiered",
-                usage=ScriptedUsage(
-                    fresh_input_tokens=TIER_THRESHOLD_TOKENS + 1, output_tokens=30
-                ),
-            )
-            if (
-                rates.input_cost_per_token_above_200k_tokens is not None
-                and rates.output_cost_per_token_above_200k_tokens is not None
-            )
-            else None
-        ),
-        (
-            Case(name="service_tier_flex", usage=_BASIC_USAGE, service_tier="flex")
-            if rates.input_cost_per_token_flex is not None and rates.output_cost_per_token_flex is not None
-            else None
-        ),
-        (
-            Case(name="service_tier_priority", usage=_BASIC_USAGE, service_tier="priority")
-            if rates.input_cost_per_token_priority is not None and rates.output_cost_per_token_priority is not None
-            else None
-        ),
-        _web_search_case(model) if rates.search_context_cost_per_query is not None and "web_search" in caps else None,
-        Case(name="stream", usage=_BASIC_USAGE, stream=True),
-        (
-            Case(
-                name="stream_no_usage",
-                usage=_BASIC_USAGE,
-                stream=True,
-                stream_usage="absent",
-                exact_spend=False,
-            )
-            if "absent_usage" in caps
-            else None
-        ),
-        (
-            Case(name="response_model_override", usage=_BASIC_USAGE, response_model_override=True)
-            if "response_model" in caps
-            else None
-        ),
-        (
-            Case(
-                name="stream_response_model_override",
-                usage=_BASIC_USAGE,
-                stream=True,
-                response_model_override=True,
-            )
-            if "response_model" in caps
-            else None
-        ),
-        (
-            Case(name="tool_call", usage=_BASIC_USAGE, tool_call=True)
-            if "tool_call" in caps
-            else None
-        ),
-        (
-            Case(
-                name="stream_no_usage_tool_call",
-                usage=_BASIC_USAGE,
-                stream=True,
-                stream_usage="absent",
-                tool_call=True,
-                exact_spend=False,
-            )
-            if "absent_usage" in caps and "tool_call" in caps
-            else None
-        ),
-        (
-            Case(
-                name="stream_no_usage_image_input",
-                usage=_BASIC_USAGE,
-                stream=True,
-                stream_usage="absent",
-                image_input=True,
-                exact_spend=False,
-            )
-            if "absent_usage" in caps and "image_input" in caps
-            else None
-        ),
-        (
-            Case(
-                name="stream_no_usage_incomplete",
-                usage=_BASIC_USAGE,
-                stream=True,
-                stream_usage="absent",
-                terminal="incomplete",
-                exact_spend=False,
-            )
-            if "responses_terminal" in caps
-            else None
-        ),
-        (
-            Case(
-                name="stream_unvalidated",
-                usage=_BASIC_USAGE,
-                stream=True,
-                terminal="unvalidated",
-            )
-            if "responses_terminal" in caps
-            else None
-        ),
-        (
-            Case(
-                name="stream_no_usage_unvalidated",
-                usage=_BASIC_USAGE,
-                stream=True,
-                stream_usage="absent",
-                terminal="unvalidated",
-                exact_spend=False,
-            )
-            if "responses_terminal" in caps
-            else None
-        ),
-        (
-            Case(
-                name="prompt_blocked",
-                usage=_PROMPT_BLOCKED_USAGE,
-                terminal="prompt_blocked",
-                response_model_override=True,
-            )
-            if "prompt_blocked" in caps
-            else None
-        ),
-        (
-            Case(
-                name="stream_prompt_blocked",
-                usage=_PROMPT_BLOCKED_USAGE,
-                stream=True,
-                terminal="prompt_blocked",
-                response_model_override=True,
-            )
-            if "prompt_blocked" in caps
-            else None
-        ),
-    )
-    return tuple(case for case in candidates if case is not None)
-
-
-@dataclass(frozen=True, slots=True)
-class ExpectedCost:
-    """The expected bill split the way the spend row's cost_breakdown reports
-    it: the gross input component (cache reads/writes folded in), the output
-    component, and the tool-usage component."""
-
-    input_cost: float
-    output_cost: float
-    tool_cost: float
-
-    @property
-    def total(self) -> float:
-        return self.input_cost + self.output_cost + self.tool_cost
-
-
-def expected_breakdown(model: FrontierModel, case: Case) -> ExpectedCost:
-    """Literal arithmetic on the test-map rates over the scripted token counts.
-
-    Input = fresh*in + read*read + 5m*create + 1h*create_1h + audio_in*audio_in;
-    output = text*out + reasoning*reasoning + audio_out*audio_out; plus the
-    billed web-search calls at the medium search-context rate. Above-threshold
-    swaps every input/output rate to its ``_above_200k_tokens`` variant when
-    total prompt tokens exceed the threshold; a service tier swaps input/output
-    to the tier's variants, falling back to the base rate when a variant is
-    unset -- mirroring _get_token_base_cost in litellm's cost calculator.
-    """
-    rates: Final = model.override_rates if case.response_model_override else model.rates
-    u: Final = case.usage
-    prompt_tokens: Final = (
-        u.fresh_input_tokens + u.cache_read_tokens + u.cache_write_5m_tokens
-        + u.cache_write_1h_tokens + u.audio_input_tokens
-    )
-    tiered: Final = prompt_tokens > TIER_THRESHOLD_TOKENS
-    in_rate: Final = (
-        (rates.input_cost_per_token_above_200k_tokens if tiered else None)
-        or (rates.input_cost_per_token_priority if case.service_tier == "priority" else None)
-        or (rates.input_cost_per_token_flex if case.service_tier == "flex" else None)
-        or rates.input_cost_per_token
-        or 0.0
-    )
-    out_rate: Final = (
-        (rates.output_cost_per_token_above_200k_tokens if tiered else None)
-        or (rates.output_cost_per_token_priority if case.service_tier == "priority" else None)
-        or (rates.output_cost_per_token_flex if case.service_tier == "flex" else None)
-        or rates.output_cost_per_token
-        or 0.0
-    )
-    input_cost: Final = (
-        u.fresh_input_tokens * in_rate
-        + u.cache_read_tokens * (rates.cache_read_input_token_cost or 0.0)
-        + u.cache_write_5m_tokens * (rates.cache_creation_input_token_cost or 0.0)
-        + u.cache_write_1h_tokens * (rates.cache_creation_input_token_cost_above_1hr or 0.0)
-        + u.audio_input_tokens * (rates.input_cost_per_audio_token or 0.0)
-    )
-    output_cost: Final = (
-        u.output_tokens * out_rate
-        + u.reasoning_tokens * (rates.output_cost_per_reasoning_token or out_rate)
-        + u.audio_output_tokens * (rates.output_cost_per_audio_token or out_rate)
-    )
-    search: Final = rates.search_context_cost_per_query
-    tool_cost: Final = case.billed_web_search_calls * (
-        search.search_context_size_medium if search and search.search_context_size_medium else 0.0
-    )
-    return ExpectedCost(input_cost=input_cost, output_cost=output_cost, tool_cost=tool_cost)
-
-
-def expected_cost(model: FrontierModel, case: Case) -> float:
-    return expected_breakdown(model, case).total
+    return tuple(case for case in CASES if case.applies_to(model))
 
 
 def recount_cost(
@@ -738,31 +416,23 @@ def image_input_data_url() -> str:
 IMAGE_INPUT_DATA_URL: Final = image_input_data_url()
 
 
-def expected_token_columns(model: FrontierModel, case: Case) -> tuple[int, int]:
-    """(prompt_tokens, completion_tokens) the spend row should carry, per the
-    wire's normalization: Anthropic folds cache read/write into prompt_tokens,
-    everyone else reports the totals the wire emitted."""
-    u: Final = case.usage
-    if model.wire in ("anthropic_messages", "bedrock_converse"):
-        return (
-            u.fresh_input_tokens + u.cache_read_tokens + u.cache_write_5m_tokens + u.cache_write_1h_tokens,
-            u.output_tokens,
-        )
-    if model.wire in ("gemini_generate", "vertex_generate"):
-        return (
-            u.fresh_input_tokens + u.cache_read_tokens + u.audio_input_tokens,
-            u.output_tokens + u.reasoning_tokens + u.audio_output_tokens,
-        )
-    if model.wire == "openai_responses":
-        return (
-            u.fresh_input_tokens + u.cache_read_tokens,
-            u.output_tokens + u.reasoning_tokens,
-        )
-    return (
-        u.fresh_input_tokens
-        + u.cache_read_tokens
-        + u.cache_write_5m_tokens
-        + u.cache_write_1h_tokens
-        + u.audio_input_tokens,
-        u.output_tokens + u.reasoning_tokens + u.audio_output_tokens,
-    )
+class _ExpectedCell(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    spend: float
+    input_cost: float
+    output_cost: float
+    prompt_tokens: int
+    completion_tokens: int
+
+
+_EXPECTED_ADAPTER: Final = TypeAdapter(dict[str, _ExpectedCell])
+EXPECTED: Final[Mapping[str, _ExpectedCell]] = MappingProxyType(
+    _EXPECTED_ADAPTER.validate_python(json.loads(EXPECTED_PATH.read_text()))
+    if EXPECTED_PATH.exists()
+    else {}
+)
+
+
+def expected_key(model: FrontierModel, case: Case) -> str:
+    return f"{model.map_key}|{case.name}"

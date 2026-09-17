@@ -1,7 +1,7 @@
-"""Token-pricing e2e: every (frontier model, pricing-component case) cell runs a
-scripted-usage call through a deployment registered on the cost-map proxy, and
-the spend row plus response-cost header must equal literal arithmetic on the
-test map's rates.
+"""Token-pricing e2e: every (map entry, case) cell derived from cost_map.json x
+cases.json runs a scripted-usage call through a deployment registered on the
+cost-map proxy, and the spend row plus response-cost header must equal the
+reviewed golden in expected.json verbatim -- no rate arithmetic lives here.
 
 Nothing here touches a real provider or the bundled cost map: the proxy's
 upstream is the scripted-provider sidecar and its entire cost map is
@@ -15,13 +15,13 @@ from typing import Final
 
 from conftest import CostCalcClient, cost_rows, register_scenario_deployment
 from cost_matrix import (
+    EXPECTED,
     FRONTIER_MODELS,
     IMAGE_INPUT_DATA_URL,
     Case,
     FrontierModel,
     cases_for,
-    expected_cost,
-    expected_token_columns,
+    expected_key,
     recount_cost,
 )
 from e2e_config import unique_marker
@@ -110,17 +110,6 @@ class TestTokenPricing:
         )
         assert response.stream_error is None, f"stream carried an error event: {response.stream_error}"
 
-        expected: Final = expected_cost(model, case)
-        if case.exact_spend and not case.stream:
-            # Streamed responses commit headers before the bill is computed, so
-            # the x-litellm-response-cost header is asserted only on non-stream
-            # calls.
-            assert response.response_cost is not None and cost_rows.approx_equal(
-                response.response_cost, expected
-            ), (
-                f"x-litellm-response-cost {response.response_cost} != expected {expected}"
-            )
-
         row: Final = cost_rows.poll_cost_row_where(
             client.proxy,
             scoped_key,
@@ -149,16 +138,39 @@ class TestTokenPricing:
             cost_rows.assert_total_is_sum_of_components(row)
             return
 
-        assert row.spend is not None and cost_rows.approx_equal(row.spend, expected), (
-            f"{model.map_key}/{case.name}: spend {row.spend} != expected {expected} "
+        golden: Final = EXPECTED[expected_key(model, case)]
+
+        if not case.stream:
+            # Streamed responses commit headers before the bill is computed, so
+            # the x-litellm-response-cost header is asserted only on non-stream
+            # calls.
+            assert response.response_cost is not None and cost_rows.approx_equal(
+                response.response_cost, golden.spend
+            ), (
+                f"x-litellm-response-cost {response.response_cost} != golden {golden.spend}"
+            )
+
+        assert row.spend is not None and cost_rows.approx_equal(row.spend, golden.spend), (
+            f"{model.map_key}/{case.name}: spend {row.spend} != golden {golden.spend} "
             f"(breakdown {row.breakdown.model_dump()})"
         )
-
-        prompt_tokens, completion_tokens = expected_token_columns(model, case)
-        assert row.prompt_tokens == prompt_tokens, (
-            f"prompt_tokens {row.prompt_tokens} != {prompt_tokens}"
+        breakdown: Final = row.breakdown
+        assert breakdown.input_cost is not None and cost_rows.approx_equal(
+            breakdown.input_cost, golden.input_cost
+        ), (
+            f"{model.map_key}/{case.name}: gross input_cost {breakdown.input_cost} "
+            f"!= golden {golden.input_cost}; cached/written tokens billed at the input rate"
         )
-        assert row.completion_tokens == completion_tokens, (
-            f"completion_tokens {row.completion_tokens} != {completion_tokens}"
+        assert breakdown.output_cost is not None and cost_rows.approx_equal(
+            breakdown.output_cost, golden.output_cost
+        ), (
+            f"{model.map_key}/{case.name}: output_cost {breakdown.output_cost} "
+            f"!= golden {golden.output_cost}"
+        )
+        assert row.prompt_tokens == golden.prompt_tokens, (
+            f"prompt_tokens {row.prompt_tokens} != {golden.prompt_tokens}"
+        )
+        assert row.completion_tokens == golden.completion_tokens, (
+            f"completion_tokens {row.completion_tokens} != {golden.completion_tokens}"
         )
         cost_rows.assert_total_is_sum_of_components(row)
