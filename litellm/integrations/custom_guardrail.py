@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     redact_nested_match_and_regex_keys,
 )
+from litellm.llms.base_llm.guardrail_translation.base_translation import REQUEST_SCAN_CONTEXT_KEY
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
@@ -906,11 +907,10 @@ class CustomGuardrail(CustomLogger):
         response: Final = (
             kwargs.get("async_complete_streaming_response") or kwargs.get("complete_streaming_response") or result
         )
-        from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
         from litellm.types.utils import ModelResponse
 
         output_translation: Final = (
-            OpenAIChatCompletionsHandler(request_scoping=translation)
+            get_guardrail_translation_mapping(CallTypes.acompletion)()
             if isinstance(response, ModelResponse)
             else translation
         )
@@ -950,9 +950,31 @@ class CustomGuardrail(CustomLogger):
         await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
         if response is None:
             return
-        await output_translation.process_output_response(
-            response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
+        output_request: Final = (
+            scratch_request
+            if type(output_translation) is type(translation)
+            else self._chat_shaped_request(scratch_request, translation)
         )
+        await output_translation.process_output_response(
+            response=copy.deepcopy(response), guardrail_to_apply=self, request_data=output_request
+        )
+
+    def _chat_shaped_request(
+        self,
+        scratch_request: Mapping[str, object],
+        translation: "BaseTranslation",
+    ) -> dict[str, object]:  # mutable-ok: BaseTranslation.process_output_response contract
+        """The logged request in OpenAI chat shape, for an output scan whose translation differs from the input's."""
+        context: Final = translation.request_scan_context(
+            dict(scratch_request),  # mutable-ok: BaseTranslation.request_scan_context requires a dict
+            self,
+        )
+        return {
+            **scratch_request,
+            "messages": list(context.structured_messages),
+            "tools": list(context.tools),
+            REQUEST_SCAN_CONTEXT_KEY: context,
+        }
 
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.

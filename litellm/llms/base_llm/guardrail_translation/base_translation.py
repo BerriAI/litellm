@@ -56,6 +56,9 @@ class RequestScanContext:
         )
 
 
+REQUEST_SCAN_CONTEXT_KEY: Final = "litellm_request_scan_context"
+
+
 @dataclass(slots=True)
 class StreamTransformSink:
     """Out-parameter used by ``process_output_streaming_response`` to hand the
@@ -313,7 +316,12 @@ class BaseTranslation(ABC):
         """``inputs`` plus the scoped request conversation, closed by the scanned reply, and the request tools."""
         if request_data is None:
             return inputs
-        context: Final = self.request_scan_context(request_data, guardrail_to_apply)
+        precomputed: Final = request_data.get(REQUEST_SCAN_CONTEXT_KEY)
+        context: Final = (
+            precomputed
+            if isinstance(precomputed, RequestScanContext)
+            else self.request_scan_context(request_data, guardrail_to_apply)
+        )
         if not context.conversation_supplied:
             return inputs
         assistant_turn: Final = response_assistant_turn(inputs.get("texts") or (), inputs.get("tool_calls") or ())
