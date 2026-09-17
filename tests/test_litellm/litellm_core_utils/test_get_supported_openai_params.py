@@ -1,7 +1,6 @@
 
 import pytest
 
-
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -67,6 +66,7 @@ def test_base_model_is_additive_not_replacement():
     assert real_only <= combined
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_base_model_adds_capabilities_the_real_model_lacks():
     """Regression for #27717 (the behavior the union must preserve).
 
