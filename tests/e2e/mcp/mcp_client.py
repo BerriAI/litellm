@@ -15,8 +15,9 @@ import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from e2e_config import settle_propagation
 from e2e_http import Headers, NoBody, Result, Success, UnknownApiError, unwrap
@@ -44,6 +45,19 @@ class McpServerNewBody(BaseModel):
 
 class McpServerNewResponse(BaseModel):
     server_id: str
+
+
+class McpHealthParams(BaseModel):
+    server_ids: list[str] | None = None
+
+
+class McpHealthRow(BaseModel):
+    server_id: str
+    status: Literal["healthy", "unhealthy", "unknown"] | None
+
+
+class McpHealthResponse(RootModel[list[McpHealthRow]]):
+    pass
 
 
 class McpToolMcpInfo(BaseModel):
@@ -186,6 +200,22 @@ class McpClient:
                 response_type=McpServerListResponse,
             )
         ).root
+
+    def list_servers(self, key: str) -> Result[McpServerListResponse]:
+        return self.proxy.transport.get(
+            "/v1/mcp/server",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            params=NoBody(),
+            response_type=McpServerListResponse,
+        )
+
+    def server_health(self, key: str, server_ids: list[str] | None = None) -> Result[McpHealthResponse]:
+        return self.proxy.transport.get(
+            "/v1/mcp/server/health",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            params=McpHealthParams(server_ids=server_ids),
+            response_type=McpHealthResponse,
+        )
 
     def await_registered(self, server_id: str) -> None:
         """Poll /v1/mcp/server until `server_id` is listed. Fails at poll_timeout.
