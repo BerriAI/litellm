@@ -78,8 +78,9 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
-    FORWARDED_KWARGS_KEYS,
+    AWS_CREDENTIAL_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
+    PROVIDER_AFFINITY_HEADER_KWARG_KEY,
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -96,6 +97,7 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
+from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -5566,8 +5568,23 @@ def completion(
             gigachat_scope=kwargs.get("gigachat_scope"),
             gigachat_auth_url=kwargs.get("gigachat_auth_url"),
             gigachat_access_token=kwargs.get("gigachat_access_token"),
-            **{key: kwargs[key] for key in FORWARDED_KWARGS_KEYS if key in kwargs},
+            **{
+                key: kwargs[key]
+                for key in (*AWS_CREDENTIAL_KWARGS_KEYS, PROVIDER_AFFINITY_HEADER_KWARG_KEY)
+                if key in kwargs
+            },
         )
+        if litellm_params.get("provider_affinity_header") is not None:
+            headers = add_provider_affinity_header(
+                headers=headers or litellm.headers or MappingProxyType({}),
+                litellm_params={
+                    "provider_affinity_header": litellm_params["provider_affinity_header"],
+                    "litellm_session_id": kwargs.get("litellm_session_id"),
+                    "session_id": kwargs.get("session_id"),
+                    "metadata": metadata,
+                    "litellm_metadata": kwargs.get("litellm_metadata"),
+                },
+            )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,
