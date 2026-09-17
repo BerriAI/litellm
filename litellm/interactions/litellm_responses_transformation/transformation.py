@@ -201,7 +201,7 @@ class LiteLLMResponsesInteractionsConfig:
     def _transform_image_content_item(item: Mapping[str, object]) -> Mapping[str, object]:
         uri: Final = item.get("uri")
         if isinstance(uri, str) and uri:
-            return {"type": "input_image", "image_url": uri}
+            return MappingProxyType({"type": "input_image", "image_url": uri})
 
         data: Final = item.get("data")
         if isinstance(data, str) and data:
@@ -210,7 +210,7 @@ class LiteLLMResponsesInteractionsConfig:
                 or LiteLLMResponsesInteractionsConfig._sniff_image_mime_type(data)
                 or "application/octet-stream"
             )
-            return {"type": "input_image", "image_url": f"data:{mime_type};base64,{data}"}
+            return MappingProxyType({"type": "input_image", "image_url": f"data:{mime_type};base64,{data}"})
 
         return item
 

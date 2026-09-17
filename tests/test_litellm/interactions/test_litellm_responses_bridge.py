@@ -137,6 +137,45 @@ class TestBridgeInputTransformation:
         )
         assert transformed[0]["content"][0]["image_url"].startswith("data:application/octet-stream;base64,")
 
+    def test_image_content_webp_signature_is_sniffed_from_data(self):
+        webp_signature_b64 = base64.b64encode(b"RIFF\x00\x00\x00\x00WEBPrest-of-file").decode()
+        image_part = {"type": "image", "data": webp_signature_b64}
+        transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
+            [{"type": "user_input", "content": [image_part]}]
+        )
+        assert transformed == [
+            {
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": f"data:image/webp;base64,{webp_signature_b64}"}],
+            }
+        ]
+
+    def test_image_content_with_undecodable_data_defaults_to_octet_stream(self):
+        image_part = {"type": "image", "data": "a" + "!" * 23}
+        transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
+            [{"type": "user_input", "content": [image_part]}]
+        )
+        assert transformed[0]["content"][0]["image_url"].startswith("data:application/octet-stream;base64,")
+
+    def test_image_content_with_too_short_data_defaults_to_octet_stream(self):
+        image_part = {"type": "image", "data": "ab"}
+        transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
+            [{"type": "user_input", "content": [image_part]}]
+        )
+        assert transformed == [
+            {
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": "data:application/octet-stream;base64,ab"}],
+            }
+        ]
+
+    def test_image_content_without_data_or_uri_passes_through_unchanged(self):
+        image_part = {"type": "image", "mime_type": "image/png"}
+        transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
+            [{"type": "user_input", "content": [image_part]}]
+        )
+        assert transformed == [{"role": "user", "content": [image_part]}]
+
     def test_unrecognized_content_type_passes_through_unchanged(self):
         other_part = {"type": "document", "data": "base64data", "mime_type": "application/pdf"}
         transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
