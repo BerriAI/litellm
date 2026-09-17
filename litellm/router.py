@@ -8047,25 +8047,24 @@ class Router:
             1. there are healthy deployments in the same model group
             2. there are fallbacks for the completion call
 
-        A raised error may set ``no_compatible_deployment_available = True`` to
-        declare that condition 1 does not hold for this request even though the
-        model group still reports healthy deployments, because the request is
-        pinned to a deployment that is not currently usable.
+        An error carrying ``no_compatible_deployment_available`` reports that
+        condition 1 does not hold for this request even though the model group still
+        has healthy deployments, because a pre-call check pinned the request to a
+        deployment that cannot serve it yet. Such a request waits out the whole
+        ``Retry-After`` the error advertises, including a window longer than the one
+        minute an ordinary retry honors.
         """
 
-        ## base case - single deployment
-        if all_deployments is not None and len(all_deployments) == 1:
-            pass
-        elif getattr(e, "no_compatible_deployment_available", False):
-            # The failing request is pinned to one specific deployment, so the
-            # other healthy deployments in the model group cannot serve it -- a
-            # pre-call check has already rejected them (encrypted-content
-            # affinity is the current example: only the deployment that minted
-            # the ciphertext can decrypt it). "A healthy deployment exists" is
-            # therefore not evidence that an immediate retry can succeed, so fall
-            # through and honor the back-off the raised error advertises.
-            pass
-        elif healthy_deployments is not None and isinstance(healthy_deployments, list) and len(healthy_deployments) > 0:
+        pinned_to_unavailable_deployment: Final = getattr(e, "no_compatible_deployment_available", False)
+        only_deployment_in_group_failed: Final = all_deployments is not None and len(all_deployments) == 1
+        can_fail_over_instantly: Final = (
+            not pinned_to_unavailable_deployment
+            and not only_deployment_in_group_failed
+            and isinstance(healthy_deployments, list)
+            and len(healthy_deployments) > 0
+        )
+
+        if can_fail_over_instantly:
             return 0
 
         response_headers: httpx.Headers | None = None
@@ -8088,6 +8087,12 @@ class Router:
                 max_retries=num_retries,
                 min_timeout=self.retry_after,
             )
+
+        if pinned_to_unavailable_deployment:
+            advertised_backoff: Final = litellm.utils._get_retry_after_from_exception_header(
+                response_headers=response_headers
+            )
+            return max(timeout, advertised_backoff)
 
         return timeout
 
