@@ -8,7 +8,7 @@ use super::types::{
     ResolvedChatCompletionsRequest,
 };
 use crate::http_utils::{http_request, truncate_error_body};
-use crate::llms::base_llm::chat::transformation::ChatCompletionsAuth;
+use litellm_providers::base_llm::chat::transformation::ChatCompletionsAuth;
 
 pub(super) async fn execute_chat_completions_provider_call(
     request: ResolvedChatCompletionsRequest<'_>,
