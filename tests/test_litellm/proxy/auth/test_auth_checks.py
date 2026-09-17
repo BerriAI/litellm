@@ -8532,8 +8532,8 @@ async def test_team_member_budget_check_temp_budget_increase_extends_cap():
         return fallback_spend
 
     with (
-        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
-        patch(
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        patch(  # test-quality-ok: [TQ008] isolates the check from the DB fetch
             "litellm.proxy.auth.auth_checks.get_team_membership",
             new_callable=AsyncMock,
             return_value=team_membership,
@@ -8560,8 +8560,8 @@ async def test_team_member_budget_check_temp_budget_increase_extends_cap():
         ),
     )
     with (
-        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
-        patch(
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),  # test-quality-ok: [TQ008] no seam on the cross-pod spend counter
+        patch(  # test-quality-ok: [TQ008] isolates the check from the DB fetch
             "litellm.proxy.auth.auth_checks.get_team_membership",
             new_callable=AsyncMock,
             return_value=expired_membership,
