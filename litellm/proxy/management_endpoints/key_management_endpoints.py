@@ -1233,11 +1233,10 @@ async def _common_key_generation_helper(
 
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # cannot grant a key a higher budget than their own authority.
-    is_ui_session_team_key = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID and _requested_team_id is not None
-    # Session tokens (lite login) carry max_budget=None to avoid a per-session
-    # LLM spend cap, but that None must not be read as "unlimited delegation
-    # authority". A personal key (no team) has no team-budget enforcement at
-    # request time, so a session token cannot delegate any budget for one.
+    # Session tokens (lite login) use their session max_budget for team keys, but
+    # personal keys are capped by user_max_budget when it is available.
+    is_ui_session_token: Final = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
+    is_ui_session_team_key = is_ui_session_token and _requested_team_id is not None
     if (
         user_api_key_dict.is_session_token
         and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -1255,7 +1254,9 @@ async def _common_key_generation_helper(
             },
         )
     delegation_ceiling: Final = (
-        user_api_key_dict.max_budget
+        user_api_key_dict.user_max_budget
+        if is_ui_session_token and user_api_key_dict.user_max_budget is not None
+        else user_api_key_dict.max_budget
         if user_api_key_dict.max_budget is not None
         else (team_table.max_budget if user_api_key_dict.is_session_token and team_table is not None else None)
     )
