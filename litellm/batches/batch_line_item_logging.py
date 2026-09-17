@@ -299,7 +299,7 @@ async def log_batch_line_items(
     is logged and swallowed: aggregate accounting must be unaffected."""
     emitted = 0  # rebind-ok: loop accumulator for emitted line count
     try:
-        internal_credentials: Final = (
+        internal_credentials: Final = getattr(parent, "_litellm_internal_model_credentials", None) or (
             litellm_params.get("_litellm_internal_model_credentials") if litellm_params else None
         )
         internal_mapping: Final = _as_object_mapping(internal_credentials)

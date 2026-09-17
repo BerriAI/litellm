@@ -414,9 +414,9 @@ async def test_line_items_edge_shapes_and_edge_cases(recorder):
     parent: Final = _parent_logging_with_params(
         {
             "metadata": {"model_info": {"id": "dep-1"}, "model_group": "gpt-4o"},
-            "_litellm_internal_model_credentials": {"api_key": "sk-line-items-marker"},
         }
     )
+    parent._litellm_internal_model_credentials = {"api_key": "sk-line-items-marker"}  # test-quality-ok: private transport attribute, same channel the batch cost tracker uses
     with (
         patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
@@ -446,6 +446,7 @@ async def test_line_items_edge_shapes_and_edge_cases(recorder):
     assert "no status here" in _payload(failure)["error_str"]
 
     assert "sk-line-items-marker" in str(file_mock.call_args_list)
+    assert "sk-line-items-marker" not in str(by_custom_id["e"]["litellm_params"])
     file_ids_fetched = [call.kwargs.get("file_id") or call.args[0] for call in file_mock.call_args_list]
     assert "input-2" in file_ids_fetched and "output-2" in file_ids_fetched
     assert not any(file_id is None for file_id in file_ids_fetched)
