@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException, status
@@ -610,27 +610,36 @@ def _router_can_route(
     if not isinstance(model, str):
         return True
 
+    return _router_model_group_routable(model=model, llm_router=llm_router, data=data, route_type=route_type)
+
+
+def _router_model_group_routable(
+    model: str,
+    llm_router: LitellmRouter,
+    data: Mapping[str, object],
+    route_type: str,
+) -> bool:
     team_id: Final = get_team_id_from_data(dict(data))
     if team_id is not None and llm_router.map_team_model(model, team_id) is not None:
         return True
 
-    router_model_names: Final = cast(set[str], llm_router.model_names)
     is_proxy_admin_without_team: Final = team_id is None and _is_proxy_admin_request(dict(data))
     if (
-        is_proxy_admin_without_team and model not in router_model_names and model in llm_router.team_public_model_names
+        is_proxy_admin_without_team
+        and model not in llm_router.model_names  # pyright: ignore[reportUnknownMemberType]  # bare set
+        and model in llm_router.team_public_model_names
     ) or llm_router.is_recognized_model(model):
         return True
 
-    if model in router_model_names:
+    if model in llm_router.model_names:  # pyright: ignore[reportUnknownMemberType]  # bare set
         return False
     if llm_router.router_general_settings.pass_through_all_models:
         return True
-    if (
-        llm_router.default_deployment is not None
-        or len(cast(dict[str, object], llm_router.pattern_router.patterns)) > 0
-    ):
+    if llm_router.default_deployment is not None:
         return True
-    if model in cast(list[str], llm_router.deployment_names):
+    if llm_router.pattern_router.patterns:  # pyright: ignore[reportUnknownMemberType]  # untyped dict
+        return True
+    if model in llm_router.deployment_names:  # pyright: ignore[reportUnknownMemberType]  # bare list
         return True
     if route_type in _MODEL_OPTIONAL_FALLBACK_ROUTE_TYPES or route_type in _VIDEO_FALLBACK_ROUTE_TYPES:
         return True

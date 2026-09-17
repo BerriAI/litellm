@@ -16,7 +16,6 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
-    cast,
     overload,
     runtime_checkable,
 )
@@ -2105,7 +2104,7 @@ class ProxyBaseLLMRequestProcessing:
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
         await raise_if_model_not_routable(
-            data=cast(dict[str, object], self.data),
+            data=self.data,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # loosely typed
             llm_router=llm_router,
             user_model=user_model,
             route_type=route_type,
