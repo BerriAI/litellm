@@ -171,8 +171,6 @@ def _item_rollover_max_budget(
         case "key":
             return None
         case "user" | "team":
-            # Rows arrive as generated prisma models, not the proxy _types
-            # classes, so dispatch on item_type instead of isinstance.
             return cast(
                 "LiteLLM_UserTable | LiteLLM_TeamTable", item
             ).rollover_max_budget  # cast-ok: item_type already restricts the member, pyright just cannot narrow it
