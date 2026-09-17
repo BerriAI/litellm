@@ -1395,7 +1395,7 @@ async def test_acompletion_with_mcp_forwards_unserved_external_mcp_tool_to_the_p
 @pytest.mark.parametrize("selection_source", ["metadata", "litellm_metadata", "body"])
 @pytest.mark.parametrize("logging_failure", [False, True])
 async def test_request_selected_mcp_guardrail_blocks_before_upstream(monkeypatch, selected, stream, selection_source, logging_failure):
-    from fastapi import HTTPException
+    from litellm.exceptions import GuardrailRaisedException
     from mcp.types import Tool
     from litellm.caching.caching import DualCache
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -1410,7 +1410,7 @@ async def test_request_selected_mcp_guardrail_blocks_before_upstream(monkeypatch
     class BlockSelected(CustomGuardrail):
         async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
             if self.should_run_guardrail(data, GuardrailEventHooks.pre_mcp_call):
-                raise HTTPException(status_code=400, detail="request-selected MCP block")
+                raise GuardrailRaisedException(message="request-selected MCP block", blocked_content=True)
             return data
 
     guardrail = BlockSelected(guardrail_name="block-all", event_hook="pre_mcp_call", default_on=False)
