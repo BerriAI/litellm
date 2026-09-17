@@ -485,10 +485,13 @@ def get_logging_payload(
         or None
     )
     custom_llm_provider: Final = logged_provider or _model_group_provider(_model_group, llm_router)
-    raw_model: Final = cast(str, kwargs.get("model") or "")
-    resolved_model: Final = (
-        standard_logging_payload.get("model") if standard_logging_payload is not None else None
-    ) or reconstruct_model_name(raw_model, logged_provider, metadata or {})
+    requested_model: Final = cast(object, kwargs.get("model"))
+    raw_model: Final = requested_model if isinstance(requested_model, str) else ""
+    model_is_malformed: Final = requested_model is not None and not isinstance(requested_model, str)
+    logged_model: Final = standard_logging_payload.get("model") if standard_logging_payload is not None else None
+    resolved_model: Final = (logged_model if isinstance(logged_model, str) else None) or reconstruct_model_name(
+        raw_model, logged_provider, metadata or {}
+    )
     failed_with_prompt_shaped_model: Final = (
         _get_status_for_spend_log(metadata=metadata) == "failure"
         and not _model_group
@@ -496,7 +499,7 @@ def get_logging_payload(
     )
     model_name: Final = (
         UNKNOWN_MODEL_SPEND_LOG_MODEL
-        if rejected_as_unknown_model or failed_with_prompt_shaped_model
+        if rejected_as_unknown_model or failed_with_prompt_shaped_model or model_is_malformed
         else resolved_model
     )
     litellm_call_id: Final = cast(

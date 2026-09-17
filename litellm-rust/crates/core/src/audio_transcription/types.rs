@@ -3,7 +3,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderConfig};
+use crate::llms::base_llm::audio_transcription::transformation::{
+    AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
+};
 
 pub struct AudioTranscriptionRequest<'a> {
     pub model: &'a str,
@@ -20,7 +22,7 @@ pub struct AudioTranscriptionRequest<'a> {
 pub struct ProviderAudioTranscriptionRequest {
     pub(super) model: String,
     pub(super) custom_llm_provider: String,
-    pub(super) config: &'static dyn AudioTranscriptionProviderConfig,
+    pub(super) config: &'static dyn BaseAudioTranscriptionConfig,
     pub(super) url: String,
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,
