@@ -73,6 +73,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     rpm_limit: int | None = None
     tpd_limit: int | None = None
     max_budget: float | None = None
+    rollover_max_budget: float | None = None
     soft_budget: float | None = None
     budget_duration: str | None = None
     budget_limits: list[BudgetLimitEntry] | None = None

@@ -119,26 +119,52 @@ class _EndUserRow(_BudgetLinkedRow, Protocol):
     def user_id(self) -> str: ...
 
 
-def _rollover_enabled() -> bool:
-    return litellm.budget_rollover is True
+@dataclass(frozen=True, slots=True)
+class _ResetBand:
+    """How one budget tier rewrites spend at reset.
+
+    ``base`` is the per-window allowance (max_budget); ``lo`` is the floor the
+    carried credit can reach (``max_budget - rollover_max_budget``, so the
+    accumulated allowance never exceeds the cap). ``keep_overage`` mirrors
+    ``litellm.budget_rollover``: when off, spend beyond ``base`` is forgiven
+    rather than carried.
+    """
+
+    base: float
+    lo: float
+    keep_overage: bool
 
 
-def _rollover_cap(max_budget: float | None) -> float | None:
-    if max_budget is None or not math.isfinite(max_budget):
+def _reset_band(max_budget: float | None, rollover_max_budget: float | None) -> _ResetBand | None:
+    if max_budget is None or not math.isfinite(max_budget) or max_budget <= 0:
         return None
-    return max_budget
+    keep_overage: Final = litellm.budget_rollover is True
+    lo: Final = (
+        max_budget - rollover_max_budget
+        if rollover_max_budget is not None
+        and math.isfinite(rollover_max_budget)
+        and rollover_max_budget > max_budget
+        else 0.0
+    )
+    if lo == 0.0 and not keep_overage:
+        return None
+    return _ResetBand(base=max_budget, lo=lo, keep_overage=keep_overage)
 
 
-def _carried_spend(spend: float | None, cap: float | None) -> float:
-    if cap is None:
+def _reset_spend(spend: float | None, band: _ResetBand | None) -> float:
+    if band is None:
         return 0.0
-    return max(0.0, (spend or 0.0) - cap)
+    carried: Final = max((spend or 0.0) - band.base, band.lo)
+    return carried if band.keep_overage else min(carried, 0.0)
 
 
-def _row_carried_spend(row: _BudgetLinkedRow, caps: Mapping[str, float]) -> float:
-    if not caps:
+def _row_reset_spend(row: _BudgetLinkedRow, bands: Mapping[str, _ResetBand]) -> float:
+    if not bands:
         return 0.0
-    return _carried_spend(row.spend, caps.get(row.budget_id) if row.budget_id is not None else None)
+    band: Final = bands.get(row.budget_id) if row.budget_id is not None else None
+    if band is None:
+        return 0.0
+    return _reset_spend(row.spend, band)
 
 
 def _team_membership_counter_key(row: _TeamMembershipRow) -> str:
@@ -212,25 +238,69 @@ def _enduser_invalidation_where(budget_ids: Sequence[str]) -> dict[str, object]:
     return {"OR": [linked, {"budget_id": None}]}  # mutable-ok: prisma where filter must be a dict
 
 
+def _spend_filter_stripped(extra: Mapping[str, object]) -> Mapping[str, object]:
+    """Drop a caller's ``spend > 0`` filter for banded budgets: rows at or
+    below zero spend must still receive their carried credit, so every linked
+    row has to be swept."""
+    if "spend" not in extra:
+        return extra
+    return {k: v for k, v in extra.items() if k != "spend"}  # mutable-ok: prisma where filter must be a dict
+
+
+def _queue_band_resets(
+    writes: LinkedSpendResetWrites,
+    base_where: Mapping[str, object],
+    band: _ResetBand,
+) -> None:
+    """Queue the statements that move a banded tier's linked rows to their
+    post-reset spend. Order is load-bearing and each statement must not
+    re-match a row the previous one rewrote:
+
+    a) floor everything below ``base + lo`` to ``lo`` (a deep-credit row or a
+       zero-spend mid-cycle joiner lands on the clamp floor),
+    b) decrement ``[base + lo, +inf)`` by ``base`` (capped at ``base`` when
+       overage is forgiven) so rows in the accumulation band keep
+       ``spend - base`` and over-cap rows keep or drop the excess,
+    c) zero the remaining over-cap rows only when overage is forgiven —
+       running it before the decrement would let the decrement push a row to
+       a negative credit the zero should have erased.
+    """
+    writes.queue_spend_set(
+        where={**base_where, "spend": {"lt": band.base + band.lo, "not": band.lo}},  # mutable-ok: prisma where filter must be a dict
+        value=band.lo,
+    )
+    decrement_spend: Final[dict[str, float]] = (
+        {"gte": band.base + band.lo}
+        if band.keep_overage
+        else {"gte": band.base + band.lo, "lte": band.base}
+    )
+    writes.queue_spend_decrement(
+        where={**base_where, "spend": decrement_spend},  # mutable-ok: prisma where filter must be a dict
+        amount=band.base,
+    )
+    if not band.keep_overage:
+        writes.queue_spend_set(
+            where={**base_where, "spend": {"gt": band.base}},  # mutable-ok: prisma where filter must be a dict
+            value=0.0,
+        )
+
+
 def _queue_budget_linked_resets(
     writes: LinkedSpendResetWrites,
     cascade: "_BudgetCascade",
     extra: Mapping[str, object] = MappingProxyType({}),
 ) -> None:
-    """Reset one linked table's spend for every expiring tier: tiers with a
-    rollover cap keep spend beyond the cap (decrement preserves writes racing
-    the reset), everything else is zeroed as before. Zero the under-cap rows
-    BEFORE decrementing the over-cap ones: the statements run sequentially in
-    one transaction, so the reverse order lets the zero re-match a row the
-    decrement just moved into the (0, cap] range and erase its carried spend."""
-    for budget_id, cap in cascade.rollover_caps.items():
-        writes.queue_spend_zero(
-            where={"budget_id": budget_id, **extra, "spend": {"gt": 0, "lte": cap}}
-        )  # mutable-ok: prisma where filter must be a dict
-        writes.queue_spend_decrement(
-            where={"budget_id": budget_id, **extra, "spend": {"gt": cap}}, amount=cap
-        )  # mutable-ok: prisma where filter must be a dict
-    plain_ids: Final = tuple(bid for bid in cascade.budget_ids if bid not in cascade.rollover_caps)
+    """Reset one linked table's spend for every expiring tier: banded tiers
+    carry spend into the next window per their band, everything else is zeroed
+    as before."""
+    banded_extra: Final = _spend_filter_stripped(extra)
+    for budget_id, band in cascade.bands.items():
+        _queue_band_resets(
+            writes,
+            {**banded_extra, "budget_id": budget_id},  # mutable-ok: prisma where filter must be a dict
+            band,
+        )
+    plain_ids: Final = tuple(bid for bid in cascade.budget_ids if bid not in cascade.bands)
     if plain_ids:
         writes.queue_spend_zero(where=_budget_link_where(plain_ids, extra))
 
@@ -249,18 +319,17 @@ def _queue_enduser_resets(writes: LinkedSpendResetWrites, cascade: "_BudgetCasca
     default_budget_id: Final = litellm.max_end_user_budget_id
     if default_budget_id is None or default_budget_id not in cascade.budget_ids:
         return
-    cap: Final = cascade.rollover_caps.get(default_budget_id)
-    if cap is None:
+    band: Final = cascade.bands.get(default_budget_id)
+    if band is None:
         writes.queue_spend_zero(
             where={"budget_id": None, **_SPENT_ROWS_WHERE}
         )  # mutable-ok: prisma where filter must be a dict
         return
-    writes.queue_spend_zero(
-        where={"budget_id": None, "spend": {"gt": 0, "lte": cap}}
-    )  # mutable-ok: prisma where filter must be a dict
-    writes.queue_spend_decrement(
-        where={"budget_id": None, "spend": {"gt": cap}}, amount=cap
-    )  # mutable-ok: prisma where filter must be a dict
+    _queue_band_resets(
+        writes,
+        {"budget_id": None},  # mutable-ok: prisma where filter must be a dict
+        band,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,7 +341,7 @@ class _BudgetCascade:
     budget_resets: tuple[tuple[str, datetime], ...] = ()
     counter_resets: tuple[tuple[str, float], ...] = ()
     cache_keys: tuple[str, ...] = ()
-    rollover_caps: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
+    bands: Mapping[str, _ResetBand] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -754,14 +823,13 @@ class ResetBudgetJob:
             where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
             log_subject="model access groups",
         )
-        rollover_caps: Final[Mapping[str, float]] = MappingProxyType(
+        bands: Final[Mapping[str, _ResetBand]] = MappingProxyType(
             {  # mutable-ok: MappingProxyType wraps a one-shot dict comprehension
-                b.budget_id: cap
+                b.budget_id: band
                 for b in budgets_to_reset
-                if b.budget_id is not None and (cap := _rollover_cap(b.max_budget)) is not None
+                if b.budget_id is not None
+                and (band := _reset_band(b.max_budget, b.rollover_max_budget)) is not None
             }
-            if _rollover_enabled()
-            else {}  # mutable-ok: empty sentinel immediately frozen by MappingProxyType
         )
         return _BudgetCascade(
             budgets=tuple(budgets_to_reset),
@@ -776,18 +844,18 @@ class ResetBudgetJob:
             ),
             counter_resets=(
                 *(
-                    (_team_membership_counter_key(row), _row_carried_spend(row, rollover_caps))
+                    (_team_membership_counter_key(row), _row_reset_spend(row, bands))
                     for row in team_memberships
                 ),
-                *((_key_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in keys),
-                *((_org_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in orgs),
-                *((_tag_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in tags),
+                *((_key_counter_key(row), _row_reset_spend(row, bands)) for row in keys),
+                *((_org_counter_key(row), _row_reset_spend(row, bands)) for row in orgs),
+                *((_tag_counter_key(row), _row_reset_spend(row, bands)) for row in tags),
                 *(
-                    (_model_access_group_counter_key(row), _row_carried_spend(row, rollover_caps))
+                    (_model_access_group_counter_key(row), _row_reset_spend(row, bands))
                     for row in model_access_groups
                 ),
             ),
-            rollover_caps=rollover_caps,
+            bands=bands,
             cache_keys=(
                 *(key for row in team_memberships for key in _team_membership_cache_keys(row)),
                 *(key for row in keys for key in _key_cache_keys(row)),
@@ -1434,11 +1502,12 @@ class ResetBudgetJob:
     ) -> float:
         """Per-window spend lives only in the counter, so the carried overage is
         read from it before the reset overwrites it."""
-        if not _rollover_enabled():
-            return 0.0
         window_max: Final = window.get("max_budget")
-        cap: Final = _rollover_cap(window_max) if isinstance(window_max, (int, float)) else None
-        if cap is None:
+        band: Final = _reset_band(
+            float(window_max) if isinstance(window_max, (int, float)) else None,
+            None,
+        )
+        if band is None:
             return 0.0
         try:
             current: Final = await spend_counter_cache.async_get_cache(key=counter_key)
@@ -1447,7 +1516,7 @@ class ResetBudgetJob:
             return 0.0
         if not isinstance(current, (int, float)):
             return 0.0
-        return _carried_spend(float(current), cap)
+        return _reset_spend(float(current), band)
 
     async def reset_budget_windows(self) -> None:
         """
@@ -1556,7 +1625,18 @@ class ResetBudgetJob:
         still holds the pre-reset value, admitting requests past the cap.
         """
         try:
-            item.spend = _carried_spend(item.spend, _rollover_cap(item.max_budget)) if _rollover_enabled() else 0.0
+            rollover_max_budget: Final = (
+                item.rollover_max_budget
+                if isinstance(item, (LiteLLM_UserTable, LiteLLM_TeamTable))
+                else None
+            )
+            if rollover_max_budget is None and litellm.budget_rollover is not True:
+                item.spend = 0.0
+            else:
+                item.spend = _reset_spend(
+                    item.spend,
+                    _reset_band(item.max_budget, rollover_max_budget),
+                )
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
                 item.budget_reset_at = compute_budget_reset_at(
                     budget_duration=item.budget_duration, settings=reset_settings

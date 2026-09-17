@@ -49,6 +49,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     require_caller_user_id_for_non_admin,
     validate_budget_duration,
     validate_finite_spend,
+    validate_rollover_max_budget,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_permissions_caller_permission,
@@ -524,6 +525,7 @@ async def new_user(
                 detail=CommonProxyErrors.db_not_connected_error.value,
             )
         validate_budget_duration(data.budget_duration)
+        validate_rollover_max_budget(data.rollover_max_budget)
 
         # Check for duplicate user_id or email
         await _check_duplicate_user_id(data.user_id, prisma_client)
@@ -1049,7 +1051,8 @@ async def user_info_v2(
 
     Note on `spend`: this is the user's running budget counter, which the budget reset job
     resets whenever `budget_reset_at` elapses (see `budget_duration`): to zero by default,
-    or to the overage above `max_budget` when `budget_rollover` is enabled. It is NOT
+    to the overage above `max_budget` when `budget_rollover` is enabled, or to a negative
+    credit for the unused allowance when `rollover_max_budget` is set. It is NOT
     lifetime or per-period historical spend. For historical spend over a date range, use
     `/user/daily/activity` or `/user/daily/activity/aggregated`, which read daily spend
     records that only ever accumulate and are never reset. The two values are expected to
@@ -1253,7 +1256,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k in ("max_budget", "budget_duration"):
+        if k in ("max_budget", "budget_duration", "rollover_max_budget"):
             if k in fields_set:
                 non_default_values[k] = v
         elif k == "model_max_budget":
@@ -1477,7 +1480,14 @@ async def _update_single_user_helper(
         # because `_update_internal_user_params` drops empty values, and `object_permission: {}` is
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
-        _protected_fields: Final = ("max_budget", "model_max_budget", "soft_budget", "spend", "object_permission")
+        _protected_fields: Final = (
+            "max_budget",
+            "rollover_max_budget",
+            "model_max_budget",
+            "soft_budget",
+            "spend",
+            "object_permission",
+        )
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
                 raise HTTPException(
@@ -1499,6 +1509,7 @@ async def _update_single_user_helper(
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(non_default_values.get("spend"))
+    validate_rollover_max_budget(cast("float | None", non_default_values.get("rollover_max_budget")))
 
     # Upsert the grants into their own row and link it, mirroring /key/update and /team/update.
     # This also removes object_permission from the payload, which is not a column on the user table.
@@ -2810,7 +2821,8 @@ async def get_user_daily_activity(
     Reads daily spend records that only ever accumulate and are never affected by budget
     resets. Their total can legitimately exceed the `spend` field returned by
     `/v2/user/info`, which is a running budget counter that every budget reset sets back
-    to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
+    to zero (or to the overage above `max_budget` when `budget_rollover` is enabled, or
+    to a negative credit for the unused allowance when `rollover_max_budget` is set).
 
     Returns:
     (by date)
@@ -2929,7 +2941,8 @@ async def get_user_daily_activity_aggregated(
     Reads daily spend records that only ever accumulate and are never affected by budget
     resets. Their total can legitimately exceed the `spend` field returned by
     `/v2/user/info`, which is a running budget counter that every budget reset sets back
-    to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
+    to zero (or to the overage above `max_budget` when `budget_rollover` is enabled, or
+    to a negative credit for the unused allowance when `rollover_max_budget` is set).
     """
     from litellm.proxy.proxy_server import prisma_client
 

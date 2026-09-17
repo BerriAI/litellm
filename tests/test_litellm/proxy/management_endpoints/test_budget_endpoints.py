@@ -436,3 +436,48 @@ async def test_update_budget_serializes_model_max_budget_for_prisma(
         "gpt4o": {"max_budget": 5.0, "budget_duration": "1d"},
         "glm-5.2": {"max_budget": 7.5, "budget_duration": "30d"},
     }
+
+
+@pytest.mark.asyncio
+async def test_new_budget_persists_rollover_max_budget(client_and_mocks):
+    """The cap on accumulated rollover credit lands on the budget row."""
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post(
+        "/budget/new",
+        json={
+            "budget_id": "budget_rollover",
+            "max_budget": 100.0,
+            "budget_duration": "30d",
+            "rollover_max_budget": 600.0,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["rollover_max_budget"] == 600.0
+    assert mock_table.create.await_args.kwargs["data"]["rollover_max_budget"] == 600.0
+
+
+@pytest.mark.asyncio
+async def test_update_budget_persists_rollover_max_budget(client_and_mocks):
+    client, _, mock_table = client_and_mocks
+    captured = _capture_update_data(mock_table)
+
+    resp = client.post(
+        "/budget/update",
+        json={"budget_id": "budget_rollover", "rollover_max_budget": 600.0},
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured["rollover_max_budget"] == 600.0
+
+
+@pytest.mark.parametrize("bad_cap", [0.0, -10.0])
+@pytest.mark.asyncio
+async def test_new_budget_rejects_nonpositive_rollover_max_budget(client_and_mocks, bad_cap):
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post(
+        "/budget/new",
+        json={"budget_id": "budget_bad_cap", "rollover_max_budget": bad_cap},
+    )
+    assert resp.status_code == 400, resp.text
+    mock_table.create.assert_not_awaited()

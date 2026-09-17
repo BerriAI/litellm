@@ -67,7 +67,10 @@ class LinkedSpendResetWrites:
     table: BatchTable
 
     def queue_spend_zero(self, where: Mapping[str, object]) -> None:
-        self.table.update_many(where=where, data={"spend": 0})
+        self.queue_spend_set(where=where, value=0.0)
+
+    def queue_spend_set(self, where: Mapping[str, object], value: float) -> None:
+        self.table.update_many(where=where, data={"spend": value})
 
     def queue_spend_decrement(self, where: Mapping[str, object], amount: float) -> None:
         """``decrement`` rather than a read-then-set, so spend written between the

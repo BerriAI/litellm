@@ -12,7 +12,7 @@ import prisma
 import pytest
 
 
-from litellm.proxy._types import LiteLLM_VerificationToken
+from litellm.proxy._types import LiteLLM_UserTable, LiteLLM_VerificationToken
 from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
@@ -20,7 +20,13 @@ from litellm.constants import (
     RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
     RESET_BUDGET_JOB_NAME,
 )
-from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob, _RowReset
+from litellm.proxy.common_utils.reset_budget_job import (
+    ResetBudgetJob,
+    _ResetBand,
+    _RowReset,
+    _reset_band,
+    _reset_spend,
+)
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
 
 
@@ -228,6 +234,7 @@ def _budget_row(
     budget_duration: Any = "7d",
     budget_reset_at: Any = _ALREADY_EXPIRED,
     max_budget: float = 10.0,
+    rollover_max_budget: Any = None,
 ):
     """An expiring budget tier, shaped like the rows get_data() hands back."""
     now = datetime.now(timezone.utc)
@@ -236,6 +243,7 @@ def _budget_row(
         (),
         {
             "max_budget": max_budget,
+            "rollover_max_budget": rollover_max_budget,
             "budget_duration": budget_duration,
             "budget_reset_at": (now - timedelta(hours=1) if budget_reset_at is _ALREADY_EXPIRED else budget_reset_at),
             "budget_id": budget_id,
@@ -506,6 +514,7 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         (),
         {
             "max_budget": 500.0,
+            "rollover_max_budget": None,
             "budget_duration": "1d",
             "budget_reset_at": now,
             "budget_id": "test-budget-1",
@@ -753,6 +762,7 @@ def test_reset_budget_resets_endusers_with_null_budget_id(reset_budget_job, mock
         (),
         {
             "max_budget": 50.0,
+            "rollover_max_budget": None,
             "budget_duration": "1d",
             "budget_reset_at": now - timedelta(hours=1),
             "budget_id": default_budget_id,
@@ -854,6 +864,7 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_configured(
         (),
         {
             "max_budget": 50.0,
+            "rollover_max_budget": None,
             "budget_duration": "1d",
             "budget_reset_at": now - timedelta(hours=1),
             "budget_id": "some-budget",
@@ -894,6 +905,7 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_in_reset_li
         (),
         {
             "max_budget": 50.0,
+            "rollover_max_budget": None,
             "budget_duration": "1d",
             "budget_reset_at": now - timedelta(hours=1),
             "budget_id": "other-budget",
@@ -1844,14 +1856,14 @@ def test_budget_cascade_carries_access_group_overage_when_rollover_enabled(
     assert {
         "table": "model_access_group",
         "op": "update_many",
-        "where": {"budget_id": "budget-roll", "spend": {"gt": 10.0}},
+        "where": {"budget_id": "budget-roll", "spend": {"gte": 10.0}},
         "data": {"spend": {"decrement": 10.0}},
     } in writes
     assert {
         "table": "model_access_group",
         "op": "update_many",
-        "where": {"budget_id": "budget-roll", "spend": {"gt": 0, "lte": 10.0}},
-        "data": {"spend": 0},
+        "where": {"budget_id": "budget-roll", "spend": {"lt": 10.0, "not": 0.0}},
+        "data": {"spend": 0.0},
     } in writes
     assert _replay_spend_writes(writes, 15.0) == 5.0
     assert _replay_spend_writes(writes, 8.0) == 0
@@ -3232,18 +3244,20 @@ def test_budget_cascade_carries_overage_per_tier_when_rollover_enabled(
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     membership_writes = _batch_writes(mock_prisma_client, "team_membership")
-    assert {
-        "table": "team_membership",
-        "op": "update_many",
-        "where": {"budget_id": "budget-roll", "spend": {"gt": 10.0}},
-        "data": {"spend": {"decrement": 10.0}},
-    } in membership_writes
-    assert {
-        "table": "team_membership",
-        "op": "update_many",
-        "where": {"budget_id": "budget-roll", "spend": {"gt": 0, "lte": 10.0}},
-        "data": {"spend": 0},
-    } in membership_writes
+    assert membership_writes == [
+        {
+            "table": "team_membership",
+            "op": "update_many",
+            "where": {"budget_id": "budget-roll", "spend": {"lt": 10.0, "not": 0.0}},
+            "data": {"spend": 0.0},
+        },
+        {
+            "table": "team_membership",
+            "op": "update_many",
+            "where": {"budget_id": "budget-roll", "spend": {"gte": 10.0}},
+            "data": {"spend": {"decrement": 10.0}},
+        },
+    ]
     counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:team_member:member-1:team-1")
 
 
@@ -3264,18 +3278,20 @@ def test_budget_cascade_carries_enduser_overage_when_rollover_enabled(
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     enduser_writes = _batch_writes(mock_prisma_client, "enduser")
-    assert {
-        "table": "enduser",
-        "op": "update_many",
-        "where": {"budget_id": "budget-roll", "spend": {"gt": 10.0}},
-        "data": {"spend": {"decrement": 10.0}},
-    } in enduser_writes
-    assert {
-        "table": "enduser",
-        "op": "update_many",
-        "where": {"budget_id": "budget-roll", "spend": {"gt": 0, "lte": 10.0}},
-        "data": {"spend": 0},
-    } in enduser_writes
+    assert enduser_writes == [
+        {
+            "table": "enduser",
+            "op": "update_many",
+            "where": {"budget_id": "budget-roll", "spend": {"lt": 10.0, "not": 0.0}},
+            "data": {"spend": 0.0},
+        },
+        {
+            "table": "enduser",
+            "op": "update_many",
+            "where": {"budget_id": "budget-roll", "spend": {"gte": 10.0}},
+            "data": {"spend": {"decrement": 10.0}},
+        },
+    ]
 
 
 def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabled(
@@ -3310,16 +3326,28 @@ def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabl
     assert "end_user_id:enduser-implicit" in deleted
 
 
+def _matches_spend_condition(spend: float, condition) -> bool:
+    if not isinstance(condition, dict):
+        return True
+    if "gt" in condition and not spend > condition["gt"]:
+        return False
+    if "gte" in condition and not spend >= condition["gte"]:
+        return False
+    if "lt" in condition and not spend < condition["lt"]:
+        return False
+    if "lte" in condition and not spend <= condition["lte"]:
+        return False
+    if "not" in condition and spend == condition["not"]:
+        return False
+    return True
+
+
 def _replay_spend_writes(writes, spend):
     """Apply the queued update_many statements in order, the way the DB
     transaction executes them, and return the row's final spend."""
     for write in writes:
-        condition = write["where"].get("spend")
-        if isinstance(condition, dict):
-            if "gt" in condition and not spend > condition["gt"]:
-                continue
-            if "lte" in condition and not spend <= condition["lte"]:
-                continue
+        if not _matches_spend_condition(spend, write["where"].get("spend")):
+            continue
         payload = write["data"]["spend"]
         spend = payload if not isinstance(payload, dict) else spend - payload["decrement"]
     return spend
@@ -3551,3 +3579,234 @@ def test_reset_deletes_spend_counter_instead_of_seeding(reset_budget_job, mock_p
     counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:user:carol")
     counter_cache.in_memory_cache.set_cache.assert_not_called()
     counter_cache.redis_cache.async_set_cache.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Unused-budget rollover with a cap (LIT-6313): the unused allowance carries
+# into the next window as negative spend (credit), floored at
+# max_budget - rollover_max_budget so the accumulated allowance never exceeds
+# the cap
+# ---------------------------------------------------------------------------
+
+
+def test_reset_band_is_none_without_cap_or_overage_flag():
+    """No cap and budget_rollover off means the reset stays a plain zeroing."""
+    assert _reset_band(None, 600.0) is None
+    assert _reset_band(0.0, 600.0) is None
+    assert _reset_band(-5.0, 600.0) is None
+    assert _reset_band(100.0, None) is None
+    assert _reset_band(100.0, float("nan")) is None
+
+
+def test_reset_band_cap_at_or_below_max_budget_disables_credit():
+    """A cap <= max_budget leaves the floor at 0, so no credit accumulates."""
+    assert _reset_band(100.0, 100.0) is None
+    assert _reset_band(100.0, 50.0) is None
+
+
+def test_reset_band_lo_floors_credit_at_max_budget_minus_cap():
+    band = _reset_band(100.0, 250.0)
+    assert band == _ResetBand(base=100.0, lo=-150.0, keep_overage=False)
+
+
+def test_reset_spend_clamps_credit_at_cap_over_consecutive_windows():
+    """base 100, cap 250: three idle windows carry -100, then the clamp holds
+    the credit at -150 instead of letting it grow to -200 and -250."""
+    band = _reset_band(100.0, 250.0)
+    first: Final = _reset_spend(0.0, band)
+    second: Final = _reset_spend(first, band)
+    third: Final = _reset_spend(second, band)
+    assert (first, second, third) == (-100.0, -150.0, -150.0)
+
+
+def test_reset_spend_overage_and_credit_interplay(rollover_enabled):
+    """budget_rollover on, cap 600: spend 150 keeps the 50 overage while
+    spend 30 carries -70 of unused allowance as credit."""
+    band = _reset_band(100.0, 600.0)
+    assert band is not None and band.keep_overage
+    assert _reset_spend(150.0, band) == 50.0
+    assert _reset_spend(30.0, band) == -70.0
+
+
+def test_reset_spend_forgives_overage_when_rollover_off():
+    band = _reset_band(100.0, 600.0)
+    assert band is not None and not band.keep_overage
+    assert _reset_spend(150.0, band) == 0.0
+    assert _reset_spend(30.0, band) == -70.0
+
+
+def test_direct_reset_carries_unused_allowance_as_negative_spend(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """max_budget 100, rollover_max_budget 600, spend 30: the write decrements
+    by the 100 allowance so the row lands at -70, and the spend counter is
+    invalidated."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["user"] = [
+        LiteLLM_UserTable(
+            user_id="user-credit",
+            spend=30.0,
+            max_budget=100.0,
+            rollover_max_budget=600.0,
+            budget_duration="7d",
+            budget_reset_at=now,
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
+
+    writes = _batch_writes(mock_prisma_client, "user")
+    assert len(writes) == 1
+    assert writes[0]["where"] == {"user_id": "user-credit"}
+    assert writes[0]["data"]["spend"] == {"decrement": 100.0}
+    assert _replay_spend_writes([{"where": {}, "data": writes[0]["data"]}], 30.0) == -70.0
+    assert writes[0]["data"]["budget_reset_at"] > now
+    counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:user:user-credit")
+
+
+def test_direct_reset_zeroes_spend_when_cap_does_not_exceed_max_budget(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """rollover_max_budget <= max_budget is accepted at the API but carries no
+    credit: the reset behaves exactly like an unset cap."""
+    _make_counter_invalidation_job(monkeypatch)
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["user"] = [
+        LiteLLM_UserTable(
+            user_id="user-nocredit",
+            spend=30.0,
+            max_budget=100.0,
+            rollover_max_budget=100.0,
+            budget_duration="7d",
+            budget_reset_at=now,
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
+
+    writes = _batch_writes(mock_prisma_client, "user")
+    assert len(writes) == 1
+    assert writes[0]["data"]["spend"] == {"decrement": 30.0}
+
+
+def test_budget_cascade_queues_ordered_band_statements_for_capped_tier(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """A capped tier emits floor -> decrement -> forgive-overage in that order,
+    and the caller's spend filter is stripped so zero-spend rows are swept."""
+    _make_counter_invalidation_job(monkeypatch)
+    budget = _budget_row(
+        budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0
+    )
+    mock_prisma_client.data["budget"] = [budget]
+    member = type(
+        "Membership",
+        (),
+        {"user_id": "member-1", "team_id": "team-1", "spend": 30.0, "budget_id": "budget-credit"},
+    )
+    mock_prisma_client.db.litellm_teammembership.set_find_many_results([member])
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    membership_writes = _batch_writes(mock_prisma_client, "team_membership")
+    assert membership_writes == [
+        {
+            "table": "team_membership",
+            "op": "update_many",
+            "where": {"budget_id": "budget-credit", "spend": {"lt": -50.0, "not": -150.0}},
+            "data": {"spend": -150.0},
+        },
+        {
+            "table": "team_membership",
+            "op": "update_many",
+            "where": {"budget_id": "budget-credit", "spend": {"gte": -50.0, "lte": 100.0}},
+            "data": {"spend": {"decrement": 100.0}},
+        },
+        {
+            "table": "team_membership",
+            "op": "update_many",
+            "where": {"budget_id": "budget-credit", "spend": {"gt": 100.0}},
+            "data": {"spend": 0.0},
+        },
+    ]
+
+
+def test_budget_cascade_keeps_spend_filter_for_plain_tier_but_strips_for_banded(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """The end-user sweep's spend > 0 filter survives for plain budgets (they
+    still only touch rows that spent) and is stripped for banded budgets (a
+    member who spent nothing still banks the period's allowance)."""
+    _make_counter_invalidation_job(monkeypatch)
+    banded = _budget_row(
+        budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0
+    )
+    plain = _budget_row(budget_id="budget-plain", budget_duration="7d", max_budget=10.0)
+    mock_prisma_client.data["budget"] = [banded, plain]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    enduser_writes = _batch_writes(mock_prisma_client, "enduser")
+    banded_wheres = [w["where"] for w in enduser_writes if w["where"].get("budget_id") == "budget-credit"]
+    assert len(banded_wheres) == 3
+    for where in banded_wheres:
+        spend_condition = where.get("spend")
+        assert not (isinstance(spend_condition, dict) and spend_condition == {"gt": 0})
+    assert {
+        "table": "enduser",
+        "op": "update_many",
+        "where": {"budget_id": {"in": ["budget-plain"]}, "spend": {"gt": 0}},
+        "data": {"spend": 0},
+    } in enduser_writes
+
+
+def test_budget_cascade_credit_reaches_idle_and_spending_members(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """Replay the committed statements over member rows: a member at spend 30
+    lands at -70 and a mid-cycle joiner at spend 0 banks the full -100."""
+    _make_counter_invalidation_job(monkeypatch)
+    budget = _budget_row(
+        budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=600.0
+    )
+    mock_prisma_client.data["budget"] = [budget]
+    mock_prisma_client.db.litellm_teammembership.set_find_many_results(
+        [
+            type("Membership", (), {"user_id": "m-1", "team_id": "t-1", "spend": 30.0, "budget_id": "budget-credit"}),
+            type("Membership", (), {"user_id": "m-2", "team_id": "t-1", "spend": 0.0, "budget_id": "budget-credit"}),
+        ]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    membership_writes = _batch_writes(mock_prisma_client, "team_membership")
+    band: Final = _reset_band(100.0, 600.0)
+    assert _replay_spend_writes(membership_writes, 30.0) == _reset_spend(30.0, band) == -70.0
+    assert _replay_spend_writes(membership_writes, 0.0) == _reset_spend(0.0, band) == -100.0
+
+
+def test_band_statements_reproduce_reset_spend_for_every_spend_value(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """Ordering proof: replaying the queued statements in order over rows at
+    -400, -200, 0, 30, 100, 150 (base 100, cap 250, overage forgiven) must land
+    each row exactly on _reset_spend. Any statement reordering or filter gap
+    leaves at least one row wrong."""
+    _make_counter_invalidation_job(monkeypatch)
+    budget = _budget_row(
+        budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0
+    )
+    mock_prisma_client.data["budget"] = [budget]
+    mock_prisma_client.db.litellm_teammembership.set_find_many_results(
+        [
+            type("Membership", (), {"user_id": "m-1", "team_id": "t-1", "spend": 30.0, "budget_id": "budget-credit"}),
+        ]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    membership_writes = _batch_writes(mock_prisma_client, "team_membership")
+    band: Final = _reset_band(100.0, 250.0)
+    for spend in (-400.0, -200.0, 0.0, 30.0, 100.0, 150.0):
+        assert _replay_spend_writes(membership_writes, spend) == pytest.approx(_reset_spend(spend, band))

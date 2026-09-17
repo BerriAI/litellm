@@ -4360,6 +4360,7 @@ async def generate_key_helper_fn(
     budget_id: float | None = None,  # budget id <-> LiteLLM_BudgetTable
     soft_budget: float | None = None,  # soft_budget is used to set soft Budgets Per user
     max_budget: float | None = None,  # max_budget is used to Budget Per user
+    rollover_max_budget: float | None = None,  # cap on the user's accumulated unused-budget credit
     blocked: bool | None = None,
     budget_duration: str | None = None,  # max_budget is used to Budget Per user
     token: str | None = None,
@@ -4483,6 +4484,7 @@ async def generate_key_helper_fn(
 
         user_data: Final = {
             "max_budget": max_budget,
+            "rollover_max_budget": rollover_max_budget,
             "user_email": user_email,
             "user_id": user_id,
             "user_alias": user_alias,

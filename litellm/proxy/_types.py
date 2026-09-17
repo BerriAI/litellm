@@ -1807,6 +1807,7 @@ class NewUserRequestTeam(LiteLLMPydanticObjectBase):
 
 class NewUserRequest(GenerateRequestBase):
     max_budget: float | None = None
+    rollover_max_budget: float | None = None
     user_email: str | None = None
     user_alias: str | None = None
     user_role: (
@@ -1859,6 +1860,7 @@ class UpdateUserRequestNoUserIDorEmail(GenerateRequestBase):  # shared with Bulk
         | None
     ) = None
     max_budget: float | None = None
+    rollover_max_budget: float | None = None
 
 
 class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
@@ -1887,6 +1889,10 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     max_budget: float | None = Field(
         default=None,
         description="Requests will fail if this budget (in USD) is exceeded.",
+    )
+    rollover_max_budget: float | None = Field(
+        default=None,
+        description="Ceiling (in USD) on the accumulated budget a reset can carry as credit. Requires max_budget; unset disables unused-budget rollover.",
     )
     soft_budget: float | None = Field(
         default=None,
@@ -2039,6 +2045,7 @@ class NewTeamRequest(TeamBase):
     team_member_tpm_limit: int | None = None  # allow user to set TPM limit for all team members
     team_member_key_duration: str | None = None  # e.g. "1d", "1w", "1m"
     team_member_budget_duration: str | None = None  # e.g. "30d", "1mo"
+    team_member_rollover_max_budget: float | None = None  # cap on unused budget rolled over per member
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     enforced_batch_output_expires_after: dict | None = None
     enforced_file_expires_after: dict | None = None
@@ -2085,6 +2092,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     rpm_limit: int | None = None
     tpd_limit: int | None = None
     max_budget: float | None = None
+    rollover_max_budget: float | None = None
     soft_budget: float | None = None
     models: list | None = None
     blocked: bool | None = None
@@ -2097,6 +2105,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     disable_global_guardrails: bool | None = None
     team_member_budget: float | None = None
     team_member_budget_duration: str | None = None
+    team_member_rollover_max_budget: float | None = None
     team_member_rpm_limit: int | None = None
     team_member_tpm_limit: int | None = None
     team_member_key_duration: str | None = None

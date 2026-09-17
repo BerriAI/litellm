@@ -4519,3 +4519,31 @@ async def test_user_update_hashes_and_persists_strong_password(_admin_prisma, mo
     written_data = mock_prisma_client.update_data.call_args.kwargs["data"]
     assert written_data.get("password") is not None
     assert written_data["password"] != strong_password
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_cap", [0.0, -10.0, float("inf"), float("nan")])
+async def test_new_user_rejects_invalid_rollover_max_budget(mocker, bad_cap):
+    """/user/new rejects a non-positive or non-finite rollover cap."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mocker.patch(  # test-quality-ok: new_user imports prisma_client lazily from proxy_server; same seam the neighboring duration test uses
+        "litellm.proxy.proxy_server.prisma_client", MagicMock()
+    )
+    duplicate_check = mocker.patch(  # test-quality-ok: validation must short-circuit before the duplicate check runs; asserting it never ran is the point
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        new=AsyncMock(),
+    )
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await new_user(
+            data=NewUserRequest(rollover_max_budget=bad_cap),
+            user_api_key_dict=admin,
+        )
+
+    assert str(exc_info.value.code) == "400"
+    assert "rollover_max_budget" in str(exc_info.value.message)
+    duplicate_check.assert_not_awaited()

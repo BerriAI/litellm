@@ -23,6 +23,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     budget_id: str | None = None
     soft_budget: float | None = None
     max_budget: float | None = None
+    rollover_max_budget: float | None = None
     max_parallel_requests: int | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None

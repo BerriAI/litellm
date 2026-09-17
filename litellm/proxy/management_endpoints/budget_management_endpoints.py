@@ -25,6 +25,7 @@ from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_view,
     validate_budget_duration,
+    validate_rollover_max_budget,
 )
 from litellm.proxy.utils import jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
@@ -78,6 +79,7 @@ async def new_budget(
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {budget_obj.soft_budget}"},
         )
 
+    validate_rollover_max_budget(budget_obj.rollover_max_budget)
     validate_budget_duration(budget_obj.budget_duration)
 
     # Validate model_max_budget if present
@@ -162,6 +164,7 @@ async def update_budget(
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {budget_obj.soft_budget}"},
         )
 
+    validate_rollover_max_budget(budget_obj.rollover_max_budget)
     validate_budget_duration(budget_obj.budget_duration)
 
     # Validate model_max_budget if present in update
@@ -277,6 +280,7 @@ async def budget_settings(
         "tpd_limit": {"type": "Integer"},
         "budget_duration": {"type": "String"},
         "max_budget": {"type": "Float"},
+        "rollover_max_budget": {"type": "Float"},
         "soft_budget": {"type": "Float"},
         "model_max_budget": {"type": "Object"},
     }

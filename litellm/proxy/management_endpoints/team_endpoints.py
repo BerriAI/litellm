@@ -130,6 +130,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _upsert_budget_and_membership,
     _user_has_admin_view,
     validate_budget_duration,
+    validate_rollover_max_budget,
     validate_team_model_max_budget,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
@@ -557,6 +558,7 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        team_member_rollover_max_budget: float | None = None,
     ) -> bool:
         """Check if any team member limits are provided"""
         return any(
@@ -565,6 +567,7 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit is not None,
                 team_member_tpm_limit is not None,
                 team_member_budget_duration is not None,
+                team_member_rollover_max_budget is not None,
             ]
         )
 
@@ -577,6 +580,7 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        team_member_rollover_max_budget: float | None = None,
         explicitly_set_fields: AbstractSet[str] = frozenset(),
     ) -> dict:
         """Create team member budget table with provided limits.
@@ -612,6 +616,8 @@ class TeamMemberBudgetHandler:
             budget_request.tpm_limit = team_member_tpm_limit
         if team_member_budget_duration is not None:
             budget_request.budget_duration = team_member_budget_duration
+        if team_member_rollover_max_budget is not None:
+            budget_request.rollover_max_budget = team_member_rollover_max_budget
 
         team_member_budget_table: Final = await _as_budget_write(new_budget)(
             budget_obj=budget_request,
@@ -637,6 +643,7 @@ class TeamMemberBudgetHandler:
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        team_member_rollover_max_budget: float | None = None,
         explicitly_set_fields: AbstractSet[str] = frozenset(),
     ) -> dict:
         """Upsert team member budget table with provided limits.
@@ -667,6 +674,11 @@ class TeamMemberBudgetHandler:
                 budget_request.budget_duration = team_member_budget_duration
                 if team_member_budget_duration is None:
                     budget_request.budget_reset_at = None
+            if (
+                team_member_rollover_max_budget is not None
+                or "team_member_rollover_max_budget" in explicitly_set_fields
+            ):
+                budget_request.rollover_max_budget = team_member_rollover_max_budget
 
             budget_row: Final = await _as_budget_write(update_budget)(
                 budget_obj=budget_request,
@@ -692,6 +704,7 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit=team_member_rpm_limit,
                 team_member_tpm_limit=team_member_tpm_limit,
                 team_member_budget_duration=team_member_budget_duration,
+                team_member_rollover_max_budget=team_member_rollover_max_budget,
                 explicitly_set_fields=explicitly_set_fields,
             )
 
@@ -706,6 +719,7 @@ class TeamMemberBudgetHandler:
         data_dict.pop("team_member_budget_duration", None)
         data_dict.pop("team_member_rpm_limit", None)
         data_dict.pop("team_member_tpm_limit", None)
+        data_dict.pop("team_member_rollover_max_budget", None)
 
     @staticmethod
     async def clear_team_member_budget_fields(
@@ -735,6 +749,8 @@ class TeamMemberBudgetHandler:
                 budget_request.rpm_limit = None
             if "team_member_tpm_limit" in explicitly_set_fields:
                 budget_request.tpm_limit = None
+            if "team_member_rollover_max_budget" in explicitly_set_fields:
+                budget_request.rollover_max_budget = None
             await update_budget(
                 budget_obj=budget_request,
                 user_api_key_dict=user_api_key_dict,
@@ -1499,6 +1515,8 @@ async def new_team(
 
         validate_budget_duration(data.budget_duration)
         validate_budget_duration(data.team_member_budget_duration)
+        validate_rollover_max_budget(data.rollover_max_budget)
+        validate_rollover_max_budget(data.team_member_rollover_max_budget)
         validate_team_model_max_budget(model_max_budget=data.model_max_budget, premium_user=premium_user)
 
         if data.soft_budget is not None:
@@ -1682,6 +1700,7 @@ async def new_team(
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
             team_member_budget_duration=data.team_member_budget_duration,
+            team_member_rollover_max_budget=data.team_member_rollover_max_budget,
         ):
             data_json = await TeamMemberBudgetHandler.create_team_member_budget_table(
                 data=data,
@@ -1691,6 +1710,7 @@ async def new_team(
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
+                team_member_rollover_max_budget=data.team_member_rollover_max_budget,
                 explicitly_set_fields=data.model_fields_set,
             )
 
@@ -2250,6 +2270,8 @@ async def update_team(
 
         validate_budget_duration(data.budget_duration)
         validate_budget_duration(data.team_member_budget_duration)
+        validate_rollover_max_budget(data.rollover_max_budget)
+        validate_rollover_max_budget(data.team_member_rollover_max_budget)
         validate_team_model_max_budget(model_max_budget=data.model_max_budget, premium_user=premium_user)
 
         existing_team_row = await _raw_team_db(TeamRepository(prisma_client)).find_unique(
@@ -2447,6 +2469,7 @@ async def update_team(
                 "team_member_rpm_limit",
                 "team_member_tpm_limit",
                 "team_member_budget_duration",
+                "team_member_rollover_max_budget",
             ]
             if field in updated_kv
         }
@@ -2476,6 +2499,7 @@ async def update_team(
             team_member_rpm_limit=data.team_member_rpm_limit,
             team_member_tpm_limit=data.team_member_tpm_limit,
             team_member_budget_duration=data.team_member_budget_duration,
+            team_member_rollover_max_budget=data.team_member_rollover_max_budget,
         ):
             updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
                 team_table=existing_team_row,
@@ -2485,6 +2509,7 @@ async def update_team(
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
+                team_member_rollover_max_budget=data.team_member_rollover_max_budget,
                 explicitly_set_fields=_team_member_fields_in_request,
             )
             # Backfill team_memberships for members who joined before the

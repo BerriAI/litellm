@@ -3983,6 +3983,69 @@ async def test_team_member_budget_check_reads_from_spend_counter():
         assert exc_info.value.entity_id == "test-user:test-team"
 
 
+@pytest.mark.asyncio
+async def test_team_member_budget_check_allows_negative_credit_spend():
+    """A member carrying -70 of rollover credit against a 100 cap has 170 of
+    remaining allowance, so the member check must not raise."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
+    from litellm.proxy.utils import ProxyLogging
+
+    team_object = LiteLLM_TeamTable(team_id="test-team")
+    user_object = LiteLLM_UserTable(user_id="test-user")
+    valid_token = UserAPIKeyAuth(token="test-token", user_id="test-user", team_id="test-team")
+    team_membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        spend=-70.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return fallback_spend
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),  # test-quality-ok: get_current_spend is lazily imported inside the check and touches Redis; same seam every neighboring test uses
+        patch(  # test-quality-ok: membership load hits prisma; the fixture membership is the documented seam used by the neighboring tests
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=team_membership,
+        ),
+    ):
+        result = await _check_team_member_budget(
+            team_object=team_object,
+            user_object=user_object,
+            valid_token=valid_token,
+            prisma_client=MagicMock(),
+            user_api_key_cache=DualCache(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_team_member_credit_does_not_unblock_exhausted_team_budget():
+    """Member credit is scoped to the member cap: a member at -70 is still
+    blocked when the team's own spend has reached the team max_budget."""
+    from litellm.proxy.utils import ProxyLogging
+
+    team_object = LiteLLM_TeamTable(team_id="test-team", spend=250.0, max_budget=200.0)
+    valid_token = UserAPIKeyAuth(token="test-token", user_id="test-user", team_id="test-team")
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return fallback_spend
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):  # test-quality-ok: get_current_spend is lazily imported inside the check and touches Redis
+        with pytest.raises(litellm.BudgetExceededError):
+            await _team_max_budget_check(
+                team_object=team_object,
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+
 class TestGuardrailModificationCheck:
     """Defense-in-depth: `_guardrail_modification_check` must 403 when the
     caller's metadata attempts to modify any guardrail-related key and the

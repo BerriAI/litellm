@@ -23,6 +23,20 @@ def validate_finite_spend(spend: float | None) -> None:
         )
 
 
+def validate_rollover_max_budget(rollover_max_budget: float | None) -> None:
+    """Reject NaN/±inf and non-positive rollover caps before they reach the DB.
+
+    A non-positive cap could never accumulate credit (the reset floor
+    ``max_budget - rollover_max_budget`` would sit at or above ``max_budget``),
+    so it is rejected at the API instead of silently never rolling over.
+    """
+    if rollover_max_budget is not None and (not math.isfinite(rollover_max_budget) or rollover_max_budget <= 0):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"rollover_max_budget must be a positive finite number. Received: {rollover_max_budget}"},
+        )
+
+
 def validate_budget_duration(budget_duration: str | None, status_code: int = 400) -> None:
     """Reject budget durations that can't be parsed, are non-positive, or
     overflow date math, so a bad value can't be persisted and later crash the

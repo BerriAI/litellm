@@ -13,6 +13,7 @@ generator client {
 model LiteLLM_BudgetTable {
   budget_id String @id @default(uuid())
   max_budget Float?
+  rollover_max_budget Float?
   soft_budget Float?
   max_parallel_requests Int?
   tpm_limit     BigInt?
@@ -128,6 +129,7 @@ model LiteLLM_TeamTable {
     members_with_roles Json @default("{}")
     metadata  Json  @default("{}")
     max_budget Float?
+    rollover_max_budget Float?
     soft_budget Float?
     spend      Float    @default(0.0)
     models     String[]
@@ -247,6 +249,7 @@ model LiteLLM_UserTable {
     teams    String[] @default([])
     user_role  String?
 		max_budget Float?
+		rollover_max_budget Float?
     spend      Float    @default(0.0)
     user_email    String?
     models     String[]

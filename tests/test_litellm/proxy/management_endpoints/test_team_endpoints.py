@@ -2521,6 +2521,7 @@ async def test_update_team_team_member_budget_not_passed_to_db(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            team_member_rollover_max_budget=None,
             explicitly_set_fields=frozenset(),
         ):
             # Remove team_member_budget from updated_kv as the real function does
@@ -3088,6 +3089,7 @@ async def test_update_team_with_team_member_budget_duration(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            team_member_rollover_max_budget=None,
             explicitly_set_fields=frozenset(),
         ):
             result_kv = updated_kv.copy()
@@ -15422,3 +15424,40 @@ async def test_team_info_reports_what_the_caller_may_edit(caller, org_admin, ena
         )
 
     assert response["team_info"].caller_edit_access.model_dump(mode="json") == expected
+
+
+@pytest.mark.asyncio
+async def test_create_team_member_budget_table_forwards_rollover_max_budget():
+    """team_member_rollover_max_budget lands on the member's budget row."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LitellmUserRoles, NewTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+    data = NewTeamRequest(team_id="test_team_id", team_alias="Test Team")
+    new_team_data_json = {"team_id": "test_team_id", "team_member_budget": 100.0}
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "budget_123"
+
+    with patch(  # test-quality-ok: create_team_member_budget_table calls new_budget lazily; capturing the built request is the neighboring tests' seam
+        "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+        new_callable=AsyncMock,
+    ) as mock_new_budget:
+        mock_new_budget.return_value = mock_budget_response
+
+        result = await TeamMemberBudgetHandler.create_team_member_budget_table(
+            data=data,
+            new_team_data_json=new_team_data_json,
+            user_api_key_dict=mock_user_api_key_dict,
+            team_member_budget=100.0,
+            team_member_rollover_max_budget=600.0,
+        )
+
+        budget_request = mock_new_budget.call_args[1]["budget_obj"]
+        assert budget_request.rollover_max_budget == 600.0
+        assert "team_member_rollover_max_budget" not in result
