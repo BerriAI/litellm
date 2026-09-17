@@ -652,13 +652,24 @@ async def test_during_call_hook_skips_custom_logger_moderation_without_auth(monk
     assert moderator.moderated == []
 
 
-def test_callback_capabilities_detects_custom_logger_moderation_override(monkeypatch):
-    ProxyLogging._callback_capabilities_cache.clear()
-    monkeypatch.setattr(litellm, "callbacks", [CustomLogger(), CustomGuardrail()])
-    assert ProxyLogging._callback_capabilities().has_moderation_override is False
+class _InheritsModerationOverride(_RejectsInModeration):
+    pass
 
-    monkeypatch.setattr(litellm, "callbacks", [_RejectsInModeration()])
-    assert ProxyLogging._callback_capabilities().has_moderation_override is True
+
+@pytest.mark.asyncio
+async def test_during_call_hook_runs_moderation_override_inherited_from_parent(monkeypatch):
+    moderator = _InheritsModerationOverride()
+    monkeypatch.setattr(litellm, "callbacks", [moderator])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+            data={"messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            call_type="acompletion",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert moderator.moderated == ["acompletion"]
 
 
 @pytest.mark.asyncio
