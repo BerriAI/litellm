@@ -5,7 +5,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 
 from litellm.llms.anthropic.experimental_pass_through.messages import handler as main
 from litellm.rust_bridge.catalog import Context, Delivery, Route
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
@@ -102,7 +102,7 @@ def anthropic_messages_handler(
         kwargs,
         python=python,
         binding=NATIVE_MESSAGES,
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=call_hook,
     )
 
 
@@ -113,7 +113,7 @@ async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:
         kwargs,
         python=python,
         binding=NATIVE_AMESSAGES,
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=call_hook,
     )
 
 

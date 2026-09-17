@@ -7,7 +7,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr import main
 from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 from litellm.rust_bridge.catalog import Context, Route
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, LiteLLMOcrRequest
 
 __all__ = ("aocr", "convert_file_document_to_url_document", "get_mime_type", "ocr")
@@ -77,7 +77,7 @@ def ocr(
         kwargs,
         python=_PYTHON_OCR,
         binding=NATIVE_OCR,
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=call_hook,
     )
 
 
@@ -87,5 +87,5 @@ async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: pr
         kwargs,
         python=_PYTHON_AOCR,
         binding=NATIVE_AOCR,
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=call_hook,
     )

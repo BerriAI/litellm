@@ -10,7 +10,7 @@ from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_COMPLETION,
     LiteLLMChatCompletionsRequest,
 )
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
 from litellm.rust_bridge.public_call import (
     bind,
     optional_bool,
@@ -103,7 +103,7 @@ def completion(
         kwargs,
         python=python,
         binding=NATIVE_COMPLETION,
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=call_hook,
     )
 
 
@@ -114,7 +114,7 @@ async def acompletion(*args: object, **kwargs: object) -> ChatResult:  # kwargs-
         kwargs,
         python=python,
         binding=NATIVE_ACOMPLETION,
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=call_hook,
     )
 
 

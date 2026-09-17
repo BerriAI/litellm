@@ -14,6 +14,17 @@ RequestT = TypeVar("RequestT")
 NativeT = TypeVar("NativeT")
 ResultT = TypeVar("ResultT")
 
+NativeHook = Callable[[RequestT, tuple[object, ...], Mapping[str, object]], ResultT]
+
+
+def call_hook(
+    hook: NativeHook[RequestT, ResultT],
+    request: RequestT,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+) -> ResultT:
+    return hook(request, args, kwargs)
+
 
 @dataclass(frozen=True, slots=True)
 class PublicDispatch(Generic[RequestT]):
