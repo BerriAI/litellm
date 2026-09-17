@@ -262,7 +262,27 @@ _VIDEO_FALLBACK_ROUTE_TYPES: Final = frozenset(
     }
 )
 
-_NO_MODEL_ROUTING_ROUTE_TYPES: Final = frozenset({"apply_guardrail", "call_mcp_tool"})
+_NO_MODEL_ROUTING_ROUTE_TYPES: Final = frozenset(
+    {
+        "apply_guardrail",
+        "call_mcp_tool",
+        # Files, fine-tuning, batch, and A2A endpoints resolve their own target
+        # (file id, job id, or agent) after pre-call processing and never reach
+        # _route_request_single_attempt.
+        "afile_content",
+        "afile_retrieve",
+        "afile_delete",
+        "acreate_fine_tuning_job",
+        "aretrieve_fine_tuning_job",
+        "alist_fine_tuning_jobs",
+        "acancel_fine_tuning_job",
+        "acreate_batch",
+        "aretrieve_batch",
+        "alist_batches",
+        "acancel_batch",
+        "asend_message",
+    }
+)
 
 
 class ProxyModelNotFoundError(HTTPException):
