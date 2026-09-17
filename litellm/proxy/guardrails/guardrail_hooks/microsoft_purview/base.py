@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 import uuid
@@ -8,6 +9,8 @@ from typing import TYPE_CHECKING, Any, Final
 from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_AZURE_AUTHORITY_HOST
+from litellm.litellm_core_utils.azure_cloud import get_azure_cloud, normalize_azure_authority_host
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -20,10 +23,6 @@ from litellm.llms.custom_httpx.http_handler import (
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
-
-GRAPH_API_BASE: Final = "https://graph.microsoft.com/v1.0"
-TOKEN_ENDPOINT_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-GRAPH_SCOPE: Final = "https://graph.microsoft.com/.default"
 
 # Protection scope cache TTL in seconds (1 hour, per Microsoft recommendation).
 SCOPE_CACHE_TTL_SECONDS: Final = 3600.0
@@ -63,6 +62,13 @@ class PurviewGuardrailBase:
         self.purview_app_name = purview_app_name
         self.user_id_field = user_id_field
 
+        self.authority_host = normalize_azure_authority_host(
+            os.getenv("AZURE_AUTHORITY_HOST") or DEFAULT_AZURE_AUTHORITY_HOST
+        )
+        graph_base: Final = get_azure_cloud(self.authority_host).microsoft_graph_base
+        self.graph_api_base = f"{graph_base}/v1.0"
+        self.graph_scope = f"{graph_base}/.default"
+
         # Token cache: (access_token, expires_at_epoch)
         self._token_cache: tuple[str, float] | None = None
 
@@ -96,12 +102,12 @@ class PurviewGuardrailBase:
             if self._token_cache and self._token_cache[1] > now + 60:
                 return self._token_cache[0]
 
-        url: Final = TOKEN_ENDPOINT_TEMPLATE.format(tenant_id=self.tenant_id)
+        url: Final = f"{self.authority_host}/{self.tenant_id}/oauth2/v2.0/token"
         data: Final = {
             "grant_type": "client_credentials",
             "client_id": self.client_id,
             "client_secret": self.client_secret,
-            "scope": GRAPH_SCOPE,
+            "scope": self.graph_scope,
         }
         response: Final = await self.async_handler.post(
             url=url,
@@ -169,7 +175,7 @@ class PurviewGuardrailBase:
                 self._scope_cache.move_to_end(user_id)
                 return cached[0], cached[1]
 
-        url: Final = f"{GRAPH_API_BASE}/users/{encoded_user_id}/dataSecurityAndGovernance/protectionScopes/compute"
+        url: Final = f"{self.graph_api_base}/users/{encoded_user_id}/dataSecurityAndGovernance/protectionScopes/compute"
         body: Final[dict[str, object]] = {
             "activities": "uploadText,downloadText",
             "locations": [
@@ -219,7 +225,7 @@ class PurviewGuardrailBase:
             correlation_id: Optional conversation/thread ID.
         """
         encoded_user_id: Final = self._encode_graph_user_id(user_id)
-        url: Final = f"{GRAPH_API_BASE}/users/{encoded_user_id}/dataSecurityAndGovernance/processContent"
+        url: Final = f"{self.graph_api_base}/users/{encoded_user_id}/dataSecurityAndGovernance/processContent"
         body: Final[dict[str, object]] = {
             "contentToProcess": {
                 "contentEntries": [

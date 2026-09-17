@@ -16,20 +16,20 @@ import asyncio
 import os
 import time
 import traceback
-from collections.abc import Mapping, Sequence
-from types import MappingProxyType
+from collections.abc import Sequence
 from typing import Final, TypeVar
-from urllib.parse import urlparse
 
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.constants import DEFAULT_AZURE_AUTHORITY_HOST
 from litellm.integrations.batch_utils import (
     BatchSendCancelled,
     send_batch_with_413_split,
     undelivered_after_http_error,
 )
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.azure_cloud import get_azure_cloud, normalize_azure_authority_host
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
     MaskedHTTPStatusError,
@@ -39,17 +39,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.integrations.azure_sentinel import AZURE_SENTINEL_MAX_PAYLOAD_SIZE_BYTES
 from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
-DEFAULT_AZURE_AUTHORITY_HOST: Final = "https://login.microsoftonline.com"
-DEFAULT_AZURE_MONITOR_SCOPE: Final = "https://monitor.azure.com/.default"
-
 _QueuedPayload = TypeVar("_QueuedPayload", StandardLoggingPayload, StandardAuditLogPayload)
-
-MONITOR_SCOPE_BY_AUTHORITY_HOST: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        "login.microsoftonline.com": DEFAULT_AZURE_MONITOR_SCOPE,
-        "login.microsoftonline.us": "https://monitor.azure.us/.default",
-    }
-)
 
 
 class AzureSentinelLogger(CustomBatchLogger):
@@ -105,7 +95,7 @@ class AzureSentinelLogger(CustomBatchLogger):
         resolved_client_secret: Final = (
             client_secret or os.getenv("AZURE_SENTINEL_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET")
         )
-        resolved_authority_host: Final = self._normalize_authority_host(
+        resolved_authority_host: Final = normalize_azure_authority_host(
             authority_host
             or os.getenv("AZURE_SENTINEL_AUTHORITY_HOST")
             or os.getenv("AZURE_AUTHORITY_HOST")
@@ -155,7 +145,7 @@ class AzureSentinelLogger(CustomBatchLogger):
 
         # OAuth2 scope for Azure Monitor
         self.authority_host = resolved_authority_host
-        self.oauth_scope = self._resolve_oauth_scope(authority_host=resolved_authority_host)
+        self.oauth_scope = get_azure_cloud(resolved_authority_host).azure_monitor_scope
         self.oauth_token: str | None = None
         self.oauth_token_expires_at: float | None = None
 
@@ -166,26 +156,6 @@ class AzureSentinelLogger(CustomBatchLogger):
         self.audit_log_queue: list[StandardAuditLogPayload] = []
         self.logs_awaiting_retry = False
         self.audit_logs_awaiting_retry = False
-
-    @staticmethod
-    def _normalize_authority_host(authority_host: str) -> str:
-        """
-        Normalize an authority host into an absolute URL with no trailing slash.
-
-        Accepts the scheme-qualified form litellm documents ("https://login.microsoftonline.us")
-        and the bare-host form the azure-identity AzureAuthorityHosts constants use.
-        """
-        stripped: Final = authority_host.strip().rstrip("/")
-        return stripped if "://" in stripped else f"https://{stripped}"
-
-    @staticmethod
-    def _resolve_oauth_scope(authority_host: str) -> str:
-        """
-        Map an authority host to the Azure Monitor Logs Ingestion audience for the same cloud,
-        falling back to the Azure Public Cloud audience for an unrecognized host.
-        """
-        host: Final = urlparse(authority_host).hostname or ""
-        return MONITOR_SCOPE_BY_AUTHORITY_HOST.get(host, DEFAULT_AZURE_MONITOR_SCOPE)
 
     @staticmethod
     def _build_api_endpoint(endpoint: str, dcr_immutable_id: str, stream_name: str) -> str:

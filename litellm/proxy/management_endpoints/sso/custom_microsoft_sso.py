@@ -21,6 +21,8 @@ from fastapi_sso.sso.base import DiscoveryDocument
 from fastapi_sso.sso.microsoft import MicrosoftSSO
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_AZURE_AUTHORITY_HOST
+from litellm.litellm_core_utils.azure_cloud import normalize_azure_authority_host
 
 
 class CustomMicrosoftSSO(MicrosoftSSO):
@@ -28,6 +30,8 @@ class CustomMicrosoftSSO(MicrosoftSSO):
     Microsoft SSO subclass that allows overriding default endpoints via environment variables.
 
     Supports:
+    - AZURE_AUTHORITY_HOST (Entra authority the default authorization and token endpoints are built on,
+      e.g. https://login.microsoftonline.us for Azure Government)
     - MICROSOFT_AUTHORIZATION_ENDPOINT
     - MICROSOFT_TOKEN_ENDPOINT
     - MICROSOFT_USERINFO_ENDPOINT
@@ -59,12 +63,14 @@ class CustomMicrosoftSSO(MicrosoftSSO):
         custom_authorization_endpoint: Final = os.getenv("MICROSOFT_AUTHORIZATION_ENDPOINT", None)
         custom_token_endpoint: Final = os.getenv("MICROSOFT_TOKEN_ENDPOINT", None)
         custom_userinfo_endpoint: Final = os.getenv("MICROSOFT_USERINFO_ENDPOINT", None)
-
-        # Use custom endpoints if set, otherwise use defaults
-        authorization_endpoint: Final = (
-            custom_authorization_endpoint or f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/authorize"
+        authority_host: Final = normalize_azure_authority_host(
+            os.getenv("AZURE_AUTHORITY_HOST") or DEFAULT_AZURE_AUTHORITY_HOST
         )
-        token_endpoint = custom_token_endpoint or f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/token"
+
+        authorization_endpoint: Final = (
+            custom_authorization_endpoint or f"{authority_host}/{self.tenant}/oauth2/v2.0/authorize"
+        )
+        token_endpoint: Final = custom_token_endpoint or f"{authority_host}/{self.tenant}/oauth2/v2.0/token"
         userinfo_endpoint: Final = custom_userinfo_endpoint or f"https://graph.microsoft.com/{self.version}/me"
 
         if custom_authorization_endpoint or custom_token_endpoint or custom_userinfo_endpoint:

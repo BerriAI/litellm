@@ -14,7 +14,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
-from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.constants import DEFAULT_AZURE_AUTHORITY_HOST, DEFAULT_MAX_RETRIES
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import BaseOpenAILLM
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -211,7 +211,7 @@ def get_azure_ad_token_from_oidc(
     """
     if scope is None:
         scope = "https://cognitiveservices.azure.com/.default"
-    azure_authority_host: Final = os.getenv("AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com")
+    azure_authority_host: Final = os.getenv("AZURE_AUTHORITY_HOST", DEFAULT_AZURE_AUTHORITY_HOST)
     azure_client_id = azure_client_id or os.getenv("AZURE_CLIENT_ID")
     azure_tenant_id = azure_tenant_id or os.getenv("AZURE_TENANT_ID")
     if azure_client_id is None or azure_tenant_id is None:

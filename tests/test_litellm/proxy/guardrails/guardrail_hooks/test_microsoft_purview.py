@@ -1062,6 +1062,56 @@ class TestTokenCaching:
 
 
 # ---------------------------------------------------------------
+# Sovereign cloud resolution
+# ---------------------------------------------------------------
+
+
+class TestSovereignCloud:
+    @pytest.mark.parametrize(
+        "authority_host, expected_authority, expected_graph_base",
+        [
+            (None, "https://login.microsoftonline.com", "https://graph.microsoft.com"),
+            ("https://login.microsoftonline.us", "https://login.microsoftonline.us", "https://graph.microsoft.us"),
+            ("login.microsoftonline.us/", "https://login.microsoftonline.us", "https://graph.microsoft.us"),
+            (
+                "https://login.partner.microsoftonline.cn",
+                "https://login.partner.microsoftonline.cn",
+                "https://microsoftgraph.chinacloudapi.cn",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_token_and_graph_requests_follow_azure_authority_host(
+        self, monkeypatch, authority_host, expected_authority, expected_graph_base
+    ):
+        """A sovereign deployment must get its token from its own Entra and call its own Graph with the
+        matching audience; commercial-cloud literals leak the client secret to the wrong authority."""
+        monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+        if authority_host is not None:
+            monkeypatch.setenv("AZURE_AUTHORITY_HOST", authority_host)
+        guardrail = _make_guardrail()
+
+        scope_resp = _mock_scope_response()
+        with patch.object(
+            guardrail.async_handler, "post", side_effect=[_mock_token_response(), scope_resp]
+        ) as mock_post:
+            await guardrail._compute_protection_scopes("user-1")
+
+        token_call, graph_call = mock_post.call_args_list
+        assert token_call.kwargs["url"] == f"{expected_authority}/test-tenant-id/oauth2/v2.0/token"
+        assert token_call.kwargs["data"]["scope"] == f"{expected_graph_base}/.default"
+        assert graph_call.kwargs["url"] == (
+            f"{expected_graph_base}/v1.0/users/user-1/dataSecurityAndGovernance/protectionScopes/compute"
+        )
+
+    def test_rejects_an_authority_host_that_is_not_an_https_origin(self, monkeypatch):
+        monkeypatch.setenv("AZURE_AUTHORITY_HOST", "http://login.microsoftonline.us")
+
+        with pytest.raises(ValueError, match="https origin with no path"):
+            _make_guardrail()
+
+
+# ---------------------------------------------------------------
 # Graph POST HTTP error propagation
 # ---------------------------------------------------------------
 
