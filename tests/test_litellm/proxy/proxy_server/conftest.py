@@ -521,13 +521,14 @@ def reset_login_throttle(monkeypatch):
     window, so without this a failed sign-in test could block unrelated tests later.
     Only the throttle's own keys are removed, so other cache entries remain untouched.
     """
+    from litellm.constants import LOGIN_THROTTLE_CACHE_KEY_PREFIX
     from litellm.proxy import proxy_server as ps
-    from litellm.proxy.auth.login_throttle import _BLOCKS, _CACHE_KEY_PREFIX, _COUNTERS
+    from litellm.proxy.auth.login_throttle import _BLOCKS, _COUNTERS
 
     def _drop_throttle_keys() -> None:
         for store in (_COUNTERS, _BLOCKS):
             for key in tuple(store.cache_dict) + tuple(store.ttl_dict):
-                if key.startswith(_CACHE_KEY_PREFIX):
+                if key.startswith(LOGIN_THROTTLE_CACHE_KEY_PREFIX):
                     store.delete_cache(key)
 
     monkeypatch.setattr(ps, "redis_usage_cache", None)
