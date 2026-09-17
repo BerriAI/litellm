@@ -36,6 +36,20 @@ pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOc
     .unwrap()
 }
 
+pub(crate) fn resolved_request(
+    request: LiteLLMOcrRequest,
+) -> crate::ocr::types::ResolvedOcrRequest {
+    request
+        .map_document(crate::ocr::document::prepare_document)
+        .unwrap()
+}
+
+pub(crate) fn with_source(request: LiteLLMOcrRequest, source: &str) -> LiteLLMOcrRequest {
+    let request = resolved_request(request);
+    let document = request.document.clone().with_source(source.into());
+    request.with_document(document.into())
+}
+
 pub(crate) struct MockResponse {
     pub status: u16,
     pub headers: Vec<(&'static str, String)>,

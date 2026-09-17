@@ -555,7 +555,7 @@ class OpenTelemetryV2(CustomLogger):
             capture_content=self.config.capture_span_content,
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
             request_route=request_root_http_route(),
-            trace_name=call.trace_name,
+            trace=call.trace,
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
