@@ -12,14 +12,21 @@ capture the forwarded kwargs; if the flag-setting line is removed the captured
 kwargs lack the flag and these tests fail.
 """
 
+import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
 
-
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
 
 
 class _StopForwarding(Exception):
@@ -170,3 +177,56 @@ async def test_async_fallback_returns_hoisted_nested_custom_tool_call_as_custom_
 
     tool_calls = [(item.type, item.name, item.input) for item in response.output if item.type == "custom_tool_call"]
     assert tool_calls == [("custom_tool_call", "exec", "ls")]
+
+
+class _RecordingAnthropicHandler:
+    def __init__(self, reply: Mapping[str, object]) -> None:
+        self.reply: Final = reply
+        self.request_body: Mapping[str, object] | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_body = json.loads(request.content)
+        return httpx.Response(200, json=dict(self.reply), request=request)
+
+
+_ANTHROPIC_MESSAGE_PAYLOAD: Final = {
+    "id": "msg_turn_two",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-6",
+    "content": [{"type": "text", "text": "14"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 12, "output_tokens": 1},
+}
+
+
+@pytest.mark.asyncio
+async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_provider_body():
+    """The proxy's ResponsesIDSecurity hook rewrites `previous_response_id` and keeps the
+    id the client addressed under `_litellm_addressed_response_id` in the same request
+    body, so internal retries re-authorize it. On a model without a native Responses
+    config that body is bridged into `litellm.acompletion` kwargs, and Azure AI Claude
+    answered `_litellm_addressed_response_id: Extra inputs are not permitted` (400) on
+    every follow-up turn. The key is LiteLLM-internal and must never reach the provider.
+    """
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    response = await litellm.aresponses(
+        model="azure_ai/claude-sonnet-4-6",
+        api_base="https://fake-foundry-resource.services.ai.azure.com",
+        api_key="fake-api-key",
+        input="Double it",
+        previous_response_id="resp_turn_one",
+        client=client,
+        **{ADDRESSED_RESPONSE_ID_FIELD: "resp_turn_one"},
+    )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert ADDRESSED_RESPONSE_ID_FIELD not in provider.request_body, (
+        f"the addressed response id reached the provider body: {sorted(provider.request_body)}"
+    )
+    assert isinstance(response, ResponsesAPIResponse)
+    assert [item.type for item in response.output] == ["message"]
