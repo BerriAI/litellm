@@ -3,7 +3,7 @@ pub use error::Error;
 mod client;
 mod handler;
 mod prepare;
-pub mod types;
+pub use litellm_providers::audio_transcription::types;
 
 pub use handler::execute_audio_transcription_provider_call;
 pub use prepare::prepare_audio_transcription_provider_call;

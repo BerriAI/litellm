@@ -11,7 +11,7 @@
 //! accepts; anything richer is declined upstream by the capability gate.
 
 use super::types::{ChatMessage, ChatMessageContent};
-use crate::constants::EMPTY_TEXT_PLACEHOLDER;
+use crate::chat::EMPTY_TEXT_PLACEHOLDER;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurnRole {

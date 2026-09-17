@@ -1,7 +1,7 @@
 use serde_json::{Map, Value};
 
-use crate::chat_completions::Error;
-use crate::chat_completions::types::{
+use crate::chat::Error;
+use crate::chat::types::{
     ChatCompletionsResponse, ChatMessage, ChatMessageContent, ProviderChatRequestData,
     ProviderChatResponseData,
 };
