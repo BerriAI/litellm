@@ -42,6 +42,24 @@ const timedPreCall: Partial<GuardrailInformation> = {
   duration: 0.1,
 };
 
+const latePreCall: Partial<GuardrailInformation> = {
+  guardrail_name: "late-pre-rail",
+  guardrail_status: "success",
+  guardrail_mode: "pre_call",
+  start_time: 1_700_000_500,
+  end_time: 1_700_000_500.1,
+  duration: 0.1,
+};
+
+const untimedPostCall: Partial<GuardrailInformation> = {
+  guardrail_name: "untimed-post-rail",
+  guardrail_status: "success",
+  guardrail_mode: "post_call",
+  start_time: null,
+  end_time: null,
+  duration: null,
+};
+
 const ranPostCall: Partial<GuardrailInformation> = {
   guardrail_name: "ran-rail",
   guardrail_status: "success",
@@ -139,6 +157,22 @@ describe("GuardrailViewer", () => {
     expect(untimedIndex).toBeGreaterThanOrEqual(0);
     expect(timedIndex).toBeGreaterThanOrEqual(0);
     expect(untimedIndex).toBeLessThan(timedIndex);
+  });
+
+  it("orders each phase on its own clock when a later pre-call outlives an earlier post-call", () => {
+    const latePre = makeGuardrailInformation(latePreCall);
+    const untimedPost = makeGuardrailInformation(untimedPostCall);
+    const earlyPost = makeGuardrailInformation(ranPostCall);
+    renderWithProviders(<GuardrailViewer data={[latePre, untimedPost, earlyPost]} />);
+
+    const rows = screen.getAllByTestId("lifecycle-row");
+    const rowIndex = (label: RegExp): number => rows.findIndex((r) => within(r).queryByText(label) !== null);
+    const untimedIndex = rowIndex(/Post-call guardrail: untimed-post-rail/);
+    const earlyIndex = rowIndex(/Post-call guardrail: ran-rail/);
+
+    expect(untimedIndex).toBeGreaterThanOrEqual(0);
+    expect(earlyIndex).toBeGreaterThanOrEqual(0);
+    expect(untimedIndex).toBeLessThan(earlyIndex);
   });
 
   it("anchors offsets on the timed entries and gives the untimed one no fabricated offset", () => {
