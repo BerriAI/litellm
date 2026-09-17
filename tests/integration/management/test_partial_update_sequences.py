@@ -5,11 +5,21 @@ from typing import Final
 import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
-from pydantic import JsonValue
-
 from integration._support.client import Gateway, object_value
 from integration._support.database import read_rows
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
+from pydantic import JsonValue
+
+
+def _key_rows(digest: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT token, key_name, key_alias, models, aliases, config, router_settings, user_id, team_id, '
+        'agent_id, project_id, permissions, max_parallel_requests, metadata, blocked, tpm_limit, rpm_limit, '
+        'tpd_limit, max_budget, budget_duration, allowed_cache_controls, allowed_routes, key_type, policies, '
+        'access_group_ids, model_spend, model_max_budget, budget_fallbacks, budget_id, organization_id, '
+        'object_permission_id, budget_limits FROM "LiteLLM_VerificationToken" WHERE token = %s',
+        (digest,),
+    )
 
 
 @pytest.mark.covers("mgmt.key.update.generated_sequences_preserve_state")
@@ -219,19 +229,15 @@ def test_restricted_actor_cannot_detach_key_from_project(gateway: Gateway) -> No
             allowed_routes=["/key/update"],
         )
         digest: Final = sha256(target.encode()).hexdigest()
-        before: Final = read_rows(
-            'SELECT project_id, team_id FROM "LiteLLM_VerificationToken" WHERE token = %s',
-            (digest,),
-        )
-        assert before != []
+        before: Final = _key_rows(digest)
+        assert len(before) == 1
+        assert before[0]["project_id"] == project
+        assert before[0]["team_id"] == team
         denied: Final = gateway.request(
             "POST", "/key/update", {"key": target, "project_id": None}, key=caller
         )
         assert denied.status_code == 403, denied.text
-        assert read_rows(
-            'SELECT project_id, team_id FROM "LiteLLM_VerificationToken" WHERE token = %s',
-            (digest,),
-        ) == before
+        assert _key_rows(digest) == before
 
 
 @pytest.mark.covers(
@@ -258,15 +264,15 @@ def test_cross_tenant_actor_cannot_read_update_or_detach_project_key(gateway: Ga
             allowed_routes=["/key/info", "/key/update"],
         )
         digest: Final = sha256(target.encode()).hexdigest()
-        before: Final = read_rows(
-            'SELECT project_id, team_id FROM "LiteLLM_VerificationToken" WHERE token = %s',
-            (digest,),
-        )
-        assert before != []
+        before: Final = _key_rows(digest)
+        assert len(before) == 1
+        assert before[0]["project_id"] == project
+        assert before[0]["team_id"] == team
         info_denied: Final = gateway.request(
             "GET", "/key/info", params={"key": digest}, key=caller
         )
         assert info_denied.status_code == 403, info_denied.text
+        assert target not in info_denied.text
         assert digest not in info_denied.text
         assert project not in info_denied.text
         assert team not in info_denied.text
@@ -279,10 +285,8 @@ def test_cross_tenant_actor_cannot_read_update_or_detach_project_key(gateway: Ga
         )
         assert detach_denied.status_code == 401, detach_denied.text
         for response in (update_denied, detach_denied):
+            assert target not in response.text
             assert digest not in response.text
             assert project not in response.text
             assert team in response.text
-        assert read_rows(
-            'SELECT project_id, team_id FROM "LiteLLM_VerificationToken" WHERE token = %s',
-            (digest,),
-        ) == before
+        assert _key_rows(digest) == before
