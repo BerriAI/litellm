@@ -16,6 +16,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -4094,6 +4095,21 @@ if MCP_AVAILABLE:
                     request = StarletteRequest(scope)
                     base_url = get_request_base_url(request)
                     _path = get_route_relative_request_path(scope)
+
+                    if _path.rstrip("/") == "/mcp":
+                        raise HTTPException(
+                            status_code=401,
+                            detail="Unauthorized",
+                            headers=types.MappingProxyType(
+                                {
+                                    "www-authenticate": (
+                                        f'Bearer resource_metadata="{base_url}/.well-known/'
+                                        f"oauth-protected-resource{well_known_root_suffix()}/mcp?"
+                                        f'{urlencode((("mcp_server_name", server_name),))}"'
+                                    )
+                                }
+                            ),
+                        )
 
                     # Pick the well-known AS-metadata form that matches the inbound route
                     # so strict RFC 9728 §3.2 clients can resolve it correctly.

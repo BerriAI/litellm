@@ -8464,6 +8464,45 @@ class TestPreemptive401ModeAware:
 
     LITELLM_KEY_HEADERS = {"Authorization": "Bearer sk-litellm-virtual-key"}
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("prefix", ("", "/tenant"))
+    @pytest.mark.parametrize("authorized", (True, False))
+    async def test_keyed_aggregate_challenge_preserves_selected_server(self, monkeypatch, prefix, authorized):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        server: Final = _make_oauth2_server("interactive", oauth2_flow="authorization_code")
+        server_module.global_mcp_server_manager.registry[server.server_id] = server
+        scope: Final = {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "path": f"{prefix}/mcp",
+            "root_path": prefix,
+            "headers": [(b"host", b"testserver")],
+        }
+        if not authorized:
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope, [server.alias], None, None, UserAPIKeyAuth(api_key="sk-test"), None, allowed_server_ids=set()
+            )
+            return
+        with pytest.raises(HTTPException) as exc:
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope,
+                [server.alias],
+                None,
+                None,
+                UserAPIKeyAuth(api_key="sk-test"),
+                None,
+                allowed_server_ids={server.server_id},
+            )
+        assert exc.value.status_code == 401
+        assert exc.value.headers["www-authenticate"] == (
+            f'Bearer resource_metadata="http://testserver{prefix}/.well-known/'
+            'oauth-protected-resource/mcp?mcp_server_name=interactive"'
+        )
+
     def _scope(self, alias: str):
         return {"type": "http", "method": "POST", "path": f"/mcp/{alias}", "headers": []}
 

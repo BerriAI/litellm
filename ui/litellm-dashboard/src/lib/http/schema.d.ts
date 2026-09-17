@@ -41348,7 +41348,9 @@ export interface operations {
     };
     oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get: {
         parameters: {
-            query?: never;
+            query?: {
+                mcp_server_name?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -41362,6 +41364,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

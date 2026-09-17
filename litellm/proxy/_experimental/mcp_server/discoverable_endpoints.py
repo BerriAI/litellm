@@ -5,6 +5,7 @@ import secrets
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -2651,7 +2652,7 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
 # in registration order, and /.well-known/oauth-authorization-server/{name}
 # would otherwise capture the "/mcp" suffix as a server name.
 @router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp")
-async def oauth_protected_resource_aggregate(request: Request):
+async def oauth_protected_resource_aggregate(request: Request, mcp_server_name: str | None = None):
     """
     OAuth protected resource discovery for the aggregate /mcp endpoint.
 
@@ -2659,7 +2660,20 @@ async def oauth_protected_resource_aggregate(request: Request):
     (those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously
     describes the aggregate resource.
     """
-    return _build_aggregate_protected_resource_response(request)
+    if mcp_server_name is None:
+        return _build_aggregate_protected_resource_response(request)
+    client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
+    server: Final = _resolve_mcp_server_by_name_or_id(mcp_server_name, client_ip)
+    if server is None or not (server.is_gateway_managed_oauth2 and server.needs_user_oauth_token):
+        raise HTTPException(status_code=404, detail="MCP server is not an interactive OAuth relay")
+    base_url: Final = get_request_base_url(request)
+    return MappingProxyType(
+        {
+            "resource": f"{base_url}/mcp",
+            "authorization_servers": (f"{base_url}/mcp/{mcp_server_name}",),
+            "scopes_supported": tuple(server.scopes or ()),
+        }
+    )
 
 
 @router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp")

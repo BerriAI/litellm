@@ -22884,6 +22884,24 @@
         "get": {
           "description": "OAuth protected resource discovery for the aggregate /mcp endpoint.\n\nThe single-segment ``/mcp`` path does not collide with any per-server PRM pattern\n(those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously\ndescribes the aggregate resource.",
           "operationId": "oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "mcp_server_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            }
+          ],
           "responses": {
             "200": {
               "content": {
@@ -22892,6 +22910,16 @@
                 }
               },
               "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
             }
           },
           "summary": "Oauth Protected Resource Aggregate",
@@ -25092,6 +25120,24 @@
         "get": {
           "description": "OAuth protected resource discovery for the aggregate /mcp endpoint.\n\nThe single-segment ``/mcp`` path does not collide with any per-server PRM pattern\n(those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously\ndescribes the aggregate resource.",
           "operationId": "oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get_2",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "mcp_server_name",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Mcp Server Name"
+              }
+            }
+          ],
           "responses": {
             "200": {
               "content": {
@@ -25100,6 +25146,16 @@
                 }
               },
               "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
             }
           },
           "summary": "Oauth Protected Resource Aggregate",

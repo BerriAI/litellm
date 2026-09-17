@@ -10607,6 +10607,66 @@ def _prefixed_discovery_client(prefixes):
     return TestClient(app)
 
 
+@pytest.mark.parametrize("prefix", ("", "/tenant"))
+@pytest.mark.parametrize("server_name", ("github_oauth", "mcp"))
+def test_selected_aggregate_discovery_reaches_upstream_oauth(
+    _no_proxy_base_url, _isolated_mcp_registry, monkeypatch, prefix, server_name
+):
+    from urllib.parse import parse_qs, urlsplit
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "local-oauth-discovery-test-salt")
+    server: Final = _create_oauth2_server(server_name=server_name, alias=server_name, name=server_name)
+    _isolated_mcp_registry[server.server_id] = server
+    client: Final = _prefixed_discovery_client(["/tenant"])
+    response: Final = client.get(
+        f"{prefix}/.well-known/oauth-protected-resource/mcp", params={"mcp_server_name": server_name}
+    )
+    assert response.status_code == 200
+    metadata: Final = response.json()
+    assert metadata["resource"] == f"http://testserver{prefix}/mcp"
+    assert metadata["authorization_servers"] == [f"http://testserver{prefix}/mcp/{server_name}"]
+    authorization: Final = client.get(f"{prefix}/.well-known/oauth-authorization-server/mcp/{server_name}").json()
+    assert authorization["issuer"] == metadata["authorization_servers"][0]
+    registration: Final = client.post(
+        authorization["registration_endpoint"],
+        json={"redirect_uris": ["http://localhost:8787/callback"], "client_name": "keyed-client"},
+    )
+    assert registration.status_code == 200
+    redirect: Final = client.get(
+        authorization["authorization_endpoint"],
+        params={
+            "client_id": registration.json()["client_id"],
+            "redirect_uri": "http://localhost:8787/callback",
+            "response_type": "code",
+            "code_challenge": "challenge",
+            "code_challenge_method": "S256",
+        },
+        follow_redirects=False,
+    )
+    assert redirect.status_code == 307
+    destination: Final = urlsplit(redirect.headers["location"])
+    assert destination.netloc == "provider.com"
+    assert parse_qs(destination.query)["client_id"] == [server.client_id]
+
+
+@pytest.mark.parametrize("mode", ("unknown", "bearer_token", "oauth_delegate", "client_credentials"))
+def test_selected_aggregate_discovery_rejects_non_interactive_relay(_no_proxy_base_url, _isolated_mcp_registry, mode):
+    from litellm.types.mcp import MCPAuth
+
+    server: Final = _create_oauth2_server()
+    if mode != "unknown":
+        _isolated_mcp_registry[server.server_id] = server.model_copy(
+            update={"oauth2_flow": mode} if mode == "client_credentials" else {"auth_type": MCPAuth(mode)}
+        )
+    client: Final = _prefixed_discovery_client([])
+    assert (
+        client.get(
+            "/.well-known/oauth-protected-resource/mcp", params={"mcp_server_name": server.server_name}
+        ).status_code
+        == 404
+    )
+
+
 class TestPerRequestRootPathDiscovery:
     def test_prefixed_wellknown_not_routable_without_middleware(self, _isolated_mcp_registry):
         """Control: on a plain app (the only shape a scalar root_path can
