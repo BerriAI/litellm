@@ -3,7 +3,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { ChevronRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import FuseProfilePresets from "./FuseProfilePresets";
 import { Switch } from "@/components/ui/switch";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -239,29 +239,7 @@ const ForecastClassifierConfig = ({ value, onChange, modelOptions, effortOptions
         </>
       ) : (
         <>
-          {(["efficient_profile", "capable_profile", "harness"] as const).map((field) => {
-            const label = {
-              efficient_profile: "Efficient solver profile",
-              capable_profile: "Capable solver profile",
-              harness: "Harness and budget",
-            }[field];
-            return (
-              <div key={field} className="space-y-1">
-                <Label htmlFor={`${id}-${field}`}>{label}</Label>
-                <Textarea
-                  id={`${id}-${field}`}
-                  value={fuse[field]}
-                  maxLength={4000}
-                  placeholder={
-                    field === "harness"
-                      ? "Tools, execution environment, verification, and budget available to each solver"
-                      : "Describe this solver's strengths, limitations, and settings"
-                  }
-                  onChange={(event) => updateFuse({ ...fuse, [field]: event.target.value })}
-                />
-              </div>
-            );
-          })}
+          <FuseProfilePresets value={fuse} onChange={updateFuse} />
           <NumberField
             label="Maximum quality gap"
             value={fuse.max_quality_gap}

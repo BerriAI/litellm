@@ -12425,6 +12425,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/complexity_router/fuse_presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Public Fuse Presets */
+        get: operations["get_public_fuse_presets_public_complexity_router_fuse_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/public/complexity_router/scorer_defaults": {
         parameters: {
             query?: never;
@@ -28207,6 +28224,39 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** FuseHarnessPreset */
+        FuseHarnessPreset: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Sources */
+            sources: string[];
+            /** Text */
+            text: string;
+        };
+        /** FuseModelPreset */
+        FuseModelPreset: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Model */
+            model: string;
+            /** Sources */
+            sources: string[];
+            /** Text */
+            text: string;
+        };
+        /** FusePresetCatalog */
+        FusePresetCatalog: {
+            /** Harnesses */
+            harnesses: components["schemas"]["FuseHarnessPreset"][];
+            /** Models */
+            models: components["schemas"]["FuseModelPreset"][];
+            /** Version */
+            version: string;
+        };
         /**
          * GUARDRAIL_DEFINITION_LOCATION
          * @enum {string}
@@ -29136,21 +29186,27 @@ export interface components {
         LLMV2Config: {
             calibration?: components["schemas"]["LLMV2Calibration"] | null;
             /** Capable Profile */
-            capable_profile: string;
+            capable_profile?: string | null;
+            /** Capable Profile Preset */
+            capable_profile_preset?: string | null;
             /**
              * Capable Tier
              * @default REASONING
              */
             capable_tier: string;
             /** Efficient Profile */
-            efficient_profile: string;
+            efficient_profile?: string | null;
+            /** Efficient Profile Preset */
+            efficient_profile_preset?: string | null;
             /**
              * Efficient Tier
              * @default SIMPLE
              */
             efficient_tier: string;
             /** Harness */
-            harness: string;
+            harness?: string | null;
+            /** Harness Preset */
+            harness_preset?: string | null;
             /**
              * Max Output Tokens
              * @default 1024
@@ -56940,6 +56996,26 @@ export interface operations {
                     "application/json": {
                         [key: string]: components["schemas"]["AutoRouterPresetRecord"];
                     };
+                };
+            };
+        };
+    };
+    get_public_fuse_presets_public_complexity_router_fuse_presets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FusePresetCatalog"];
                 };
             };
         };

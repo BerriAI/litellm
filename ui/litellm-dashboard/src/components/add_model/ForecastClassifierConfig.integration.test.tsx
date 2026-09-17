@@ -1,7 +1,7 @@
 import React, { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
 import ForecastClassifierConfig from "./ForecastClassifierConfig";
@@ -37,6 +37,53 @@ const fuseInitial: ComplexityRouterConfigValue = {
   },
 };
 const options = ["judge", "efficient", "capable"].map((model) => ({ value: model, label: model }));
+const catalog = {
+  version: "catalog-v1",
+  models: [
+    {
+      id: "efficient-v1",
+      label: "Efficient preset",
+      text: "Maintained efficient profile",
+      sources: ["https://example.com/efficient"],
+      model: "efficient-model",
+    },
+    {
+      id: "capable-v1",
+      label: "Capable preset",
+      text: "Maintained capable profile",
+      sources: ["https://example.com/capable"],
+      model: "capable-model",
+    },
+  ],
+  harnesses: [
+    {
+      id: "runtime-v1",
+      label: "Runtime preset",
+      text: "Maintained runtime profile",
+      sources: ["https://example.com/runtime"],
+    },
+  ],
+};
+const presetConfig = {
+  efficient_profile_preset: catalog.models[0].id,
+  capable_profile_preset: catalog.models[1].id,
+  harness_preset: catalog.harnesses[0].id,
+  max_quality_gap: 0.05,
+};
+const presetInitial = { ...fuseInitial, llm_v2_config: presetConfig };
+
+beforeEach(() => {
+  testQueryClient.clear();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(async () => Response.json(catalog)),
+  );
+});
+
+afterEach(() => {
+  testQueryClient.clear();
+  vi.unstubAllGlobals();
+});
 
 function Form({ initialValue = initial }: { initialValue?: ComplexityRouterConfigValue }) {
   const [value, setValue] = useState(initialValue);
@@ -72,6 +119,118 @@ function Form({ initialValue = initial }: { initialValue?: ComplexityRouterConfi
 }
 
 describe("forecast classifier form", () => {
+  it("selects all three maintained presets, previews provenance, and saves only references", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Form initialValue={fuseInitial} />);
+    await user.click(screen.getByRole("combobox", { name: "Efficient solver profile preset" }));
+    await user.click(await screen.findByRole("option", { name: /^Efficient preset/ }));
+    await user.click(screen.getByRole("combobox", { name: "Capable solver profile preset" }));
+    await user.click(screen.getByRole("option", { name: /^Capable preset/ }));
+    await user.click(screen.getByRole("combobox", { name: "Harness and budget preset" }));
+    await user.click(screen.getByRole("option", { name: /^Runtime preset/ }));
+    expect(screen.getByLabelText("Efficient solver profile")).toHaveValue(catalog.models[0].text);
+    expect(screen.getByLabelText("Efficient solver profile")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("Capable solver profile")).toHaveValue(catalog.models[1].text);
+    expect(screen.getByLabelText("Harness and budget")).toHaveValue(catalog.harnesses[0].text);
+    expect(screen.getAllByText(`Catalog version: ${catalog.version}`)).toHaveLength(3);
+    expect(screen.getByText(`Model: ${catalog.models[0].model}`)).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Source 1" }).map((link) => link.getAttribute("href"))).toEqual([
+      catalog.models[0].sources[0],
+      catalog.models[1].sources[0],
+      catalog.harnesses[0].sources[0],
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    expect(JSON.parse(screen.getByRole("status", { name: "Saved configuration" }).textContent!).llm_v2_config).toEqual(
+      presetConfig,
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      expect.objectContaining({ url: expect.stringMatching(/\/public\/complexity_router\/fuse_presets$/) }),
+    );
+  });
+
+  it.each([undefined, null, "Explicit override"])(
+    "copies effective text to Custom and clears only that reference, override=%s",
+    async (override) => {
+      const user = userEvent.setup();
+      renderWithProviders(
+        <Form initialValue={{ ...presetInitial, llm_v2_config: { ...presetConfig, efficient_profile: override } }} />,
+      );
+      const effectiveText = override ?? catalog.models[0].text;
+      await waitFor(() => expect(screen.getByLabelText("Efficient solver profile")).toHaveValue(effectiveText));
+      await user.click(screen.getByRole("combobox", { name: "Efficient solver profile preset" }));
+      await user.click(screen.getByRole("option", { name: "Custom", exact: true }));
+      expect(screen.getByLabelText("Efficient solver profile")).not.toHaveAttribute("readonly");
+      expect(screen.getByLabelText("Efficient solver profile")).toHaveValue(effectiveText);
+      fireEvent.change(screen.getByLabelText("Efficient solver profile"), { target: { value: "Custom budget" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+      const { efficient_profile_preset: _preset, ...rest } = presetConfig;
+      expect(
+        JSON.parse(screen.getByRole("status", { name: "Saved configuration" }).textContent!).llm_v2_config,
+      ).toEqual({
+        ...rest,
+        efficient_profile: "Custom budget",
+      });
+    },
+  );
+
+  it.each([
+    { ...fuseInitial.llm_v2_config!, efficient_profile: catalog.models[0].text },
+    {
+      ...presetConfig,
+      efficient_profile: "Explicit override",
+      capable_profile: "Capable override",
+      harness: "Harness override",
+    },
+  ])("keeps existing custom ownership and references on an unchanged save: %j", async (settings) => {
+    renderWithProviders(<Form initialValue={{ ...fuseInitial, llm_v2_config: settings }} />);
+    await waitFor(() => expect(screen.queryByText(/Loading profile presets/)).not.toBeInTheDocument());
+    expect(screen.getByRole("combobox", { name: "Efficient solver profile preset" })).toHaveValue("Custom");
+    expect(screen.getByLabelText("Efficient solver profile")).toHaveValue(settings.efficient_profile);
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    expect(JSON.parse(screen.getByRole("status", { name: "Saved configuration" }).textContent!).llm_v2_config).toEqual(
+      settings,
+    );
+  });
+
+  it.each([true, false])(
+    "keeps edits and stored IDs while the pending catalog settles, success=%s",
+    async (success) => {
+      let resolveCatalog: (response: Response) => void = () => {};
+      vi.mocked(fetch).mockReturnValue(
+        new Promise<Response>((resolve) => {
+          resolveCatalog = resolve;
+        }),
+      );
+      const settings = { ...presetConfig, efficient_profile: "Original override" };
+      renderWithProviders(<Form initialValue={{ ...fuseInitial, llm_v2_config: settings }} />);
+      expect(screen.getByText(/Loading profile presets/)).toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText("Efficient solver profile"), { target: { value: "Typed while loading" } });
+      await act(async () =>
+        resolveCatalog(success ? Response.json(catalog) : Response.json({ error: "unavailable" }, { status: 503 })),
+      );
+      if (success) await screen.findAllByText(`Catalog version: ${catalog.version}`);
+      else expect(await screen.findByText(/Profile presets could not be loaded/)).toBeInTheDocument();
+      expect(screen.getByLabelText("Efficient solver profile")).toHaveValue("Typed while loading");
+      fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+      expect(
+        JSON.parse(screen.getByRole("status", { name: "Saved configuration" }).textContent!).llm_v2_config,
+      ).toEqual({ ...settings, efficient_profile: "Typed while loading" });
+    },
+  );
+
+  it("keeps unknown saved IDs visible with unavailable previews rather than replacing them", async () => {
+    const settings = { ...presetConfig, efficient_profile_preset: "unavailable-v8" };
+    renderWithProviders(<Form initialValue={{ ...fuseInitial, llm_v2_config: settings }} />);
+    await screen.findAllByText(`Catalog version: ${catalog.version}`);
+    expect(screen.getByRole("combobox", { name: "Efficient solver profile preset" })).toHaveValue("unavailable-v8");
+    expect(screen.getByText("Preset preview unavailable. The saved reference is preserved")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    expect(JSON.parse(screen.getByRole("status", { name: "Saved configuration" }).textContent!).llm_v2_config).toEqual(
+      settings,
+    );
+  });
+
   it("switches a populated standard router to Capability without saving hidden pools or their overrides", () => {
     renderWithProviders(
       <Form
