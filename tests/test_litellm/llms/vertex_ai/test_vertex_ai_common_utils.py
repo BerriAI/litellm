@@ -1150,10 +1150,6 @@ def test_get_token_url():
     vertex_ai_location = "us-central1"
     vertex_credentials = ""
 
-    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
-        optional_params={"cached_content": "hi"}
-    )
-
     _, url = vertex_llm._get_token_and_url(
         auth_header=None,
         vertex_project=vertex_ai_project,
@@ -1161,7 +1157,7 @@ def test_get_token_url():
         vertex_credentials=vertex_credentials,
         gemini_api_key="",
         custom_llm_provider="vertex_ai_beta",
-        should_use_v1beta1_features=should_use_v1beta1_features,
+        should_use_v1beta1_features=False,
         api_base=None,
         model="",
         stream=False,
@@ -1169,10 +1165,6 @@ def test_get_token_url():
 
     print("url=", url)
 
-    should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
-        optional_params={"temperature": 0.1}
-    )
-
     _, url = vertex_llm._get_token_and_url(
         auth_header=None,
         vertex_project=vertex_ai_project,
@@ -1180,7 +1172,7 @@ def test_get_token_url():
         vertex_credentials=vertex_credentials,
         gemini_api_key="",
         custom_llm_provider="vertex_ai_beta",
-        should_use_v1beta1_features=should_use_v1beta1_features,
+        should_use_v1beta1_features=False,
         api_base=None,
         model="",
         stream=False,
