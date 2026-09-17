@@ -49,55 +49,21 @@ class GunzipRequestMiddleware:
             await self.app(scope, receive, send)
             return
 
-        chunks: list[bytes] = []
-        while True:
-            message = await receive()
-            if message["type"] == "http.request":
-                chunks.append(message.get("body", b""))
-                if not message.get("more_body", False):
-                    break
-            elif message["type"] == "http.disconnect":
-                return
+        compressed = await self._read_body(receive)
+        if compressed is None:
+            return
 
-        compressed = b"".join(chunks)
         if not compressed:
-            response = PlainTextResponse("Empty gzip-encoded request body", status_code=400)
-            await response(scope, receive, send)
+            await self._send_error(scope, receive, send, "Empty gzip-encoded request body", 400)
             return
 
-        decompressor = zlib.decompressobj(wbits=zlib.MAX_WBITS | 16)
-        decompressed_chunks: list[bytes] = []
-        total_decompressed = 0
-        offset = 0
-        chunk_size = 65536
-        try:
-            while offset < len(compressed):
-                end = min(offset + chunk_size, len(compressed))
-                decompressed = decompressor.decompress(compressed[offset:end])
-                total_decompressed += len(decompressed)
-                if total_decompressed > MAX_DECOMPRESSED_SIZE:
-                    response = PlainTextResponse("Decompressed request body exceeds size limit", status_code=413)
-                    await response(scope, receive, send)
-                    return
-                decompressed_chunks.append(decompressed)
-                offset = end
-            tail = decompressor.flush()
-            total_decompressed += len(tail)
-            if total_decompressed > MAX_DECOMPRESSED_SIZE:
-                response = PlainTextResponse("Decompressed request body exceeds size limit", status_code=413)
-                await response(scope, receive, send)
-                return
-            decompressed_chunks.append(tail)
-            if not decompressor.eof:
-                response = PlainTextResponse("Invalid gzip-encoded request body", status_code=400)
-                await response(scope, receive, send)
-                return
-        except (OSError, EOFError, zlib.error):
-            response = PlainTextResponse("Invalid gzip-encoded request body", status_code=400)
-            await response(scope, receive, send)
+        body = self._decompress(compressed)
+        if body is None:
+            await self._send_error(scope, receive, send, "Invalid gzip-encoded request body", 400)
             return
-
-        body = b"".join(decompressed_chunks)
+        if body is False:
+            await self._send_error(scope, receive, send, "Decompressed request body exceeds size limit", 413)
+            return
 
         if "content-encoding" in headers:
             del headers["content-encoding"]
@@ -113,3 +79,48 @@ class GunzipRequestMiddleware:
             return await receive()
 
         await self.app(scope, receive_replaced, send)
+
+    @staticmethod
+    async def _read_body(receive: Receive) -> bytes | None:
+        chunks: list[bytes] = []
+        while True:
+            message = await receive()
+            if message["type"] == "http.request":
+                chunks.append(message.get("body", b""))
+                if not message.get("more_body", False):
+                    break
+            elif message["type"] == "http.disconnect":
+                return None
+        return b"".join(chunks)
+
+    @staticmethod
+    def _decompress(compressed: bytes) -> bytes | None | bool:
+        decompressor = zlib.decompressobj(wbits=zlib.MAX_WBITS | 16)
+        decompressed_chunks: list[bytes] = []
+        total_decompressed = 0
+        offset = 0
+        chunk_size = 65536
+        try:
+            while offset < len(compressed):
+                end = min(offset + chunk_size, len(compressed))
+                decompressed = decompressor.decompress(compressed[offset:end])
+                total_decompressed += len(decompressed)
+                if total_decompressed > MAX_DECOMPRESSED_SIZE:
+                    return False
+                decompressed_chunks.append(decompressed)
+                offset = end
+            tail = decompressor.flush()
+            total_decompressed += len(tail)
+            if total_decompressed > MAX_DECOMPRESSED_SIZE:
+                return False
+            decompressed_chunks.append(tail)
+            if not decompressor.eof:
+                return None
+        except (OSError, EOFError, zlib.error):
+            return None
+        return b"".join(decompressed_chunks)
+
+    @staticmethod
+    async def _send_error(scope: Scope, receive: Receive, send: Send, message: str, status: int) -> None:
+        response = PlainTextResponse(message, status_code=status)
+        await response(scope, receive, send)
