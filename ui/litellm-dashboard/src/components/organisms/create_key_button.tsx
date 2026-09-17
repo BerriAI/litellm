@@ -740,7 +740,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             Create User
                           </Button>
                         </div>
-                        <div className="text-xs text-muted-foreground">Search by email to find users</div>
+                        <div className="text-xs text-muted-foreground">Search by email or user ID to find users</div>
                       </div>
                     )}
                   </MountedFormField>
