@@ -1479,9 +1479,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 model=model, custom_llm_provider=custom_llm_provider
             ):
                 verbose_logger.warning(
-                    f"Custom pricing for model='{model}' not registered: model already "
-                    f"has canonical pricing in litellm.model_cost. Per-request rates "
-                    f"will be applied via cost threading for this request only."
+                    "Custom pricing not registered: model already has canonical pricing "
+                    "in litellm.model_cost. Per-request rates apply to this request only."
                 )
             else:
                 litellm.register_model(

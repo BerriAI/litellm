@@ -15,8 +15,11 @@ Bug 2 - per-request custom pricing must apply to that request only and must
         by all other traffic.
 """
 
+import json
 import os
 import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 
 import pytest
 
@@ -132,33 +135,16 @@ def test_extract_from_top_level_litellm_params():
     assert result == {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
 
 
-def test_extract_from_metadata_model_info():
-    litellm_params = {
-        "metadata": {
-            "model_info": {
-                "input_cost_per_token": 1e-06,
-                "output_cost_per_token": 2e-06,
-            }
-        }
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata", "model_info"])
+def test_extract_ignores_caller_model_info(metadata_key):
+    costs = {
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        "input_cost_per_second": 0,
     }
-    result = extract_custom_cost_per_token(litellm_params)
-    assert result == {
-        "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 2e-06,
-    }
-
-
-def test_extract_from_litellm_metadata_model_info():
-    litellm_params = {
-        "litellm_metadata": {
-            "model_info": {
-                "input_cost_per_token": 0,
-                "output_cost_per_token": 0,
-            }
-        }
-    }
-    result = extract_custom_cost_per_token(litellm_params)
-    assert result == {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+    nested = costs if metadata_key == "model_info" else {"model_info": costs}
+    assert extract_custom_cost_per_token({metadata_key: nested}) is None
+    assert extract_custom_cost_per_second({metadata_key: nested}) is None
 
 
 def test_extract_includes_cache_rates_when_present():
@@ -202,8 +188,8 @@ def test_extract_custom_cost_per_second_zero():
     assert result == 0.0
 
 
-def test_extract_custom_cost_per_second_skips_model_info_without_deployment_flag():
-    """Top-level model_info must be ignored when _model_info_from_deployment is False.
+def test_extract_custom_cost_per_second_ignores_untrusted_model_info():
+    """Top-level model_info is caller-controlled and must not supply request prices.
 
     This prevents proxy clients from injecting ``model_info: {input_cost_per_second: 0}``
     to bypass spend tracking for per-second priced deployments."""
@@ -211,21 +197,6 @@ def test_extract_custom_cost_per_second_skips_model_info_without_deployment_flag
         {"model_info": {"input_cost_per_second": 0.01}}
     )
     assert result is None
-
-
-def test_extract_custom_cost_per_second_from_model_info_with_flag():
-    result = extract_custom_cost_per_second(
-        {"model_info": {"input_cost_per_second": 0.01}},
-        _model_info_from_deployment=True,
-    )
-    assert result == 0.01
-
-
-def test_extract_custom_cost_per_second_from_metadata():
-    result = extract_custom_cost_per_second(
-        {"metadata": {"model_info": {"input_cost_per_second": 0.02}}}
-    )
-    assert result == 0.02
 
 
 def test_extract_custom_cost_per_second_absent():
@@ -236,8 +207,8 @@ def test_extract_custom_cost_per_second_absent():
 # ---------------------------------------------------------------------------
 # extract_custom_cost_per_token — security gate
 # ---------------------------------------------------------------------------
-def test_extract_skips_model_info_without_deployment_flag():
-    """Top-level model_info must be ignored when _model_info_from_deployment is False.
+def test_extract_ignores_untrusted_model_info():
+    """Top-level model_info is caller-controlled and must not supply request prices.
 
     This prevents proxy clients from injecting ``model_info: {input_cost_per_token: 0,
     output_cost_per_token: 0}`` to bypass spend tracking."""
@@ -249,22 +220,6 @@ def test_extract_skips_model_info_without_deployment_flag():
     }
     result = extract_custom_cost_per_token(litellm_params)
     assert result is None
-
-
-def test_extract_uses_model_info_with_deployment_flag():
-    litellm_params = {
-        "model_info": {
-            "input_cost_per_token": 1e-06,
-            "output_cost_per_token": 2e-06,
-        }
-    }
-    result = extract_custom_cost_per_token(
-        litellm_params, _model_info_from_deployment=True
-    )
-    assert result == {
-        "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 2e-06,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -297,51 +252,156 @@ def test_response_cost_calculator_honors_custom_cost_per_second():
 # ---------------------------------------------------------------------------
 # Bug 2 - per-request pricing must not poison the canonical model_cost entry
 # ---------------------------------------------------------------------------
-def test_per_request_custom_pricing_does_not_poison_canonical_entry():
-    """A single zero-priced request must not re-price the shared model entry.
+@pytest.fixture
+def pricing_provider():
+    class PricingHandler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            body = json.dumps(
+                {
+                    "id": "chatcmpl-pricing",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": request["model"],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 50,
+                        "total_tokens": 150,
+                    },
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
-    Verifies both:
-    - The request itself is billed at the custom (zero) rate.
-    - The canonical ``litellm.model_cost`` entry is left unchanged
-      for all other traffic.
-    """
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), PricingHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_per_request_custom_pricing_does_not_poison_canonical_entry(pricing_provider):
     model = "gpt-4o"
-    assert model in litellm.model_cost
-    canonical_input_cost_before = litellm.model_cost[model]["input_cost_per_token"]
-    canonical_output_cost_before = litellm.model_cost[model]["output_cost_per_token"]
-    assert canonical_input_cost_before > 0
+    canonical_before = litellm.model_cost[model].copy()
+    request = {
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_base": pricing_provider,
+        "api_key": "fixture-key",
+    }
+    custom_response = litellm.completion(
+        **request, input_cost_per_token=0, output_cost_per_token=0
+    )
+    assert custom_response.usage.total_tokens == 150
+    assert custom_response._hidden_params["response_cost"] == 0.0
+    assert litellm.model_cost[model] == canonical_before
 
+    standard_response = litellm.completion(**request)
+    expected = (
+        100 * canonical_before["input_cost_per_token"]
+        + 50 * canonical_before["output_cost_per_token"]
+    )
+    assert expected > 0
+    assert standard_response._hidden_params["response_cost"] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("pricing_source", ["litellm_params", "model_info"])
+def test_router_custom_pricing_survives_cost_map_reload(
+    pricing_provider, monkeypatch, pricing_source
+):
+    canonical_before = litellm.model_cost["gpt-4o"].copy()
+    deployment = {
+        "model_name": "byok",
+        "litellm_params": {
+            "model": "openai/gpt-4o",
+            "api_base": pricing_provider,
+            "api_key": "fixture-key",
+        },
+        "model_info": {"id": "byok-deployment"},
+    }
+    deployment[pricing_source].update(
+        {"input_cost_per_token": 0, "output_cost_per_token": 0}
+    )
+    router = litellm.Router(model_list=[deployment])
+    monkeypatch.setattr(litellm, "model_cost", {"gpt-4o": canonical_before})
+    response = router.completion(
+        model="byok", messages=[{"role": "user", "content": "hi"}]
+    )
+    assert response.usage.total_tokens == 150
+    assert response._hidden_params["response_cost"] == 0.0
+    assert litellm.model_cost["gpt-4o"] == canonical_before
+
+
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+def test_request_metadata_cannot_override_pricing(pricing_provider, metadata_key):
+    canonical = litellm.model_cost["gpt-4o"]
     response = litellm.completion(
-        model=model,
+        model="gpt-4o",
         messages=[{"role": "user", "content": "hi"}],
-        mock_response="ok",
+        api_base=pricing_provider,
+        api_key="fixture-key",
+        **{
+            metadata_key: {
+                "model_info": {
+                    "id": "client-deployment",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                }
+            }
+        },
+    )
+    expected = (
+        100 * canonical["input_cost_per_token"]
+        + 50 * canonical["output_cost_per_token"]
+    )
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)
+
+
+def test_custom_pricing_warning_does_not_emit_model_line_breaks(
+    pricing_provider, monkeypatch, caplog
+):
+    model = "custom-model\nFORGED_LOG_ENTRY"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            **litellm.model_cost["gpt-4o"],
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    response = litellm.completion(
+        model=f"openai/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base=pricing_provider,
+        api_key="fixture-key",
         input_cost_per_token=0,
         output_cost_per_token=0,
     )
-
-    # The canonical entry must not be mutated.
-    assert (
-        litellm.model_cost[model]["input_cost_per_token"] == canonical_input_cost_before
+    assert response._hidden_params["response_cost"] == 0
+    pricing_warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if "canonical pricing" in record.getMessage()
+    ]
+    assert pricing_warnings
+    assert all(
+        "\n" not in message and "\r" not in message for message in pricing_warnings
     )
-    assert (
-        litellm.model_cost[model]["output_cost_per_token"]
-        == canonical_output_cost_before
-    )
-
-    # The per-request cost must also be calculated with the custom rates.
-    # Verify via the cost calculator directly (mock_response bypasses the
-    # normal cost-calculation path, so the response object may not carry
-    # cost metadata).
-    cost = litellm.response_cost_calculator(
-        response_object=response,
-        model=model,
-        custom_llm_provider="openai",
-        call_type="completion",
-        optional_params={},
-        custom_pricing=True,
-        custom_cost_per_token={
-            "input_cost_per_token": 0.0,
-            "output_cost_per_token": 0.0,
-        },
-    )
-    assert cost == 0.0

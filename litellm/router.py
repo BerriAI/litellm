@@ -3172,6 +3172,13 @@ class Router:
 
         kwargs["model_info"] = model_info
 
+        for field in CustomPricingLiteLLMParams.model_fields:
+            deployment_rate = deployment["litellm_params"].get(field)
+            if deployment_rate is None:
+                deployment_rate = model_info.get(field)
+            if deployment_rate is not None and kwargs.get(field) is None:
+                kwargs[field] = deployment_rate
+
         kwargs["timeout"] = self._get_timeout(
             kwargs=kwargs, data=deployment["litellm_params"]
         )
