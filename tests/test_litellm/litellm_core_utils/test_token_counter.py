@@ -102,7 +102,7 @@ def test_token_counter_default_encoding_matches_cl100k():
     encoding: Final = tiktoken.get_encoding("cl100k_base")
     expected: Final = len(encoding.encode("hello world", disallowed_special=()))
 
-    assert token_counter_new(model="", text="hello world") == expected
+    assert token_counter_new(model=None, text="hello world") == expected
 
 
 def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
