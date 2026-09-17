@@ -446,6 +446,8 @@ async def test_add_new_member_creates_new_budget_when_max_budget_provided():
     1. When max_budget_in_team is provided
     2. A new budget is created in the litellm_budgettable
     3. The new budget_id is used for the team membership
+    4. The upsert's update branch stays empty, so a bulk /team/member_add that names a member
+       already on the team does not replace the budget_id (and the spend) their existing row carries
     """
     from litellm.proxy._types import LitellmUserRoles
 
@@ -529,6 +531,7 @@ async def test_add_new_member_creates_new_budget_when_max_budget_provided():
     assert team_membership_call_args is not None
     create_data = team_membership_call_args.kwargs["data"]["create"]
     assert create_data["budget_id"] == test_new_budget_id
+    assert team_membership_call_args.kwargs["data"]["update"] == {}
 
 
 @pytest.mark.asyncio

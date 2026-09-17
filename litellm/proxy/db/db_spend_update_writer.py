@@ -188,17 +188,17 @@ SET spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend,
 
 
 async def _write_team_member_spend(transaction: _SpendTransaction, spend_by_member_key: Mapping[str, float]) -> None:
-    # key is "team_id::<value>::user_id::<value>"; the string sort orders rows by (team_id, user_id),
-    # keeping lock order consistent across pods to prevent deadlocks
-    keys: Final = tuple(sorted(spend_by_member_key))
-    team_ids: Final = [key.split("::")[1] for key in keys]
+    # key is "team_id::<value>::user_id::<value>"; rows are sorted by (team_id, user_id) so the teams are
+    # locked in the same `sorted(team_ids)` order the team endpoints use, preventing deadlocks
+    rows: Final = sorted((key.split("::")[1], key.split("::")[3], cost) for key, cost in spend_by_member_key.items())
+    team_ids: Final = [team_id for team_id, _user_id, _cost in rows]
     for team_id in dict.fromkeys(team_ids):
         _ = await transaction.execute_raw(_TEAM_ADVISORY_LOCK_SQL, team_id)
     _ = await transaction.execute_raw(
         _TEAM_MEMBER_SPEND_SQL,
-        [key.split("::")[3] for key in keys],
+        [user_id for _team_id, user_id, _cost in rows],
         team_ids,
-        [spend_by_member_key[key] for key in keys],
+        [cost for _team_id, _user_id, cost in rows],
     )
 
 

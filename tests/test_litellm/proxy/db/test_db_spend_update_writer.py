@@ -992,8 +992,9 @@ async def test_commit_spend_updates_to_db_orders_team_member_rows_by_team_then_u
     """
     The member spend statement touches rows in the order of its input arrays, so the batch
     is handed over sorted by (team_id, user_id), with each cost kept next to its member, and
-    each distinct team is locked once, in that same order, so concurrent pods lock in the
-    same order and cannot deadlock.
+    each distinct team is locked once, in `sorted(team_ids)` order, the order /team/delete
+    locks in, so a concurrent flush and delete cannot deadlock. `eng` and `eng2` pin that:
+    sorting the composite keys instead would lock `eng2` first because `2` < `:`.
     """
     db_writer = DBSpendUpdateWriter()
     mock_transaction, mock_prisma_client = _team_member_flush_fixtures()
@@ -1007,10 +1008,10 @@ async def test_commit_spend_updates_to_db_orders_team_member_rows_by_team_then_u
         proxy_logging_obj=mock_proxy_logging,
         db_spend_update_transactions=_team_member_only_transactions(
             {
-                "team_id::team_c::user_id::user_x": 0.1,
-                "team_id::team_a::user_id::user_y": 0.2,
-                "team_id::team_a::user_id::user_x": 0.3,
-                "team_id::team_b::user_id::user_x": 0.4,
+                "team_id::eng2::user_id::user_x": 0.1,
+                "team_id::eng::user_id::user_y": 0.2,
+                "team_id::eng::user_id::user_x": 0.3,
+                "team_id::eng-b::user_id::user_x": 0.4,
             }
         ),
     )
@@ -1018,15 +1019,15 @@ async def test_commit_spend_updates_to_db_orders_team_member_rows_by_team_then_u
     *lock_calls, spend_call = mock_transaction.execute_raw.await_args_list
     _statement, user_ids, team_ids, costs = spend_call.args
     assert [lock_call.args for lock_call in lock_calls] == [
-        (_TEAM_ADVISORY_LOCK_SQL, "team_a"),
-        (_TEAM_ADVISORY_LOCK_SQL, "team_b"),
-        (_TEAM_ADVISORY_LOCK_SQL, "team_c"),
+        (_TEAM_ADVISORY_LOCK_SQL, "eng"),
+        (_TEAM_ADVISORY_LOCK_SQL, "eng-b"),
+        (_TEAM_ADVISORY_LOCK_SQL, "eng2"),
     ]
     assert list(zip(team_ids, user_ids, costs)) == [
-        ("team_a", "user_x", 0.3),
-        ("team_a", "user_y", 0.2),
-        ("team_b", "user_x", 0.4),
-        ("team_c", "user_x", 0.1),
+        ("eng", "user_x", 0.3),
+        ("eng", "user_y", 0.2),
+        ("eng-b", "user_x", 0.4),
+        ("eng2", "user_x", 0.1),
     ]
 
 
