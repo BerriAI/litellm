@@ -12,15 +12,23 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 
 import NumericalInput from "../shared/numerical_input";
 import {
+  TEAM_ADMIN_SETTINGS_FIELDS,
   teamAdminFieldLabel,
   teamAdminSettingsChanges,
   type TeamAdminSettingsChanges,
+  type TeamAdminSettingsField,
   type TeamAdminSettingsValues,
 } from "./teamAdminEditAccess";
 
+const numericInputSchema = z.union([z.string(), z.number()]).nullish();
+
 const teamAdminSettingsSchema = z.object({
-  tpm_limit: z.union([z.string(), z.number()]).nullish(),
+  tpm_limit: numericInputSchema,
+  rpm_limit: numericInputSchema,
+  max_budget: numericInputSchema,
 });
+
+const INPUT_STEP: Readonly<Record<TeamAdminSettingsField, number>> = { tpm_limit: 1, rpm_limit: 1, max_budget: 0.01 };
 
 interface TeamAdminSettingsFormProps {
   initialValues: TeamAdminSettingsValues;
@@ -48,11 +56,13 @@ export default function TeamAdminSettingsForm({
         <p className="text-sm text-muted-foreground">
           A proxy admin chose which settings team admins can change. Ask a proxy admin to change anything else.
         </p>
-        {editableFields.has("tpm_limit") && (
-          <FormField control={form.control} name="tpm_limit" label={teamAdminFieldLabel("tpm_limit")}>
-            {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
+        {TEAM_ADMIN_SETTINGS_FIELDS.filter((name) => editableFields.has(name)).map((name) => (
+          <FormField key={name} control={form.control} name={name} label={teamAdminFieldLabel(name)}>
+            {({ ref, value, ...field }) => (
+              <NumericalInput {...field} ref={ref} value={value ?? ""} step={INPUT_STEP[name]} />
+            )}
           </FormField>
-        )}
+        ))}
       </FieldGroup>
 
       <div className="mt-6 flex items-center justify-end gap-2">
