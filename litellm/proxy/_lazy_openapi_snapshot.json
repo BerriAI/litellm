@@ -3004,28 +3004,6 @@
           "title": "AgentSkill",
           "type": "object"
         },
-        "AgentTeamAssignment": {
-          "additionalProperties": false,
-          "properties": {
-            "team_id": {
-              "anyOf": [
-                {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Team Id"
-            }
-          },
-          "required": [
-            "team_id"
-          ],
-          "title": "AgentTeamAssignment",
-          "type": "object"
-        },
         "BreakdownMetrics": {
           "description": "Breakdown of spend by different dimensions",
           "properties": {
@@ -4456,63 +4434,6 @@
             }
           ],
           "summary": "Make Agent Public",
-          "tags": [
-            "agents"
-          ]
-        }
-      },
-      "/v1/agents/{agent_id}/team": {
-        "put": {
-          "operationId": "assign_agent_team_v1_agents__agent_id__team_put",
-          "parameters": [
-            {
-              "in": "path",
-              "name": "agent_id",
-              "required": true,
-              "schema": {
-                "title": "Agent Id",
-                "type": "string"
-              }
-            }
-          ],
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentTeamAssignment"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/AgentResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Assign Agent Team",
           "tags": [
             "agents"
           ]

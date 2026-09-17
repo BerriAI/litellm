@@ -331,18 +331,6 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
             <DetailList>
               <DetailItem label="Agent ID">{agent.agent_id}</DetailItem>
               <DetailItem label="Agent Name">{agent.agent_name}</DetailItem>
-              <DetailItem label="Team">
-                {typeof agent.litellm_params?.team_id === "string" ? (
-                  <a
-                    className="underline"
-                    href={`/ui/?page=teams&team=${encodeURIComponent(agent.litellm_params.team_id)}`}
-                  >
-                    {agent.litellm_params.team_id}
-                  </a>
-                ) : (
-                  "Unassigned. Add this agent under Teams > Agents to apply team controls."
-                )}
-              </DetailItem>
               <DetailItem label="Display Name">{agent.agent_card_params?.name || "-"}</DetailItem>
               <DetailItem label="Description">{agent.agent_card_params?.description || "-"}</DetailItem>
               <DetailItem label="URL">{agent.agent_card_params?.url || "-"}</DetailItem>

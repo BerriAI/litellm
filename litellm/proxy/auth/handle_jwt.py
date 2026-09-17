@@ -15,7 +15,6 @@ import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
@@ -55,7 +54,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints.identity import agent_identity, identity_evidence_key, match_agent_identity
-from litellm.proxy.agent_endpoints.team_membership import assigned_agent_team
 from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.auth.model_access_denied import (
     ModelAccessDeniedHTTPException,
@@ -1646,7 +1644,7 @@ class JWTAuthManager:
 
     @staticmethod
     async def find_team_with_model_access(
-        team_ids: AbstractSet[str],
+        team_ids: set[str],
         requested_model: str | None,
         route: str,
         jwt_handler: JWTHandler,
@@ -1885,7 +1883,7 @@ class JWTAuthManager:
     @staticmethod
     def get_team_id_from_header(
         request_headers: dict | None,
-        allowed_team_ids: AbstractSet[str],
+        allowed_team_ids: set[str],
         fallback_to_db_teams: bool = False,
     ) -> str | None:
         """
@@ -2456,25 +2454,17 @@ class JWTAuthManager:
             agent_registry=handler.agent_lookup,
         )
 
-        assigned_team_id: Final = await assigned_agent_team(
-            handler.agent_lookup.get_agent_by_id(agent_id) if agent_id else None, prisma_client
-        )
-
         # Check admin access
-        admin_result: Final = (
-            None
-            if assigned_team_id
-            else await JWTAuthManager.check_admin_access(
-                handler,
-                scopes,
-                route,
-                user_id,
-                org_id,
-                api_key,
-                jwt_valid_token,
-                user_email=user_email,
-                agent_id=agent_id,
-            )
+        admin_result: Final = await JWTAuthManager.check_admin_access(
+            handler,
+            scopes,
+            route,
+            user_id,
+            org_id,
+            api_key,
+            jwt_valid_token,
+            user_email=user_email,
+            agent_id=agent_id,
         )
         if admin_result:
             await JWTAuthManager._attach_team_from_header_for_admin(
@@ -2497,12 +2487,8 @@ class JWTAuthManager:
 
         # Get team with model access
         ## Check if team_id is specified via x-litellm-team-id header
-        claim_team_ids: Final = (
-            frozenset((assigned_team_id,))
-            if assigned_team_id
-            else JWTAuthManager.get_all_team_ids(handler, jwt_valid_token)
-        )
-        specific_team_id: Final = assigned_team_id or handler.get_team_id(token=jwt_valid_token, default_value=None)
+        all_team_ids: Final = JWTAuthManager.get_all_team_ids(handler, jwt_valid_token)
+        specific_team_id: Final = handler.get_team_id(token=jwt_valid_token, default_value=None)
 
         # The DB fallback only applies when the token carries no team identity at
         # all. `get_all_jwt_team_ids` ignores `team_id_default` so a configured
@@ -2512,32 +2498,20 @@ class JWTAuthManager:
         # the RBAC team-role path (which already set `team_id`); otherwise a
         # provisional x-litellm-team-id header could override an RBAC-asserted team.
         db_team_fallback: Final = (
-            assigned_team_id is None
-            and handler.litellm_jwtauth.fallback_to_db_teams
+            handler.litellm_jwtauth.fallback_to_db_teams
             and not handler.get_all_jwt_team_ids(token=jwt_valid_token)
             and not handler.get_team_alias(token=jwt_valid_token, default_value=None)
             and team_id is None
         )
-        all_team_ids: Final = (
-            claim_team_ids.union((specific_team_id,)) if specific_team_id and not db_team_fallback else claim_team_ids
-        )
+        if specific_team_id and not db_team_fallback:
+            all_team_ids.add(specific_team_id)
 
         header_team_id: Final = JWTAuthManager.get_team_id_from_header(
             request_headers=request_headers,
             allowed_team_ids=all_team_ids,
             fallback_to_db_teams=db_team_fallback,
         )
-        if assigned_team_id:
-            team_id = assigned_team_id
-            team_object = await get_team_object(
-                team_id=assigned_team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                team_id_upsert=False,
-            )
-        elif header_team_id:
+        if header_team_id:
             team_id = header_team_id
             # A provisional header team (accepted only because the JWT carries no
             # team claims) is validated against DB membership further down; never

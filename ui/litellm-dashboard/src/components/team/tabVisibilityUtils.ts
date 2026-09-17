@@ -8,7 +8,6 @@ export const TEAM_INFO_TAB_KEYS = {
   MY_USER: "my-user",
   VIRTUAL_KEYS: "virtual-keys",
   MEMBERS: "members",
-  AGENTS: "agents",
   MEMBER_PERMISSIONS: "member-permissions",
   SETTINGS: "settings",
 } as const;
@@ -18,7 +17,6 @@ export const TEAM_INFO_TAB_LABELS: Record<string, string> = {
   [TEAM_INFO_TAB_KEYS.MY_USER]: "My User",
   [TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]: "Virtual Keys",
   [TEAM_INFO_TAB_KEYS.MEMBERS]: "Members",
-  [TEAM_INFO_TAB_KEYS.AGENTS]: "Agents",
   [TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS]: "Member Permissions",
   [TEAM_INFO_TAB_KEYS.SETTINGS]: "Settings",
 };
@@ -34,7 +32,6 @@ export function getTeamInfoVisibleTabs(canEditTeam: boolean): readonly string[] 
     return [
       ...baseTabs,
       TEAM_INFO_TAB_KEYS.MEMBERS,
-      TEAM_INFO_TAB_KEYS.AGENTS,
       TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS,
       TEAM_INFO_TAB_KEYS.SETTINGS,
     ];

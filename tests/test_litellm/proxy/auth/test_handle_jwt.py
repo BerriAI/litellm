@@ -7126,7 +7126,6 @@ async def test_admin_jwt_team_header_only_provisions_during_admission(monkeypatc
     handler.litellm_jwtauth.admin_allowed_routes = ["openai_routes"]
     database = MagicMock()
     database.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
-    database.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
     create_team = AsyncMock(return_value=LiteLLM_TeamTable(team_id="new-team").model_dump())
     monkeypatch.setattr(team_endpoints, "new_team", create_team)
     resolve = JWTAuthManager.auth_builder if admission else JWTAuthManager.authorize_jwt
@@ -7198,48 +7197,3 @@ def test_explicit_entra_identity_cannot_be_claimed_via_legacy_lookup(override: M
         }, registry)
     assert failure.value.status_code == 403
     assert handler.user_api_key_cache.get_cache(identity_evidence_key(registry.get_agent_list()[0])) is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("admin_scope", [False, True])
-async def test_agent_team_assignment_overrides_claim_team_and_admin_scope(monkeypatch, admin_scope: bool) -> None:
-    handler, token = _entra_signed_app_token(monkeypatch, azp="canonical-agent-id", scope=LiteLLM_JWTAuth().admin_jwt_scope if admin_scope else "")
-    registry: Final = _entra_agent_registry()
-    agent: Final = registry.get_agent_by_id("canonical-agent-id")
-    registry.deregister_agent(agent_name=agent.agent_name)
-    registry.register_agent(agent.model_copy(update={"litellm_params": {"team_id": "assigned-team"}}))
-    handler.bind_agent_lookup(registry)
-    handler.litellm_jwtauth.team_id_jwt_field = "azp"
-    team: Final = LiteLLM_TeamTable(team_id="assigned-team", models=["all-proxy-models"])
-    database: Final = MagicMock()
-    database.db.litellm_agentstable.find_unique = AsyncMock(return_value=registry.get_agent_by_id("canonical-agent-id"))
-    database.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
-    result: Final = await JWTAuthManager.auth_builder(
-        api_key=token, jwt_handler=handler, request_data={"model": "demo-model"},
-        general_settings={"enforce_rbac": False}, route="/chat/completions", prisma_client=database,
-        user_api_key_cache=DualCache(), parent_otel_span=None, proxy_logging_obj=None,
-    )
-    assert result["agent_id"] == "canonical-agent-id"
-    assert result["team_id"] == "assigned-team"
-    assert result["is_proxy_admin"] is False
-    database.db.litellm_teamtable.find_unique.assert_awaited_once()
-    database.db.litellm_teamtable.create.assert_not_called()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("removed", [False, True])
-async def test_agent_cannot_override_assigned_team_or_reuse_removed_membership(monkeypatch, removed: bool) -> None:
-    handler, token = _entra_signed_app_token(monkeypatch, azp="canonical-agent-id", scope="")
-    registry: Final = _entra_agent_registry()
-    agent: Final = registry.get_agent_by_id("canonical-agent-id")
-    registry.deregister_agent(agent_name=agent.agent_name)
-    registry.register_agent(agent.model_copy(update={"litellm_params": {"team_id": None if removed else "assigned-team"}}))
-    handler.bind_agent_lookup(registry)
-    handler.litellm_jwtauth.team_id_jwt_field = "azp"
-    with pytest.raises(HTTPException) as failure:
-        await JWTAuthManager.auth_builder(
-            api_key=token, jwt_handler=handler, request_data={}, general_settings={"enforce_rbac": False},
-            route="/chat/completions", prisma_client=None, user_api_key_cache=DualCache(),
-            parent_otel_span=None, proxy_logging_obj=None, request_headers={"x-litellm-team-id": "other-team"},
-        )
-    assert failure.value.status_code == 403

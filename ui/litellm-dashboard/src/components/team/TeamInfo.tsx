@@ -117,7 +117,6 @@ import {
   TEAM_INFO_TAB_LABELS,
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
-import TeamAgentsTab from "./TeamAgentsTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
@@ -1355,11 +1354,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       ),
     },
     {
-      key: TEAM_INFO_TAB_KEYS.AGENTS,
-      label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.AGENTS],
-      children: <TeamAgentsTab teamId={teamId} accessToken={accessToken} canManage={is_proxy_admin} />,
-    },
-    {
       key: TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS,
       label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS],
       children: <MemberPermissions teamId={teamId} accessToken={accessToken} canEditTeam={canEditTeam} />,
@@ -1893,17 +1887,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     />
                   </div>
 
-                  <FormField
-                    control={form.control}
-                    name="agents_and_groups"
-                    label="Allowed agents to call / Access Groups"
-                  >
+                  <FormField control={form.control} name="agents_and_groups" label="Agents / Access Groups">
                     {({ value, onChange }) => (
                       <AgentSelector
                         onChange={onChange}
                         value={value}
                         accessToken={accessToken || ""}
-                        placeholder="Select agents this team can call (optional)"
+                        placeholder="Select agents or access groups (optional)"
                       />
                     )}
                   </FormField>

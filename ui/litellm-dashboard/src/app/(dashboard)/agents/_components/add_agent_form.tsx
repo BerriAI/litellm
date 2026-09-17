@@ -396,7 +396,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
       const selectedTeamId = values.team_id || null;
       if (selectedTeamId) {
-        agentData.litellm_params = { ...agentData.litellm_params, team_id: selectedTeamId };
+        agentData.team_id = selectedTeamId;
       }
 
       const agentResponse = await createAgentCall(accessToken, agentData);
@@ -894,7 +894,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           name="team_id"
           label={labelWithHint(
             "Assign to Team",
-            "Assign this agent to a team to apply its controls. You can also do this later in Teams > Agents.",
+            "Optionally assign this agent to a team. The agent and its key will belong to the selected team.",
           )}
         >
           {({ value, onChange }) => (
@@ -1022,18 +1022,10 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           Key <span className="font-medium">{assignedKeyAlias}</span> has been assigned to this agent.
         </p>
       )}
-      {form.getValues("identity_provider") === "microsoft_entra" && !form.getValues("team_id") && (
-        <p className="mt-2 text-sm">
-          Next: open a team, select Agents, and add {createdAgentName}.{" "}
-          <a className="underline" href="/ui/?page=teams">
-            Open Teams
-          </a>
-        </p>
-      )}
       {!createdKeyValue && !assignedKeyAlias && keyAssignOption === "skip" && (
         <p className="mt-2 text-sm text-muted-foreground">
           {form.getValues("identity_provider") === "microsoft_entra"
-            ? "Microsoft Entra ID is configured. JWT requests require an assigned team."
+            ? "Microsoft Entra ID is configured. Send an authenticated agent request to verify the connection."
             : "No key assigned. You can create one from the Virtual Keys page."}
         </p>
       )}
