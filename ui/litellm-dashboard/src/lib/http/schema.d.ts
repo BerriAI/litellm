@@ -52186,7 +52186,10 @@ export interface operations {
     bulk_update_team_member_budgets_action_management_v1_teams__team_id__members_bulk_update_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
             path: {
                 team_id: string;
             };
