@@ -28800,13 +28800,18 @@ export interface components {
              */
             vault_cert_role?: string | null;
             /**
+             * Vault Login Namespace
+             * @description Namespace for AppRole and TLS cert login (X-Vault-Namespace header); falls back to vault_namespace
+             */
+            vault_login_namespace?: string | null;
+            /**
              * Vault Mount Name
              * @description KV engine mount name (default: secret)
              */
             vault_mount_name?: string | null;
             /**
              * Vault Namespace
-             * @description Vault namespace (for multi-tenant Vault, sent as X-Vault-Namespace header)
+             * @description Vault namespace used for both login and secret operations unless overridden below
              */
             vault_namespace?: string | null;
             /**
@@ -28814,6 +28819,11 @@ export interface components {
              * @description Optional path prefix for secrets (e.g., myapp -> secret/data/myapp/{secret_name})
              */
             vault_path_prefix?: string | null;
+            /**
+             * Vault Secret Namespace
+             * @description Namespace for secret reads and writes (URL path segment); falls back to vault_namespace
+             */
+            vault_secret_namespace?: string | null;
             /**
              * Vault Token
              * @description Token for Vault token-based authentication
