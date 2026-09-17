@@ -5818,6 +5818,7 @@ async def test_centralized_common_checks_backfills_org_id_from_team(key_org_id, 
         ("org-missing", None, None, None, None, "missing", False, False, "org-missing", None, (None, None, None)),
         ("org-db-failure-allowed", None, None, None, None, "db_failure", True, False, "org-db-failure-allowed", None, (None, None, None)),
         ("org-db-failure-denied", None, None, None, None, "db_failure", False, True, "org-db-failure-denied", None, (None, None, None)),
+        ("org-bad-row", None, None, None, None, "bad_row", False, False, "org-bad-row", None, (None, None, None)),
         ("org-nobudget", None, None, None, None, "no_budget", False, False, "org-nobudget", "acme-org", (None, None, None)),
     ],
 )
@@ -5895,10 +5896,12 @@ async def test_centralized_common_checks_inherits_org_identity(
             if lookup_mode == "missing":
                 mock_get_org_object.side_effect = OrganizationNotFoundError("x")
             elif lookup_mode == "db_failure":
-                mock_get_org_object.side_effect = RuntimeError("db unavailable")
+                mock_get_org_object.side_effect = ConnectionRefusedError("db unavailable")
+            elif lookup_mode == "bad_row":
+                mock_get_org_object.side_effect = ValueError("row failed validation")
 
             if expect_lookup_error:
-                with pytest.raises(RuntimeError, match="db unavailable"):
+                with pytest.raises(ConnectionRefusedError, match="db unavailable"):
                     await _run_centralized_common_checks(
                         user_api_key_auth_obj=token,
                         request=request,
@@ -5943,7 +5946,7 @@ async def test_centralized_common_checks_inherits_org_identity(
             mock_get_org_object.assert_awaited_once()
             assert mock_get_org_object.await_args.kwargs["org_id"] == expected_org_id
             assert mock_get_org_object.await_args.kwargs["include_budget_table"] is True
-            if lookup_mode not in {"missing", "db_failure"}:
+            if lookup_mode not in {"missing", "db_failure", "bad_row"}:
                 assert token.organization_metadata == {"model_rpm_limit": {"gpt-4o": 2}}
     finally:
         for k, v in originals.items():
