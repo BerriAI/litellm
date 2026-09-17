@@ -16332,6 +16332,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tinyfish/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tinyfish Proxy Route
+         * @description Pass-through for the TinyFish Agent API (goal-based web automation).
+         *
+         *     Forwarded endpoints:
+         *     - POST /v1/automation/run        — run to completion (blocking)
+         *     - POST /v1/automation/run-async  — submit a run, poll GET /v1/runs/{id} for the result
+         *     - POST /v1/automation/run-sse    — run with SSE progress events
+         *     - GET  /v1/runs/{id}             — run status / result
+         *     - POST /v1/runs/{id}/cancel      — cancel a run
+         *
+         *     Every other Agent API endpoint (vault, wallet, browser profiles, and the GET /v1/runs
+         *     listing, which would let any caller discover other callers' run ids) returns 403: all
+         *     proxy callers share one upstream key.
+         *
+         *     Credential lookup order:
+         *     1. passthrough_endpoint_router (config.yaml deployments with use_in_pass_through)
+         *     2. TINYFISH_API_KEY environment variable
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/tinyfish)
+         */
+        get: operations["tinyfish_proxy_route_tinyfish__endpoint__get"];
+        put?: never;
+        /**
+         * Tinyfish Proxy Route
+         * @description Pass-through for the TinyFish Agent API (goal-based web automation).
+         *
+         *     Forwarded endpoints:
+         *     - POST /v1/automation/run        — run to completion (blocking)
+         *     - POST /v1/automation/run-async  — submit a run, poll GET /v1/runs/{id} for the result
+         *     - POST /v1/automation/run-sse    — run with SSE progress events
+         *     - GET  /v1/runs/{id}             — run status / result
+         *     - POST /v1/runs/{id}/cancel      — cancel a run
+         *
+         *     Every other Agent API endpoint (vault, wallet, browser profiles, and the GET /v1/runs
+         *     listing, which would let any caller discover other callers' run ids) returns 403: all
+         *     proxy callers share one upstream key.
+         *
+         *     Credential lookup order:
+         *     1. passthrough_endpoint_router (config.yaml deployments with use_in_pass_through)
+         *     2. TINYFISH_API_KEY environment variable
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/tinyfish)
+         */
+        post: operations["tinyfish_proxy_route_tinyfish__endpoint__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/token": {
         parameters: {
             query?: never;
@@ -61164,6 +61222,68 @@ export interface operations {
             header?: never;
             path: {
                 thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tinyfish_proxy_route_tinyfish__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tinyfish_proxy_route_tinyfish__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
             };
             cookie?: never;
         };

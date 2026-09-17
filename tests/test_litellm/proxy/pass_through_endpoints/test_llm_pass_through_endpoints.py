@@ -6136,3 +6136,96 @@ class TestAzureRelayDeploymentSegment:
             )
 
         assert [call["model"] for call in captured] == ["gpt", "gpt"]
+
+
+class TestTinyFishProxyRoute:
+    """Tests for the TinyFish Agent pass-through route, faking the upstream HTTP boundary."""
+
+    RUN_BODY = {"url": "https://scrapeme.live/shop", "goal": "Extract the first 2 product names. Return JSON."}
+
+    @pytest.fixture
+    def tinyfish_client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setenv("TINYFISH_API_KEY", "sk-tf-upstream")
+        monkeypatch.delenv("TINYFISH_AGENT_API_BASE", raising=False)
+        monkeypatch.delenv("TINYFISH_ALLOW_AUTHENTICATED_RUNS", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+        yield TestClient(app)
+
+    def test_forwards_run_with_server_key_not_callers(self, tinyfish_client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post("https://agent.tinyfish.ai/v1/automation/run").mock(
+                return_value=httpx.Response(200, json={"run_id": "run-1", "status": "COMPLETED", "num_of_steps": 2})
+            )
+            response = tinyfish_client.post(
+                "/tinyfish/v1/automation/run", json=self.RUN_BODY, headers={"X-API-Key": "sk-callers-virtual-key"}
+            )
+
+        assert (response.status_code, response.json()["run_id"]) == (200, "run-1")
+        assert route.calls.last.request.headers["x-api-key"] == "sk-tf-upstream"
+
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("GET", "/tinyfish/v1/vault/items"),
+            ("GET", "/tinyfish/v1/wallet"),
+            ("POST", "/tinyfish/v1/browser-profiles"),
+            ("GET", "/tinyfish/v1/automation/run"),
+            ("GET", "/tinyfish/v1/runs"),
+        ],
+    )
+    def test_blocks_endpoints_outside_allowlist(self, tinyfish_client: TestClient, method: str, path: str) -> None:
+        with respx.mock:
+            response = tinyfish_client.request(method, path)
+
+        assert response.status_code == 403
+        assert "not an allowed TinyFish Agent passthrough endpoint" in response.json()["detail"]
+
+    def test_rejects_authenticated_run_fields_by_default(self, tinyfish_client: TestClient) -> None:
+        with respx.mock:
+            response = tinyfish_client.post("/tinyfish/v1/automation/run", json={**self.RUN_BODY, "use_vault": True})
+
+        assert response.status_code == 403
+        assert "use_vault" in response.json()["detail"]
+
+    def test_env_opt_in_allows_authenticated_run_fields(
+        self, tinyfish_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TINYFISH_ALLOW_AUTHENTICATED_RUNS", "true")
+
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post("https://agent.tinyfish.ai/v1/automation/run").mock(
+                return_value=httpx.Response(200, json={"run_id": "run-2", "status": "COMPLETED", "num_of_steps": 1})
+            )
+            response = tinyfish_client.post("/tinyfish/v1/automation/run", json={**self.RUN_BODY, "use_vault": True})
+
+        assert response.status_code == 200
+        assert json.loads(route.calls.last.request.content)["use_vault"] is True
+
+    def test_returns_401_on_missing_api_key(
+        self, tinyfish_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("TINYFISH_API_KEY")
+
+        with respx.mock:
+            response = tinyfish_client.get("/tinyfish/v1/runs/run-123")
+
+        assert response.status_code == 401
+        assert "TINYFISH_API_KEY" in response.json()["detail"]
+
+    def test_env_base_override_changes_target(
+        self, tinyfish_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TINYFISH_AGENT_API_BASE", "https://agent.staging.tinyfish.ai")
+
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.get("https://agent.staging.tinyfish.ai/v1/runs/run-123").mock(
+                return_value=httpx.Response(200, json={"run_id": "run-123", "status": "RUNNING"})
+            )
+            response = tinyfish_client.get("/tinyfish/v1/runs/run-123")
+
+        assert (response.status_code, response.json()["status"]) == (200, "RUNNING")
