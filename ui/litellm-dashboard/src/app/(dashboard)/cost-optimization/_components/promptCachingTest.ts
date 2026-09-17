@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { buildPlaygroundHeaders } from "@/components/llm_calls/request_headers";
+import { CustomHeaders, buildPlaygroundHeaders, withRequiredHeaders } from "@/components/llm_calls/request_headers";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 
 export const PROMPT_CACHING_TEST_MIN_SYSTEM_TOKENS = 4096;
@@ -93,20 +93,29 @@ const parseResponseCost = (headers: Headers): number | null => {
   return Number.isFinite(cost) ? cost : null;
 };
 
-const sendTestCall = async (
-  accessToken: string,
-  baseUrl: string,
-  body: PromptCachingTestRequestBody,
-  fetchImpl: typeof fetch,
-): Promise<PromptCachingCallResult> => {
+interface SendTestCallOptions {
+  readonly accessToken: string;
+  readonly baseUrl: string;
+  readonly body: PromptCachingTestRequestBody;
+  readonly fetchImpl: typeof fetch;
+  readonly customHeaders: CustomHeaders;
+}
+
+const sendTestCall = async ({
+  accessToken,
+  baseUrl,
+  body,
+  fetchImpl,
+  customHeaders,
+}: SendTestCallOptions): Promise<PromptCachingCallResult> => {
   const startedAt = Date.now();
+  const headers = withRequiredHeaders(buildPlaygroundHeaders(["prompt-caching-test"], customHeaders), {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  });
   const response = await fetchImpl(`${baseUrl}/v1/chat/completions`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      ...buildPlaygroundHeaders(["prompt-caching-test"]),
-    },
+    headers,
     body: JSON.stringify(body),
   });
   const durationMs = Date.now() - startedAt;
@@ -137,6 +146,7 @@ export interface RunPromptCachingTestOptions {
   readonly baseUrl: string;
   readonly fetchImpl?: typeof fetch;
   readonly onCallStart?: (callIndex: 1 | 2) => void;
+  readonly customHeaders?: CustomHeaders;
 }
 
 export const runPromptCachingTest = async ({
@@ -145,6 +155,7 @@ export const runPromptCachingTest = async ({
   baseUrl,
   fetchImpl = fetch,
   onCallStart,
+  customHeaders = {},
 }: RunPromptCachingTestOptions): Promise<{
   first: PromptCachingCallResult;
   second: PromptCachingCallResult;
@@ -153,10 +164,12 @@ export const runPromptCachingTest = async ({
   const systemPrompt = buildTestSystemPrompt(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const body = buildTestRequestBody(model, systemPrompt);
 
+  const callOptions = { accessToken, baseUrl, body, fetchImpl, customHeaders };
+
   onCallStart?.(1);
-  const first = await sendTestCall(accessToken, baseUrl, body, fetchImpl);
+  const first = await sendTestCall(callOptions);
   onCallStart?.(2);
-  const second = await sendTestCall(accessToken, baseUrl, body, fetchImpl);
+  const second = await sendTestCall(callOptions);
 
   return { first, second, verdict: judgePromptCachingTest(first, second) };
 };

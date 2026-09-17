@@ -4,11 +4,13 @@ import React, { useState } from "react";
 import { CircleAlert, CircleCheck, CirclePlay } from "lucide-react";
 
 import ModelSelector from "@/components/common_components/ModelSelector";
+import { customHeadersFromPairs, parseStoredHeaderPairs } from "@/components/llm_calls/request_headers";
 import { getProxyBaseUrl } from "@/components/networking";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { getSecureItem } from "@/utils/secureStorage";
 import { PromptCachingCallResult, PromptCachingVerdict, runPromptCachingTest } from "./promptCachingTest";
 
 interface PromptCachingTestCardProps {
@@ -76,7 +78,13 @@ const PromptCachingTestCard: React.FC<PromptCachingTestCardProps> = ({
     setOutcome(null);
     setError(null);
     try {
-      const testOptions = { accessToken, model, baseUrl: getProxyBaseUrl(), onCallStart: setRunningCall };
+      const testOptions = {
+        accessToken,
+        model,
+        baseUrl: getProxyBaseUrl(),
+        onCallStart: setRunningCall,
+        customHeaders: customHeadersFromPairs(parseStoredHeaderPairs(getSecureItem("customHeaders"))),
+      };
       setOutcome(await runTestImpl(testOptions));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -93,7 +101,8 @@ const PromptCachingTestCard: React.FC<PromptCachingTestCardProps> = ({
         <CardTitle>Test prompt caching</CardTitle>
         <p className="mt-1 break-words text-xs text-muted-foreground">
           Sends two identical requests with a ~9k token system prompt and no cache_control of its own. If LiteLLM
-          injects the breakpoints, the first call writes the cache and the second reads it.
+          injects the breakpoints, the first call writes the cache and the second reads it. Both calls hit the real
+          model through the proxy and are billed normally.
         </p>
 
         {!enabled && (

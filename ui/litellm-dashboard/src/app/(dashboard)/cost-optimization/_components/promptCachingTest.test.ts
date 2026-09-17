@@ -89,6 +89,7 @@ describe("runPromptCachingTest", () => {
       model: "claude-haiku-4-5",
       baseUrl: "http://proxy:4000",
       fetchImpl,
+      customHeaders: { "x-custom-auth": "abc", Authorization: "Bearer wrong" },
     };
     const result = await runPromptCachingTest(testOptions);
 
@@ -96,6 +97,7 @@ describe("runPromptCachingTest", () => {
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("http://proxy:4000/v1/chat/completions");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer token-123");
+    expect((init.headers as Record<string, string>)["x-custom-auth"]).toBe("abc");
     expect((init.headers as Record<string, string>)["x-litellm-tags"]).toBe("prompt-caching-test");
 
     const serialized = JSON.stringify(seenBodies);
