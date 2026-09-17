@@ -335,10 +335,15 @@ def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
     """The plain-text log format, colorized only when both streams are an interactive terminal.
 
     Honors the NO_COLOR convention from no-color.org: color is disabled when
-    NO_COLOR is present with a non-empty value.
+    NO_COLOR is present with a non-empty value. FORCE_COLOR is its counterpart
+    and keeps color on when there is no terminal to detect -- CI runners set it
+    precisely because their log stream is a pipe. NO_COLOR wins when both are
+    set, as no-color.org specifies.
     """
     if os.environ.get("NO_COLOR"):
         return _PLAIN_LOG_FORMAT
+    if os.environ.get("FORCE_COLOR"):
+        return _COLOR_LOG_FORMAT
     return _COLOR_LOG_FORMAT if _stream_is_tty(stdout) and _stream_is_tty(stderr) else _PLAIN_LOG_FORMAT
 
 
