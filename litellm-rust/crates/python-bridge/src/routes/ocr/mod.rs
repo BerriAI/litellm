@@ -62,16 +62,13 @@ fn call(
             ..OcrAdmission::all()
         },
     ))?;
-    let host = PythonOcrHost::new(
-        PythonCallState::new(
-            py,
-            args.unbind(),
-            kwargs.copy()?.unbind(),
-            asynchronous,
-            signature.name,
-        )?,
-        signature,
-    );
+    let host = PythonOcrHost::new(PythonCallState::new(
+        py,
+        args.unbind(),
+        kwargs.copy()?.unbind(),
+        asynchronous,
+        signature.name,
+    )?, signature);
     run_call(py, call, host)
 }
 

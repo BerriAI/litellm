@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+import datetime
+import uuid
 from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
-from typing import Final, Protocol
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # bounded compatibility calls into legacy Python integrations
+)
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +52,47 @@ async def drive(execution: Execution) -> object:
         execution.close()
 
 
+class MetadataUpdater(Protocol):
+    def __call__(
+        self,
+        result: object,
+        logging_obj: Logging,
+        model: str | None,
+        kwargs: dict[str, object],
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CallSetup:
+    logger: Logging
+    kwargs: dict[str, object]
+
+
+def setup(
+    call_type: str,
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
+    start_time: datetime.datetime,
+    asynchronous: bool,
+) -> CallSetup:
+    from litellm import utils
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    arguments: Final = {  # mutable-ok: function_setup consumes an owned kwargs dict
+        "litellm_call_id": str(uuid.uuid4()),
+        **kwargs,
+    }
+    supplied: Final = arguments.get("litellm_logging_obj")
+    if isinstance(supplied, Logging):
+        return CallSetup(supplied, arguments)
+    logger, prepared = utils.function_setup(
+        call_type, utils.Rules(), start_time, *args, is_async_call=asynchronous, **arguments
+    )
+    return CallSetup(logger, prepared)
+
+
 def check_limits(kwargs: Mapping[str, object]) -> None:
     import litellm
     from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
@@ -51,3 +102,19 @@ def check_limits(kwargs: Mapping[str, object]) -> None:
         raise litellm.BudgetExceededError(current_cost=current_cost, max_budget=litellm.max_budget)
     if max_retries_per_request_hit(kwargs, litellm.num_retries_per_request):
         raise RuntimeError("Max retries per request hit!")
+
+
+def finalize(
+    response: object,
+    logger: Logging,
+    kwargs: dict[str, object],
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+) -> None:
+    from litellm.litellm_core_utils.llm_response_utils import response_metadata
+
+    model: Final = kwargs.get("model")
+    update: Final = cast(  # cast-ok: legacy metadata function accepts concrete kwargs
+        MetadataUpdater, response_metadata.update_response_metadata
+    )
+    update(response, logger, model if isinstance(model, str) else None, kwargs, start_time, end_time)

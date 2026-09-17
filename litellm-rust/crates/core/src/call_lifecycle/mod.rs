@@ -3,7 +3,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub mod callbacks;
 pub mod host;
-pub mod registration;
 pub mod types;
 
 pub use callbacks::{
