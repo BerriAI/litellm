@@ -479,7 +479,7 @@ async def add_new_member(
         budget_link: Final[Mapping[str, object]] = {"budget_id": _budget_id} if _budget_id is not None else {}
         _returned_team_membership: Final = await membership_table.upsert(
             where={"user_id_team_id": membership_key},
-            data={"create": {**membership_key, **budget_link}, "update": {**budget_link}},
+            data={"create": {**membership_key, **budget_link}, "update": {}},
             include={"litellm_budget_table": True},
         )
 
