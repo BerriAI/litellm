@@ -1686,13 +1686,6 @@
     "prompt_tokens": 100,
     "spend": 0.0216
   },
-  "meta.llama4-maverick-17b-instruct-v1:0|all_components_anthropic": {
-    "completion_tokens": 25,
-    "input_cost": 0.020900000000000002,
-    "output_cost": 0.0095,
-    "prompt_tokens": 150,
-    "spend": 0.030400000000000003
-  },
   "meta.llama4-maverick-17b-instruct-v1:0|basic": {
     "completion_tokens": 40,
     "input_cost": 0.0228,

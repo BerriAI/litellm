@@ -180,11 +180,20 @@
         "audio_input_tokens": 5,
         "audio_output_tokens": 3
       },
+      "requires_rates": [
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
+        "cache_creation_input_token_cost_above_1hr",
+        "output_cost_per_reasoning_token",
+        "input_cost_per_audio_token",
+        "output_cost_per_audio_token"
+      ],
       "wires": ["openai_chat", "azure_chat", "together_chat"]
     },
     {
       "name": "all_components_fireworks",
       "usage": {"fresh_input_tokens": 80, "cache_read_tokens": 40, "output_tokens": 25},
+      "requires_rates": ["cache_read_input_token_cost"],
       "wires": ["fireworks_chat"]
     },
     {
@@ -196,6 +205,11 @@
         "cache_write_1h_tokens": 10,
         "output_tokens": 25
       },
+      "requires_rates": [
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
+        "cache_creation_input_token_cost_above_1hr"
+      ],
       "wires": ["anthropic_messages", "bedrock_converse"]
     },
     {
@@ -208,6 +222,11 @@
         "output_tokens": 25
       },
       "stream": true,
+      "requires_rates": [
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
+        "cache_creation_input_token_cost_above_1hr"
+      ],
       "wires": ["anthropic_messages"]
     },
     {
@@ -220,11 +239,18 @@
         "audio_input_tokens": 5,
         "audio_output_tokens": 3
       },
+      "requires_rates": [
+        "cache_read_input_token_cost",
+        "output_cost_per_reasoning_token",
+        "input_cost_per_audio_token",
+        "output_cost_per_audio_token"
+      ],
       "wires": ["gemini_generate", "vertex_generate"]
     },
     {
       "name": "all_components_responses",
       "usage": {"fresh_input_tokens": 80, "cache_read_tokens": 40, "output_tokens": 25, "reasoning_tokens": 15},
+      "requires_rates": ["cache_read_input_token_cost", "output_cost_per_reasoning_token"],
       "wires": ["openai_responses"]
     }
   ]

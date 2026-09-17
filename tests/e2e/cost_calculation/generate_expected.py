@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -27,6 +29,7 @@ from cost_matrix import (  # noqa: E402  # path bootstrap before package-local i
     TIER_THRESHOLD_TOKENS,
     Case,
     CostMapEntry,
+    ExpectedCell,
     FrontierModel,
     cases_for,
     expected_key,
@@ -93,16 +96,11 @@ def expected_breakdown(model: FrontierModel, case: Case) -> ExpectedCost:
         or rates.output_cost_per_token
         or 0.0
     )
-    # The biller charges cache writes at the input rate when the entry carries
-    # no cache_creation rate (cost_calculator.py:2452), and at the 5m write
-    # rate when the 1h variant is unset; cache reads bill only at their own
-    # rate (zero when the entry lacks one).
-    write_5m_rate: Final = rates.cache_creation_input_token_cost or in_rate
     input_cost: Final = (
         u.fresh_input_tokens * in_rate
         + u.cache_read_tokens * (rates.cache_read_input_token_cost or 0.0)
-        + u.cache_write_5m_tokens * write_5m_rate
-        + u.cache_write_1h_tokens * (rates.cache_creation_input_token_cost_above_1hr or write_5m_rate)
+        + u.cache_write_5m_tokens * (rates.cache_creation_input_token_cost or 0.0)
+        + u.cache_write_1h_tokens * (rates.cache_creation_input_token_cost_above_1hr or 0.0)
         + u.audio_input_tokens * (rates.input_cost_per_audio_token or 0.0)
     )
     output_cost: Final = (
@@ -147,39 +145,46 @@ def expected_token_columns(model: FrontierModel, case: Case) -> tuple[int, int]:
     )
 
 
-def _proposed() -> dict[str, dict[str, object]]:
-    return {
-        expected_key(model, case): (
-            lambda breakdown, tokens: {
-                "spend": breakdown.total,
-                "input_cost": breakdown.input_cost,
-                "output_cost": breakdown.output_cost,
-                "prompt_tokens": tokens[0],
-                "completion_tokens": tokens[1],
-            }
-        )(expected_breakdown(model, case), expected_token_columns(model, case))
-        for model in FRONTIER_MODELS
-        for case in cases_for(model)
-        if case.exact_spend
-    }
+def _cell(model: FrontierModel, case: Case) -> ExpectedCell:
+    breakdown: Final = expected_breakdown(model, case)
+    prompt_tokens, completion_tokens = expected_token_columns(model, case)
+    return ExpectedCell(
+        spend=breakdown.total,
+        input_cost=breakdown.input_cost,
+        output_cost=breakdown.output_cost,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+
+def _proposed() -> Mapping[str, ExpectedCell]:
+    return MappingProxyType(
+        {
+            expected_key(model, case): _cell(model, case)
+            for model in FRONTIER_MODELS
+            for case in cases_for(model)
+            if case.exact_spend
+        }
+    )
 
 
 def main() -> None:
     rewrite: Final = "--rewrite" in sys.argv[1:]
     proposed: Final = _proposed()
+    proposed_values: Final = {key: cell.model_dump() for key, cell in proposed.items()}
     existing: Final = (
         json.loads(EXPECTED_PATH.read_text()) if EXPECTED_PATH.exists() else {}
     )
     merged: Final = {
-        key: (proposed[key] if rewrite or key not in existing else existing[key])
-        for key in sorted(proposed)
+        key: (proposed_values[key] if rewrite or key not in existing else existing[key])
+        for key in sorted(proposed_values)
     }
-    added: Final = sum(1 for key in proposed if key not in existing)
-    removed: Final = sum(1 for key in existing if key not in proposed)
-    kept: Final = sum(1 for key in proposed if key in existing and not rewrite)
-    rewritten: Final = sum(1 for key in proposed if key in existing and rewrite)
+    added: Final = sum(1 for key in proposed_values if key not in existing)
+    removed: Final = sum(1 for key in existing if key not in proposed_values)
+    kept: Final = sum(1 for key in proposed_values if key in existing and not rewrite)
+    rewritten: Final = sum(1 for key in proposed_values if key in existing and rewrite)
     EXPECTED_PATH.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
-    print(
+    print(  # noqa: T201  # CLI summary is the tool output
         f"expected.json: {added} added, {removed} removed, {kept} kept, "
         f"{rewritten} rewritten ({len(merged)} cells)"
     )
