@@ -66,7 +66,7 @@ from e2e_http import (
 )
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, KeyMetadata, LiteLLMParamsBody, SpendLogRow
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 pytestmark = pytest.mark.e2e
 
@@ -74,6 +74,25 @@ CREATED_BATCH_STATUSES = {"validating", "in_progress", "finalizing"}
 BATCH_CANCEL_DELAY_SECONDS = 2
 BATCH_TERMINAL_BEFORE_CANCEL = {"failed", "cancelled", "expired"}
 BATCH_OP_RETRIES = 5
+
+
+class _GovCloudBedrockContent(BaseModel):
+    text: str
+
+
+class _GovCloudBedrockMessage(BaseModel):
+    content: tuple[_GovCloudBedrockContent, ...]
+
+
+class _GovCloudBedrockInput(BaseModel):
+    messages: tuple[_GovCloudBedrockMessage, ...]
+
+
+class _GovCloudBedrockRecord(BaseModel):
+    record_id: str = Field(alias="recordId")
+    model_input: _GovCloudBedrockInput = Field(alias="modelInput")
+
+
 # Azure / Vertex cancel and the pre-cancel re-retrieve are provider-side flakes
 # (connection refused, brief 500s) and the registry only has one basic cell per
 # provider (shared across scenarios). Create + retrieve already prove routing;
@@ -1061,7 +1080,17 @@ class TestBedrockBatchGovCloud:
         assert downloaded.status_code == 200, (
             f"GovCloud file content must be 200, got {downloaded.status_code}: {downloaded.body[:300]}"
         )
-        assert downloaded.body.strip(), "GovCloud file content download returned an empty body"
+        downloaded_lines: Final = downloaded.body.strip().splitlines()
+        assert len(downloaded_lines) == 1, (
+            f"GovCloud file content download must contain one JSONL record, got {len(downloaded_lines)}"
+        )
+        downloaded_record: Final = _GovCloudBedrockRecord.model_validate(json.loads(downloaded_lines[0]))
+        assert downloaded_record.record_id == "req-1", (
+            f"GovCloud file content must preserve the uploaded custom_id, got {downloaded_record.record_id!r}"
+        )
+        assert downloaded_record.model_input.messages[0].content[0].text == "ping", (
+            "GovCloud file content must preserve the uploaded message text"
+        )
 
         created: Final = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
         require_successful_call(created)
