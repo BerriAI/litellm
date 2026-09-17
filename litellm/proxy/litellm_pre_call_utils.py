@@ -137,7 +137,7 @@ def add_otel_trace_id_to_request(
         return
     data["litellm_trace_id"] = trace_id  # rebind-ok: data is an out-param
     if isinstance(metadata, dict):
-        metadata["trace_id"] = trace_id  # rebind-ok: metadata is the request's own out-param dict
+        metadata["trace_id"] = trace_id
 
 
 def _session_id_from_baggage(baggage: str) -> str | None:

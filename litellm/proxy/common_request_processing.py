@@ -2241,7 +2241,7 @@ class ProxyBaseLLMRequestProcessing:
         return fallbacks if isinstance(fallbacks, list) and fallbacks else None
 
     @staticmethod
-    def _resolve_fallback_models(model: str, fallbacks: list) -> list | None:
+    def _resolve_fallback_models(model: str, fallbacks: list) -> list[str] | None:
         from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 
         fallback_model_group, generic_fallback_idx = get_fallback_model_group(
