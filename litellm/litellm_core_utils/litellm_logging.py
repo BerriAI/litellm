@@ -1590,16 +1590,12 @@ class Logging(LiteLLMLoggingBaseClass):
                         start_time=start_time,
                         end_time=end_time,
                     )
-                    ######################################################################
-                    # if any of the callbacks modify the response, use the modified response
-                    # current implementation returns the first modified response
-                    ######################################################################
                     hook_content = self._parse_post_mcp_call_hook_response(response=response)
                     if hook_content is not None:
-                        return hook_content
+                        post_mcp_tool_call_response_obj.mcp_tool_call_response = hook_content
             except Exception as e:
                 verbose_logger.exception("LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e)
-        return response_obj.content
+        return post_mcp_tool_call_response_obj.mcp_tool_call_response
 
     def _parse_post_mcp_call_hook_response(
         self, response: MCPPostCallResponseObject | None
