@@ -20,6 +20,7 @@ from mcp.types import (
     TextResourceContents,
 )
 
+from litellm.constants import MCP_ALLOWLIST_PEEK_MAX_BYTES
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPTransport,
@@ -2312,6 +2313,88 @@ async def test_streamable_http_allowlist_reads_past_the_routing_peek_cap_for_ini
 
 
 @pytest.mark.asyncio
+async def test_streamable_http_allowlist_bounds_the_body_it_buffers_for_unidentified_posts() -> None:
+    from starlette.types import Scope
+
+    from litellm.proxy._experimental.mcp_server import client_allowlist
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    chunk_size: Final = 1024
+    request_body: Final = _oversized_initialize("antigravity-cli", MCP_ALLOWLIST_PEEK_MAX_BYTES)
+    assert len(request_body) > 2 * MCP_ALLOWLIST_PEEK_MAX_BYTES
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    receive: Final = _chunked_receive(request_body, chunk_size)
+    send: Final = AsyncMock()
+    stateful_handle: Final = AsyncMock()
+    stateless_handle: Final = AsyncMock()
+
+    with (
+        _client_allowlist_patches(["antigravity-cli"]),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful_handle),
+        ),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=stateless_handle),
+        ),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    status, body = _forbidden_client_response(send)
+    assert status == 403
+    assert body == client_allowlist.oversized_unidentified_request_body()
+    assert receive.await_count <= MCP_ALLOWLIST_PEEK_MAX_BYTES // chunk_size + 1
+    stateful_handle.assert_not_awaited()
+    stateless_handle.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_allowlist_streams_large_posts_on_an_admitted_session() -> None:
+    from starlette.types import Receive, Scope, Send
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    request_body: Final = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {
+                "name": "echo",
+                "arguments": {"text": "x" * (2 * MCP_ALLOWLIST_PEEK_MAX_BYTES)},
+            },
+        }
+    ).encode()
+    scope: Final[Scope] = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [(b"mcp-session-id", b"admitted-session")],
+    }
+    receive: Final = _chunked_receive(request_body, 1024)
+    send: Final = AsyncMock()
+    downstream_bodies: Final[list[bytes]] = []
+
+    async def handle_request(_: Scope, downstream_receive: Receive, __: Send) -> None:
+        downstream_bodies.append(await _drain_body(downstream_receive))
+
+    stateful_handle: Final = AsyncMock(side_effect=handle_request)
+
+    with (
+        _client_allowlist_patches(["antigravity-cli"]),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful_handle, _server_instances={"admitted-session": object()}),
+        ),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    assert downstream_bodies == [request_body]
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("request_body", "admitted"),
     ((_ANTIGRAVITY_INITIALIZE, True), (_CLAUDE_CODE_INITIALIZE, False), (_ANONYMOUS_INITIALIZE, False)),
@@ -2359,6 +2442,43 @@ async def test_sse_endpoint_applies_the_same_client_allowlist(request_body: byte
     assert status == 403
     assert body["error"] == "Forbidden"
     assert "mcp_allowed_clients" in body["details"]
+
+
+@pytest.mark.asyncio
+async def test_sse_endpoint_rejects_posts_larger_than_the_allowlist_peek_cap() -> None:
+    from starlette.types import Scope
+
+    from litellm.proxy._experimental.mcp_server import client_allowlist
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    chunk_size: Final = 1024
+    request_body: Final = _oversized_initialize("antigravity-cli", MCP_ALLOWLIST_PEEK_MAX_BYTES)
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp/sse", "headers": []}
+    receive: Final = _chunked_receive(request_body, chunk_size)
+    send: Final = AsyncMock()
+    sse_handle: Final = AsyncMock()
+
+    with (
+        _client_allowlist_patches(["antigravity-cli"]),
+        patch(  # test-quality-ok: module-level pre-auth probe unrelated to the allowlist under test; no injection seam
+            "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: module-level upstream auth probe unrelated to the allowlist under test; no injection seam
+            "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+            new_callable=AsyncMock,
+        ),
+        patch.object(  # test-quality-ok: SSE manager is a module singleton; the downstream call is the observable
+            mcp_module.sse_session_manager, "handle_request", sse_handle
+        ),
+    ):
+        await mcp_module.handle_sse_mcp(scope, receive, send)
+
+    status, body = _forbidden_client_response(send)
+    assert status == 403
+    assert body == client_allowlist.oversized_unidentified_request_body()
+    assert receive.await_count <= MCP_ALLOWLIST_PEEK_MAX_BYTES // chunk_size + 1
+    sse_handle.assert_not_awaited()
 
 
 @pytest.mark.asyncio

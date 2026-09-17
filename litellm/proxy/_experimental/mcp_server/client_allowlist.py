@@ -12,6 +12,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_ALLOWLIST_PEEK_MAX_BYTES
 
 MCP_ALLOWED_CLIENTS_SETTING: Final = "mcp_allowed_clients"
 
@@ -53,6 +54,18 @@ class MCPClientRejection:
     def response_body(self) -> MCPClientForbiddenBody:
         body: Final[MCPClientForbiddenBody] = {"error": "Forbidden", "details": self.details}
         return body
+
+
+def oversized_unidentified_request_body() -> MCPClientForbiddenBody:
+    body: Final[MCPClientForbiddenBody] = {
+        "error": "Forbidden",
+        "details": (
+            f"While {MCP_ALLOWED_CLIENTS_SETTING} is set, this gateway reads at most "
+            f"{MCP_ALLOWLIST_PEEK_MAX_BYTES} bytes of an MCP POST to find clientInfo.name before routing it; "
+            "this request was larger than that and could not be identified."
+        ),
+    }
+    return body
 
 
 def parse_allowed_mcp_clients(raw_setting: object) -> frozenset[str] | None:

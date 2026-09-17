@@ -26,7 +26,7 @@ from starlette.types import Message, Receive, Scope, Send
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG, MCP_ALLOWLIST_PEEK_MAX_BYTES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -467,6 +467,7 @@ if MCP_AVAILABLE:
         MCP_ALLOWED_CLIENTS_SETTING,
         allowed_mcp_clients_from_general_settings,
         check_mcp_client_allowed,
+        oversized_unidentified_request_body,
     )
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
         SERVER_OUTCOMES_META_KEY,
@@ -3826,8 +3827,23 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_clients_from_general_settings(general_settings)
 
-    def _routing_peek_limit(allowed_clients: frozenset[str] | None) -> int | None:
-        return _MCP_ROUTING_PEEK_MAX_BYTES if allowed_clients is None else None
+    def _routing_peek_limit(allowed_clients: frozenset[str] | None) -> int:
+        return _MCP_ROUTING_PEEK_MAX_BYTES if allowed_clients is None else MCP_ALLOWLIST_PEEK_MAX_BYTES
+
+    async def _reject_oversized_unidentified_request(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        client_ip: str | None,
+    ) -> None:
+        verbose_logger.warning(
+            "Rejecting MCP POST (ip=%s): body exceeds %d bytes so %s cannot be checked",
+            client_ip,
+            MCP_ALLOWLIST_PEEK_MAX_BYTES,
+            MCP_ALLOWED_CLIENTS_SETTING,
+        )
+        forbidden: Final = JSONResponse(status_code=403, content=oversized_unidentified_request_body())
+        await forbidden(scope, receive, send)
 
     async def _reject_initialize_from_disallowed_client(
         scope: Scope,
@@ -3864,13 +3880,14 @@ if MCP_AVAILABLE:
 
     async def _read_request_body_for_routing(
         receive: Receive,
-        peek_max_bytes: int | None = _MCP_ROUTING_PEEK_MAX_BYTES,
-    ) -> tuple[list[Message], bytes]:
+        peek_max_bytes: int = _MCP_ROUTING_PEEK_MAX_BYTES,
+    ) -> tuple[list[Message], bytes, bool]:
         """
         Read just enough of the request body to decide whether this is a
         JSON-RPC ``initialize`` call. Returns the consumed ASGI messages so
         the caller can replay them faithfully to the downstream handler, and
-        the peeked body bytes (capped at ``peek_max_bytes``).
+        the peeked body bytes (capped at ``peek_max_bytes``), plus whether
+        the body was cut off at that cap.
 
         Stops reading from the wire as soon as either (a) we have peeked
         ``peek_max_bytes`` of body, or (b) the body is complete.
@@ -3878,14 +3895,11 @@ if MCP_AVAILABLE:
         ``wrapped_receive`` in the caller — so an authenticated client cannot
         force the proxy to buffer an arbitrarily large payload just to make a
         routing decision.
-
-        ``peek_max_bytes=None`` reads the whole body. The client allowlist
-        needs that: a truncated initialize body parses as non-initialize and
-        would otherwise skip the allowlist check entirely.
         """
         consumed_messages: Final[list[Message]] = []
         body_chunks: Final[list[bytes]] = []
         peeked_bytes = 0
+        truncated = False
 
         while True:
             message = await receive()
@@ -3902,20 +3916,22 @@ if MCP_AVAILABLE:
                 # handler via ``consumed_messages``, but ``body_chunks`` is
                 # purely for the JSON-RPC method check — there is no reason
                 # to copy a large body frame into a second buffer.
-                remaining = len(body) if peek_max_bytes is None else peek_max_bytes - peeked_bytes
+                remaining = peek_max_bytes - peeked_bytes
                 if remaining > 0:
                     body_chunks.append(body[:remaining])
                     peeked_bytes += min(len(body), remaining)
+                truncated = truncated or len(body) > remaining
 
             if not message.get("more_body", False):
                 break
 
-            if peek_max_bytes is not None and peeked_bytes >= peek_max_bytes:
+            if peeked_bytes >= peek_max_bytes:
                 # Stop draining; downstream replay will pull remaining chunks
                 # directly from the original `receive` via wrapped_receive.
+                truncated = True
                 break
 
-        return consumed_messages, b"".join(body_chunks)
+        return consumed_messages, b"".join(body_chunks), truncated
 
     async def _handle_stale_mcp_session(
         scope: Scope,
@@ -4566,9 +4582,12 @@ if MCP_AVAILABLE:
             body = b""
             if scope.get("method") == "POST":
                 allowed_clients: Final = _load_allowed_mcp_clients()
-                consumed_messages, body = await _read_request_body_for_routing(
+                consumed_messages, body, body_truncated = await _read_request_body_for_routing(
                     receive, _routing_peek_limit(allowed_clients)
                 )
+                if allowed_clients is not None and body_truncated and not session_id:
+                    await _reject_oversized_unidentified_request(scope, receive, send, _client_ip)
+                    return
                 is_initialize = _is_initialize_request(body)
                 if is_initialize and await _reject_initialize_from_disallowed_client(
                     scope, receive, send, body, _client_ip, allowed_clients
@@ -4843,11 +4862,14 @@ if MCP_AVAILABLE:
                 await asyncio.sleep(0.1)
 
             sse_allowed_clients: Final = _load_allowed_mcp_clients()
-            sse_consumed_messages, sse_body = (
+            sse_consumed_messages, sse_body, sse_truncated = (
                 await _read_request_body_for_routing(receive, _routing_peek_limit(sse_allowed_clients))
                 if scope.get("method") == "POST"
-                else ((), b"")
+                else ((), b"", False)
             )
+            if sse_allowed_clients is not None and sse_truncated:
+                await _reject_oversized_unidentified_request(scope, receive, send, _sse_client_ip)
+                return
             if _is_initialize_request(sse_body) and await _reject_initialize_from_disallowed_client(
                 scope, receive, send, sse_body, _sse_client_ip, sse_allowed_clients
             ):
