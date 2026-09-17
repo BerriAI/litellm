@@ -1,10 +1,10 @@
 """Failed-login accounting for the Admin UI sign-in path.
 
 Wrong passwords are counted over a short window per source address and per source-and-username
-pair; too many in one window blocks that key for a fixed time. Blocks are soft: a correct password
-still signs in, while a wrong one from a blocked key is held open before its 429 and only a few can
-be held at once, which bounds how many guesses a blocked key gets checked. A blocked pair stops
+pair; too many in one window blocks that key for a fixed time. While a key is blocked every attempt
+from it, right or wrong, is refused with 429 before the password is checked. A blocked pair stops
 counting against its source, so one script stuck on one account does not block the whole office.
+Recovery is the master key over the API, which never passes through here, or waiting out the block.
 """
 
 from __future__ import annotations
@@ -14,8 +14,7 @@ import hashlib
 import ipaddress
 import math
 import time
-from collections.abc import AsyncGenerator, Mapping
-from contextlib import asynccontextmanager
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
@@ -37,8 +36,6 @@ DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_USER: Final = 5
 DEFAULT_FAILED_LOGIN_WINDOW_SECONDS: Final = 60
 DEFAULT_FAILED_LOGIN_BLOCK_SECONDS: Final = 300
 
-BLOCKED_ATTEMPT_HOLD_SECONDS: Final = 30
-MAX_HELD_ATTEMPTS_PER_KEY: Final = 5
 IPV6_SOURCE_PREFIX_LENGTH: Final = 64
 
 SOURCE_LIMIT_KEY: Final = "max_failed_login_attempts_per_source"
@@ -100,11 +97,6 @@ _COUNTERS: Final = InMemoryCache(
     max_size_in_memory=_MAX_TRACKED_COUNTERS, default_ttl=DEFAULT_FAILED_LOGIN_WINDOW_SECONDS
 )
 _BLOCKS: Final = InMemoryCache(max_size_in_memory=_MAX_TRACKED_BLOCKS, default_ttl=DEFAULT_FAILED_LOGIN_BLOCK_SECONDS)
-_HELD_ATTEMPTS: Final[dict[str, int]] = {}  # mutable-ok: in-flight hold counts rise on entry and fall on exit
-
-
-async def _sleep(seconds: float) -> None:
-    await asyncio.sleep(seconds)
 
 
 @cache
@@ -127,10 +119,23 @@ def warn_login_counters_are_per_worker(num_workers: str) -> None:
 def warn_source_login_limit_is_off() -> None:
     verbose_proxy_logger.warning(
         "%s is not set, so failed Admin UI sign-in attempts are limited per source address and username "
-        "only. Set it to the address ranges of the proxies in front of LiteLLM to also limit each "
-        "source address across usernames.",
+        "only. Set it to the address ranges of the proxies in front of LiteLLM, or to an empty list when "
+        "clients connect directly, to also limit each source address across usernames.",
         TRUSTED_PROXY_RANGES_KEY,
     )
+
+
+def declared_proxy_ranges(settings: Mapping[str, object]) -> tuple[str, ...] | None:
+    """What the operator says fronts LiteLLM: the proxy ranges, an empty tuple for none, None when unsaid.
+
+    Only a declared topology makes the source address trustworthy enough to limit across usernames.
+    An unset key, or a value that is not a list of ranges, leaves it unknown and the source scope off.
+    """
+    raw_ranges: Final = settings.get(TRUSTED_PROXY_RANGES_KEY)
+    if isinstance(raw_ranges, (list, tuple, set)) and not raw_ranges:
+        return ()
+    cidrs: Final = tuple(normalize_cidr_ranges(raw_ranges, setting_name=TRUSTED_PROXY_RANGES_KEY))
+    return cidrs or None
 
 
 def _positive_int(raw: object, key: str, default: int) -> int:
@@ -221,8 +226,11 @@ class Block:
 
 @dataclass(frozen=True, slots=True)
 class LoginThrottle:
-    """Failed-login limits for one request's source address; ``source_limit`` is None when the
-    source scope is off because ``trusted_proxy_ranges`` is unset and the peer address is the ingress."""
+    """Failed-login limits for one request's source address.
+
+    ``source_limit`` is None when the source scope is off: ``trusted_proxy_ranges`` is unset, so the peer
+    address may be a shared ingress. An empty list means clients connect directly and the peer is the source.
+    """
 
     client_ip: str
     source_limit: int | None
@@ -242,15 +250,13 @@ class LoginThrottle:
         redis_cache: RedisCache | None,
     ) -> LoginThrottle:
         settings: Final = general_settings if general_settings is not None else _NO_SETTINGS
-        cidrs: Final = normalize_cidr_ranges(
-            settings.get(TRUSTED_PROXY_RANGES_KEY), setting_name=TRUSTED_PROXY_RANGES_KEY
-        )
+        proxies: Final = declared_proxy_ranges(settings)
         resolved, _ = resolve_client_ip(
-            request, TrustedProxyConfig(use_forwarded_for=bool(cidrs), trusted_proxy_cidrs=cidrs)
+            request, TrustedProxyConfig(use_forwarded_for=bool(proxies), trusted_proxy_cidrs=proxies or ())
         )
         return cls(
             client_ip=resolved or _UNKNOWN_SOURCE,
-            source_limit=_source_limit(settings, resolved) if cidrs and resolved is not None else None,
+            source_limit=_source_limit(settings, resolved) if proxies is not None and resolved is not None else None,
             user_limit=_int_setting(settings, USER_LIMIT_KEY, DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_USER),
             window_seconds=_int_setting(settings, WINDOW_KEY, DEFAULT_FAILED_LOGIN_WINDOW_SECONDS),
             block_seconds=_int_setting(settings, BLOCK_KEY, DEFAULT_FAILED_LOGIN_BLOCK_SECONDS),
@@ -270,18 +276,21 @@ class LoginThrottle:
             source_block=f"{_CACHE_KEY_PREFIX}:{{{group}}}:block:source",
         )
 
-    @asynccontextmanager
-    async def attempt(self, username: str, *, exempt: bool = False) -> AsyncGenerator[LoginAttempt]:
-        if not self.enabled or exempt:
-            yield LoginAttempt(throttle=self, username=username, block=None)
-            return
-        keys: Final = self._keys(username)
-        block: Final = await self._active_block(keys)
+    async def attempt(self, username: str) -> LoginAttempt:
+        """Refuses a blocked key before any credential is looked at; otherwise hands back the attempt to settle."""
+        if not self.enabled:
+            return LoginAttempt(throttle=self, username=username)
+        block: Final = await self._active_block(self._keys(username))
         if block is None:
-            yield LoginAttempt(throttle=self, username=username, block=None)
-            return
-        slot: Final = keys.pair_block if block.scope == "user" else keys.source_block
-        yield LoginAttempt(throttle=self, username=username, block=block, slot=slot)
+            return LoginAttempt(throttle=self, username=username)
+        verbose_proxy_logger.warning(
+            "Admin UI sign-in refused: the %s is blocked for %s more seconds; username=%r source=%s",
+            block.scope,
+            block.retry_after,
+            username,
+            self.client_ip,
+        )
+        self.refuse(block.retry_after)
 
     async def _active_block(self, keys: _Keys) -> Block | None:
         local: Final = self._local_block_ttls(keys)
@@ -372,8 +381,6 @@ class LoginThrottle:
 class LoginAttempt:
     throttle: LoginThrottle
     username: str
-    block: Block | None
-    slot: str | None = None
 
     async def succeeded(self) -> None:
         if not self.throttle.enabled:
@@ -383,8 +390,6 @@ class LoginAttempt:
     async def failed(self) -> None:
         if not self.throttle.enabled:
             return
-        if self.block is not None and self.slot is not None:
-            await self._hold_then_refuse(self.block, self.slot)
         user_block, source_block = await self.throttle.record_failure(self.username)
         if user_block == 0 and source_block == 0:
             return
@@ -395,26 +400,3 @@ class LoginAttempt:
             self.username,
             self.throttle.client_ip,
         )
-
-    async def _hold_then_refuse(self, block: Block, slot: str) -> NoReturn:
-        held: Final = _HELD_ATTEMPTS.get(slot, 0)
-        if held >= MAX_HELD_ATTEMPTS_PER_KEY:
-            verbose_proxy_logger.warning(
-                "Admin UI sign-in refused at once: %s wrong attempts already held for a blocked %s; "
-                "username=%r source=%s",
-                held,
-                block.scope,
-                self.username,
-                self.throttle.client_ip,
-            )
-            self.throttle.refuse(block.retry_after)
-        _HELD_ATTEMPTS[slot] = held + 1
-        try:
-            await _sleep(BLOCKED_ATTEMPT_HOLD_SECONDS)
-        finally:
-            remaining: Final = _HELD_ATTEMPTS.get(slot, 1) - 1
-            if remaining > 0:
-                _HELD_ATTEMPTS[slot] = remaining
-            else:
-                _HELD_ATTEMPTS.pop(slot, None)
-        self.throttle.refuse(max(block.retry_after - BLOCKED_ATTEMPT_HOLD_SECONDS, 1))
