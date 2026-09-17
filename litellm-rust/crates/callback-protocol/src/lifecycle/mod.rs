@@ -2,9 +2,6 @@ use std::future::Future;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub mod host;
-#[cfg(test)]
-#[path = "../../tests/host_lifecycle.rs"]
-mod host_tests;
 pub mod types;
 
 pub use types::{
@@ -235,6 +232,11 @@ mod tests {
 
     type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+    #[derive(Debug, PartialEq, Eq)]
+    enum TestError {
+        ProviderDown,
+    }
+
     #[derive(Default)]
     struct RecordingHooks {
         events: Mutex<Vec<&'static str>>,
@@ -255,9 +257,9 @@ mod tests {
     }
 
     impl CallLifecycleHooks<String, String, String> for RecordingHooks {
-        type Error = crate::messages::Error;
-        type PreCallFuture<'a> = BoxFuture<'a, Result<String, crate::messages::Error>>;
-        type DuringCallFuture<'a> = BoxFuture<'a, Result<String, crate::messages::Error>>;
+        type Error = TestError;
+        type PreCallFuture<'a> = BoxFuture<'a, Result<String, TestError>>;
+        type DuringCallFuture<'a> = BoxFuture<'a, Result<String, TestError>>;
         type SuccessFuture<'a> = BoxFuture<'a, ()>;
         type FailureFuture<'a> = BoxFuture<'a, ()>;
 
@@ -299,7 +301,7 @@ mod tests {
         fn async_log_failure_event<'a>(
             &'a self,
             _context: &'a CallLifecycleContext,
-            _error: &'a crate::messages::Error,
+            _error: &'a TestError,
             _timing: &'a CallLifecycleTiming,
         ) -> Self::FailureFuture<'a> {
             Box::pin(async move {
@@ -309,9 +311,9 @@ mod tests {
     }
 
     impl CallLifecycleHooks<RecordingRequest, String, String> for RecordingHooks {
-        type Error = crate::messages::Error;
-        type PreCallFuture<'a> = BoxFuture<'a, Result<RecordingRequest, crate::messages::Error>>;
-        type DuringCallFuture<'a> = BoxFuture<'a, Result<String, crate::messages::Error>>;
+        type Error = TestError;
+        type PreCallFuture<'a> = BoxFuture<'a, Result<RecordingRequest, TestError>>;
+        type DuringCallFuture<'a> = BoxFuture<'a, Result<String, TestError>>;
         type SuccessFuture<'a> = BoxFuture<'a, ()>;
         type FailureFuture<'a> = BoxFuture<'a, ()>;
 
@@ -351,7 +353,7 @@ mod tests {
         fn async_log_failure_event<'a>(
             &'a self,
             _context: &'a CallLifecycleContext,
-            _error: &'a crate::messages::Error,
+            _error: &'a TestError,
             _timing: &'a CallLifecycleTiming,
         ) -> Self::FailureFuture<'a> {
             Box::pin(async move {
@@ -388,21 +390,12 @@ mod tests {
                 CallLifecycleContext::new("ocr", "mistral-ocr-latest", "mistral", "call_1"),
                 "request".to_string(),
                 &hooks,
-                |_request| async move {
-                    Err::<String, crate::messages::Error>(crate::messages::Error::Transport(
-                        crate::transport::Error::Network("provider down".to_string()),
-                    ))
-                },
+                |_request| async move { Err::<String, TestError>(TestError::ProviderDown) },
             )
             .await
             .expect_err("call fails");
 
-        assert_eq!(
-            error,
-            crate::messages::Error::Transport(crate::transport::Error::Network(
-                "provider down".to_string()
-            ))
-        );
+        assert_eq!(error, TestError::ProviderDown);
         assert_eq!(hooks.events(), vec!["pre_call", "during_call", "failure"]);
     }
 

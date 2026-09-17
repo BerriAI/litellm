@@ -2,6 +2,9 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use futures_util::future::{AbortHandle, Abortable};
+use litellm_callback_python_legacy as bindings;
+use litellm_callback_python_legacy::DeploymentHooks;
+pub(crate) use litellm_callback_python_legacy::LegacyPythonLogger as PythonLogger;
 #[cfg(test)]
 use litellm_core::call_lifecycle::host::HostCallFuture;
 use litellm_core::call_lifecycle::host::{
@@ -15,12 +18,8 @@ use tokio::sync::Mutex;
 
 use crate::execution::{poll_async_value, run_async_value, run_sync_value};
 
-mod bindings;
 mod handle;
-mod preparation;
 
-use bindings::DeploymentHooks;
-pub(crate) use bindings::PythonLogger;
 use handle::{Execution, ExecutionBody, ExecutionStep};
 
 pub(crate) enum OperationClass {
@@ -422,7 +421,7 @@ impl PythonCallState {
     }
 
     pub fn prepare(&mut self, py: Python<'_>) -> PyResult<()> {
-        self.kwargs = preparation::prepare(py, self.kwargs.bind(py), self.logger()?)?.unbind();
+        self.kwargs = bindings::prepare(py, self.kwargs.bind(py), self.logger()?)?.unbind();
         Ok(())
     }
 
@@ -477,15 +476,13 @@ impl PythonCallState {
                 if !logger.callbacks_needed(py, "async_success")? {
                     logger.success_bookkeeping(py, &self.response, &self.start, &self.end, true)?;
                 } else if logger.defers_async_logging(py) {
-                    logger.defer_success(
+                    let pending = Py::new(
                         py,
-                        Py::new(
-                            py,
-                            PendingLogging {
-                                pending: Some(pending()),
-                            },
-                        )?,
+                        PendingLogging {
+                            pending: Some(pending()),
+                        },
                     )?;
+                    logger.defer_success(py, pending.bind(py).as_any())?;
                 } else {
                     pending().asynchronous(py)?;
                 }

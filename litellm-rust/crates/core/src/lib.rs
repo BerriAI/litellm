@@ -1,6 +1,7 @@
 pub mod audio_transcription;
 pub mod call_arguments;
-pub mod call_lifecycle;
+pub mod callback_dispatch;
+pub use litellm_callback_protocol::lifecycle as call_lifecycle;
 pub mod chat_completions;
 pub mod constants;
 pub mod error;

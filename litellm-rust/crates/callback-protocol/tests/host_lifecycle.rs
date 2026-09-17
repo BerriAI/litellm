@@ -1,5 +1,7 @@
-use crate::call_lifecycle::host::{HostFailure, HostLifecycle, HostPhase};
-use crate::ocr::Error;
+use litellm_callback_protocol::lifecycle::host::{HostFailure, HostLifecycle, HostPhase};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Error(String);
 
 fn run(fail_at: Option<HostPhase>, asynchronous: bool) -> (Vec<HostPhase>, Vec<Error>) {
     let mut lifecycle = HostLifecycle::new(asynchronous);
@@ -9,9 +11,7 @@ fn run(fail_at: Option<HostPhase>, asynchronous: bool) -> (Vec<HostPhase>, Vec<E
         let phase = lifecycle.phase();
         events.push(phase);
         let result = if Some(phase) == fail_at {
-            Err(HostFailure::Error(Error::InvalidRequest(
-                "selected failure".into(),
-            )))
+            Err(HostFailure::Error(Error("selected failure".into())))
         } else {
             Ok(())
         };
@@ -82,10 +82,10 @@ fn failure_handler_errors_do_not_replace_selected_failure_or_suppress_async_disp
     while lifecycle.phase() != HostPhase::Execute {
         lifecycle.accept::<Error>(Ok(()));
     }
-    let selected = Error::InvalidRequest("provider".into());
+    let selected = Error("provider".into());
     assert!(matches!(
         lifecycle.accept(Err(HostFailure::Error(selected.clone()))),
-        Some(Error::InvalidRequest(message)) if message == "provider"
+        Some(Error(message)) if message == "provider"
     ));
     lifecycle.accept::<Error>(Ok(()));
     for phase in [
@@ -96,9 +96,7 @@ fn failure_handler_errors_do_not_replace_selected_failure_or_suppress_async_disp
         assert_eq!(lifecycle.phase(), phase);
         assert!(
             lifecycle
-                .accept(Err(HostFailure::Error(Error::InvalidRequest(
-                    "callback".into()
-                ))))
+                .accept(Err(HostFailure::Error(Error("callback".into()))))
                 .is_none()
         );
     }
@@ -108,10 +106,10 @@ fn failure_handler_errors_do_not_replace_selected_failure_or_suppress_async_disp
 #[test]
 fn cancellation_skips_terminal_dispatch() {
     let mut lifecycle = HostLifecycle::new(true);
-    let error = Error::InvalidRequest("cancelled".into());
+    let error = Error("cancelled".into());
     assert!(matches!(
         lifecycle.accept(Err(HostFailure::Cancelled(error.clone()))),
-        Some(Error::InvalidRequest(message)) if message == "cancelled"
+        Some(Error(message)) if message == "cancelled"
     ));
     assert_eq!(lifecycle.phase(), HostPhase::Complete);
 }

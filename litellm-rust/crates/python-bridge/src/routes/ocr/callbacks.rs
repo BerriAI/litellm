@@ -25,8 +25,36 @@ impl From<&OcrPreCallRequest> for OcrLoggingFields {
     }
 }
 
-impl PythonLogger {
-    pub(super) fn update_ocr(
+pub(super) trait OcrLogger {
+    fn update_ocr(
+        &self,
+        py: Python<'_>,
+        kwargs: &Py<PyDict>,
+        pre_call: &OcrLoggingFields,
+        secret_fields: &[&str],
+        url: &str,
+    ) -> PyResult<()>;
+
+    fn pre_ocr(
+        &self,
+        py: Python<'_>,
+        api_key: &Option<Py<PyAny>>,
+        body: &Bound<'_, PyDict>,
+        headers: &Bound<'_, PyDict>,
+        url: &str,
+    ) -> PyResult<()>;
+
+    fn post_ocr(
+        &self,
+        py: Python<'_>,
+        original_response: &Value,
+        body: Option<&Py<PyDict>>,
+        headers: Option<&Py<PyDict>>,
+    ) -> PyResult<()>;
+}
+
+impl OcrLogger for PythonLogger {
+    fn update_ocr(
         &self,
         py: Python<'_>,
         kwargs: &Py<PyDict>,
@@ -72,7 +100,7 @@ impl PythonLogger {
         Ok(())
     }
 
-    pub(crate) fn pre_ocr(
+    fn pre_ocr(
         &self,
         py: Python<'_>,
         api_key: &Option<Py<PyAny>>,
@@ -98,7 +126,7 @@ impl PythonLogger {
         Ok(())
     }
 
-    pub(crate) fn post_ocr(
+    fn post_ocr(
         &self,
         py: Python<'_>,
         original_response: &Value,

@@ -2002,6 +2002,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callback-protocol"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
+name = "litellm-callback-python-legacy"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth",
+ "litellm-callback-protocol",
+ "litellm-python-interop",
+ "pyo3",
+]
+
+[[package]]
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
@@ -2015,6 +2032,7 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-auth-azure",
  "litellm-auth-gcp",
+ "litellm-callback-protocol",
  "litellm-framing",
  "mime_guess",
  "moka",
@@ -2060,6 +2078,7 @@ dependencies = [
  "criterion",
  "futures-util",
  "litellm-auth",
+ "litellm-callback-python-legacy",
  "litellm-core",
  "litellm-python-interop",
  "litellm-token-counter",
