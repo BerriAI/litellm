@@ -22,6 +22,7 @@ from cost_matrix import (
     FrontierModel,
     cases_for,
     expected_key,
+    matrix_data_errors,
     recount_cost,
 )
 from e2e_config import unique_marker
@@ -38,6 +39,9 @@ from models import (
 )
 
 pytestmark: Final = [pytest.mark.e2e, pytest.mark.cost_map_stack]  # mutable-ok: pytest only accepts a list for pytestmark
+
+if _data_errors := matrix_data_errors():
+    raise ValueError("\n".join(_data_errors))
 
 _MATRIX: Final[tuple[tuple[FrontierModel, Case], ...]] = tuple(
     (model, case) for model in FRONTIER_MODELS for case in cases_for(model)
