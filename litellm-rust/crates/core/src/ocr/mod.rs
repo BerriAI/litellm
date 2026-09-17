@@ -18,12 +18,13 @@ pub use client::{OcrClient, ocr};
 pub use document::{encode_file_document, mime_type_for_name, upload_mime_type};
 pub use lifecycle::{
     NativeOutcome, NativeResult, NoopOcrHost, OcrAdmission, OcrCall, OcrCallStep, OcrDecline,
-    OcrHookHost, OcrHost, OcrHostOperation, OcrHostResult,
+    OcrHookHost, OcrHost, OcrHostOperation, OcrHostResult, OcrProjectedRequest,
 };
 pub use provider_config::{get_api_key_env_var, get_health_check_document};
 pub use types::{
     LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrConnectionInputs, OcrCredentialInputs,
-    OcrDocument, OcrDocumentInput, OcrFileContent, OcrPage, OcrPageDimensions, OcrPageImage, OcrTransportConfig, OcrUsageInfo,
+    OcrDocument, OcrDocumentInput, OcrFileContent, OcrPage, OcrPageDimensions, OcrPageImage,
+    OcrTransportConfig, OcrUsageInfo,
 };
 
 #[cfg(test)]

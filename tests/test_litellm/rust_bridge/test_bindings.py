@@ -33,3 +33,17 @@ def test_binding_validates_native_attribute(
     binding: Final = bindings.NativeBinding("route", validate=lambda item: item if isinstance(item, int) else None)
 
     assert binding.load() == expected
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_decline_accessor_only_catches_admission_declines(monkeypatch: pytest.MonkeyPatch, available: bool) -> None:
+    class Declined(Exception):
+        pass
+
+    class Upstream(Exception):
+        pass
+
+    native: Final = SimpleNamespace(RustBridgeDeclined=Declined, RustUpstreamError=Upstream) if available else None
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
+    assert bindings.native_decline_types() == ((Declined,) if available else ())
+    assert not isinstance(Upstream("already dispatched"), bindings.native_decline_types())

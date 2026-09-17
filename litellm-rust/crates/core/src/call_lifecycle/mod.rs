@@ -1,9 +1,17 @@
 use std::future::Future;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+pub mod callbacks;
 pub mod host;
+pub mod registration;
 pub mod types;
 
+pub use callbacks::{
+    CallbackFamily, CallbackId, CallbackInvocation, CallbackKind, CallbackMethod, CursorFacts,
+    Delivery, Dispatch, DispatchCursor, DispatchFacts, DispatchStep, InvocationOutcome,
+    LoggedMarker, ReleaseGate, SuccessFacts, TargetErrorPolicy, object_target_eligible,
+    plan_failure, plan_request, plan_success,
+};
 pub use types::{
     CallLifecycleContext, CallLifecyclePhase, CallLifecyclePhaseTiming, CallLifecycleRequest,
     CallLifecycleTiming,

@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
@@ -93,7 +93,10 @@ impl From<OcrDocument> for OcrDocumentInput {
 
 impl From<PathBuf> for OcrDocumentInput {
     fn from(path: PathBuf) -> Self {
-        Self::Path { path, mime_type: None }
+        Self::Path {
+            path,
+            mime_type: None,
+        }
     }
 }
 
@@ -324,7 +327,6 @@ impl LiteLLMOcrRequest {
             config,
         })
     }
-
 }
 
 impl<D> LiteLLMOcrRequest<D> {
@@ -383,7 +385,6 @@ impl<D> LiteLLMOcrRequest<D> {
             ..self
         }
     }
-
 }
 
 impl LiteLLMOcrRequest {

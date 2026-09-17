@@ -13,6 +13,11 @@ use litellm_python_interop::from_py_preserving_errors as from_py;
 use crate::auth::{AZURE_AD_TOKEN_PROVIDER, PythonTokenProvider};
 use crate::lifecycle::BoundArguments;
 
+pub(crate) struct Projection<Native, Retained> {
+    pub native: Native,
+    pub retained: Retained,
+}
+
 /// Fields every lifecycle route reads from its bound `*args, **kwargs` before
 /// asking core to build the typed request. Route-specific inputs (for example
 /// the OCR `document`) are read separately by the route.

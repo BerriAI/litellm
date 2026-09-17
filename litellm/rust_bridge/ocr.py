@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
@@ -8,6 +8,56 @@ from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KEY, OCRResponse
 from litellm.rust_bridge.bindings import NativeBinding
+from litellm.types.utils import CustomPricingLiteLLMParams
+
+
+class OcrLoggingProtocol(Protocol):
+    def update_from_kwargs(
+        self,
+        *,
+        kwargs: dict[str, object],
+        model: str,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        custom_llm_provider: str,
+    ) -> object: ...
+
+
+def _redact(params: Mapping[str, object], secret_fields: Sequence[str]) -> dict[str, object]:
+    return {  # mutable-ok: update_from_kwargs takes dict
+        name: "****" if name in secret_fields else value
+        for name, value in params.items()
+        if name != "proxy_server_request"
+    }
+
+
+def update_logging(
+    logger: OcrLoggingProtocol,
+    kwargs: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str,
+    optional_params: Mapping[str, object],
+    secret_fields: Sequence[str],
+    url: str,
+) -> None:
+    logger.update_from_kwargs(
+        kwargs=_redact(kwargs, secret_fields),
+        model=model,
+        optional_params=_redact(optional_params, secret_fields),
+        litellm_params={  # mutable-ok: update_from_kwargs takes dict
+            "litellm_call_id": kwargs.get("litellm_call_id"),
+            "api_base": url,
+            **{
+                name: kwargs[name] for name in ("logger_fn", "litellm_request_debug") if name in kwargs
+            },  # mutable-ok: splat into the dict above
+            **{  # mutable-ok: splat into the dict above
+                name: kwargs[name]
+                for name in CustomPricingLiteLLMParams.model_fields
+                if name in kwargs and kwargs[name] is not None
+            },
+        },
+        custom_llm_provider=custom_llm_provider,
+    )
 
 
 class RustOcr(Protocol):

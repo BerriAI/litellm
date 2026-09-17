@@ -22,6 +22,7 @@ pub struct OcrPreCallRequest {
 pub struct OcrDuringCallRequest {
     pub model: String,
     pub custom_llm_provider: String,
+    pub optional_params: Value,
     pub api_key: Option<String>,
     pub url: String,
     pub headers: Vec<(String, String)>,

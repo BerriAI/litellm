@@ -15,7 +15,10 @@ pub(crate) fn read_path_document(
 ) -> Result<OcrDocument, super::Error> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
-        .and_then(|file| file.take(OCR_INLINE_MAX_BYTES as u64 + 1).read_to_end(&mut bytes))
+        .and_then(|file| {
+            file.take(OCR_INLINE_MAX_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+        })
         .map_err(|source| super::Error::FileRead {
             path: path.to_owned(),
             source: std::sync::Arc::new(source),
@@ -201,9 +204,14 @@ mod tests {
 
     #[test]
     fn path_preparation_preserves_io_causes_and_enforces_the_inline_limit() {
-        let path = std::env::temp_dir().join(format!("ocr-document-{:032x}.png", rand::random::<u128>()));
+        let path =
+            std::env::temp_dir().join(format!("ocr-document-{:032x}.png", rand::random::<u128>()));
         let error = read_path_document(&path, None).unwrap_err();
-        let super::super::Error::FileRead { path: failed_path, source } = error else {
+        let super::super::Error::FileRead {
+            path: failed_path,
+            source,
+        } = error
+        else {
             panic!("missing path must produce a typed file error");
         };
         assert_eq!(failed_path, path);
@@ -215,9 +223,16 @@ mod tests {
         let image = read_path_document(&path, None).unwrap();
         let overridden = read_path_document(&path, Some("application/pdf")).unwrap();
         std::fs::remove_file(&path).unwrap();
-        assert!(matches!(oversized, Err(super::super::Error::InlineDocumentTooLarge)));
-        assert!(matches!(image, OcrDocument::ImageUrl { image_url, .. } if image_url == "data:image/png;base64,aW1hZ2UgYnl0ZXM="));
-        assert!(matches!(overridden, OcrDocument::DocumentUrl { document_url, .. } if document_url == "data:application/pdf;base64,aW1hZ2UgYnl0ZXM="));
+        assert!(matches!(
+            oversized,
+            Err(super::super::Error::InlineDocumentTooLarge)
+        ));
+        assert!(
+            matches!(image, OcrDocument::ImageUrl { image_url, .. } if image_url == "data:image/png;base64,aW1hZ2UgYnl0ZXM=")
+        );
+        assert!(
+            matches!(overridden, OcrDocument::DocumentUrl { document_url, .. } if document_url == "data:application/pdf;base64,aW1hZ2UgYnl0ZXM=")
+        );
     }
 
     fn document(source: &str) -> OcrDocument {
