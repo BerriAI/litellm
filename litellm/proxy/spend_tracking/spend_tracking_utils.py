@@ -378,7 +378,11 @@ def _looks_like_model_name(model: str) -> bool:
 
 
 def get_logging_payload(
-    kwargs, response_obj, start_time, end_time, llm_router: "Router | None" = None
+    kwargs: dict | None,
+    response_obj: object,
+    start_time: datetime,
+    end_time: datetime,
+    llm_router: "Router | None" = None,
 ) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
