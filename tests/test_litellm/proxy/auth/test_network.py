@@ -57,6 +57,13 @@ def test_xff_honored_from_trusted_peer():
     assert via_proxy is True
 
 
+def test_ipv4_mapped_peer_and_hop_match_ipv4_trusted_ranges():
+    request = make_request(headers={"x-forwarded-for": "203.0.113.9, ::ffff:10.0.0.5"}, client=("::ffff:10.0.0.1", 1))
+    ip, via_proxy = resolve_client_ip(request, TRUSTED)
+    assert ip == "203.0.113.9"
+    assert via_proxy is True
+
+
 def test_spoofed_xff_from_untrusted_peer_is_ignored():
     request = make_request(
         headers={"x-forwarded-for": "203.0.113.9"}, client=("8.8.8.8", 1)
