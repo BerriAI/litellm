@@ -75,6 +75,34 @@
     ],
     "tests/integration/authorization/test_warmed_policy.py::test_expiry_and_explicit_clear_reach_both_warmed_workers": [
       "mgmt.key.update.expiry_changes_reach_warmed_workers"
+    ],
+    "tests/integration/database/test_partition_transactions.py::test_real_partition_ddl_survives_witnessed_lock_and_is_idempotent": [
+      "other.database.partitions.lock_wait_outlives_transaction_default",
+      "other.database.partitions.repeat_preserves_rows"
+    ],
+    "tests/integration/database/test_reader_writer_regeneration.py::test_key_regeneration_uses_writer_with_a_real_readonly_reader": [
+      "other.database.regeneration.writer_updates_dependent_grants"
+    ],
+    "tests/integration/pricing/test_price_precedence.py::test_generated_zero_null_and_omitted_prices_follow_independent_arithmetic": [
+      "quota_management.spend_tracking.price_precedence.zero_and_default_rates"
+    ],
+    "tests/integration/pricing/test_price_precedence.py::test_same_upstream_aliases_keep_distinct_prices_after_reload": [
+      "quota_management.spend_tracking.alias_prices.remain_independent_on_reload"
+    ],
+    "tests/integration/spend/test_cache_and_quota.py::test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost": [
+      "quota_management.response_cache.generated_sequences_preserve_content_and_accounting"
+    ],
+    "tests/integration/spend/test_cache_and_quota.py::test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores": [
+      "quota_management.budget.key.boundary_blocks_before_provider_and_reset_restores"
+    ],
+    "tests/integration/spend/test_cache_and_quota.py::test_different_system_messages_do_not_share_a_cached_response": [
+      "quota_management.response_cache.system_messages_partition_cache_identity"
+    ],
+    "tests/integration/database/test_transaction_atomicity.py::test_access_group_second_key_constraint_failure_rolls_back_all_writes": [
+      "other.database.access_group.failed_second_write_rolls_back_first"
+    ],
+    "tests/integration/spend/test_cache_and_quota.py::test_repeated_hits_keep_response_identity_and_create_distinct_zero_cost_rows": [
+      "quota_management.response_cache.repeated_hits_preserve_identity_and_single_charge"
     ]
   }
 }
