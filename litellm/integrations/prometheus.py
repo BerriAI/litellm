@@ -4553,7 +4553,10 @@ class PrometheusLogger(CustomLogger):
         from prometheus_client import REGISTRY
 
         from litellm._logging import verbose_proxy_logger
-        from litellm.integrations.prometheus_metrics_endpoint import make_metrics_asgi_app
+        from litellm.integrations.prometheus_metrics_endpoint import (
+            ASGIRoute,
+            make_metrics_asgi_app,
+        )
         from litellm.proxy.proxy_server import app
 
         # Create metrics ASGI app
@@ -4566,8 +4569,20 @@ class PrometheusLogger(CustomLogger):
         else:
             metrics_app = make_metrics_asgi_app(REGISTRY)
 
-        # Mount the metrics app to the app
-        app.mount("/metrics", metrics_app)
+        # `app.mount("/metrics", ...)` makes starlette answer the bare `/metrics`
+        # with `307 Location: /metrics/`. Prometheus and grafana alloy do not
+        # follow redirects, so the scrape reads an empty body while `up` stays 1
+        # -- metric loss with no error anywhere (#30079).
+        #
+        # Register both spellings as routes instead. `ASGIRoute` is what keeps
+        # `metrics_app`'s streaming, gzip and render-coalescing intact -- a plain
+        # function endpoint would have to buffer the whole scrape to hand back a
+        # single Response.
+        # `methods` is left at its default: starlette's `Route` resolves None to
+        # exactly `["GET"]`, so naming it here would only add a mutable literal.
+        metrics_route: Final = ASGIRoute(metrics_app)
+        app.add_route("/metrics", metrics_route)
+        app.add_route("/metrics/", metrics_route)
         verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics (no authentication)")
 
 

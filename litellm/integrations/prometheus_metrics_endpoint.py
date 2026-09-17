@@ -79,6 +79,22 @@ def _chunks(body: bytes) -> Iterator[bytes]:
     return (body[start : start + RESPONSE_CHUNK_SIZE_BYTES] for start in range(0, len(body), RESPONSE_CHUNK_SIZE_BYTES))
 
 
+class ASGIRoute:
+    """Adapt an ASGI app so it can be registered with ``Starlette.add_route``.
+
+    Starlette calls a plain function endpoint as ``f(request)`` and expects a
+    ``Response`` back. A callable object is handed the raw ASGI triple instead,
+    which lets the mounted app write its own streaming response rather than
+    having the whole scrape buffered to build one.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self._app(scope, receive, send)
+
+
 def make_metrics_asgi_app(registry: CollectorRegistry) -> ASGIApp:
     renderer: Final = CoalescedScrapeRenderer(registry)
 

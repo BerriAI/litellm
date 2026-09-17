@@ -274,3 +274,49 @@ async def test_a_finishing_render_does_not_evict_another_that_is_still_in_flight
     assert collector.collect_calls == 1, "an unrelated render finishing evicted the render still in flight"
     for response in responses:
         assert b"gated_metric" in response.content
+
+
+def test_both_metrics_paths_answer_without_a_redirect(monkeypatch: pytest.MonkeyPatch):
+    """`app.mount("/metrics", ...)` answers the bare path with 307 Location:
+    /metrics/. Prometheus and grafana alloy do not follow redirects, so the
+    scrape reads an empty body while `up` stays 1 (#30079). Both spellings must
+    return the payload directly.
+
+    Drives the real `_mount_metrics_endpoint` against a stand-in app so the
+    wiring itself is covered, not just `ASGIRoute` in isolation.
+    """
+    import sys
+    import types
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    # Import before the stub goes in. `_mount_metrics_endpoint` resolves
+    # `litellm.proxy.proxy_server` lazily, and standing a fake module in that
+    # slot while this module graph is still being built changes what the real
+    # imports underneath it resolve to.
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    app: Final = FastAPI()
+    proxy_server: Final = types.ModuleType("litellm.proxy.proxy_server")
+    proxy_server.app = app  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server)
+
+    PrometheusLogger._mount_metrics_endpoint()
+
+    assert {route.path for route in app.router.routes if "metrics" in getattr(route, "path", "")} == {
+        "/metrics",
+        "/metrics/",
+    }
+
+    client: Final = TestClient(app, follow_redirects=False)
+    for path in ("/metrics", "/metrics/"):
+        response = client.get(path)
+        # 200 rather than the 307 the mount used to emit. What the registry
+        # holds is deliberately not asserted -- this shares the process-wide
+        # default REGISTRY, so another test may legitimately have drained it.
+        assert response.status_code == 200, path
+        assert response.headers["content-type"].startswith("text/plain"), path
+
+    # The streaming app still owns the response, so its behaviour survives.
+    assert client.get("/metrics", headers={"accept-encoding": "gzip"}).headers["content-encoding"] == "gzip"
