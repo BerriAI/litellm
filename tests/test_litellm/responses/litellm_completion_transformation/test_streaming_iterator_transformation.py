@@ -1065,6 +1065,34 @@ async def test_reasoning_then_text_announces_message_item_before_text_events(syn
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
+async def test_tool_then_reasoning_then_text_gives_message_its_own_output_index(sync_mode):
+    iterator: Final = _build_iterator(
+        [
+            _tool_call_chunk(),
+            _reasoning_chunk("thinking"),
+            _chunk("Hello"),
+            _chunk("!", finish_reason="stop"),
+        ]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+    output_item_added_events: Final = [
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+    message_item_adds: Final = [event for event in output_item_added_events if _is_message_item(event)]
+    function_call_adds: Final = [
+        event for event in output_item_added_events if getattr(event.item, "type", None) == "function_call"
+    ]
+
+    assert len(message_item_adds) == 1
+    assert all(message_item_adds[0].output_index != event.output_index for event in function_call_adds)
+
+    output_indexes_by_item_id: Final = {event.item.id: event.output_index for event in output_item_added_events}
+    assert len(output_indexes_by_item_id) == len(set(output_indexes_by_item_id.values()))
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
 async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode):
     iterator: Final = _build_iterator([_chunk("Hel"), _chunk("lo", finish_reason="stop")])
 

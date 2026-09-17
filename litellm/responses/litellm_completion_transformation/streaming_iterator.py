@@ -599,7 +599,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._cached_item_id = f"msg_{uuid.uuid4()}"
         self.sent_message_item_added_event = True
         self.sent_content_part_added_event = True
-        self._message_output_index = 1 if self._cached_reasoning_item_id is not None else 0
+        if self._cached_reasoning_item_id is not None:
+            self._message_output_index = self._next_tool_output_index
+            self._next_tool_output_index += 1
         self._sequence_number += 1
         event: Final = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -953,7 +955,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if self._cached_reasoning_item_id is None:
                 self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
             self._reasoning_item_id = self._cached_reasoning_item_id
-            self._next_tool_output_index = max(self._next_tool_output_index, 2)
 
             event = OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
