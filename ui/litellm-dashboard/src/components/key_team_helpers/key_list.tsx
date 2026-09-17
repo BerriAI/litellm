@@ -39,6 +39,7 @@ export interface KeyResponse {
   key_name: string;
   key_alias: string;
   spend: number;
+  total_spend: number;
   max_budget: number;
   expires: string;
   models: string[];
@@ -64,6 +65,8 @@ export interface KeyResponse {
   model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
   soft_budget_cooldown: boolean;
   blocked: boolean;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
   litellm_budget_table: Record<string, unknown>;
   organization_id: string | null;
   org_id?: string | null;

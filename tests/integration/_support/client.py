@@ -27,6 +27,13 @@ def string_value(value: JsonValue) -> str:
     return value
 
 
+def delete_key_if_present(candidate: Gateway, key: str) -> None:
+    digest: Final = sha256(key.encode()).hexdigest()
+    if read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)):
+        candidate.post("/key/delete", {"keys": [key]})
+    assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)) == []
+
+
 def eventually(read: Callable[[], T], satisfied: Callable[[T], bool], seconds: float = 10) -> T:
     deadline: Final = time.monotonic() + seconds
     while True:
