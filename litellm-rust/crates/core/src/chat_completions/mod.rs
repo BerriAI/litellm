@@ -15,13 +15,11 @@ pub(crate) mod handler;
 mod prepare;
 pub mod response_utils;
 pub mod streaming;
-pub mod transformation;
 pub mod types;
-
-use serde_json::{Map, Value};
 
 use handler::execute_chat_completions_provider_call;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};
+use serde_json::{Map, Value};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
 pub async fn chat_completions(
