@@ -11,11 +11,14 @@ Related issue: https://github.com/BerriAI/litellm/issues/18221
 import json
 import re
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, get_args
 
 import pytest
-from prometheus_client import REGISTRY
+from prometheus_client import REGISTRY, Gauge
+from prometheus_client.registry import Collector
 
 import litellm
 from litellm.caching.redis_cache import _breaker_metrics
@@ -33,8 +36,12 @@ _BY_CLAUSE_RE: Final = re.compile(r"\bby\s*\([^)]*\)")
 _EXPOSITION_SUFFIXES: Final = ("", "_total", "_bucket", "_sum", "_count", "_created")
 
 
-def _reset_default_registry() -> None:
-    for collector in list(REGISTRY._collector_to_names.keys()):
+def _registered_collectors() -> MappingProxyType[Collector, tuple[str, ...]]:
+    return MappingProxyType({collector: tuple(names) for collector, names in REGISTRY._collector_to_names.items()})
+
+
+def _clear_default_registry_and_lazy_owners() -> None:
+    for collector in tuple(REGISTRY._collector_to_names):
         REGISTRY.unregister(collector)
     SpendLogCleanupMetrics._initialized = False
     InFlightRequestsMiddleware._gauge_init_attempted = False
@@ -42,19 +49,57 @@ def _reset_default_registry() -> None:
     _breaker_metrics.cache_clear()
 
 
-@pytest.fixture
-def emitted_metric_families(monkeypatch: pytest.MonkeyPatch) -> Iterator[frozenset[str]]:
-    _reset_default_registry()
+@contextmanager
+def _isolated_litellm_metric_families(monkeypatch: pytest.MonkeyPatch) -> Iterator[frozenset[str]]:
+    previous: Final = _registered_collectors()
+    _clear_default_registry_and_lazy_owners()
     monkeypatch.setattr(litellm, "prometheus_metrics_config", None)
     PrometheusLogger()
     PrometheusServicesLogger()
+    logger_collectors: Final = frozenset(REGISTRY._collector_to_names)
     SpendLogCleanupMetrics._ensure_initialized()
     assert SpendLogCleanupMetrics.runs is not None
     assert InFlightRequestsMiddleware._get_gauge() is not None
     assert _breaker_metrics()._state_gauge is not None
     assert create_prometheus_admission_metrics() is not None
-    yield frozenset(metric.name for metric in REGISTRY.collect())
-    _reset_default_registry()
+    lazy_owner_names: Final = frozenset(
+        name
+        for collector, names in _registered_collectors().items()
+        if collector not in logger_collectors
+        for name in names
+    )
+    try:
+        yield frozenset(metric.name for metric in REGISTRY.collect())
+    finally:
+        _clear_default_registry_and_lazy_owners()
+        for collector, names in previous.items():
+            if lazy_owner_names.isdisjoint(names):
+                REGISTRY.register(collector)
+
+
+@pytest.fixture
+def emitted_metric_families(monkeypatch: pytest.MonkeyPatch) -> Iterator[frozenset[str]]:
+    with _isolated_litellm_metric_families(monkeypatch) as families:
+        yield families
+
+
+@pytest.fixture
+def unrelated_gauge() -> Iterator[Gauge]:
+    gauge: Final = Gauge("litellm_unrelated_sentinel", "registered by a test outside the isolated block")
+    yield gauge
+    if gauge in REGISTRY._collector_to_names:
+        REGISTRY.unregister(gauge)
+
+
+def test_isolated_metric_families_restore_unrelated_collectors_and_lazy_owners(
+    monkeypatch: pytest.MonkeyPatch, unrelated_gauge: Gauge
+):
+    with _isolated_litellm_metric_families(monkeypatch) as families:
+        assert "litellm_unrelated_sentinel" not in families
+        assert unrelated_gauge not in REGISTRY._collector_to_names
+    assert unrelated_gauge in REGISTRY._collector_to_names
+    assert InFlightRequestsMiddleware._get_gauge() is not None
+    assert _breaker_metrics()._state_gauge is not None
 
 
 def _dashboard_expressions(path: Path) -> tuple[str, ...]:
