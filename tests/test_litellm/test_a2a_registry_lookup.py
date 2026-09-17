@@ -75,6 +75,43 @@ def test_a2a_registry_integration():
     assert post.call_args.kwargs["headers"]["X-Agent"] == "static"
 
 
+def test_one_callers_bearer_never_reaches_another_caller_of_the_same_registered_agent():
+    """The registered headers dict is shared by every request to the agent, so the bearer one caller
+    supplies must be written to that request alone and never persisted onto the agent for the next
+    caller, who has no key of their own."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.types.agents import AgentResponse
+
+    shared_agent = AgentResponse(
+        agent_id="shared-id",
+        agent_name="shared-agent",
+        agent_card_params={"url": "http://registry-url.example.com:9999"},
+        litellm_params={"headers": {"X-Agent": "static"}},
+    )
+    client = HTTPHandler()
+    agent_reply = httpx.Response(
+        200,
+        json={"jsonrpc": "2.0", "id": "1", "result": {"kind": "message", "parts": [{"kind": "text", "text": "ok"}]}},
+    )
+    messages = [{"role": "user", "content": "hi"}]
+    original_agents = global_agent_registry.agent_list.copy()
+    global_agent_registry.register_agent(shared_agent)
+
+    try:
+        with patch.object(client, "post", return_value=agent_reply) as post:  # test-quality-ok: injected client
+            litellm.completion(model="a2a/shared-agent", messages=messages, api_key="caller-one-key", client=client)
+            litellm.completion(model="a2a/shared-agent", messages=messages, client=client)
+    finally:
+        global_agent_registry.agent_list = original_agents
+
+    first_call_headers, second_call_headers = (call.kwargs["headers"] for call in post.call_args_list)
+    assert first_call_headers["Authorization"] == "Bearer caller-one-key"
+    assert "Authorization" not in second_call_headers
+    assert second_call_headers["X-Agent"] == "static"
+    assert shared_agent.litellm_params == {"headers": {"X-Agent": "static"}}
+
+
 def _foundry_card_stored_through_the_agents_api() -> dict:
     from litellm.proxy.a2a.agent_card import merge_agent_card
 

@@ -103,7 +103,7 @@ class A2AConfig(BaseConfig):
                     if not headers:
                         agent_headers: Final = agent.litellm_params.get("headers")
                         if agent_headers:
-                            headers = agent_headers
+                            headers = dict(agent_headers)
 
                 # Merge other litellm_params (timeout, max_retries, etc.)
                 registry_params: Final = tuple(
@@ -174,17 +174,13 @@ class A2AConfig(BaseConfig):
             api_base: API base URL
 
         Returns:
-            Updated headers dict
+            A new headers dict; the caller's dict is left untouched
         """
-        # Ensure Content-Type is set to application/json for JSON-RPC 2.0
-        if "content-type" not in headers and "Content-Type" not in headers:
-            headers["Content-Type"] = "application/json"
-
-        # Add Authorization header if API key is provided
-        if api_key is not None:
-            headers["Authorization"] = f"Bearer {api_key}"
-
-        return headers
+        content_type_default: Final = (
+            () if "content-type" in headers or "Content-Type" in headers else (("Content-Type", "application/json"),)
+        )
+        bearer: Final = () if api_key is None else (("Authorization", f"Bearer {api_key}"),)
+        return dict((*headers.items(), *content_type_default, *bearer))
 
     def get_complete_url(
         self,
