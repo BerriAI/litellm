@@ -32,6 +32,7 @@ from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import (
     KeyGenerateBody,
+    OrgNewBody,
     TeamInfoParams,
     TeamMemberAddBody,
     TeamMemberDeleteBody,
@@ -46,6 +47,7 @@ TeamRole = Literal["admin", "user"]
 
 _TEAM_TPM_LIMIT: Final = 1000
 _TEAM_MAX_BUDGET: Final = 10.0
+_ORG_MAX_BUDGET: Final = 100.0
 
 
 class TeamBlockBody(BaseModel):
@@ -117,6 +119,10 @@ class TeamWithAdminNewBody(TeamNewBody):
     tpm_limit: int
     max_budget: float | None = None
     members_with_roles: list[TeamMemberEntry]
+
+
+class OrgWithBudgetNewBody(OrgNewBody):
+    max_budget: float
 
 
 class TeamSettingsChange(PartialBody, TeamSettings):
@@ -423,7 +429,10 @@ def rpm_limit_and_max_budget_editable_by_team_admins(client: ManagementClient) -
 
 
 def _team_with_admin(
-    client: ManagementClient, resources: ResourceManager, max_budget: float | None = None
+    client: ManagementClient,
+    resources: ResourceManager,
+    max_budget: float | None = None,
+    organization_id: str | None = None,
 ) -> tuple[str, str]:
     """A team with a tpm_limit, and the key of a user who is an admin of that team."""
     admin_id = _create_user(client, resources, f"e2e-team-admin-{unique_marker()}@example.com")
@@ -432,6 +441,7 @@ def _team_with_admin(
             team_alias=f"e2e-team-admin-{unique_marker()}",
             tpm_limit=_TEAM_TPM_LIMIT,
             max_budget=max_budget,
+            organization_id=organization_id,
             members_with_roles=[TeamMemberEntry(role="admin", user_id=admin_id)],
         )
     )
@@ -654,3 +664,26 @@ class TestTeamAdminWithRpmLimitAndMaxBudgetEnabled:
         assert after == before, (
             f"the refused update still wrote to the team, the rpm_limit included: before {before}, after {after}"
         )
+
+    @pytest.mark.covers("mgmt.team.update.team_admin_cannot_grow_budget")
+    def test_team_admin_cannot_raise_an_org_team_budget_under_the_org_cap(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        org_id = client.create_org(
+            OrgWithBudgetNewBody(organization_alias=f"e2e-team-admin-org-{unique_marker()}", max_budget=_ORG_MAX_BUDGET)
+        )
+        resources.defer(lambda: client.delete_org(org_id))
+        team_id, admin_key = _team_with_admin(client, resources, max_budget=_TEAM_MAX_BUDGET, organization_id=org_id)
+        before = _read_team(client, team_id).team_info
+
+        outcome = _update_team_as(
+            client, admin_key, TeamSettingsUpdate(team_id=team_id, max_budget=_ORG_MAX_BUDGET / 2)
+        )
+
+        assert outcome.status_code == 403, (
+            f"a team admin raising an org team's max_budget from {_TEAM_MAX_BUDGET} to {_ORG_MAX_BUDGET / 2}, "
+            f"under the org's {_ORG_MAX_BUDGET}, must be 403, got {outcome.status_code}: {outcome.body[:300]}"
+        )
+        assert "Only a proxy admin can raise" in outcome.body, f"403 body should say why, got: {outcome.body[:300]}"
+        after = _read_team(client, team_id).team_info
+        assert after == before, f"the refused update still wrote to the team: before {before}, after {after}"

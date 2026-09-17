@@ -1206,13 +1206,13 @@ def _check_team_budget_update_authority(
     existing_team_max_budget: float | None,
 ) -> None:
     """
-    Restrict who can grow a standalone team's spend ceiling on /team/update.
+    Restrict who can grow a team's spend ceiling on /team/update.
 
-    A team admin (already authorized via _verify_team_access) may keep or lower
-    the team budget, but only a proxy admin may grow it - by raising max_budget
-    above the team's current value or by removing the cap (setting it to None).
-    Setting a finite budget on a team that has no cap is a restriction and is
-    allowed. Org-scoped teams are governed by _check_org_team_limits().
+    A team admin may keep or lower the team budget, but only a proxy admin may
+    grow it - by raising max_budget above the team's current value or by
+    removing the cap (setting it to None). Setting a finite budget on a team
+    that has no cap is a restriction and is allowed. Org admins editing
+    org-scoped teams are governed by _check_org_team_limits() instead.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return
@@ -2339,9 +2339,9 @@ async def update_team(
                     prisma_client=prisma_client,
                 )
 
-        # Only a proxy admin may grow a standalone team's spend ceiling.
-        # Org-scoped teams are validated by _check_org_team_limits() above.
-        if org_id_to_check is None:
+        # A team admin never grows its own team's spend ceiling. Org admins grow org-scoped teams
+        # within the org limits _check_org_team_limits() enforced above.
+        if org_id_to_check is None or access_role == "team_admin":
             _check_team_budget_update_authority(
                 data=data,
                 user_api_key_dict=user_api_key_dict,

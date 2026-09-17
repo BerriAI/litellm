@@ -7124,8 +7124,10 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit(
     mock_org.litellm_budget_table = mock_budget_table
 
     with (
-        _team_admin_may_edit("max_budget"),
-        _not_org_admin(),
+        patch(  # test-quality-ok: the org-admin lookup needs a real prisma client this file's MagicMock cannot provide
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            AsyncMock(return_value=True),
+        ),
         patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
         patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
@@ -7147,9 +7149,7 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit(
             "team_id": "org-team-update-budget-123",
             "organization_id": "test-org-update-budget",
             "max_budget": 30.0,
-            "members_with_roles": [
-                {"user_id": "org-admin-update-budget-test", "role": "admin"}
-            ],
+            "members_with_roles": [],
         }
         mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=mock_existing_team
@@ -15175,6 +15175,63 @@ async def test_update_team_holds_a_team_admin_to_the_org_tpm_limit(disable_audit
     assert "exceeds organization's tpm_limit (10000)" in str(over_cap.value.message)
     assert prisma.db.litellm_teamtable.update.await_count == 1
     assert prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["tpm_limit"] == 8000
+
+
+@pytest.mark.asyncio
+async def test_update_team_stops_a_team_admin_raising_an_org_team_budget_under_the_org_cap(
+    disable_audit_logging_for_mocked_team,
+):
+    """The org cap alone would let a team admin with max_budget enabled grow its own team's budget up to the org's."""
+    import contextlib
+
+    budgeted_org = LiteLLM_OrganizationTable(
+        organization_id="budgeted-org",
+        budget_id="budgeted-org-budget",
+        created_by="admin",
+        updated_by="admin",
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+    )
+    org_team = MagicMock()
+    org_team.metadata = {}
+    org_team.organization_id = "budgeted-org"
+    org_team.max_budget = 10.0
+    org_team.model_max_budget = None
+    org_team.model_dump.return_value = {
+        "team_id": "test_team_id",
+        "team_alias": "test_team",
+        "organization_id": "budgeted-org",
+        "max_budget": 10.0,
+        "metadata": {},
+        "members_with_roles": [{"user_id": "team-admin", "role": "admin"}],
+    }
+
+    with contextlib.ExitStack() as stack:
+        prisma = _wire_update_team(stack, {})
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=org_team)
+        stack.enter_context(_team_admin_may_edit("max_budget"))
+        stack.enter_context(_not_org_admin())
+        stack.enter_context(
+            patch(  # test-quality-ok: update_team reads orgs through this module-level import; no seam to inject
+                "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
+                AsyncMock(return_value=budgeted_org),
+            )
+        )
+        with pytest.raises(ProxyException) as raised:
+            await update_team(
+                data=UpdateTeamRequest(team_id="test_team_id", max_budget=50.0),
+                http_request=_update_request_stub(),
+                user_api_key_dict=_TEAM_ADMIN_CALLER,
+            )
+        await update_team(
+            data=UpdateTeamRequest(team_id="test_team_id", max_budget=5.0),
+            http_request=_update_request_stub(),
+            user_api_key_dict=_TEAM_ADMIN_CALLER,
+        )
+
+    assert str(raised.value.code) == "403"
+    assert "Only a proxy admin can raise a team's max_budget" in str(raised.value.message)
+    assert prisma.db.litellm_teamtable.update.await_count == 1
+    assert prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["max_budget"] == 5.0
 
 
 @pytest.mark.asyncio
