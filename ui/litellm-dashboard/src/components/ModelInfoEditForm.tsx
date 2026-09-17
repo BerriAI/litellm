@@ -28,6 +28,7 @@ import type { Team } from "./key_team_helpers/key_list";
 import type { CredentialItem } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import type { Tag } from "./tag_management/types";
+import { ModelTeamSelect } from "./view_model/ModelTeamSelect";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { formatPtuUtcDisplay, utcIsoToPickerValue } from "../utils/ptuDatetime";
 import { isMaskedSecret } from "../utils/maskedSecretUtils";
@@ -810,30 +811,9 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               <FieldLabel>Team</FieldLabel>
               {isEditing ? (
                 <FormField control={form.control} name="team_id">
-                  {({ id, value, onChange, onBlur }) => {
-                    const items = (teams ?? []).map((team) => ({
-                      value: team.team_id,
-                      label: team.team_alias ? `${team.team_alias} (${team.team_id})` : team.team_id,
-                    }));
-                    return (
-                      <Select
-                        items={items}
-                        value={(value as string | undefined) || null}
-                        onValueChange={(selected: string | null) => onChange(selected ?? "")}
-                      >
-                        <SelectTrigger id={id} className="w-full" onBlur={onBlur}>
-                          <SelectValue placeholder="Select a team" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {items.map((item) => (
-                            <SelectItem key={item.value} value={item.value}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    );
-                  }}
+                  {({ id, value, onChange, onBlur }) => (
+                    <ModelTeamSelect id={id} value={value} onChange={onChange} onBlur={onBlur} teams={teams} />
+                  )}
                 </FormField>
               ) : (
                 <Display>
