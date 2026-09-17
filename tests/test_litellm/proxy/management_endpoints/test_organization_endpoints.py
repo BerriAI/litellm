@@ -622,6 +622,130 @@ async def test_organization_member_update_rejects_unauthorized_caller(patched_or
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "budget_payload",
+    [{"max_budget_in_organization": None}, {}],
+    ids=["explicit-null", "omitted"],
+)
+async def test_organization_member_add_budget_omission_and_null_leave_budget_unset(budget_payload, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationMembershipTable,
+        LiteLLM_UserTable,
+        LitellmUserRoles,
+        OrganizationMemberAddRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
+
+    user = LiteLLM_UserTable(user_id="user-1", user_role="internal_user")
+    async def create_membership(data):
+        return LiteLLM_OrganizationMembershipTable(
+            user_id="user-1",
+            organization_id="org-1",
+            user_role="internal_user",
+            budget_id=data.get("budget_id"),
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+        )
+
+    mock_db = SimpleNamespace(
+        litellm_organizationtable=SimpleNamespace(find_unique=AsyncMock(return_value=SimpleNamespace())),
+        litellm_usertable=SimpleNamespace(find_unique=AsyncMock(return_value=user)),
+        litellm_organizationmembership=SimpleNamespace(create=create_membership),
+    )
+    mock_prisma = SimpleNamespace(db=mock_db)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._verify_org_access",
+        AsyncMock(),
+    )
+
+    response = await organization_member_add(
+        data=OrganizationMemberAddRequest(
+            organization_id="org-1",
+            member={"role": "internal_user", "user_id": "user-1"},
+            **budget_payload,
+        ),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response.updated_organization_memberships[0].budget_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "budget_payload",
+    [{"max_budget_in_organization": None}, {}],
+    ids=["explicit-null", "omitted"],
+)
+async def test_organization_member_update_budget_omission_and_null_preserve_existing_budget(
+    budget_payload, monkeypatch
+):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, OrganizationMemberUpdateRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+
+    budget_state = {"max_budget": 100.0}
+
+    def membership_row():
+        row = MagicMock()
+        row.budget_id = "budget-1"
+
+        def dump(**_):
+            return {
+                "user_id": "user-1",
+                "organization_id": "org-1",
+                "user_role": "internal_user",
+                "budget_id": "budget-1",
+                "created_at": datetime(2024, 1, 1),
+                "updated_at": datetime(2024, 1, 1),
+                "litellm_budget_table": {"budget_id": "budget-1", **budget_state},
+            }
+
+        row.model_dump.side_effect = dump
+        return row
+
+    async def update_budget(*, budget_obj, user_api_key_dict):
+        budget_state["max_budget"] = budget_obj.max_budget
+
+    mock_db = SimpleNamespace(
+        litellm_organizationtable=SimpleNamespace(find_unique=AsyncMock(return_value=SimpleNamespace())),
+        litellm_organizationmembership=SimpleNamespace(
+            find_unique=AsyncMock(side_effect=[membership_row(), membership_row()]),
+            update=AsyncMock(),
+        ),
+        litellm_usertable=SimpleNamespace(
+            find_unique=AsyncMock(return_value=SimpleNamespace(user_role="internal_user"))
+        ),
+    )
+    mock_prisma = SimpleNamespace(db=mock_db)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(organization_endpoints, "update_budget", update_budget)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._verify_org_access",
+        AsyncMock(),
+    )
+
+    response = await organization_endpoints.organization_member_update(
+        data=OrganizationMemberUpdateRequest(
+            organization_id="org-1",
+            user_id="user-1",
+            **budget_payload,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response.litellm_budget_table is not None
+    assert response.litellm_budget_table.max_budget == 100.0
+
+
+@pytest.mark.asyncio
 async def test_organization_member_delete_rejects_unauthorized_caller(patched_org_prisma, unauthorized_caller):
     from litellm.proxy._types import OrganizationMemberDeleteRequest
     from litellm.proxy.management_endpoints.organization_endpoints import (
