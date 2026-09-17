@@ -551,14 +551,23 @@ def test_handle_pipeline_result_block_does_not_reraise_sensitive_data_route():
         session_id="sess-1",
         guardrail_name="pii-router",
     )
+    cb = _make_guardrail()
+    cb.guardrail_name = "pii-router"
     result = MagicMock()
     result.terminal_action = "block"
     result.step_results = [MagicMock(guardrail_name="pii-router")]
     result.original_exception = original
-    with pytest.raises(HTTPException) as info:
-        ProxyLogging._handle_pipeline_result(result=result, data={"model": "m"}, policy_name="p")
+    data: dict[str, object] = {"model": "m"}
+    saved = litellm.callbacks
+    litellm.callbacks = [cb]
+    try:
+        with pytest.raises(HTTPException) as info:
+            ProxyLogging._handle_pipeline_result(result=result, data=data, policy_name="p")
+    finally:
+        litellm.callbacks = saved
     assert info.value.status_code == 400
     assert info.value.detail["error"]["type"] == "guardrail_pipeline_error"
+    assert data["metadata"] == {"applied_guardrails": ["pii-router"]}
 
 
 def test_handle_pipeline_result_block_does_not_reraise_modify_response():
@@ -571,14 +580,23 @@ def test_handle_pipeline_result_block_does_not_reraise_modify_response():
         request_data={"model": "m"},
         guardrail_name="masker",
     )
+    cb = _make_guardrail()
+    cb.guardrail_name = "masker"
     result = MagicMock()
     result.terminal_action = "block"
     result.step_results = [MagicMock(guardrail_name="masker")]
     result.original_exception = original
-    with pytest.raises(HTTPException) as info:
-        ProxyLogging._handle_pipeline_result(result=result, data={"model": "m"}, policy_name="p")
+    data: dict[str, object] = {"model": "m"}
+    saved = litellm.callbacks
+    litellm.callbacks = [cb]
+    try:
+        with pytest.raises(HTTPException) as info:
+            ProxyLogging._handle_pipeline_result(result=result, data=data, policy_name="p")
+    finally:
+        litellm.callbacks = saved
     assert info.value.status_code == 400
     assert info.value.detail["error"]["type"] == "guardrail_pipeline_error"
+    assert data["metadata"] == {"applied_guardrails": ["masker"]}
 
 
 def test_handle_pipeline_result_modify_response_raises_modify_exception():

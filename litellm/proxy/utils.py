@@ -12,13 +12,36 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, TypeVar, Union, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Final,
+    Generic,
+    Literal,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -442,6 +465,33 @@ def _record_raising_guardrail(request_data: Mapping[str, object], callback: obje
     guardrail_name: Final[object] = getattr(callback, "guardrail_name", None)
     if isinstance(request_data, dict) and isinstance(guardrail_name, str):
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=guardrail_name)
+
+
+class _UpstreamStreamBoundary(Generic[_T]):
+    """Remembers the exception the upstream iterator raised, so the wrapper around a
+    streaming hook can tell a pass-through failure from one the hook raised itself."""
+
+    __slots__ = ("_upstream", "failure")
+
+    def __init__(self, upstream: AsyncIterable[_T]) -> None:
+        self._upstream: Final = upstream.__aiter__()
+        self.failure: BaseException | None = None
+
+    def __aiter__(self) -> "_UpstreamStreamBoundary[_T]":
+        return self
+
+    async def __anext__(self) -> _T:
+        try:
+            return await self._upstream.__anext__()
+        except StopAsyncIteration:
+            raise
+        except Exception as e:
+            self.failure = e
+            raise
+
+
+class _StreamIteratorHook(Protocol[_T]):
+    def __call__(self, *, response: AsyncIterator[_T]) -> AsyncGenerator[_T, None]: ...
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
@@ -2037,14 +2087,18 @@ class ProxyLogging:
             _merge_pipeline_metadata_writes(data, result.modified_data)
 
         if result.terminal_action == "block":
+            blocking_step: Final = result.step_results[-1] if result.step_results else None
+            callback: Final = (
+                PipelineExecutor.find_guardrail_callback(blocking_step.guardrail_name)
+                if blocking_step is not None
+                else None
+            )
+            if callback is not None:
+                _record_raising_guardrail(data, callback)
             original_exception: Final = result.original_exception
             if original_exception is not None and not _exception_changes_request_flow(original_exception):
-                blocking_step: Final = result.step_results[-1] if result.step_results else None
-                if blocking_step is not None:
-                    callback: Final = PipelineExecutor.find_guardrail_callback(blocking_step.guardrail_name)
-                    if callback is not None:
-                        _enrich_http_exception_with_guardrail_context(original_exception, callback)
-                        _record_raising_guardrail(data, callback)
+                if callback is not None:
+                    _enrich_http_exception_with_guardrail_context(original_exception, callback)
                 raise original_exception
 
             step_results_serializable: Final = [
@@ -2490,23 +2544,26 @@ class ProxyLogging:
     @staticmethod
     async def _wrap_streaming_iterator_with_enrichment(
         callback: object,
-        gen: AsyncGenerator[_T, None],
+        response: AsyncIterable[_T],
+        hook: _StreamIteratorHook[_T],
         request_data: Mapping[str, object],
     ) -> AsyncGenerator[_T, None]:
         """
-        Yield from `gen`; if iteration raises an HTTPException with dict detail,
-        enrich the detail with the originating callback's `guardrail_name` and
-        `guardrail_mode` before re-raising. Used to wrap each layer of the
-        async_post_call_streaming_iterator_hook chain so the enrichment is
-        attributed to the callback that produced the chunk pipeline at that
-        point in the chain.
+        Run `hook` over `response` and yield its chunks. If the hook itself raises,
+        enrich an HTTPException's dict detail with the callback's `guardrail_name`
+        and `guardrail_mode` and record the callback in `applied_guardrails` before
+        re-raising. Failures raised by `response` (the provider stream or an inner
+        layer of the async_post_call_streaming_iterator_hook chain) pass through
+        untouched, so only the layer that actually raised is attributed.
         """
+        upstream: Final = _UpstreamStreamBoundary(response)
         try:
-            async for chunk in gen:
+            async for chunk in hook(response=upstream):
                 yield chunk
         except Exception as e:
-            _enrich_http_exception_with_guardrail_context(e, callback)
-            _record_raising_guardrail(request_data, callback)
+            if e is not upstream.failure:
+                _enrich_http_exception_with_guardrail_context(e, callback)
+                _record_raising_guardrail(request_data, callback)
             raise
 
     # Cache for callback-capability detection. Keyed on a signature of
@@ -3663,29 +3720,27 @@ class ProxyLogging:
                 )
                 else kind
             )
-            if effective_kind == "override":
-                current_response = self._wrap_streaming_iterator_with_enrichment(
-                    resolved_callback,
-                    resolved_callback.async_post_call_streaming_iterator_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        response=current_response,
-                        request_data=request_data,
-                    ),
+            hook: _StreamIteratorHook[object] = (
+                partial(
+                    resolved_callback.async_post_call_streaming_iterator_hook,
+                    user_api_key_dict=user_api_key_dict,
                     request_data=request_data,
                 )
-            else:
-                # kind == "apply_guardrail": route through unified_guardrail
-                current_response = self._wrap_streaming_iterator_with_enrichment(
-                    resolved_callback,
-                    unified_guardrail.async_post_call_streaming_iterator_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        request_data=request_data,
-                        response=current_response,
-                        guardrail_to_apply=resolved_callback,
-                        buffer_until_moderated_default=(kind == "override"),
-                    ),
+                if effective_kind == "override"
+                else partial(
+                    unified_guardrail.async_post_call_streaming_iterator_hook,
+                    user_api_key_dict=user_api_key_dict,
                     request_data=request_data,
+                    guardrail_to_apply=resolved_callback,
+                    buffer_until_moderated_default=(kind == "override"),
                 )
+            )
+            current_response = self._wrap_streaming_iterator_with_enrichment(
+                resolved_callback,
+                current_response,
+                hook,
+                request_data=request_data,
+            )
 
         pipeline_translation: Final = (
             resolve_endpoint_translation(user_api_key_dict, None) if post_call_pipelines else None

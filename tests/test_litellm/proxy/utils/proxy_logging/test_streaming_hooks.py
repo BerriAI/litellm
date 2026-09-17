@@ -170,6 +170,15 @@ def test_init_response_taking_too_long_task_no_slack_instance_no_error_raises(pr
 # ---------------------------------------------------------------------------
 
 
+async def _passthrough_hook(*, response: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+    async for chunk in response:
+        yield chunk
+
+
+async def _one_chunk() -> AsyncGenerator[object, None]:
+    yield "chunk"
+
+
 @pytest.mark.asyncio
 async def test_wrap_streaming_iterator_with_enrichment_passes_through_chunks(proxy_logging):
     async def gen():
@@ -177,7 +186,9 @@ async def test_wrap_streaming_iterator_with_enrichment_passes_through_chunks(pro
             yield ch
 
     cb = MagicMock(guardrail_name="g", event_hook="pre_call")
-    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(callback=cb, gen=gen(), request_data={})
+    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(
+        callback=cb, response=gen(), hook=_passthrough_hook, request_data={}
+    )
     out = [ch async for ch in wrapped]
     snapshot = {
         "chunks": out,
@@ -197,18 +208,43 @@ async def test_wrap_streaming_iterator_with_enrichment_passes_through_chunks(pro
 async def test_wrap_streaming_iterator_with_enrichment_enriches_http_exception_raises(proxy_logging):
     detail = {"error": "blocked"}
 
-    async def boom_gen():
+    async def boom_hook(*, response: AsyncIterator[object]) -> AsyncGenerator[object, None]:
         if False:
             yield  # pragma: no cover
         raise HTTPException(status_code=400, detail=detail)
 
     cb = MagicMock(guardrail_name="presidio", event_hook="post_call")
-    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(callback=cb, gen=boom_gen(), request_data={})
+    request_data: dict[str, object] = {}
+    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(
+        callback=cb, response=_one_chunk(), hook=boom_hook, request_data=request_data
+    )
     with pytest.raises(HTTPException):
         async for _ in wrapped:
             pass
     assert detail["guardrail_name"] == "presidio"
     assert detail["guardrail_mode"] == "post_call"
+    assert request_data["metadata"]["applied_guardrails"] == ["presidio"]
+
+
+@pytest.mark.asyncio
+async def test_wrap_streaming_iterator_leaves_upstream_http_exception_unattributed(proxy_logging):
+    detail = {"error": "upstream rejected the stream"}
+
+    async def failing_upstream() -> AsyncGenerator[object, None]:
+        if False:
+            yield  # pragma: no cover
+        raise HTTPException(status_code=502, detail=detail)
+
+    cb = MagicMock(guardrail_name="presidio", event_hook="post_call")
+    request_data: dict[str, object] = {}
+    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(
+        callback=cb, response=failing_upstream(), hook=_passthrough_hook, request_data=request_data
+    )
+    with pytest.raises(HTTPException):
+        async for _ in wrapped:
+            pass
+    assert detail == {"error": "upstream rejected the stream"}
+    assert request_data == {}
 
 
 # ---------------------------------------------------------------------------
@@ -700,33 +736,83 @@ async def test_post_call_response_headers_hook_swallows_callback_error(proxy_log
     assert out == {}
 
 
+class _StreamBlocker(CustomGuardrail):
+    def __init__(self, guardrail_name: str = "stream-blocker") -> None:
+        super().__init__(guardrail_name=guardrail_name, event_hook=GuardrailEventHooks.post_call, default_on=True)
+
+    async def async_post_call_streaming_iterator_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, response: AsyncIterator[object], request_data: dict[str, object]
+    ) -> AsyncGenerator[object, None]:
+        async for _ in response:
+            raise HTTPException(status_code=400, detail={"error": "blocked"})
+            yield  # pragma: no cover
+
+
+class _StreamPasser(CustomGuardrail):
+    def __init__(self, guardrail_name: str = "stream-passer") -> None:
+        super().__init__(guardrail_name=guardrail_name, event_hook=GuardrailEventHooks.post_call, default_on=True)
+
+    async def async_post_call_streaming_iterator_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, response: AsyncIterator[object], request_data: dict[str, object]
+    ) -> AsyncGenerator[object, None]:
+        async for chunk in response:
+            yield chunk
+
+
+async def _drain_stream_chain(
+    proxy_logging: ProxyLogging,
+    user_api_key_dict: UserAPIKeyAuth,
+    upstream: AsyncIterator[object],
+    request_data: dict[str, object],
+) -> None:
+    async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+        response=upstream,
+        user_api_key_dict=user_api_key_dict,
+        request_data=request_data,
+    ):
+        pass
+
+
+async def _failing_provider_stream() -> AsyncGenerator[object, None]:
+    yield "chunk"
+    raise RuntimeError("provider connection dropped")
+
+
 @pytest.mark.asyncio
 async def test_stream_guardrail_block_names_the_blocking_guardrail_in_applied_guardrails(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
-    class _StreamBlocker(CustomGuardrail):
-        def __init__(self) -> None:
-            super().__init__(guardrail_name="stream-blocker", event_hook=GuardrailEventHooks.post_call, default_on=True)
-
-        async def async_post_call_streaming_iterator_hook(
-            self, user_api_key_dict: UserAPIKeyAuth, response: AsyncIterator[object], request_data: dict[str, object]
-        ) -> AsyncGenerator[object, None]:
-            async for _ in response:
-                raise HTTPException(status_code=400, detail={"error": "blocked"})
-                yield  # pragma: no cover
-
     monkeypatch.setattr(litellm, "callbacks", [_StreamBlocker()])
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
 
-    async def upstream():
-        yield "chunk"
-
     request_data: dict[str, object] = {"metadata": {}}
     with pytest.raises(HTTPException):
-        async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
-            response=upstream(),
-            user_api_key_dict=make_user_api_key_auth(),
-            request_data=request_data,
-        ):
-            pass
+        await _drain_stream_chain(proxy_logging, make_user_api_key_auth(), _one_chunk(), request_data)
     assert request_data["metadata"]["applied_guardrails"] == ["stream-blocker"]
+
+
+@pytest.mark.asyncio
+async def test_stream_block_by_inner_guardrail_does_not_name_the_outer_layers(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [_StreamBlocker(), _StreamPasser("outer-a"), _StreamPasser("outer-b")])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+
+    request_data: dict[str, object] = {"metadata": {}}
+    with pytest.raises(HTTPException) as info:
+        await _drain_stream_chain(proxy_logging, make_user_api_key_auth(), _one_chunk(), request_data)
+    assert info.value.detail["guardrail_name"] == "stream-blocker"
+    assert request_data["metadata"]["applied_guardrails"] == ["stream-blocker"]
+
+
+@pytest.mark.asyncio
+async def test_stream_provider_failure_is_not_attributed_to_any_guardrail(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [_StreamPasser("outer-a"), _StreamPasser("outer-b")])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+
+    request_data: dict[str, object] = {"metadata": {}}
+    with pytest.raises(RuntimeError, match="provider connection dropped"):
+        await _drain_stream_chain(proxy_logging, make_user_api_key_auth(), _failing_provider_stream(), request_data)
+    assert request_data["metadata"] == {}
