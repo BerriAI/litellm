@@ -3,6 +3,7 @@ import contextlib
 import contextvars
 import json
 import os
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final
@@ -19,6 +20,7 @@ from mcp.types import (
     TextContent,
     TextResourceContents,
 )
+from starlette.types import Receive, Scope, Send
 
 from litellm.constants import MCP_ALLOWLIST_PEEK_MAX_BYTES
 from litellm.proxy._types import (
@@ -2050,7 +2052,7 @@ _ANONYMOUS_INITIALIZE: Final = b'{"jsonrpc":"2.0","id":0,"method":"initialize","
 _TOOLS_LIST: Final = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 
 
-async def _drain_body(receive) -> bytes:
+async def _drain_body(receive: Receive) -> bytes:
     chunks: list[bytes] = []
     while True:
         message = await receive()
@@ -2066,7 +2068,7 @@ def _forbidden_client_response(send: AsyncMock) -> tuple[int, dict[str, str]]:
 
 
 @contextlib.contextmanager
-def _client_allowlist_patches(allowed_clients: object):
+def _client_allowlist_patches(allowed_clients: list[str] | list[dict[str, str]] | str | None) -> Iterator[None]:
     settings: Final = {} if allowed_clients is None else {"mcp_allowed_clients": allowed_clients}
     with (
         patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
@@ -2188,7 +2190,9 @@ async def test_streamable_http_admits_listed_or_unrestricted_initialize_and_repl
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("allowed_clients", ([], "claude-code", [{"name": "claude-code"}]))
-async def test_streamable_http_empty_or_malformed_allowlist_admits_nobody(allowed_clients: object) -> None:
+async def test_streamable_http_empty_or_malformed_allowlist_admits_nobody(
+    allowed_clients: list[str] | list[dict[str, str]] | str,
+) -> None:
     from starlette.types import Scope
 
     from litellm.proxy._experimental.mcp_server import server as mcp_module
@@ -2243,6 +2247,10 @@ async def test_streamable_http_allowlist_only_inspects_initialize_requests() -> 
 
 
 def _oversized_initialize(client_name: str, peek_cap: int) -> bytes:
+    return _padded_initialize(client_name, peek_cap * 2)
+
+
+def _padded_initialize(client_name: str, padding: int) -> bytes:
     return json.dumps(
         {
             "jsonrpc": "2.0",
@@ -2250,7 +2258,7 @@ def _oversized_initialize(client_name: str, peek_cap: int) -> bytes:
             "method": "initialize",
             "params": {
                 "protocolVersion": "2025-06-18",
-                "capabilities": {"experimental": {"padding": "x" * (peek_cap * 2)}},
+                "capabilities": {"experimental": {"padding": "x" * padding}},
                 "clientInfo": {"name": client_name, "version": "1.0.0"},
             },
         }
@@ -2347,6 +2355,44 @@ async def test_streamable_http_allowlist_bounds_the_body_it_buffers_for_unidenti
     assert receive.await_count <= MCP_ALLOWLIST_PEEK_MAX_BYTES // chunk_size + 1
     stateful_handle.assert_not_awaited()
     stateless_handle.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_allowlist_admits_an_initialize_of_exactly_the_peek_cap() -> None:
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    request_body: Final = _padded_initialize(
+        "antigravity-cli", MCP_ALLOWLIST_PEEK_MAX_BYTES - len(_padded_initialize("antigravity-cli", 0))
+    )
+    assert len(request_body) == MCP_ALLOWLIST_PEEK_MAX_BYTES
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    receive: Final = AsyncMock(
+        side_effect=[
+            {"type": "http.request", "body": request_body, "more_body": True},
+            {"type": "http.request", "body": b"", "more_body": False},
+        ]
+    )
+    send: Final = AsyncMock()
+    downstream_bodies: Final[list[bytes]] = []
+
+    async def handle_request(_: Scope, downstream_receive: Receive, __: Send) -> None:
+        downstream_bodies.append(await _drain_body(downstream_receive))
+
+    with (
+        _client_allowlist_patches(["antigravity-cli"]),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=AsyncMock(side_effect=handle_request)),
+        ),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=AsyncMock(side_effect=handle_request)),
+        ),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    assert downstream_bodies == [request_body]
+    send.assert_not_awaited()
 
 
 @pytest.mark.asyncio

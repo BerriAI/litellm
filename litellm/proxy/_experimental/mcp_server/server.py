@@ -3881,6 +3881,7 @@ if MCP_AVAILABLE:
     async def _read_request_body_for_routing(
         receive: Receive,
         peek_max_bytes: int = _MCP_ROUTING_PEEK_MAX_BYTES,
+        settle_truncation: bool = False,
     ) -> tuple[list[Message], bytes, bool]:
         """
         Read just enough of the request body to decide whether this is a
@@ -3889,8 +3890,11 @@ if MCP_AVAILABLE:
         the peeked body bytes (capped at ``peek_max_bytes``), plus whether
         the body was cut off at that cap.
 
-        Stops reading from the wire as soon as either (a) we have peeked
-        ``peek_max_bytes`` of body, or (b) the body is complete.
+        Stops reading from the wire as soon as either (a) the peek budget is
+        spent, or (b) the body is complete. A body that fills the budget
+        exactly in a frame with ``more_body`` is reported as cut off unless
+        ``settle_truncation`` is set, in which case one more frame is read to
+        find out whether anything actually follows.
         The remainder of an oversized body is streamed lazily through
         ``wrapped_receive`` in the caller — so an authenticated client cannot
         force the proxy to buffer an arbitrarily large payload just to make a
@@ -3922,12 +3926,9 @@ if MCP_AVAILABLE:
                     peeked_bytes += min(len(body), remaining)
                 truncated = truncated or len(body) > remaining
 
-            if not message.get("more_body", False):
+            if truncated or not message.get("more_body", False):
                 break
-
-            if peeked_bytes >= peek_max_bytes:
-                # Stop draining; downstream replay will pull remaining chunks
-                # directly from the original `receive` via wrapped_receive.
+            if not settle_truncation and peeked_bytes >= peek_max_bytes:
                 truncated = True
                 break
 
@@ -4583,7 +4584,7 @@ if MCP_AVAILABLE:
             if scope.get("method") == "POST":
                 allowed_clients: Final = _load_allowed_mcp_clients()
                 consumed_messages, body, body_truncated = await _read_request_body_for_routing(
-                    receive, _routing_peek_limit(allowed_clients)
+                    receive, _routing_peek_limit(allowed_clients), settle_truncation=allowed_clients is not None
                 )
                 if allowed_clients is not None and body_truncated and not session_id:
                     await _reject_oversized_unidentified_request(scope, receive, send, _client_ip)
@@ -4863,11 +4864,11 @@ if MCP_AVAILABLE:
 
             sse_allowed_clients: Final = _load_allowed_mcp_clients()
             sse_consumed_messages, sse_body, sse_truncated = (
-                await _read_request_body_for_routing(receive, _routing_peek_limit(sse_allowed_clients))
-                if scope.get("method") == "POST"
+                await _read_request_body_for_routing(receive, MCP_ALLOWLIST_PEEK_MAX_BYTES, settle_truncation=True)
+                if sse_allowed_clients is not None and scope.get("method") == "POST"
                 else ((), b"", False)
             )
-            if sse_allowed_clients is not None and sse_truncated:
+            if sse_truncated:
                 await _reject_oversized_unidentified_request(scope, receive, send, _sse_client_ip)
                 return
             if _is_initialize_request(sse_body) and await _reject_initialize_from_disallowed_client(
