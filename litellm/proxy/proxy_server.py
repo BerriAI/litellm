@@ -415,7 +415,6 @@ from litellm.proxy.common_utils.scheduled_job_stagger import (
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
     parse_stagger_settings,
-    stagger_trigger,
 )
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.common_utils.timezone_utils import (
@@ -442,6 +441,7 @@ from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManage
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SpendLogCleanup,
+    first_cleanup_run_time,
 )
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
@@ -7029,10 +7029,6 @@ class ProxyConfig:
         autorouter_retention: Final = general_settings.get("maximum_autorouter_session_retention_period")
         health_check_retention: Final = general_settings.get("maximum_health_check_retention_period")
         if retention_period is not None or autorouter_retention is not None or health_check_retention is not None:
-            from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
-                SpendLogCleanup,
-            )
-
             spend_log_cleanup: Final = SpendLogCleanup()
             cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
 
@@ -7061,17 +7057,10 @@ class ProxyConfig:
                 retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
                 try:
                     interval_seconds: Final = duration_in_seconds(retention_interval)
-                    # this runs against a started scheduler, which the startup stagger sweep
-                    # cannot reach, so the offset is applied here or the job reconverges across
-                    # replicas the first time an admin edits the retention settings
                     scheduler.add_job(
                         spend_log_cleanup.cleanup_old_spend_logs,
-                        stagger_trigger(
-                            job_id="spend_log_cleanup_job",
-                            trigger=IntervalTrigger(seconds=interval_seconds),
-                            period_seconds=interval_seconds,
-                            settings=parse_stagger_settings(general_settings),
-                        ),
+                        IntervalTrigger(seconds=interval_seconds),
+                        next_run_time=first_cleanup_run_time(datetime.now(timezone.utc)),
                         args=[prisma_client],
                         id="spend_log_cleanup_job",
                         replace_existing=True,
@@ -10080,7 +10069,8 @@ class ProxyStartupEvent:
                     scheduler.add_job(
                         spend_log_cleanup.cleanup_old_spend_logs,
                         "interval",
-                        seconds=interval_seconds + random.randint(0, 60),
+                        seconds=interval_seconds,
+                        next_run_time=first_cleanup_run_time(datetime.now(timezone.utc)),
                         args=[prisma_client],
                         id="spend_log_cleanup_job",
                         replace_existing=True,
