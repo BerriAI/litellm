@@ -3,6 +3,7 @@ import socket
 import stat
 from typing import Optional
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -389,9 +390,15 @@ class TestStartCommand:
         written_config = yaml.safe_load(config_path.read_text())
         assert written_config["general_settings"]["master_key"] == "fresh-minted-key"
 
-    def test_port_override_reaches_settings_launch_and_pid_record(self, monkeypatch, tmp_path):
-        """A --port override must flow to every consumer of the port; a hardcoded default in any
-        one of them would leave the patched settings pointing somewhere the proxy is not."""
+    @pytest.mark.parametrize(
+        ("command", "leading_args"),
+        [(start, []), (autoroute_group, ["start"]), (autoroute_group, ["up"])],
+        ids=["start", "group start", "deprecated up alias"],
+    )
+    def test_port_override_reaches_settings_launch_and_pid_record(self, monkeypatch, tmp_path, command, leading_args):
+        """A --port override must flow to every consumer of the port, through the deprecated `up`
+        alias too; a hardcoded default in any one of them would leave the patched settings pointing
+        somewhere the proxy is not."""
         config_path, _log_path, claude_settings_path, _backup_path, pid_record_path = _patch_paths(
             monkeypatch, tmp_path
         )
@@ -420,7 +427,7 @@ class TestStartCommand:
 
         monkeypatch.setattr("threading.Event.wait", fake_wait)
 
-        result = self.runner.invoke(start, ["--port", "6111"])
+        result = self.runner.invoke(command, [*leading_args, "--port", "6111"])
 
         assert result.exit_code == 0, result.output
         assert captured["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:6111"
@@ -500,6 +507,20 @@ class TestStopCommand:
         assert not pid_record_path.exists()
         assert not backup_path.exists()
         assert json.loads(claude_settings_path.read_text()) == original_settings
+
+    def test_removes_settings_that_did_not_exist_before_start(self, monkeypatch, tmp_path):
+        _config_path, _log_path, claude_settings_path, backup_path, _pid_record_path = _patch_paths(
+            monkeypatch, tmp_path
+        )
+        write_backup(ClaudeBackupRecord(existed=False, content=None), backup_path)
+        claude_settings_path.write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "fixed-master-key"}}))
+
+        result = self.runner.invoke(stop)
+
+        assert result.exit_code == 0, result.output
+        assert f"Removed {claude_settings_path} (it did not exist before `lite autoroute start`)." in result.output
+        assert not claude_settings_path.exists()
+        assert not backup_path.exists()
 
     def test_is_a_clean_no_op_when_nothing_is_running_and_no_backup_exists(self, monkeypatch, tmp_path):
         _config_path, _log_path, claude_settings_path, _backup_path, _pid_record_path = _patch_paths(
