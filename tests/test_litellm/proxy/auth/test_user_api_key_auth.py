@@ -35,7 +35,6 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.auth_checks import (
-    OrganizationNotFoundError,
     TeamNotFoundError,
     UserNotFoundError,
     get_key_object,
@@ -5809,27 +5808,31 @@ async def test_centralized_common_checks_backfills_org_id_from_team(key_org_id, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "key_org_id,team_id,team_org_id,existing_alias,existing_rpm,lookup_mode,expected_org_id,expected_alias,expected_limits",
+    "key_org_id,team_id,team_org_id,existing_alias,existing_rpm,lookup_mode,allow_db_unavailable,expect_lookup_error,expected_org_id,expected_alias,expected_limits",
     [
-        (None, "t1", "org-from-team", None, None, "success", "org-from-team", "acme-org", (12.5, 700, 7)),
-        ("org-jwt", None, None, None, None, "success", "org-jwt", "acme-org", (12.5, 700, 7)),
-        ("org-pinned", None, None, "preset", None, "success", "org-pinned", "preset", (None, None, None)),
-        ("org-view", None, None, None, 3, "success", "org-view", None, (None, None, 3)),
-        ("org-missing", None, None, None, None, "missing", "org-missing", None, (None, None, None)),
-        ("org-nobudget", None, None, None, None, "no_budget", "org-nobudget", "acme-org", (None, None, None)),
+        (None, "t1", "org-from-team", None, None, "success", False, False, "org-from-team", "acme-org", (12.5, 700, 7)),
+        ("org-jwt", None, None, None, None, "success", False, False, "org-jwt", "acme-org", (12.5, 700, 7)),
+        ("org-pinned", None, None, "preset", None, "success", False, False, "org-pinned", "preset", (None, None, None)),
+        ("org-view", None, None, None, 3, "success", False, False, "org-view", None, (None, None, 3)),
+        ("org-missing", None, None, None, None, "missing", True, False, "org-missing", None, (None, None, None)),
+        ("org-db-failure-allowed", None, None, None, None, "db_failure", True, False, "org-db-failure-allowed", None, (None, None, None)),
+        ("org-db-failure-denied", None, None, None, None, "db_failure", False, True, "org-db-failure-denied", None, (None, None, None)),
+        ("org-nobudget", None, None, None, None, "no_budget", False, False, "org-nobudget", "acme-org", (None, None, None)),
     ],
 )
 async def test_centralized_common_checks_inherits_org_identity(
-    key_org_id,
-    team_id,
-    team_org_id,
-    existing_alias,
-    existing_rpm,
-    lookup_mode,
-    expected_org_id,
-    expected_alias,
-    expected_limits,
-):
+    key_org_id: str | None,
+    team_id: str | None,
+    team_org_id: str | None,
+    existing_alias: str | None,
+    existing_rpm: int | None,
+    lookup_mode: str,
+    allow_db_unavailable: bool,
+    expect_lookup_error: bool,
+    expected_org_id: str | None,
+    expected_alias: str | None,
+    expected_limits: tuple[float | None, int | None, int | None],
+) -> None:
     import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
@@ -5867,11 +5870,11 @@ async def test_centralized_common_checks_inherits_org_identity(
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
     attrs["prisma_client"] = MagicMock()
+    attrs["general_settings"] = {"allow_requests_on_db_unavailable": allow_db_unavailable}
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
     try:
         for k, v in attrs.items():
             setattr(_proxy_server_mod, k, v)
-        identity_seen_by_common_checks = []
         with (
             patch(
                 "litellm.proxy.auth.user_api_key_auth.get_team_object",
@@ -5886,30 +5889,48 @@ async def test_centralized_common_checks_inherits_org_identity(
             patch(
                 "litellm.proxy.auth.user_api_key_auth.common_checks",
                 new_callable=AsyncMock,
-                side_effect=lambda **kw: identity_seen_by_common_checks.append(
-                    (kw["valid_token"].org_id, kw["valid_token"].organization_alias)
-                ),
             ) as mock_checks,
         ):
             if lookup_mode == "missing":
-                mock_get_org_object.side_effect = OrganizationNotFoundError("x")
+                mock_get_org_object.return_value = None
+            elif lookup_mode == "db_failure":
+                mock_get_org_object.side_effect = RuntimeError("db unavailable")
 
-            await _run_centralized_common_checks(
-                user_api_key_auth_obj=token,
-                request=request,
-                request_data={"model": "gpt-4o"},
-                route="/chat/completions",
-            )
+            if expect_lookup_error:
+                with pytest.raises(RuntimeError, match="db unavailable"):
+                    await _run_centralized_common_checks(
+                        user_api_key_auth_obj=token,
+                        request=request,
+                        request_data={"model": "gpt-4o"},
+                        route="/chat/completions",
+                    )
+            else:
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request,
+                    request_data={"model": "gpt-4o"},
+                    route="/chat/completions",
+                )
+
+        assert token.org_id == expected_org_id
+        if expect_lookup_error:
+            mock_checks.assert_not_awaited()
+            assert token.organization_alias is None
+            assert token.organization_max_budget is None
+            assert token.organization_tpm_limit is None
+            assert token.organization_rpm_limit is None
+            return
 
         mock_checks.assert_awaited_once()
-        assert token.org_id == expected_org_id
         assert token.organization_alias == expected_alias
         assert (
             token.organization_max_budget,
             token.organization_tpm_limit,
             token.organization_rpm_limit,
         ) == expected_limits
-        assert identity_seen_by_common_checks == [(expected_org_id, expected_alias)]
+        checked_token = mock_checks.await_args.kwargs["valid_token"]
+        assert checked_token.org_id == expected_org_id
+        assert checked_token.organization_alias == expected_alias
         if team_id is None:
             mock_get_team_object.assert_not_awaited()
         else:
@@ -5921,7 +5942,7 @@ async def test_centralized_common_checks_inherits_org_identity(
             mock_get_org_object.assert_awaited_once()
             assert mock_get_org_object.await_args.kwargs["org_id"] == expected_org_id
             assert mock_get_org_object.await_args.kwargs["include_budget_table"] is True
-            if lookup_mode != "missing":
+            if lookup_mode not in {"missing", "db_failure"}:
                 assert token.organization_metadata == {"model_rpm_limit": {"gpt-4o": 2}}
     finally:
         for k, v in originals.items():

@@ -2635,7 +2635,9 @@ async def _inherit_org_identity(
             include_budget_table=True,
         )
     except Exception:  # noqa: BLE001  # organization lookup must not fail authentication
-        verbose_proxy_logger.debug("org lookup failed for org_id=%s", user_api_key_auth_obj.org_id, exc_info=True)
+        if not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable():
+            raise
+        verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
         return
     if org_object is None:
         return
