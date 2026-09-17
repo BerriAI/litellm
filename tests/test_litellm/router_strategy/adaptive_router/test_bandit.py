@@ -75,6 +75,24 @@ def test_thompson_sample_in_range():
         assert 0.0 <= s <= 1.0
 
 
+def test_thompson_sample_handles_non_positive_shape_parameters():
+    rng = random.Random(42)
+    for cell in (
+        BanditCell(alpha=-1.0, beta=1.0),
+        BanditCell(alpha=0.0, beta=1.0),
+        BanditCell(alpha=1.0, beta=-1.0),
+        BanditCell(alpha=1.0, beta=0.0),
+    ):
+        sample = thompson_sample(cell, rng=rng)
+        assert 0.0 <= sample <= 1.0
+
+
+def test_apply_delta_keeps_shape_parameters_positive():
+    cell = apply_delta(BanditCell(alpha=-1.0, beta=1.0), delta_alpha=0.0, delta_beta=0.0)
+    assert cell.alpha > 0.0
+    assert cell.beta > 0.0
+
+
 def test_normalized_cost_cheapest_wins():
     assert normalized_cost(0.001, [0.001, 0.005, 0.01]) == 1.0
     assert normalized_cost(0.01, [0.001, 0.005, 0.01]) == 0.0
