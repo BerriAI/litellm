@@ -1,9 +1,11 @@
 import ast
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import pytest
+from botocore.credentials import Credentials
 
 import litellm
 from litellm.integrations.s3_v2 import S3Logger
@@ -20,8 +22,20 @@ from litellm.llms.aws_polly.text_to_speech.transformation import AWSPollyTextToS
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+from litellm.llms.bedrock.chat.invoke_agent.transformation import AmazonInvokeAgentConfig
 from litellm.llms.bedrock.common_utils import init_bedrock_client
+from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
+from litellm.llms.bedrock.vector_stores.transformation import BedrockVectorStoreConfig
 from litellm.llms.sagemaker.chat.transformation import SagemakerChatConfig
+from litellm.llms.sagemaker.completion.handler import SagemakerLLM
+from litellm.proxy.auth.rds_iam_token import init_rds_client
+from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
+
+STATIC_AWS_CREDENTIALS: Final = MappingProxyType(
+    {"aws_access_key_id": "test-key", "aws_secret_access_key": "test-secret"}
+)
 
 
 @pytest.mark.parametrize(
@@ -106,6 +120,48 @@ def _s3_object_url(region: str) -> str:
     return logger._build_object_url("2025-01-01/key.json")
 
 
+def _bedrock_job_arn(region: str) -> str:
+    return f"{get_aws_arn_prefix(region)}bedrock:{region}:111122223333:model-invocation-job/abc1234567"
+
+
+def _bedrock_files_upload_url(region: str) -> str:
+    return BedrockFilesConfig().get_complete_file_url(
+        api_base=None,
+        api_key=None,
+        model="amazon.nova-pro-v1:0",
+        optional_params={},
+        litellm_params={"s3_bucket_name": "batch-bucket", "s3_region_name": region},
+        data={"file": ("batch.jsonl", b"{}", "application/jsonl"), "purpose": "batch"},
+    )
+
+
+def _bedrock_files_download_url(region: str) -> str:
+    return (
+        BedrockFilesConfig()
+        ._s3_request_target(optional_params={}, litellm_params={"s3_region_name": region})
+        .endpoint_url
+    )
+
+
+def _bedrock_guardrail_url(region: str) -> str:
+    guardrail = BedrockGuardrail(guardrailIdentifier="guardrail-id", guardrailVersion="1")
+    return guardrail._prepare_request(
+        credentials=Credentials("test-key", "test-secret"),
+        data={"source": "INPUT", "content": []},
+        optional_params={},
+        aws_region_name=region,
+    ).url
+
+
+def _secrets_manager_url(region: str) -> str:
+    endpoint_url, _headers, _body = AWSSecretsManagerV2(aws_region_name=region)._prepare_request(
+        action="GetSecretValue",
+        secret_name="my-secret",
+        optional_params=dict(STATIC_AWS_CREDENTIALS),
+    )
+    return endpoint_url
+
+
 ENDPOINT_BUILDERS: Final = {
     "bedrock_runtime_default": lambda region: BaseAWSLLM()._select_default_endpoint_url("runtime", region),
     "bedrock_agent_default": lambda region: BaseAWSLLM()._select_default_endpoint_url("agent", region),
@@ -124,12 +180,45 @@ ENDPOINT_BUILDERS: Final = {
         litellm_params={},
         data={"input_file_id": "s3://bucket/key.jsonl"},
     ),
+    "bedrock_batches_retrieve": lambda region: BedrockBatchesConfig().transform_retrieve_batch_request(
+        batch_id=_bedrock_job_arn(region),
+        optional_params=dict(STATIC_AWS_CREDENTIALS),
+        litellm_params={},
+    )["url"],
+    "bedrock_files_upload": _bedrock_files_upload_url,
+    "bedrock_files_download": _bedrock_files_download_url,
     "bedrock_agentcore_invoke": lambda region: AmazonAgentCoreConfig().get_complete_url(
         api_base=None,
         api_key=None,
         model=_agentcore_model(region),
         optional_params={},
         litellm_params={},
+    ),
+    "bedrock_invoke_agent": lambda region: AmazonInvokeAgentConfig().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="agent/AGENT123/ALIAS456",
+        optional_params={"aws_region_name": region},
+        litellm_params={},
+    ),
+    "bedrock_guardrail_apply": _bedrock_guardrail_url,
+    "bedrock_rerank": lambda region: BedrockRerankHandler()._prepare_request(
+        model="amazon.rerank-v1:0",
+        api_base=None,
+        extra_headers=None,
+        data={"queries": [], "sources": []},
+        optional_params={"aws_region_name": region, **STATIC_AWS_CREDENTIALS},
+    )["endpoint_url"],
+    "bedrock_knowledgebase_search": lambda region: BedrockVectorStoreConfig().get_complete_url(
+        api_base=None, litellm_params={"aws_region_name": region}
+    ),
+    "secrets_manager": _secrets_manager_url,
+    "rds_iam_client": lambda region: (
+        init_rds_client(
+            aws_region_name=region,
+            aws_access_key_id="test-key",
+            aws_secret_access_key="test-secret",
+        ).meta.endpoint_url
     ),
     "polly": lambda region: AWSPollyTextToSpeechConfig().get_complete_url(
         model="polly/neural",
@@ -151,6 +240,19 @@ ENDPOINT_BUILDERS: Final = {
         optional_params={"aws_region_name": region},
         litellm_params={},
         stream=True,
+    ),
+    "sagemaker_completion": lambda region: (
+        SagemakerLLM()
+        ._prepare_request(
+            credentials=Credentials("test-key", "test-secret"),
+            model="my-endpoint",
+            data={},
+            messages=[],
+            litellm_params={},
+            optional_params={},
+            aws_region_name=region,
+        )
+        .url
     ),
     "s3_object_url": _s3_object_url,
 }
@@ -180,6 +282,18 @@ def test_every_endpoint_builder_keeps_amazonaws_com_outside_cn(builder_name: str
     hostname = urlparse(url).hostname
     assert hostname is not None
     assert hostname.endswith(".amazonaws.com"), url
+
+
+@pytest.mark.parametrize("region", ["us-gov-west-1", "us-gov-east-1"])
+@pytest.mark.parametrize("builder_name", sorted(ENDPOINT_BUILDERS))
+def test_every_endpoint_builder_respects_us_gov_partition(builder_name: str, region: str) -> None:
+    url = unquote(ENDPOINT_BUILDERS[builder_name](region))
+    hostname = urlparse(url).hostname
+    assert hostname is not None
+    assert hostname.endswith(f".{region}.amazonaws.com"), url
+    assert "arn:aws:" not in url, url
+    if "arn:" in url:
+        assert "arn:aws-us-gov:" in url, url
 
 
 def _fstring_literal_offenders(needle: str) -> list[str]:
