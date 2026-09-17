@@ -408,14 +408,21 @@ def test_update_customer_budget_omission_and_null_preserve_existing_budget(
 ):
     from litellm.proxy._types import LiteLLM_BudgetTable
 
-    budget_state = {"budget_id": "budget-1", "max_budget": 100.0}
+    class BudgetState:
+        def __init__(self) -> None:
+            self.max_budget: float | None = 100.0
+
+        def store(self, data) -> None:
+            self.max_budget = data.get("max_budget", self.max_budget)
+
+    budget_state = BudgetState()
 
     def end_user_row():
         return LiteLLM_EndUserTable(
             user_id="cust-1",
             blocked=False,
             budget_id="budget-1",
-            litellm_budget_table=LiteLLM_BudgetTable(**budget_state),
+            litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-1", max_budget=budget_state.max_budget),
         )
 
     def response_row():
@@ -426,15 +433,15 @@ def test_update_customer_budget_omission_and_null_preserve_existing_budget(
             "budget_id": "budget-1",
             "litellm_budget_table": {
                 "budget_id": "budget-1",
-                "max_budget": budget_state["max_budget"],
+                "max_budget": budget_state.max_budget,
                 "created_at": "2024-01-01T00:00:00",
             },
         }
         return row
 
     async def update_budget(*, where, data):
-        budget_state.update(data)
-        return LiteLLM_BudgetTable(**budget_state)
+        budget_state.store(data)
+        return LiteLLM_BudgetTable(budget_id="budget-1", max_budget=budget_state.max_budget)
 
     mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=end_user_row())
     mock_prisma_client.db.litellm_budgettable.update = AsyncMock(side_effect=update_budget)
