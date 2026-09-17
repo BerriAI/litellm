@@ -5739,9 +5739,15 @@ class TestMCPDcrBridgeDelegateAdmission:
         prisma and are swallowed (``_safe_fetch`` / the SCIM gate's fail-open), so their checks
         skip. Yields the ``get_key_object`` mock so callers can assert the sealed ``key_hash`` was
         the reload key."""
+        from litellm.proxy.auth.auth_checks import OrganizationNotFoundError
+
         get_key_object = AsyncMock(return_value=return_value, side_effect=side_effect)
+        get_org_object = AsyncMock(side_effect=OrganizationNotFoundError("Organization doesn't exist in db."))
         patchers = [
             patch("litellm.proxy.auth.auth_checks.get_key_object", get_key_object),
+            patch(  # test-quality-ok: central auth now resolves org limits; this fixture models a missing org row
+                "litellm.proxy.auth.user_api_key_auth.get_org_object", get_org_object
+            ),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         ]

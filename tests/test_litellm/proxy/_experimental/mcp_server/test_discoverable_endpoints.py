@@ -11870,9 +11870,13 @@ async def test_oauth_credential_write_keeps_virtual_key_permissions(
     from litellm.proxy._experimental.mcp_server import mcp_server_manager
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import authorize_oauth_credential_request
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
-    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
+    from litellm.proxy.auth.auth_checks import OrganizationNotFoundError, jwt_key_mapping_cache_key
 
     handler, signing_key = jwt_oauth_identity
+    monkeypatch.setattr(
+        "litellm.proxy.auth.user_api_key_auth.get_org_object",
+        AsyncMock(side_effect=OrganizationNotFoundError("Organization doesn't exist in db.")),
+    )
     key: Final = "sk-oauth-permission-test"
     hashed: Final = hash_token(key)
     credential: Final = UserAPIKeyAuth(
