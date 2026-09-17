@@ -498,7 +498,11 @@ async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
     proxy_module = types.SimpleNamespace(proxy_logging_obj=None)
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
 
-    result = CallToolResult(content=[TextContent(type="text", text="SECRET-1234")], isError=False)
+    result = CallToolResult(
+        content=[TextContent(type="text", text="SECRET-1234")],
+        structuredContent={"result": "SECRET-1234"},
+        isError=False,
+    )
     fake_manager = types.SimpleNamespace(
         get_registry=MagicMock(return_value={}),
         call_tool=AsyncMock(return_value=result),
@@ -526,6 +530,7 @@ async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
 
     assert results == [{"tool_call_id": "call-1", "result": "[REDACTED]", "name": tool_name}]
     assert logging_obj.async_success_handler.await_args.kwargs["result"].content[0].text == "[REDACTED]"
+    assert logging_obj.async_success_handler.await_args.kwargs["result"].structuredContent is None
 
 
 @pytest.mark.asyncio

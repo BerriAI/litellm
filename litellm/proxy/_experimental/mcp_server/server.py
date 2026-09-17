@@ -67,6 +67,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_VERSION,
     MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
+    apply_post_call_hook_content,
     build_synthetic_mcp_request,
     extract_mcp_tool_result_error_message,
     get_server_prefix,
@@ -3309,7 +3310,7 @@ if MCP_AVAILABLE:
             start_time=start_time,
             end_time=end_time,
         )
-        hooked_result: Final = result.model_copy(update={"content": list(hook_content)})
+        hooked_result: Final = apply_post_call_hook_content(result, hook_content)
         logging_obj.call_type = CallTypes.call_mcp_tool.value
         error_message: Final = extract_mcp_tool_result_error_message(hooked_result)
         if error_message is None:

@@ -7858,6 +7858,21 @@ def test_extract_mcp_tool_result_error_message():
     assert extract_mcp_tool_result_error_message({}) is None
 
 
+def test_apply_post_call_hook_content_preserves_unchanged_result():
+    from litellm.proxy._experimental.mcp_server.utils import apply_post_call_hook_content
+
+    result = CallToolResult(
+        content=[TextContent(type="text", text="SECRET-1234")],
+        structuredContent={"result": "SECRET-1234"},
+        isError=False,
+    )
+
+    hooked_result = apply_post_call_hook_content(result, result.content)
+
+    assert hooked_result is result
+    assert hooked_result.structuredContent == {"result": "SECRET-1234"}
+
+
 @pytest.mark.asyncio
 async def test_fire_mcp_tool_call_logging_iserror_logs_failure():
     """Regression test: a CallToolResult with isError=True must go
@@ -7960,7 +7975,11 @@ async def test_fire_mcp_tool_call_logging_applies_hook_content():
         dynamic_success_callbacks=[RedactingLogger()],
     )
     proxy_logging_mock = _mock_mcp_proxy_logging()
-    result = CallToolResult(content=[TextContent(type="text", text="SECRET-1234")], isError=False)
+    result = CallToolResult(
+        content=[TextContent(type="text", text="SECRET-1234")],
+        structuredContent={"result": "SECRET-1234"},
+        isError=False,
+    )
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
         hooked_result = await _fire_mcp_tool_call_logging(
@@ -7974,6 +7993,7 @@ async def test_fire_mcp_tool_call_logging_applies_hook_content():
 
     assert isinstance(hooked_result.content[0], TextContent)
     assert hooked_result.content[0].text == "[REDACTED]"
+    assert hooked_result.structuredContent is None
 
 
 @pytest.mark.asyncio

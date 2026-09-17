@@ -11,6 +11,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._experimental.mcp_server.utils import (
+    apply_post_call_hook_content,
     iter_known_server_prefixes,
     logging_safe_mcp_headers,
     split_server_prefix_from_name,
@@ -881,7 +882,7 @@ class LiteLLM_Proxy_MCP_Handler:
                             start_time=start_time,
                             end_time=datetime.now(),
                         )
-                        return proxy_hooked_result.model_copy(update={"content": list(hook_content)})
+                        return apply_post_call_hook_content(proxy_hooked_result, hook_content)
                     except Exception:
                         verbose_logger.exception("Failed to run post-call logging for MCP tool call %s", tool_name)
                         return proxy_hooked_result

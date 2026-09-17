@@ -18,6 +18,7 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if typing.TYPE_CHECKING:
     from fastapi import Request
+    from mcp.types import CallToolResult, EmbeddedResource, ImageContent, TextContent
 
 
 class _McpServerLike(Protocol):
@@ -147,6 +148,17 @@ def is_mcp_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def apply_post_call_hook_content(
+    result: "CallToolResult",
+    hook_content: "Sequence[TextContent | ImageContent | EmbeddedResource]",
+) -> "CallToolResult":
+    original_content: Final = list(result.content)
+    updated_content: Final = list(hook_content)
+    if updated_content == original_content:
+        return result
+    return result.model_copy(update={"content": updated_content, "structuredContent": None})
 
 
 def normalize_server_name(server_name: str) -> str:
