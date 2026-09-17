@@ -750,10 +750,8 @@ def _gemini_body(scenario: Scenario, requested_model: str) -> Mapping[str, objec
 
 def _gemini_sse(scenario: Scenario, requested_model: str) -> bytes:
     emit_usage: Final = scenario.stream_usage == "final_chunk"
-    first: Final = (
-        _jobj(*((key, value) for key, value in _gemini_body(scenario, requested_model).items() if key != "usageMetadata"))
-        if scenario.stream_usage == "absent"
-        else _gemini_body(scenario, requested_model)
+    first: Final = _jobj(
+        *((key, value) for key, value in _gemini_body(scenario, requested_model).items() if key != "usageMetadata")
     )
     return _sse(
         (
