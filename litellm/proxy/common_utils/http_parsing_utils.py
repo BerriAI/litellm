@@ -11,7 +11,6 @@ from typing_extensions import NotRequired, ReadOnly, Required
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
-    AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX,
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
 )
@@ -220,9 +219,11 @@ async def _read_request_body(request: Request | None) -> dict:
 
 
 def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
-    return route.startswith(
-        f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}{AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX}"
-    ) and _normalize_media_type(content_type).startswith("audio/")
+    """Azure Speech bodies (raw audio, multipart uploads) are forwarded byte for byte, so auth must not consume them."""
+    media_type: Final = _normalize_media_type(content_type)
+    return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (
+        media_type.startswith("audio/") or media_type == "multipart/form-data"
+    )
 
 
 async def read_raw_json_body(request: Request | None) -> bytes | None:
