@@ -8,11 +8,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
-from litellm.llms.azure_ai.common_utils import (
-    AZURE_ENTRA_LITELLM_PARAM_KEYS,
-    get_azure_ai_agent_entra_token,
-    has_azure_entra_params,
-)
+from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_LITELLM_PARAM_KEYS, get_azure_ai_agent_entra_token
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
@@ -20,6 +16,7 @@ from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 from ..common_utils import (
     A2AError,
+    a2a_hop_uses_entra,
     convert_messages_to_prompt,
     extract_text_from_a2a_response,
 )
@@ -41,13 +38,27 @@ def _card_declares_no_streaming(agent_card_params: Mapping[str, object]) -> bool
     return isinstance(capabilities, Mapping) and not capabilities.get("streaming")
 
 
-def _registry_api_key(agent_litellm_params: dict[str, object]) -> str | None:
-    configured_api_key: Final = agent_litellm_params.get("api_key")
-    if isinstance(configured_api_key, str):
-        return configured_api_key
-    if has_azure_entra_params(agent_litellm_params):
+def _agent_authenticates_with_entra(agent_litellm_params: Mapping[str, object]) -> bool:
+    return a2a_hop_uses_entra(agent_litellm_params, agent_litellm_params.get("custom_llm_provider"))
+
+
+def _registry_api_key(agent_litellm_params: Mapping[str, object]) -> str | None:
+    if _agent_authenticates_with_entra(agent_litellm_params):
         return get_azure_ai_agent_entra_token(agent_litellm_params)
-    return None
+    configured_api_key: Final = agent_litellm_params.get("api_key")
+    return configured_api_key if isinstance(configured_api_key, str) else None
+
+
+def _registry_headers(agent_litellm_params: Mapping[str, object]) -> dict[str, Any] | None:
+    stored_headers: Final = agent_litellm_params.get("headers")
+    if not isinstance(stored_headers, Mapping):
+        return None
+    entra_owns_authorization: Final = _agent_authenticates_with_entra(agent_litellm_params)
+    return {  # mutable-ok: completion() and httpx take the request headers as a dict
+        name: value
+        for name, value in stored_headers.items()
+        if not (entra_owns_authorization and str(name).lower() == "authorization")
+    }
 
 
 class A2AConfig(BaseConfig):
@@ -101,9 +112,7 @@ class A2AConfig(BaseConfig):
                         api_key = _registry_api_key(agent.litellm_params)
 
                     if not headers:
-                        agent_headers: Final = agent.litellm_params.get("headers")
-                        if agent_headers:
-                            headers = dict(agent_headers)
+                        headers = _registry_headers(agent.litellm_params) or headers
 
                 # Merge other litellm_params (timeout, max_retries, etc.)
                 registry_params: Final = tuple(
