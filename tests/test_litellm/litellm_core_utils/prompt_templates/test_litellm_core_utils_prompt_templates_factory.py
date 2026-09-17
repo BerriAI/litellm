@@ -8,8 +8,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
+    _emit_ollama_default_template_warning,
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
@@ -71,6 +73,81 @@ def test_ollama_pt_consecutive_user_messages():
     expected_prompt = "### User:\nHello\n\n### Assistant:\nHow can I help you?\n\n### User:\nHow are you?\n\n### Assistant:\nI'm good, thanks!\n\n### User:\nI am well too.\n\n"
     assert isinstance(result, dict)
     assert result["prompt"] == expected_prompt
+
+
+class TestOllamaDefaultTemplateWarning:
+    """The `ollama/` provider flattens chat messages with hard-coded '### System:' /
+    '### User:' markers, replacing the model's own chat template that Ollama would apply
+    on /api/chat. That substitution is otherwise invisible (HTTP 200, no log line), so the
+    warning is the caller's only signal. It must fire for chat-shaped requests, stay quiet
+    on repeat calls, and never change the prompt that is actually sent.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_warning_cache(self):
+        _emit_ollama_default_template_warning.cache_clear()
+
+    @staticmethod
+    def _warnings(caplog):
+        return [record.message for record in caplog.records if "### System:" in record.message]
+
+    def test_warns_once_and_leaves_prompt_unchanged(self, caplog):
+        messages: Final = [
+            {"role": "system", "content": "You are a helpful assistant"},
+            {"role": "user", "content": "Hello"},
+        ]
+        expected_prompt: Final = "### System:\nYou are a helpful assistant\n\n### User:\nHello\n\n"
+
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            first = ollama_pt(model="llama3.2:1b", messages=messages)
+            second = ollama_pt(model="llama3.2:1b", messages=messages)
+
+        warnings = self._warnings(caplog)
+        assert len(warnings) == 1, "the flattening warning must be emitted once per model, not once per request"
+        assert "ollama/llama3.2:1b" in warnings[0]
+        assert "ollama_chat/llama3.2:1b" in warnings[0]
+        assert "litellm.register_prompt_template()" in warnings[0]
+
+        assert first["prompt"] == expected_prompt, "warning must not change the flattened prompt"
+        assert second["prompt"] == expected_prompt
+
+    def test_does_not_warn_for_single_role_prompt(self, caplog):
+        messages: Final = [{"role": "user", "content": "Hello"}]
+
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            result = ollama_pt(model="llama3.2:1b", messages=messages)
+
+        assert self._warnings(caplog) == [], "a single-role prompt has no chat template to override"
+        assert result["prompt"] == "### User:\nHello\n\n"
+
+    def test_warns_again_for_a_different_model(self, caplog):
+        messages: Final = [
+            {"role": "system", "content": "You are a helpful assistant"},
+            {"role": "user", "content": "Hello"},
+        ]
+
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            ollama_pt(model="llama3.2:1b", messages=messages)
+            ollama_pt(model="qwen2.5-coder:7b", messages=messages)
+
+        warned_models: Final = [warning.split(":")[0] for warning in self._warnings(caplog)]
+        assert warned_models == ["ollama/llama3.2", "ollama/qwen2.5-coder"], (
+            "each affected model needs its own warning, since one deployment can route several"
+        )
+
+    def test_control_characters_in_the_model_name_cannot_forge_log_lines(self, caplog):
+        messages: Final = [
+            {"role": "system", "content": "You are a helpful assistant"},
+            {"role": "user", "content": "Hello"},
+        ]
+
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            ollama_pt(model="llama3.2:1b\nFORGED: standalone log line", messages=messages)
+
+        warnings: Final = self._warnings(caplog)
+        assert len(warnings) == 1
+        assert "\n" not in warnings[0], "a caller-supplied model name must not inject extra log lines"
+        assert "FORGED" in warnings[0]
 
 
 @pytest.mark.asyncio
