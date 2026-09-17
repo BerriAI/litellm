@@ -10,6 +10,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.tinyfish_passthr
     _BACKGROUND_BILLING_TASKS,
     TinyFishPassthroughLoggingHandler,
     is_tinyfish_agent_url,
+    resolve_tinyfish_agent_api_base,
     resolve_tinyfish_cost_per_step,
     run_id_from_sse_frames,
     sse_poller_spawned,
@@ -164,6 +165,13 @@ class TestBlockingRunBilling:
 
         assert handler_result["kwargs"]["response_cost"] is None
 
+    def test_unexpected_error_shape_still_bills(self, tinyfish_env):
+        run = {"run_id": "run-1", "status": "COMPLETED", "num_of_steps": 2, "error": {"retry_after": "5s"}}
+
+        handler_result = self._handle(run, _make_logging_obj())
+
+        assert handler_result["kwargs"]["response_cost"] == pytest.approx(0.032)
+
 
 class TestRunAsyncBilling:
     def test_poll_and_log_bills_once_terminal(self, tinyfish_env):
@@ -213,7 +221,7 @@ class TestRunAsyncBilling:
         )
 
         assert run is None
-        assert len(fake_client.requested_urls) == 3
+        assert len(fake_client.requested_urls) == 12
 
     def test_traversal_run_id_is_rejected(self, tinyfish_env):
         fake_client = _FakeClient(payloads=[{}])
@@ -268,6 +276,7 @@ class TestStartSseRunBilling:
     def test_spawns_detached_poller_that_bills_once(self, tinyfish_env):
         logging_obj = _make_logging_obj()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.model_call_details["litellm_params"] = {"metadata": {"user_api_key_hash": "hash-team-a"}}
         fake_client = _FakeClient(
             payloads=[{"run_id": "run-7", "status": "COMPLETED", "num_of_steps": 5, "result": "done"}]
         )
@@ -290,6 +299,8 @@ class TestStartSseRunBilling:
         assert awaited_kwargs["response_cost"] == pytest.approx(0.08)
         # a missing call id makes every poller row a NULL request_id primary-key collision
         assert awaited_kwargs["standard_logging_object"]["id"] == "test-call-id"
+        # SLO consumers (Prometheus, Langfuse) must see the caller's attribution despite the empty poller kwargs
+        assert awaited_kwargs["standard_logging_object"]["metadata"]["user_api_key_hash"] == "hash-team-a"
         assert fake_client.requested_urls == ["https://agent.tinyfish.ai/v1/runs/run-7?screenshots=none"]
 
     def test_flag_defaults_to_not_spawned(self):
@@ -352,6 +363,11 @@ class TestRouteDetection:
         monkeypatch.setenv("TINYFISH_AGENT_API_BASE", "https://agent.staging.tinyfish.ai")
         assert is_tinyfish_agent_url("https://agent.staging.tinyfish.ai/v1/runs/x")
         assert not is_tinyfish_agent_url("https://agent.tinyfish.ai/v1/runs/x")
+
+    def test_schemeless_env_base_is_normalized(self, monkeypatch):
+        monkeypatch.setenv("TINYFISH_AGENT_API_BASE", "agent.staging.tinyfish.ai")
+        assert resolve_tinyfish_agent_api_base() == "https://agent.staging.tinyfish.ai"
+        assert is_tinyfish_agent_url("https://agent.staging.tinyfish.ai/v1/runs/x")
 
 
 class TestEndpointAllowlist:

@@ -73,6 +73,9 @@ class PassThroughStreamingHandler:
         exception: Exception,
         stream_context: PassThroughStreamContext | None = None,
     ) -> None:
+        # the tinyfish poller writes the one authoritative row; a failure row here would collide on its request_id
+        if endpoint_type == EndpointType.TINYFISH and sse_poller_spawned(litellm_logging_obj):
+            return
         PassThroughStreamingHandler._record_partial_usage_for_failure(
             litellm_logging_obj=litellm_logging_obj,
             endpoint_type=endpoint_type,
@@ -182,8 +185,7 @@ class PassThroughStreamingHandler:
                 )
             )
         )
-        # TinyFish SSE bills via a detached poller spawned on the first run_id-bearing frame, so a
-        # client disconnect mid-stream cannot lose the charge (the run completes upstream regardless).
+        # TinyFish SSE bills via a detached poller spawned on the first run_id frame, so disconnects can't lose the charge
         tinyfish_scan_active = endpoint_type == EndpointType.TINYFISH  # rebind-ok: scan stops once the poller spawns
         tinyfish_pending = b""  # rebind-ok: SSE frame reassembly buffer across transport chunks
         try:
@@ -290,10 +292,18 @@ class PassThroughStreamingHandler:
         - OpenAI
         """
         try:
-            # TinyFish billing is owned by the poller spawned in chunk_processor; this path only
-            # writes the $0 fallback row for streams that never produced a run_id.
+            # TinyFish billing is owned by the detached poller; the $0 fallback below is only for streams with no run_id
             if endpoint_type == EndpointType.TINYFISH:
                 if sse_poller_spawned(litellm_logging_obj):
+                    return
+                late_run_id: Final = run_id_from_sse_frames(b"".join(raw_bytes))
+                if late_run_id:
+                    # the run_id arrived in an unterminated frame; poll to terminal instead of mispricing a RUNNING run
+                    TinyFishPassthroughLoggingHandler.start_sse_run_billing(
+                        run_id=late_run_id,
+                        litellm_logging_obj=litellm_logging_obj,
+                        start_time=start_time,
+                    )
                     return
                 tinyfish_payload: Final = (
                     await TinyFishPassthroughLoggingHandler.handle_logging_tinyfish_collected_chunks(

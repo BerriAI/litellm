@@ -55,6 +55,19 @@ class _TinyfishLoggingPayload(NamedTuple):
 # asyncio tasks are weakly referenced by the loop; hold them until done or they can vanish mid-poll
 _BACKGROUND_BILLING_TASKS: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: task registry
 
+
+def _register_billing_task(task: "asyncio.Task[None]") -> None:
+    _BACKGROUND_BILLING_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_BILLING_TASKS.discard)
+    task.add_done_callback(_warn_if_cancelled)
+
+
+def _warn_if_cancelled(task: "asyncio.Task[None]") -> None:
+    # CancelledError bypasses the poller's exception handler, so shutdown-time charge loss must be logged here
+    if task.cancelled():
+        verbose_proxy_logger.warning("TinyFish passthrough: billing poller cancelled mid-poll; the run may go unbilled")
+
+
 _SSE_POLLER_SPAWNED_KEY: Final = "tinyfish_sse_poller_spawned"
 
 
@@ -71,7 +84,9 @@ def run_id_from_sse_frames(frames: bytes) -> str | None:
 
 
 def resolve_tinyfish_agent_api_base() -> str:
-    return (os.getenv("TINYFISH_AGENT_API_BASE") or TINYFISH_AGENT_DEFAULT_API_BASE).rstrip("/")
+    raw: Final = (os.getenv("TINYFISH_AGENT_API_BASE") or TINYFISH_AGENT_DEFAULT_API_BASE).rstrip("/")
+    # a schemeless override would silently break both routing and billing (urlparse hostname becomes None)
+    return raw if "://" in raw else f"https://{raw}"
 
 
 def resolve_tinyfish_cost_per_step() -> float:
@@ -183,8 +198,7 @@ class TinyFishPassthroughLoggingHandler:
                 kwargs=kwargs,
             )
         )
-        _BACKGROUND_BILLING_TASKS.add(task)
-        task.add_done_callback(_BACKGROUND_BILLING_TASKS.discard)
+        _register_billing_task(task)
 
     @staticmethod
     def start_sse_run_billing(
@@ -193,8 +207,7 @@ class TinyFishPassthroughLoggingHandler:
         start_time: datetime,
         client: AsyncHTTPHandler | None = None,
     ) -> None:
-        """Bill POST /v1/automation/run-sse once, when the polled run turns terminal; the detached
-        task outlives client disconnects, so interrupted streams still bill completed runs."""
+        """Bill POST /v1/automation/run-sse once via a detached poller that outlives client disconnects."""
         mark_sse_poller_spawned(litellm_logging_obj)
         task: Final = asyncio.create_task(
             TinyFishPassthroughLoggingHandler._poll_and_log(
@@ -207,8 +220,7 @@ class TinyFishPassthroughLoggingHandler:
                 client=client,
             )
         )
-        _BACKGROUND_BILLING_TASKS.add(task)
-        task.add_done_callback(_BACKGROUND_BILLING_TASKS.discard)
+        _register_billing_task(task)
 
     @staticmethod
     async def _poll_and_log(
@@ -326,8 +338,7 @@ class TinyFishPassthroughLoggingHandler:
         end_time: datetime,
         client: AsyncHTTPHandler | None = None,
     ) -> PassThroughEndpointLoggingTypedDict:
-        """Fallback for run-sse streams where chunk_processor spawned no poller (no run_id frame
-        ever arrived): logs the request, still pricing via GET /v1/runs/{id} if a run_id parses."""
+        """Fallback for run-sse streams with no poller: logs the request, pricing via one GET if a run_id parses."""
         try:
             run_id: Final = _run_id_from_sse_chunks(all_chunks)
             if run_id is None:
@@ -369,6 +380,10 @@ class TinyFishPassthroughLoggingHandler:
             "response_cost": response_cost,
             # spend rows key on this as request_id; without it every poller-billed row is a NULL-key collision
             "litellm_call_id": logging_obj.litellm_call_id,
+            # the poller paths pass no request kwargs, so SLO attribution (key hash, team, tags) needs the stored params
+            "litellm_params": kwargs.get("litellm_params")
+            or logging_obj.model_call_details.get("litellm_params")
+            or {},
         }
         logging_obj.model_call_details.update(
             model=TINYFISH_MODEL_NAME,

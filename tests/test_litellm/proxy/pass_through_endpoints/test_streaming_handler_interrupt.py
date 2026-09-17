@@ -997,3 +997,64 @@ class TestTinyFishStreamBilling:
 
         logging_obj.dispatch_success_handlers.assert_awaited_once()
         assert logging_obj.dispatch_success_handlers.await_args.kwargs["response_cost"] is None
+
+    @pytest.mark.asyncio
+    async def test_upstream_error_after_spawn_skips_failure_dispatch(self, tinyfish_env):
+        logging_obj = self._tinyfish_logging_obj()
+        logging_obj.dispatch_failure_handlers = MagicMock()
+        tasks_before = set(tinyfish_handler_module._BACKGROUND_BILLING_TASKS)
+
+        async def _aiter_bytes():
+            yield b'data: {"run_id": "run-sse-1", "event": "INITIALIZED"}\n\n'
+            raise httpx.ReadTimeout("upstream died")
+
+        response = MagicMock(spec=httpx.Response)
+        response.status_code = 200
+        response.aiter_bytes = _aiter_bytes
+
+        async def _consume():
+            async for _ in PassThroughStreamingHandler.chunk_processor(
+                response=response,
+                request_body={},
+                litellm_logging_obj=logging_obj,
+                endpoint_type=EndpointType.TINYFISH,
+                start_time=datetime.now(),
+                passthrough_success_handler_obj=MagicMock(),
+                url_route=self.SSE_ROUTE,
+                route_streaming_logging=AsyncMock(),
+            ):
+                pass
+
+        with pytest.raises(httpx.ReadTimeout):
+            await _consume()
+
+        spawned = self._spawned_since(tasks_before)
+        assert len(spawned) == 1
+        # the poller owns the single row; a failure dispatch would collide on its request_id
+        logging_obj.dispatch_failure_handlers.assert_not_called()
+        for task in spawned:
+            task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_unterminated_run_id_frame_late_spawns_poller(self, tinyfish_env):
+        logging_obj = self._tinyfish_logging_obj()
+        tasks_before = set(tinyfish_handler_module._BACKGROUND_BILLING_TASKS)
+
+        await PassThroughStreamingHandler._route_streaming_logging_to_handler(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route=self.SSE_ROUTE,
+            request_body={},
+            endpoint_type=EndpointType.TINYFISH,
+            start_time=datetime.now(),
+            raw_bytes=[b'data: {"run_id": "run-sse-1", "event": "INITIALIZED"}'],
+            end_time=datetime.now(),
+        )
+
+        spawned = self._spawned_since(tasks_before)
+        assert len(spawned) == 1
+        assert sse_poller_spawned(logging_obj)
+        # the poller polls to terminal instead of the old single fetch that mispriced a RUNNING run at $0
+        logging_obj.dispatch_success_handlers.assert_not_awaited()
+        for task in spawned:
+            task.cancel()
