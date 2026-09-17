@@ -88,13 +88,7 @@ impl PythonLogger {
         kwargs.set_item("input", "OCR document processing")?;
         kwargs.set_item("api_key", api_key)?;
         kwargs.set_item("additional_args", &additional)?;
-        if self.callbacks_needed(py, "input")? {
-            self.object(py).call_method("pre_call", (), Some(&kwargs))?;
-        } else {
-            self.object(py)
-                .call_method("_pre_call", (), Some(&kwargs))?;
-            self.object(py).call_method0("record_api_call_start_time")?;
-        }
+        self.object(py).call_method("pre_call", (), Some(&kwargs))?;
         Ok(())
     }
 
@@ -108,21 +102,11 @@ impl PythonLogger {
         let additional = PyDict::new(py);
         additional.set_item("complete_input_dict", body)?;
         additional.set_item("headers", headers)?;
-        if self.callbacks_needed(py, "input")? {
-            let kwargs = PyDict::new(py);
-            kwargs.set_item("original_response", to_py(py, original_response)?)?;
-            kwargs.set_item("additional_args", &additional)?;
-            self.object(py)
-                .call_method("post_call", (), Some(&kwargs))?;
-        } else {
-            let response = py
-                .import("json")?
-                .call_method1("dumps", (to_py(py, original_response)?,))?;
-            self.object(py).call_method1(
-                "record_post_call",
-                (response, py.None(), py.None(), additional),
-            )?;
-        }
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("original_response", to_py(py, original_response)?)?;
+        kwargs.set_item("additional_args", &additional)?;
+        self.object(py)
+            .call_method("post_call", (), Some(&kwargs))?;
         Ok(())
     }
 }

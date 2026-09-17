@@ -54,8 +54,6 @@ impl OcrAdapter for VertexMistralAdapter {
             &location,
             &request.model,
         )?;
-        let retains_document = !request.document.source().starts_with("http://")
-            && !request.document.source().starts_with("https://");
         let document = inline_remote_document(
             client.document_fetcher(),
             request.document.clone(),
@@ -68,7 +66,6 @@ impl OcrAdapter for VertexMistralAdapter {
             request,
             &url,
             &authentication.headers,
-            retains_document,
             body,
             |body| validate_inline_document(&body.document),
         )

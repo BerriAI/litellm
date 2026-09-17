@@ -61,7 +61,6 @@ pub(crate) async fn transform_request_body<B>(
     request: &LiteLLMOcrRequest,
     url: &str,
     headers: &[(String, String)],
-    retains_document: bool,
     body: B,
     validate: impl FnOnce(&B) -> Result<(), OcrRequestError>,
 ) -> Result<reqwest::Request, OcrError>
@@ -72,13 +71,6 @@ where
         let body = serde_json::to_value(body).map_err(|_| OcrRequestError::RequestField {
             path: "body".into(),
         })?;
-        let retained_fields = request
-            .optional_params
-            .keys()
-            .filter(|name| body.get(*name).is_some())
-            .cloned()
-            .chain(retains_document.then(|| "document".to_string()))
-            .collect();
         let changed = request
             .hooks
             .during_call(OcrDuringCallRequest {
@@ -87,7 +79,6 @@ where
                 url: url.into(),
                 headers: headers.to_vec(),
                 body,
-                retained_fields,
             })
             .await?;
         let body = OcrWireBody::<B>::decode(changed.body)?;
@@ -143,7 +134,6 @@ pub(crate) async fn guardrail_document(
                     path: "document".into(),
                 }
             })?,
-            retained_fields: Vec::new(),
         })
         .await?;
     let document = super::wire::decode_request_value(changed.body, "guardrail.document")?;

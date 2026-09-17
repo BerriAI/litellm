@@ -9,7 +9,7 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
@@ -121,65 +121,35 @@ def test_native_ocr_pre_call_header_rebinding_does_not_replace_execution_root(oc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_native_ocr_pre_call_nested_document_edit_updates_caller_callback_and_provider_references(
+async def test_native_ocr_pre_call_body_is_detached_from_caller_objects(
     ocr_server: RecordingServer, asynchronous: bool
 ) -> None:
-    original: Final = dict(OCR_DOCUMENT)
+    document: Final = dict(OCR_DOCUMENT)
+    pages: Final = [0]
     replacement_url: Final = "data:application/pdf;base64,ZGVm"
-    retained: Final = []
     aliases: Final = []
-
-    class Retain(CustomLogger):
-        def log_pre_api_call(self, model, messages, kwargs):
-            aliases.append(request_body(kwargs)["document"] is original)
-            retained.append(request_body(kwargs)["document"])
 
     class Edit(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
-            original["document_url"] = replacement_url
-
-    arguments: Final = {
-        "model": "mistral/mistral-ocr-latest",
-        "document": original,
-        "api_key": "test-key",
-        "api_base": ocr_server.base_url,
-        "callbacks": [Retain(), Edit()],
-    }
-    response: Final = (
-        await call_native_aocr(ocr_server, **arguments)
-        if asynchronous
-        else call_native_ocr(ocr_server, **arguments)
-    )
-
-    assert aliases == [True]
-    assert retained[0]["document_url"] == replacement_url
-    assert original["document_url"] == replacement_url
-    assert ocr_server.requests[0].body["document"]["document_url"] == replacement_url
-    assert response.pages[0].markdown == "native OCR response"
-
-
-def test_native_ocr_pre_call_document_replacement_does_not_mutate_original_document(
-    ocr_server: RecordingServer,
-) -> None:
-    original: Final = dict(OCR_DOCUMENT)
-    replacement: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,ZGVm"}
-    retained: Final = []
-
-    class RetainAndReplace(CustomLogger):
-        def log_pre_api_call(self, model, messages, kwargs):
             body = request_body(kwargs)
-            retained.append(body["document"])
-            body["document"] = replacement
+            aliases.append((body["document"] is document, body["pages"] is pages))
+            body["document"]["document_url"] = replacement_url
+            body["pages"].append(1)
+            request_headers(kwargs)["x-edited"] = "yes"
 
-    call_native_ocr(
-        ocr_server,
-        document=original,
-        callbacks=[RetainAndReplace()],
+    response: Final = (
+        await call_native_aocr(ocr_server, document=document, pages=pages, callbacks=[Edit()])
+        if asynchronous
+        else call_native_ocr(ocr_server, document=document, pages=pages, callbacks=[Edit()])
     )
 
-    assert retained[0] is original
-    assert original["document_url"] == OCR_DOCUMENT["document_url"]
-    assert ocr_server.requests[0].body["document"] == replacement
+    assert aliases == [(False, False)]
+    assert document == OCR_DOCUMENT
+    assert pages == [0]
+    assert ocr_server.requests[0].body["document"]["document_url"] == replacement_url
+    assert ocr_server.requests[0].body["pages"] == [0, 1]
+    assert ocr_server.requests[0].headers["x-edited"] == "yes"
+    assert response.pages[0].markdown == "native OCR response"
 
 
 def test_native_ocr_pre_call_body_rebinding_is_visible_to_callbacks_but_not_provider(
@@ -343,6 +313,38 @@ async def test_native_aocr_callback_error_does_not_mask_provider_error_or_skip_l
     assert sync_events[0].kwargs["exception"] is caught.value
     assert async_events[0].kwargs["exception"] is caught.value
     assert "async_log_success_event" not in recorder.names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_native_ocr_callback_ordering_matches_sync_and_async(
+    ocr_server: RecordingServer, asynchronous: bool
+) -> None:
+    names: Final = []
+    finished: Final = threading.Event()
+
+    class Order(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            names.append("pre_call")
+
+        def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+            names.append("post_call")
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            names.append("success")
+            finished.set()
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            names.append("success")
+
+    if asynchronous:
+        await call_native_aocr(ocr_server, callbacks=[Order()])
+        await drain_logging()
+    else:
+        call_native_ocr(ocr_server, callbacks=[Order()])
+        assert finished.wait(10)
+
+    assert names == ["pre_call", "post_call", "success"]
 
 
 def test_native_ocr_dispatches_each_callback_phase_once_when_logger_is_registered_multiple_times(

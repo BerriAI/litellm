@@ -12,6 +12,7 @@ from tests.test_litellm_rust.support.requests import (
     OCR_RESPONSE,
     call_native_aocr,
     call_native_ocr,
+    request_body,
 )
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -503,7 +504,7 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
     class Observer(RecordingLogger):
         def log_pre_api_call(self, model, messages, kwargs):
             super().log_pre_api_call(model, messages, kwargs)
-            pages.append(2)
+            request_body(kwargs)["pages"].append(2)
 
     arguments: Final = {
         "model": "mistral/mistral-ocr-latest",
@@ -516,6 +517,7 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
     assert response.pages[0].markdown == "native OCR response"
     assert ocr_server.requests[0].headers["authorization"] == f"Bearer {expected_key}"
     assert ocr_server.requests[0].body["pages"] == [0, 2]
+    assert pages == [0]
 
 
 @pytest.mark.parametrize(

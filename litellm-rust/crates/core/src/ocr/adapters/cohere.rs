@@ -35,7 +35,7 @@ impl OcrAdapter for CohereAdapter {
                 .unwrap_or(COHERE_PARSE_API_BASE),
         )?;
         let body = transform_request(&request.model, request.document.clone(), params)?;
-        transform_request_body(client, request, &url, &headers, true, body, |body| {
+        transform_request_body(client, request, &url, &headers, body, |body| {
             validate_document(&body.document)
         })
         .await

@@ -18,7 +18,6 @@ use crate::marshal::{project_optional_fields, python_timeout_seconds, request_in
 
 pub(super) struct ProjectedOcrFields {
     pub boundary_request: Py<PyAny>,
-    pub document: Option<Py<PyAny>>,
     pub reader: Option<PythonFileReader>,
     pub api_key: Py<PyAny>,
     pub azure_ad_token_provider: Option<PythonTokenProvider>,
@@ -83,7 +82,7 @@ impl<'py> OcrArguments<'_, 'py> {
 
 enum ProjectedDocument {
     File(FileDocumentInput),
-    Other { wire: Value, retained: Py<PyAny> },
+    Other { wire: Value },
 }
 
 impl ProjectedDocument {
@@ -92,24 +91,16 @@ impl ProjectedDocument {
         if kind != "file" {
             return Ok(Self::Other {
                 wire: from_py(document)?,
-                retained: document.clone().unbind(),
             });
         }
         Ok(Self::File(document.extract()?))
     }
 
-    fn into_parts(
-        self,
-    ) -> PyResult<(
-        OcrDocumentInput,
-        Option<Py<PyAny>>,
-        Option<PythonFileReader>,
-    )> {
+    fn into_parts(self) -> PyResult<(OcrDocumentInput, Option<PythonFileReader>)> {
         match self {
-            Self::File(FileDocumentInput { input, reader }) => Ok((input, None, reader)),
-            Self::Other { wire, retained } => Ok((
+            Self::File(FileDocumentInput { input, reader }) => Ok((input, reader)),
+            Self::Other { wire } => Ok((
                 decode_document(wire).map_err(ocr_error_to_pyerr)?.into(),
-                Some(retained),
                 None,
             )),
         }
@@ -140,7 +131,7 @@ pub(super) fn project_request(
     let azure_ad_token_provider = kwargs
         .get_item("azure_ad_token_provider")?
         .and_then(|provider| PythonTokenProvider::select(provider, AZURE_AD_TOKEN_PROVIDER));
-    let (document, retained_document, reader) = document.into_parts()?;
+    let (document, reader) = document.into_parts()?;
     let wire = OcrWireRequest {
         model,
         document,
@@ -158,7 +149,6 @@ pub(super) fn project_request(
         request: request.with_host_hooks(Arc::new(BridgeOcrHooks), None),
         fields: ProjectedOcrFields {
             boundary_request,
-            document: retained_document,
             reader,
             api_key: api_key.unbind(),
             azure_ad_token_provider,
@@ -204,11 +194,7 @@ mod tests {
 
     fn project_document(
         document: &Bound<'_, PyAny>,
-    ) -> PyResult<(
-        OcrDocumentInput,
-        Option<Py<PyAny>>,
-        Option<PythonFileReader>,
-    )> {
+    ) -> PyResult<(OcrDocumentInput, Option<PythonFileReader>)> {
         ProjectedDocument::project(document)?.into_parts()
     }
 
@@ -423,9 +409,8 @@ kwargs = {}
                 .unwrap();
             let arguments = arguments(&request, &kwargs);
             let document = arguments.document().unwrap();
-            let (input, retained, reader) = project_document(&document).unwrap();
+            let (input, reader) = project_document(&document).unwrap();
             assert_eq!(input, OcrDocumentInput::HostReader { mime_type: None });
-            assert!(retained.is_none());
             assert_eq!(arguments.api_base().unwrap().as_deref(), Some("original"));
             assert_eq!(arguments.timeout_seconds().unwrap(), Some(1.0));
             reader.unwrap().read(py).unwrap();
@@ -466,7 +451,7 @@ kwargs = {'api_key': key}
     }
 
     #[test]
-    fn file_documents_become_typed_inputs_and_other_documents_keep_the_python_object() {
+    fn file_and_other_documents_become_typed_inputs() {
         Python::initialize();
         Python::attach(|py| {
             let file = py
@@ -476,7 +461,7 @@ kwargs = {'api_key': key}
                     None,
                 )
                 .unwrap();
-            let (input, retained, reader) = project_document(&file).unwrap();
+            let (input, reader) = project_document(&file).unwrap();
             assert_eq!(
                 input,
                 OcrDocumentInput::Bytes {
@@ -485,7 +470,6 @@ kwargs = {'api_key': key}
                     mime_type: Some("application/pdf".into()),
                 }
             );
-            assert!(retained.is_none());
             assert!(reader.is_none());
 
             let original = py
@@ -495,9 +479,8 @@ kwargs = {'api_key': key}
                     None,
                 )
                 .unwrap();
-            let (input, retained, _) = project_document(&original).unwrap();
+            let (input, _) = project_document(&original).unwrap();
             assert_eq!(input, url_document("https://example.com/a.pdf"));
-            assert!(retained.unwrap().bind(py).is(&original));
         });
     }
 
@@ -572,9 +555,8 @@ document = Document()
 ",
             );
             let document = locals.get_item("document").unwrap().unwrap();
-            let (input, retained, _) = project_document(&document).unwrap();
+            let (input, _) = project_document(&document).unwrap();
             assert!(matches!(input, OcrDocumentInput::Bytes { .. }));
-            assert!(retained.is_none());
             let reads: Vec<String> = document.getattr("reads").unwrap().extract().unwrap();
             assert_eq!(reads, ["type", "mime_type", "file"]);
         });

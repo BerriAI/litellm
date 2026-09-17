@@ -180,6 +180,7 @@ async fn accepted_response_polls_to_success_with_only_credentials() {
 
 struct SubmissionBoundary {
     request_count: Arc<Mutex<Vec<String>>>,
+    post_calls: Arc<Mutex<Vec<Value>>>,
 }
 
 impl super::hooks::OcrHooks for SubmissionBoundary {
@@ -188,24 +189,18 @@ impl super::hooks::OcrHooks for SubmissionBoundary {
         request: super::hooks::OcrPostCallRequest,
     ) -> super::hooks::OcrHookFuture<'_, super::hooks::OcrPostCallRequest> {
         Box::pin(async move {
-            match self.request_count.lock().unwrap().len() {
-                1 => assert_eq!(request.original_response, json!(r#"{"submitted":true}"#)),
-                2 => assert!(
-                    request
-                        .original_response
-                        .as_str()
-                        .unwrap()
-                        .contains("succeeded")
-                ),
-                count => panic!("unexpected callback after {count} requests"),
-            }
+            assert_eq!(self.request_count.lock().unwrap().len(), 1);
+            self.post_calls
+                .lock()
+                .unwrap()
+                .push(request.original_response.clone());
             Ok(request)
         })
     }
 }
 
 #[tokio::test]
-async fn accepted_response_runs_post_call_before_polling() {
+async fn accepted_response_runs_post_call_once_before_polling() {
     let (base, seen, server) = mock_server(vec![
         MockResponse {
             status: 202,
@@ -215,9 +210,11 @@ async fn accepted_response_runs_post_call_before_polling() {
         MockResponse::json(json!({"status":"succeeded"})),
     ])
     .await;
+    let post_calls = Arc::new(Mutex::new(Vec::new()));
     let request = super::LiteLLMOcrRequest {
         hooks: Arc::new(SubmissionBoundary {
             request_count: seen.clone(),
+            post_calls: post_calls.clone(),
         }),
         ..wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({}))
     };
@@ -225,6 +222,10 @@ async fn accepted_response_runs_post_call_before_polling() {
     perform_ocr(request).await.unwrap();
     server.await.unwrap();
     assert_eq!(seen.lock().unwrap().len(), 2);
+    assert_eq!(
+        *post_calls.lock().unwrap(),
+        [json!(r#"{"submitted":true}"#)]
+    );
 }
 
 #[tokio::test]

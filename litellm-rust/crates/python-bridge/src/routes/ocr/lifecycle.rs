@@ -29,7 +29,6 @@ enum OcrHostData {
 struct ProjectedOcrHost {
     fields: ProjectedOcrFields,
     pre_call: Option<callbacks::OcrLoggingFields>,
-    retained_fields: Option<Py<PyDict>>,
     body: Option<Py<PyDict>>,
     headers: Option<Py<PyDict>>,
 }
@@ -49,31 +48,8 @@ impl PythonOcrHost {
         }
     }
 
-    fn pre_call(
-        &mut self,
-        py: Python<'_>,
-        request: OcrPreCallRequest,
-    ) -> PyResult<OcrPreCallRequest> {
-        let kwargs = self.state.kwargs.bind(py);
-        let retained_fields = PyDict::new(py);
-        for name in request
-            .optional_params
-            .as_object()
-            .ok_or_else(missing_state)?
-            .keys()
-        {
-            if let Some(value) = kwargs.get_item(name)? {
-                retained_fields.set_item(name, value)?;
-            }
-        }
+    fn pre_call(&mut self, request: OcrPreCallRequest) -> PyResult<OcrPreCallRequest> {
         let projected = self.projected_mut()?;
-        let document = match &projected.fields.document {
-            Some(document) => document.clone_ref(py),
-            None => to_py(py, &request.document)?,
-        };
-        retained_fields.set_item("document", &document)?;
-        projected.fields.document = Some(document);
-        projected.retained_fields = Some(retained_fields.unbind());
         projected.pre_call = Some((&request).into());
         Ok(request)
     }
@@ -111,28 +87,9 @@ impl PythonOcrHost {
             &projected.fields.secret_fields,
             &request.url,
         )?;
-        if !self.state.logger()?.callbacks_needed(py, "payload")? {
-            self.state
-                .logger()?
-                .object(py)
-                .call_method0("record_api_call_start_time")?;
-            return Ok(request);
-        }
-        if let Some(body) = request.body.as_object_mut() {
-            for name in &request.retained_fields {
-                body.remove(name);
-            }
-        }
         let body = to_py(py, &request.body)?
             .into_bound(py)
             .cast_into::<PyDict>()?;
-        if let Some(retained) = &self.projected()?.retained_fields {
-            for name in &request.retained_fields {
-                if let Some(value) = retained.bind(py).get_item(name)? {
-                    body.set_item(name, value)?;
-                }
-            }
-        }
         let headers = PyDict::new(py);
         for (name, value) in &request.headers {
             headers.set_item(name, value)?;
@@ -158,16 +115,13 @@ impl PythonOcrHost {
         py: Python<'_>,
         request: OcrPostCallRequest,
     ) -> PyResult<OcrPostCallRequest> {
-        let logger = self.state.logger()?;
-        if logger.callbacks_needed(py, "payload")? {
-            let projected = self.projected()?;
-            logger.post_ocr(
-                py,
-                &request.original_response,
-                projected.body.as_ref(),
-                projected.headers.as_ref(),
-            )?;
-        }
+        let projected = self.projected()?;
+        self.state.logger()?.post_ocr(
+            py,
+            &request.original_response,
+            projected.body.as_ref(),
+            projected.headers.as_ref(),
+        )?;
         Ok(request)
     }
 }
@@ -213,7 +167,6 @@ impl PythonRoute for PythonOcrHost {
                 self.data = OcrHostData::Projected(Box::new(ProjectedOcrHost {
                     fields: projected.fields,
                     pre_call: None,
-                    retained_fields: None,
                     body: None,
                     headers: None,
                 }));
@@ -224,7 +177,7 @@ impl PythonRoute for PythonOcrHost {
                 OcrHostResult::AzureAdToken(Ok(self.acquire_azure_ad_token(py)?))
             }
             OcrHostOperation::PreCall(request) => {
-                OcrHostResult::PreCall(Ok(self.pre_call(py, request)?))
+                OcrHostResult::PreCall(Ok(self.pre_call(request)?))
             }
             OcrHostOperation::DuringCall(request) => {
                 OcrHostResult::DuringCall(Ok(self.python_pre_call(py, request)?))
@@ -272,7 +225,6 @@ impl PythonRoute for PythonOcrHost {
             OcrHostData::Unprojected { request } => visit.call(request),
             OcrHostData::Projected(projected) => {
                 visit.call(&projected.fields.boundary_request)?;
-                visit.call(&projected.fields.document)?;
                 if let Some(reader) = &projected.fields.reader {
                     reader.traverse(visit)?;
                 }
@@ -280,7 +232,6 @@ impl PythonRoute for PythonOcrHost {
                 if let Some(provider) = &projected.fields.azure_ad_token_provider {
                     provider.traverse(visit)?;
                 }
-                visit.call(&projected.retained_fields)?;
                 visit.call(&projected.body)?;
                 visit.call(&projected.headers)
             }

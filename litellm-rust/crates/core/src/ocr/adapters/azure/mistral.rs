@@ -41,8 +41,6 @@ impl OcrAdapter for AzureMistralAdapter {
         config.azure_ad_token_provider = request.azure_ad_token_provider.clone();
         let url = get_complete_url(request.connection.api_base.as_deref(), &credential_env)?;
         let headers = validate_environment(&request.connection, &config, &credential_env).await?;
-        let retains_document = !request.document.source().starts_with("http://")
-            && !request.document.source().starts_with("https://");
         let document = inline_remote_document(
             client.document_fetcher(),
             request.document.clone(),
@@ -50,15 +48,9 @@ impl OcrAdapter for AzureMistralAdapter {
         )
         .await?;
         let body = mistral::transform_ocr_request(&request.model, document, &params)?;
-        transform_request_body(
-            client,
-            request,
-            &url,
-            &headers,
-            retains_document,
-            body,
-            |body| validate_inline_document(&body.document),
-        )
+        transform_request_body(client, request, &url, &headers, body, |body| {
+            validate_inline_document(&body.document)
+        })
         .await
     }
 

@@ -43,7 +43,7 @@ impl OcrAdapter for AzureDocumentIntelligenceAdapter {
             .ok_or_else(|| Error::Auth("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into()))?;
         let url = get_complete_url(&endpoint, &request.model, &params)?;
         let body = document_intelligence::transform_ocr_request(request.document.clone())?;
-        transform_request_body(client, request, &url, &headers, false, body, |_| Ok(())).await
+        transform_request_body(client, request, &url, &headers, body, |_| Ok(())).await
     }
 
     fn transform_ocr_response(

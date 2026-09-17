@@ -49,8 +49,6 @@ impl OcrAdapter for AzureCohereAdapter {
         let headers =
             super::validate_ai_environment(&request.connection, &config, &credential_env).await?;
         validate_document(&request.document)?;
-        let remote = request.document.source().starts_with("http://")
-            || request.document.source().starts_with("https://");
         let document = inline_remote_document(
             client.document_fetcher(),
             request.document.clone(),
@@ -63,7 +61,6 @@ impl OcrAdapter for AzureCohereAdapter {
             request,
             &complete_url(&base)?,
             &headers,
-            !remote,
             body,
             |body| {
                 validate_document(&body.document)?;
