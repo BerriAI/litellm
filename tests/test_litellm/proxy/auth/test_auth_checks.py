@@ -51,6 +51,8 @@ from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_user_object,
     invalidate_team_member_spend_state,
+    request_skips_budget_checks,
+    route_skips_budget_checks,
     vector_store_access_check,
 )
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -8447,3 +8449,15 @@ async def test_access_group_model_fallback_uses_the_injected_database(channel: s
                 llm_router=None, prisma_client=client,
             ) is True
     reader.assert_awaited_once_with(where={"access_group_id": "group-a"})
+
+
+def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
+    assert route_skips_budget_checks(route="/v1/models") is True
+    assert route_skips_budget_checks(route="/spend/logs") is True
+    assert route_skips_budget_checks(route="/health") is False
+    assert route_skips_budget_checks(route="/v1/chat/completions") is False
+
+
+def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() -> None:
+    assert request_skips_budget_checks(route="/v1/models", model=None, llm_router=None) is True
+    assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False
