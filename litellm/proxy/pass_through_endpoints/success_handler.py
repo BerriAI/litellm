@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import urlparse
 
@@ -263,7 +264,7 @@ class PassThroughEndpointLogging:
 
             typesafe_handler_result: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
                 httpx_response=httpx_response,
-                response_body=response_body if isinstance(response_body, dict) else {},
+                response_body=response_body if isinstance(response_body, dict) else MappingProxyType({}),
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,

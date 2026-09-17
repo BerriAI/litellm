@@ -527,8 +527,8 @@ async def mistral_proxy_route(
 
 @router.api_route(
     "/typesafe/{endpoint:path}",
-    methods=["GET", "POST"],
-    tags=["TypeSafe AI Pass-through", "pass-through"],
+    methods=["GET", "POST"],  # mutable-ok: FastAPI route metadata requires a list
+    tags=["TypeSafe AI Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
 )
 async def typesafe_proxy_route(
     endpoint: str,
@@ -552,7 +552,7 @@ async def typesafe_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
-        custom_headers={
+        custom_headers={  # mutable-ok: pass-through request headers require a mutable mapping
             "Authorization": f"Bearer {typesafe_api_key}",
             "Content-Type": "application/json",
         },
