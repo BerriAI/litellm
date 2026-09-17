@@ -5168,7 +5168,7 @@
       },
       "/v1/skills/{skill_id}/archive": {
         "get": {
-          "description": "Stored skill upload, repacked so SKILL.md sits at the archive root.",
+          "description": "Stored skill upload, repacked so SKILL.md sits at the archive root.\n\nAnonymous while the public index is on; otherwise needs a LiteLLM key\nwith access to the skill's owner scope.",
           "operationId": "agent_skills_archive_v1_skills__skill_id__archive_get",
           "parameters": [
             {
