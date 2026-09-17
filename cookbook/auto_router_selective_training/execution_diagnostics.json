@@ -1,0 +1,315 @@
+{
+  "scope": "Execution diagnostics for completed attempts, without reading grades. A length stop is a model output-budget event, not an infrastructure failure. All recorded responses remain billed.",
+  "groups": [
+    {
+      "split": "test",
+      "benchmark": "lcb",
+      "model": "anthropic/claude-opus-5",
+      "attempts": 25,
+      "responses": 25,
+      "response_cost": 2.384855,
+      "token_limit_responses": 7,
+      "token_limit_response_cost": 1.4849325,
+      "token_limit_without_action_or_text": 7,
+      "token_limit_without_action_or_text_cost": 1.4849325
+    },
+    {
+      "split": "test",
+      "benchmark": "lcb",
+      "model": "anthropic/claude-sonnet-5",
+      "attempts": 25,
+      "responses": 25,
+      "response_cost": 1.3789665000000002,
+      "token_limit_responses": 14,
+      "token_limit_response_cost": 1.1779045000000001,
+      "token_limit_without_action_or_text": 14,
+      "token_limit_without_action_or_text_cost": 1.1779045000000001
+    },
+    {
+      "split": "test",
+      "benchmark": "lcb",
+      "model": "openai/gpt-5.6-luna",
+      "attempts": 25,
+      "responses": 25,
+      "response_cost": 0.1164804,
+      "token_limit_responses": 7,
+      "token_limit_response_cost": 0.06988079999999999,
+      "token_limit_without_action_or_text": 7,
+      "token_limit_without_action_or_text_cost": 0.06988079999999999
+    },
+    {
+      "split": "test",
+      "benchmark": "lcb",
+      "model": "openai/gpt-5.6-sol",
+      "attempts": 25,
+      "responses": 25,
+      "response_cost": 1.529944,
+      "token_limit_responses": 4,
+      "token_limit_response_cost": 0.667568,
+      "token_limit_without_action_or_text": 4,
+      "token_limit_without_action_or_text_cost": 0.667568
+    },
+    {
+      "split": "test",
+      "benchmark": "mbpp",
+      "model": "anthropic/claude-opus-5",
+      "attempts": 50,
+      "responses": 50,
+      "response_cost": 0.224865
+    },
+    {
+      "split": "test",
+      "benchmark": "mbpp",
+      "model": "anthropic/claude-sonnet-5",
+      "attempts": 50,
+      "responses": 50,
+      "response_cost": 0.09884600000000003
+    },
+    {
+      "split": "test",
+      "benchmark": "mbpp",
+      "model": "openai/gpt-5.6-luna",
+      "attempts": 50,
+      "responses": 50,
+      "response_cost": 0.017396
+    },
+    {
+      "split": "test",
+      "benchmark": "mbpp",
+      "model": "openai/gpt-5.6-sol",
+      "attempts": 50,
+      "responses": 50,
+      "response_cost": 0.20637600000000006
+    },
+    {
+      "split": "test",
+      "benchmark": "swe",
+      "model": "anthropic/claude-opus-5",
+      "attempts": 25,
+      "responses": 381,
+      "response_cost": 10.529565750000002
+    },
+    {
+      "split": "test",
+      "benchmark": "swe",
+      "model": "anthropic/claude-sonnet-5",
+      "attempts": 25,
+      "responses": 833,
+      "response_cost": 11.053656000000016,
+      "token_limit_responses": 4,
+      "token_limit_response_cost": 0.4144736,
+      "token_limit_without_action_or_text": 4,
+      "token_limit_without_action_or_text_cost": 0.4144736
+    },
+    {
+      "split": "test",
+      "benchmark": "swe",
+      "model": "openai/gpt-5.6-luna",
+      "attempts": 25,
+      "responses": 427,
+      "response_cost": 0.6371064399999993
+    },
+    {
+      "split": "test",
+      "benchmark": "swe",
+      "model": "openai/gpt-5.6-sol",
+      "attempts": 25,
+      "responses": 403,
+      "response_cost": 10.713241600000002
+    },
+    {
+      "split": "test",
+      "benchmark": "terminal",
+      "model": "anthropic/claude-opus-5",
+      "attempts": 25,
+      "responses": 414,
+      "response_cost": 32.915727249999996,
+      "token_limit_responses": 80,
+      "token_limit_response_cost": 17.381599,
+      "token_limit_without_action_or_text": 76,
+      "token_limit_without_action_or_text_cost": 16.427720750000002
+    },
+    {
+      "split": "test",
+      "benchmark": "terminal",
+      "model": "anthropic/claude-sonnet-5",
+      "attempts": 25,
+      "responses": 795,
+      "response_cost": 25.464663800000025,
+      "token_limit_responses": 106,
+      "token_limit_response_cost": 9.517311799999998,
+      "token_limit_without_action_or_text": 98,
+      "token_limit_without_action_or_text_cost": 8.773203099999998
+    },
+    {
+      "split": "test",
+      "benchmark": "terminal",
+      "model": "openai/gpt-5.6-luna",
+      "attempts": 25,
+      "responses": 839,
+      "response_cost": 1.8821569099999986,
+      "token_limit_responses": 43,
+      "token_limit_response_cost": 0.43733629999999996,
+      "token_limit_without_action_or_text": 35,
+      "token_limit_without_action_or_text_cost": 0.35178958
+    },
+    {
+      "split": "test",
+      "benchmark": "terminal",
+      "model": "openai/gpt-5.6-sol",
+      "attempts": 25,
+      "responses": 341,
+      "response_cost": 8.446844399999998,
+      "token_limit_responses": 3,
+      "token_limit_response_cost": 0.5060674000000001
+    },
+    {
+      "split": "train",
+      "benchmark": "lcb",
+      "model": "openai/gpt-5.6-luna",
+      "attempts": 50,
+      "responses": 50,
+      "response_cost": 0.2573764,
+      "token_limit_responses": 16,
+      "token_limit_response_cost": 0.1596568,
+      "token_limit_without_action_or_text": 16,
+      "token_limit_without_action_or_text_cost": 0.1596568
+    },
+    {
+      "split": "train",
+      "benchmark": "lcb",
+      "model": "openai/gpt-5.6-sol",
+      "attempts": 50,
+      "responses": 50,
+      "response_cost": 2.630148,
+      "token_limit_responses": 5,
+      "token_limit_response_cost": 0.836052,
+      "token_limit_without_action_or_text": 5,
+      "token_limit_without_action_or_text_cost": 0.836052
+    },
+    {
+      "split": "train",
+      "benchmark": "mbpp",
+      "model": "openai/gpt-5.6-luna",
+      "attempts": 80,
+      "responses": 80,
+      "response_cost": 0.0218284
+    },
+    {
+      "split": "train",
+      "benchmark": "mbpp",
+      "model": "openai/gpt-5.6-sol",
+      "attempts": 80,
+      "responses": 80,
+      "response_cost": 0.289156
+    },
+    {
+      "split": "train",
+      "benchmark": "swe",
+      "model": "openai/gpt-5.6-luna",
+      "attempts": 25,
+      "responses": 398,
+      "response_cost": 0.5176403399999997
+    },
+    {
+      "split": "train",
+      "benchmark": "swe",
+      "model": "openai/gpt-5.6-sol",
+      "attempts": 25,
+      "responses": 346,
+      "response_cost": 7.403714199999999
+    },
+    {
+      "split": "train",
+      "benchmark": "terminal",
+      "model": "openai/gpt-5.6-luna",
+      "attempts": 5,
+      "responses": 87,
+      "response_cost": 0.12343140999999999
+    },
+    {
+      "split": "train",
+      "benchmark": "terminal",
+      "model": "openai/gpt-5.6-sol",
+      "attempts": 5,
+      "responses": 34,
+      "response_cost": 0.7672414000000001
+    },
+    {
+      "split": "validation",
+      "benchmark": "lcb",
+      "model": "openai/gpt-5.6-luna",
+      "attempts": 20,
+      "responses": 20,
+      "response_cost": 0.0921004,
+      "token_limit_responses": 6,
+      "token_limit_response_cost": 0.0598586,
+      "token_limit_without_action_or_text": 6,
+      "token_limit_without_action_or_text_cost": 0.0598586
+    },
+    {
+      "split": "validation",
+      "benchmark": "lcb",
+      "model": "openai/gpt-5.6-sol",
+      "attempts": 20,
+      "responses": 20,
+      "response_cost": 1.0552880000000002,
+      "token_limit_responses": 1,
+      "token_limit_response_cost": 0.166696,
+      "token_limit_without_action_or_text": 1,
+      "token_limit_without_action_or_text_cost": 0.166696
+    },
+    {
+      "split": "validation",
+      "benchmark": "mbpp",
+      "model": "openai/gpt-5.6-luna",
+      "attempts": 30,
+      "responses": 30,
+      "response_cost": 0.010364400000000001
+    },
+    {
+      "split": "validation",
+      "benchmark": "mbpp",
+      "model": "openai/gpt-5.6-sol",
+      "attempts": 30,
+      "responses": 30,
+      "response_cost": 0.14699600000000002
+    },
+    {
+      "split": "validation",
+      "benchmark": "swe",
+      "model": "openai/gpt-5.6-luna",
+      "attempts": 10,
+      "responses": 149,
+      "response_cost": 0.2096464700000001
+    },
+    {
+      "split": "validation",
+      "benchmark": "swe",
+      "model": "openai/gpt-5.6-sol",
+      "attempts": 10,
+      "responses": 141,
+      "response_cost": 3.702219799999998
+    },
+    {
+      "split": "validation",
+      "benchmark": "terminal",
+      "model": "openai/gpt-5.6-luna",
+      "attempts": 5,
+      "responses": 66,
+      "response_cost": 0.10991243999999999,
+      "token_limit_responses": 1,
+      "token_limit_response_cost": 0.009907
+    },
+    {
+      "split": "validation",
+      "benchmark": "terminal",
+      "model": "openai/gpt-5.6-sol",
+      "attempts": 5,
+      "responses": 63,
+      "response_cost": 2.5312083999999997,
+      "token_limit_responses": 6,
+      "token_limit_response_cost": 0.9978314000000001
+    }
+  ]
+}

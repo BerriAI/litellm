@@ -28,4 +28,17 @@ All policies and family controls were frozen before final outcomes. These are ta
 
 Two Luna solver requests interrupted by host sleep have unknown charges. An earlier unavailable DNA-assembly review has one additional unmetered connection-timeout request. Thus Luna-only comparisons contain two unmetered requests, and review cascades contain three. The report marks affected costs as lower bounds and savings as upper bounds. The three upfront comparisons quoted with exact costs above are fully metered
 
-The additional Sonnet/Opus controls are still running. Their completion will extend the comparison; it cannot change these frozen Luna/Sol results
+The additional Sonnet/Opus controls are complete. All 500 final attempts and grades are present, and the complete reporter verified that the previously published Luna/Sol results and calibration diagnostics are unchanged
+
+| Fixed model | Solved | Recorded inference cost |
+|---|---:|---:|
+| Luna | 84/125 | At least $2.6531 |
+| Sol | 87/125 | $20.8964 |
+| Sonnet 5 | 81/125 | At least $37.9961 |
+| Opus 5 | 99/125 | At least $46.0550 |
+
+Opus solved 22/25 SWE-bench tasks at $10.5296, compared with Sol's 18/25 at $10.7132. On Terminal-Bench it solved 21/25 at at least $32.9157, compared with Sol's 18/25 at $8.4468. These are observed results under the frozen harness and budgets, not unrestricted model rankings. Across all tasks, even perfect selection between the saved Luna and Sol attempts reaches only 95/125, below Opus's 99/125. Changing the candidate model pair is a separate training and evaluation question
+
+All four models had an 8,192-token response cap and high reasoning effort. Corrected Sonnet and Opus attempts still incurred 116 and 83 length stops with no action or visible text, costing $10.3656 and $17.9127 respectively. Those responses remain in the results. Increasing the response cap could change quality and spending, but this experiment did not test that change. Host sleep and unresolved transport charges also prevent latency conclusions and exact affected cost comparisons
+
+The practical next experiment is to collect substantially more paired agentic training examples where Sol rescues Luna, then evaluate rescue prediction and verification on fresh tasks. The present fitting set contains only two such agentic cases. The current final set is now diagnostic evidence and must not be reused as an unseen test after training on its failures. Better average probability calibration alone did not deliver the requested selective-rescue precision
