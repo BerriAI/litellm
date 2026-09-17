@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import importlib
 import json
+import logging
 import os
 import re
 import socket
@@ -19,7 +20,7 @@ import fastapi.routing
 import httpx
 import pytest
 import yaml
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
@@ -13004,6 +13005,144 @@ async def test_moderations_response_carries_litellm_call_id_header():
 
 
 @pytest.mark.asyncio
+async def test_moderations_failure_log_carries_the_callers_litellm_call_id(caplog):
+    """LIT-7836: the /v1/moderations error line must carry the litellm_call_id the
+    client sent, rendered in the message and as a structured log record field."""
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy._types import ProxyException
+
+    call_id = "moderations-call-7836"
+
+    async def passthrough_add_litellm_data(data, **kwargs):
+        return data
+
+    request = MagicMock()
+    request.headers = {"x-litellm-call-id": call_id}
+    request.body = AsyncMock(return_value=b'{"input": "hi"}')
+    fake_logging = MagicMock()
+    fake_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    fake_logging.post_call_failure_hook = AsyncMock()
+
+    verbose_proxy_logger.propagate = True
+    try:
+        with (
+            patch.object(proxy_server_module, "add_litellm_data_to_request", new=passthrough_add_litellm_data),  # test-quality-ok: the route reads this module global, no injection point
+            patch.object(proxy_server_module, "route_request", new=AsyncMock(side_effect=Exception("bad key"))),  # test-quality-ok: fakes the provider failure so the real route's error log is observable
+            patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
+            caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
+            pytest.raises(ProxyException) as raised,
+        ):
+            await proxy_server_module.moderations(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", spend=0.0),
+            )
+    finally:
+        verbose_proxy_logger.propagate = False
+
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+    record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
+    assert record.litellm_call_id == call_id
+    assert call_id in record.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_moderations_unparseable_body_bills_the_callers_litellm_call_id():
+    """LIT-7836: a body that fails to parse must still hand the failure hook the
+    litellm_call_id the response header answers with, so the spend row is findable."""
+    from litellm.proxy._types import ProxyException
+
+    call_id = "moderations-early-7836"
+
+    request = MagicMock()
+    request.headers = {"x-litellm-call-id": call_id}
+    request.body = AsyncMock(return_value=b'{"input": ')
+    fake_logging = MagicMock()
+    fake_logging.post_call_failure_hook = AsyncMock()
+
+    with (
+        patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
+        pytest.raises(ProxyException) as raised,
+    ):
+        await proxy_server_module.moderations(
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", spend=0.0),
+        )
+
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+    hook_request_data = fake_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+    assert hook_request_data["litellm_call_id"] == call_id
+
+
+@pytest.mark.asyncio
+async def test_moderations_already_shaped_failure_answers_with_the_callers_litellm_call_id():
+    """LIT-7836: a ProxyException raised inside /v1/moderations is re-raised unwrapped but still
+    answers with the caller's x-litellm-call-id so the client can join it to the error log."""
+    call_id = "moderations-call-7836-shaped"
+    exc = ProxyException(message="budget exceeded", type=ProxyErrorTypes.budget_exceeded, param="key", code=402)
+
+    request = MagicMock()
+    request.headers = {"x-litellm-call-id": call_id}
+    request.body = AsyncMock(return_value=b'{"input": "hi"}')
+    fake_logging = MagicMock()
+    fake_logging.post_call_failure_hook = AsyncMock()
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
+        pytest.raises(ProxyException) as raised,
+    ):
+        await proxy_server_module.moderations(
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", spend=0.0),
+        )
+
+    assert raised.value is exc
+    assert raised.value.code == "402"
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        HTTPException(status_code=401, detail="bad key"),
+        ProxyException(message="budget exceeded", type=ProxyErrorTypes.budget_exceeded, param="key", code=402),
+    ],
+    ids=["http_exception", "proxy_exception"],
+)
+async def test_audio_speech_already_shaped_failure_answers_with_the_callers_litellm_call_id(exc: Exception):
+    """LIT-7836: /v1/audio/speech re-raises HTTP and proxy shaped failures unchanged, and they must
+    still answer with the caller's x-litellm-call-id."""
+    call_id = "speech-call-7836-shaped"
+
+    request = MagicMock()
+    request.headers = {"x-litellm-call-id": call_id}
+    request.body = AsyncMock(return_value=b'{"model": "tts-1", "input": "hi", "voice": "alloy"}')
+    fake_logging = MagicMock()
+    fake_logging.post_call_failure_hook = AsyncMock()
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=exc)),  # test-quality-ok: the route reads this module global, no injection point
+        patch.object(proxy_server_module, "proxy_logging_obj", new=fake_logging),  # test-quality-ok: module global, no injection point
+        pytest.raises(type(exc)) as raised,
+    ):
+        await proxy_server_module.audio_speech(
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", spend=0.0),
+        )
+
+    if isinstance(exc, HTTPException):
+        assert (raised.value.status_code, raised.value.detail) == (401, "bad key")
+    else:
+        assert raised.value is exc
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+
+
+@pytest.mark.asyncio
 async def test_init_agents_in_db_rebuilds_registry_under_agent_reconcile_lock(monkeypatch):
     from litellm.proxy.agent_endpoints.agent_registry import (
         AGENT_RECONCILE_LOCK,
@@ -13461,6 +13600,45 @@ async def test_load_config_router_authorizes_fallback_targets_against_the_callin
     router, _, _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
     assert router.fallback_access_check is router_fallback_access_check
+
+
+@pytest.mark.asyncio
+async def test_load_config_router_budget_checks_fallback_targets_against_the_calling_key(tmp_path, monkeypatch):
+    """A config-loaded router refuses a paid fallback target for an over-budget caller."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump({"model_list": [{"model_name": "m", "litellm_params": {"model": "openai/m", "api_key": "k"}}]})
+    )
+
+    router, _, _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    over_budget = {
+        "metadata": {
+            "user_api_key_auth": UserAPIKeyAuth(
+                api_key="hashed", token="hashed", user_id="u1", user_spend=99.0, user_max_budget=1.0
+            )
+        }
+    }
+    under_budget = {
+        "metadata": {
+            "user_api_key_auth": UserAPIKeyAuth(
+                api_key="hashed", token="hashed", user_id="u1", user_spend=0.0, user_max_budget=100.0
+            )
+        }
+    }
+
+    # on by default: an over-budget caller is refused the paid fallback with no config at all
+    monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
+    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, llm_router=router) is False
+    assert await router.fallback_budget_check(model="m", request_kwargs=under_budget, llm_router=router) is True
+
+    # explicit opt-out restores the unguarded behaviour
+    monkeypatch.setattr(proxy_server, "general_settings", {"enforce_fallback_budget": False}, raising=False)
+    assert await router.fallback_budget_check(model="m", request_kwargs=over_budget, llm_router=router) is True
 
 
 @pytest.mark.asyncio

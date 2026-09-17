@@ -1180,9 +1180,8 @@ async def bedrock_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(prepped.url),
-        custom_headers=prepped.headers,
+        custom_headers=_upstream_headers_for_bedrock_agent_runtime_route(request, user_api_key_dict, prepped.headers),
         is_streaming_request=is_streaming_request,
-        _forward_headers=True,
     )  # dynamically construct pass-through endpoint based on incoming path
     setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, data)
     # SigV4 signs an exact payload; pass-through must send prepped.body, not json.dumps
@@ -2001,6 +2000,9 @@ _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset({"authorization", "x-a
 _HEADERS_NEVER_FORWARDED_TO_ANTHROPIC: Final = frozenset({"content-length", "host", "accept-encoding"}) | (
     SpecialHeaders.litellm_credential_header_names() - _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS
 )
+_HEADERS_NEVER_FORWARDED_TO_BEDROCK: Final = (
+    frozenset({"content-length", "host", "accept-encoding"}) | SpecialHeaders.litellm_credential_header_names()
+)
 
 
 _MAPPED_ROUTE_CALLER_KEY_HEADER: Final = "litellm_user_api_key"
@@ -2097,6 +2099,17 @@ def _upstream_headers_for_anthropic_route(
     if proxy_auth_header is None and _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(caller_headers):
         raise HTTPException(status_code=401, detail=_CREDENTIALLESS_ANTHROPIC_MISSING_CREDENTIAL_DETAIL)
     return MappingProxyType({**caller_headers, **(proxy_auth_header or {})})
+
+
+def _upstream_headers_for_bedrock_agent_runtime_route(
+    request: Request, user_api_key_dict: UserAPIKeyAuth, signed_headers: Mapping[str, object]
+) -> Mapping[str, object]:
+    caller_headers: Final = _caller_headers_without_litellm_secrets(
+        request,
+        user_api_key_dict,
+        _HEADERS_NEVER_FORWARDED_TO_BEDROCK | frozenset(name.lower() for name in signed_headers),
+    )
+    return MappingProxyType({**caller_headers, **signed_headers})
 
 
 async def _prepare_vertex_auth_headers(
