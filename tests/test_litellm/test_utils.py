@@ -4311,6 +4311,65 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
         _invalidate_model_cost_lowercase_map()
 
 
+def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch):
+    """
+    A price data reload rebuilds the lowercase lookup map and the provider model
+    sets by walking litellm.model_cost while request threads keep registering
+    per-request pricing into it. A key inserted mid-walk raised "dictionary
+    changed size during iteration", which aborted the reload between the
+    catalog swap and the deployment replay, or failed the built-in lookup of
+    the deployment being replayed. Both walks have to run over a snapshot.
+    """
+    from litellm.utils import _invalidate_model_cost_lowercase_map, _rebuild_model_cost_lowercase_map
+
+    class _KeyRegisteredMidWalk(str):
+        def lower(self) -> str:
+            litellm.model_cost.setdefault("lit-5853-registered-during-the-rebuild", {"mode": "chat"})
+            return super().lower()
+
+    class _EntryRegisteredMidWalk(dict):
+        def get(self, field, default=None):
+            litellm.model_cost.setdefault("lit-5853-registered-during-add-known-models", {"mode": "chat"})
+            return super().get(field, default)
+
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    litellm.model_cost[_KeyRegisteredMidWalk("LIT-5853-WALKED-LAST")] = _EntryRegisteredMidWalk(mode="chat")
+    try:
+        assert _rebuild_model_cost_lowercase_map()["lit-5853-walked-last"] == "LIT-5853-WALKED-LAST"
+        litellm.add_known_models(model_cost_map=litellm.model_cost)
+        assert "lit-5853-registered-during-the-rebuild" in litellm.model_cost
+        assert "lit-5853-registered-during-add-known-models" in litellm.model_cost
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+class _KeyWhoseLoweringLosesTheRace(str):
+    """Lowering the key is the one Python-level step between the lookup map's rebuild and
+    its read, so another thread's registration invalidating the map lands right there."""
+
+    def lower(self) -> str:
+        from litellm.utils import _invalidate_model_cost_lowercase_map
+
+        _invalidate_model_cost_lowercase_map()
+        return super().lower()
+
+
+def test_case_insensitive_model_cost_lookup_survives_an_invalidation_mid_lookup():
+    """
+    _get_model_cost_key read the module-level lowercase map after rebuilding it, so a
+    registration on another thread that invalidated the map in between turned the
+    lookup into an AttributeError on None, which the model info ladder reports as
+    "model isn't mapped yet" and register_model turns into a $0 shadow entry.
+    """
+    from litellm.utils import _get_model_cost_key, _invalidate_model_cost_lowercase_map
+
+    _invalidate_model_cost_lowercase_map()
+    try:
+        assert _get_model_cost_key(_KeyWhoseLoweringLosesTheRace("GPT-4O")) == "gpt-4o"
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
 class _JsonCapture(logging.Handler):
     def __init__(self):
         super().__init__()

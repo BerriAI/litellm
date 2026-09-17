@@ -744,7 +744,7 @@ def is_openai_finetune_model(key: str) -> bool:
 
 
 def _populate_provider_model_sets(model_cost_map: Dict) -> None:
-    for key, value in model_cost_map.items():
+    for key, value in tuple(model_cost_map.items()):
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
         elif value.get("litellm_provider") == "text-completion-openai":

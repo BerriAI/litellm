@@ -8,9 +8,12 @@ should still use the built-in pricing.
 """
 
 import copy
+import itertools
 import logging
 import os
 import re
+import sys
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -2392,3 +2395,73 @@ def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(
 
     assert router.cached_model_group_info("grp").input_cost_per_token == new_price
     assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == new_price
+
+
+def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_pricing(monkeypatch):
+    """
+    Request threads register per-request pricing into litellm.model_cost while a price
+    data reload walks it. The walk raised "dictionary changed size during iteration",
+    which aborted the reload after the catalog swap or failed the built-in lookup of the
+    bedrock geo deployment being replayed; that deployment then registered its own raw
+    key with metadata only and priced every request at $0 until the next reload.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    catalog = litellm.get_model_cost_map(url="")
+    monkeypatch.setattr(litellm, "model_cost", dict(catalog))
+    _invalidate_model_cost_lowercase_map()
+    backends = tuple(
+        f"bedrock/au.anthropic.{model}"
+        for model in ("claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001-v1:0", "claude-sonnet-4-6")
+    )
+    canonical_prices = {
+        backend: catalog[backend.removeprefix("bedrock/")]["input_cost_per_token"] for backend in backends
+    }
+    assert all(price > 0 for price in canonical_prices.values())
+    router = Router(
+        model_list=[
+            {
+                "model_name": backend.rsplit(".", 1)[-1],
+                "litellm_params": {"model": backend, "aws_region_name": "ap-southeast-2"},
+                "model_info": {"id": f"lit-5853-dep-{index}"},
+            }
+            for index, backend in enumerate(backends)
+        ]
+    )
+    stop = threading.Event()
+
+    def register_until_stopped():
+        for i in itertools.count():
+            if stop.is_set():
+                return
+            litellm.register_model(
+                {
+                    f"lit-5853-writer-{i}": {
+                        "litellm_provider": "lit-5853-writer",
+                        "mode": "chat",
+                        "input_cost_per_token": 1e-07,
+                        "output_cost_per_token": 4e-07,
+                        "cache_read_input_token_cost": 1e-08,
+                    }
+                },
+                persist_across_reloads=False,
+            )
+
+    writer = threading.Thread(target=register_until_stopped, daemon=True)
+    saved_switch_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-4)
+    writer.start()
+    try:
+        for _ in range(10):
+            _simulate_price_data_reload_with_provider_sets(monkeypatch, dict(catalog))
+    finally:
+        stop.set()
+        writer.join()
+        sys.setswitchinterval(saved_switch_interval)
+
+    try:
+        assert [backend for backend in backends if backend in litellm.model_cost] == []
+        for backend in backends:
+            assert litellm.get_model_info(backend)["input_cost_per_token"] == canonical_prices[backend]
+        assert router.get_model_names() == [backend.rsplit(".", 1)[-1] for backend in backends]
+    finally:
+        _invalidate_model_cost_lowercase_map()
