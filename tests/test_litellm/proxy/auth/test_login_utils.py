@@ -1232,6 +1232,7 @@ async def test_a_full_hold_pool_still_lets_the_right_password_in(monkeypatch):
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
     release = asyncio.Event()
 
     async def _park(_seconds: float) -> None:
