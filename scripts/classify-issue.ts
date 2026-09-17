@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { githubApi, type GitHubApi } from "./auto-close-duplicates";
-import { MANIFEST, type Manifest } from "./issue-labels";
+import { MANIFEST, labelName, namespaceOf, type Manifest } from "./issue-labels";
 
 declare const process: { readonly env: Readonly<Record<string, string | undefined>> };
 declare const Bun: {
@@ -13,6 +13,8 @@ export interface IssueForClassification {
   readonly title: string;
   readonly body: string | null;
   readonly author_association: string;
+  readonly labels: readonly { readonly name: string }[];
+  readonly created_at: string;
   readonly pull_request?: unknown;
 }
 
@@ -74,6 +76,8 @@ export interface ClassifyConfig {
   readonly repo: string;
   readonly issueNumber: number;
   readonly model: string;
+  readonly action: string;
+  readonly now: Date;
 }
 
 export interface Schema {
@@ -273,16 +277,29 @@ export function parseClassification(raw: string, manifest: Manifest, routes: rea
   };
 }
 
+export const EDIT_WINDOW_MS = 60 * 60 * 1000;
+
+export function shouldReclassify(issue: Pick<IssueForClassification, "labels" | "created_at">, now: Date): boolean {
+  const names = issue.labels.map((label) => label.name);
+  if (names.some((name) => namespaceOf(name) === "domain")) {
+    return false;
+  }
+  return names.includes(labelName("needs", "template")) || now.getTime() - Date.parse(issue.created_at) < EDIT_WINDOW_MS;
+}
+
 export async function classifyIssue(
   api: GitHubApi,
   llm: LlmClient,
   config: ClassifyConfig,
   prompt: string,
   schema: Schema,
-): Promise<Verdict> {
+): Promise<Verdict | null> {
   const issue = await api.request<IssueForClassification>("GET", `/repos/${config.repo}/issues/${config.issueNumber}`);
   if (issue.pull_request !== undefined) {
     throw new Error(`#${config.issueNumber} is a pull request`);
+  }
+  if (config.action === "edited" && !shouldReclassify(issue, config.now)) {
+    return null;
   }
   const passed = gate(issue);
   if (passed.kind === "template") {
@@ -331,6 +348,7 @@ export function litellmClient(apiBase: string, apiKey: string): LlmClient {
 
 export function readConfig(
   env: Readonly<Record<string, string | undefined>>,
+  now: Date,
 ): ClassifyConfig & { readonly token: string; readonly apiBase: string; readonly apiKey: string } {
   const token = env.GITHUB_TOKEN;
   const repo = env.GITHUB_REPOSITORY;
@@ -353,13 +371,17 @@ export function readConfig(
   if (!model) {
     throw new Error("ISSUE_CLASSIFIER_MODEL must name a model the LiteLLM deployment serves");
   }
-  return { token, repo, issueNumber, apiBase, apiKey, model };
+  return { token, repo, issueNumber, apiBase, apiKey, model, action: env.GITHUB_EVENT_ACTION ?? "", now };
 }
 
 if (import.meta.main) {
-  const { token, apiBase, apiKey, ...config } = readConfig(process.env);
+  const { token, apiBase, apiKey, ...config } = readConfig(process.env, new Date());
   const prompt = await Bun.file(`${import.meta.dir}/../.github/prompts/issue-classifier.md`).text();
   const schema = (await Bun.file(`${import.meta.dir}/../.github/prompts/issue-classifier.schema.json`).json()) as Schema;
   const verdict = await classifyIssue(githubApi(token), litellmClient(apiBase, apiKey), config, prompt, schema);
-  console.log(JSON.stringify(verdict));
+  if (verdict === null) {
+    console.error(`#${config.issueNumber}: edit ignored, the issue is already classified or older than the edit window`);
+  } else {
+    console.log(JSON.stringify(verdict));
+  }
 }
