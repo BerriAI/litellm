@@ -306,6 +306,25 @@ def _queue_band_resets(
         )
 
 
+def _linked_reset_where(
+    budget_ids: Sequence[str],
+    bands: Mapping[str, "_ResetBand"],
+    extra: Mapping[str, object] = MappingProxyType({}),
+) -> dict[str, object]:
+    """Rows the cascade will actually rewrite: plain tiers still only touch
+    ``spend > 0`` rows, banded tiers sweep every linked row."""
+    banded_ids: Final = tuple(bid for bid in budget_ids if bid in bands)
+    plain_ids: Final = tuple(bid for bid in budget_ids if bid not in bands)
+    if not banded_ids:
+        return _budget_link_where(plain_ids, extra)
+    banded_where: Final = _budget_link_where(banded_ids, _spend_filter_stripped(extra))
+    if not plain_ids:
+        return banded_where
+    return {
+        "OR": [_budget_link_where(plain_ids, extra), banded_where]
+    }  # mutable-ok: prisma where filter must be a dict
+
+
 def _queue_budget_linked_resets(
     writes: LinkedSpendResetWrites,
     cascade: "_BudgetCascade",
@@ -819,6 +838,13 @@ class ResetBudgetJob:
         if not budget_ids:
             return _EMPTY_CASCADE
 
+        bands: Final[Mapping[str, _ResetBand]] = MappingProxyType(
+            {  # mutable-ok: MappingProxyType wraps a one-shot dict comprehension
+                b.budget_id: band
+                for b in budgets_to_reset
+                if b.budget_id is not None and (band := _reset_band(b.max_budget, b.rollover_max_budget)) is not None
+            }
+        )
         team_memberships: Final[tuple[_TeamMembershipRow, ...]] = await self._fetch_linked_rows(
             table=TeamMembershipRepository(self.prisma_client).table,
             where=_budget_link_where(budget_ids),
@@ -826,30 +852,23 @@ class ResetBudgetJob:
         )
         keys: Final[tuple[_KeyRow, ...]] = await self._fetch_linked_rows(
             table=VerificationTokenRepository(self.prisma_client).table,
-            where=_budget_link_where(budget_ids, _LINKED_KEYS_WHERE),
+            where=_linked_reset_where(budget_ids, bands, _LINKED_KEYS_WHERE),
             log_subject="keys",
         )
         orgs: Final[tuple[_OrgRow, ...]] = await self._fetch_linked_rows(
             table=OrganizationRepository(self.prisma_client).table,
-            where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
+            where=_linked_reset_where(budget_ids, bands, _SPENT_ROWS_WHERE),
             log_subject="orgs",
         )
         tags: Final[tuple[_TagRow, ...]] = await self._fetch_linked_rows(
             table=TagRepository(self.prisma_client).table,
-            where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
+            where=_linked_reset_where(budget_ids, bands, _SPENT_ROWS_WHERE),
             log_subject="tags",
         )
         model_access_groups: Final[tuple[_ModelAccessGroupRow, ...]] = await self._fetch_linked_rows(
             table=ModelAccessGroupBudgetRepository(self.prisma_client).table,
-            where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
+            where=_linked_reset_where(budget_ids, bands, _SPENT_ROWS_WHERE),
             log_subject="model access groups",
-        )
-        bands: Final[Mapping[str, _ResetBand]] = MappingProxyType(
-            {  # mutable-ok: MappingProxyType wraps a one-shot dict comprehension
-                b.budget_id: band
-                for b in budgets_to_reset
-                if b.budget_id is not None and (band := _reset_band(b.max_budget, b.rollover_max_budget)) is not None
-            }
         )
         return _BudgetCascade(
             budgets=tuple(budgets_to_reset),

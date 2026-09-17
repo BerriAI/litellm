@@ -3849,6 +3849,31 @@ def test_budget_cascade_credit_reaches_idle_and_spending_members(
     assert _replay_spend_writes(membership_writes, 0.0) == _reset_spend(0.0, band) == -100.0
 
 
+def test_budget_cascade_invalidates_zero_spend_rows_on_banded_tiers(reset_budget_job, mock_prisma_client, monkeypatch):
+    """A zero-spend tag on a capped tier is DB-floored to credit, so it must be
+    fetched despite the spend > 0 filter or its Redis counter stays stale."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    banded = _budget_row(
+        budget_id="budget-credit", budget_duration="7d", max_budget=100.0, rollover_max_budget=250.0
+    )
+    plain = _budget_row(budget_id="budget-plain", budget_duration="7d", max_budget=10.0)
+    mock_prisma_client.data["budget"] = [banded, plain]
+    mock_prisma_client.db.litellm_tagtable.set_find_many_results(
+        [type("Tag", (), {"tag_name": "tenant-42", "spend": 0.0, "budget_id": "budget-credit"})]
+    )
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    expected_where = {
+        "OR": [
+            {"budget_id": {"in": ["budget-plain"]}, "spend": {"gt": 0}},
+            {"budget_id": {"in": ["budget-credit"]}},
+        ]
+    }
+    assert mock_prisma_client.db.litellm_tagtable.find_many_calls == [{"where": expected_where}]
+    counter_cache.in_memory_cache.delete_cache.assert_any_call(key="spend:tag:tenant-42")
+
+
 def test_band_statements_reproduce_reset_spend_for_every_spend_value(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
