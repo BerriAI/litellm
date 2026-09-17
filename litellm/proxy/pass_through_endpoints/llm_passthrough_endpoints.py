@@ -1329,16 +1329,26 @@ async def transcribe_proxy_route(
     """
     Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.
 
-    The request body is forwarded as-is to the AWS JSON 1.1 API and signed with SigV4
-    using the proxy's AWS credentials. Streaming transcription (`transcribestreaming`)
-    uses a separate HTTP/2 event-stream protocol and is not served by this route.
+    The request body is forwarded to the AWS JSON 1.1 API and signed with SigV4 using the
+    proxy's AWS credentials. Standard jobs are tagged with the calling key's owner so that
+    only that owner (or a proxy admin) can read or delete them; account-wide operations
+    such as ListTranscriptionJobs are limited to proxy admins. Streaming transcription
+    (`transcribestreaming`) uses a separate HTTP/2 event-stream protocol and is not served
+    by this route.
 
     [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
     """
     from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
         TRANSCRIBE_CUSTOM_LLM_PROVIDER,
+        TRANSCRIBE_OWNED_JOB_OPERATIONS,
+        TRANSCRIBE_PRICED_OPERATION,
         TRANSCRIBE_TARGET_PREFIX,
+        TranscribeRefusal,
+        transcribe_admin_only_refusal,
         transcribe_cost_per_second,
+        transcribe_job_access_refusal,
+        transcribe_job_lookup,
+        transcribe_owned_start_request,
         transcribe_supported_operations,
         transcribe_unpriceable_request_reason,
     )
@@ -1371,6 +1381,23 @@ async def transcribe_proxy_route(
     unpriceable_reason: Final = transcribe_unpriceable_request_reason(operation, data, transcribe_cost_per_second())
     if unpriceable_reason is not None:
         raise HTTPException(status_code=400, detail=unpriceable_reason)
+    admin_only_refusal: Final = transcribe_admin_only_refusal(operation, user_api_key_dict)
+    if admin_only_refusal is not None:
+        raise HTTPException(status_code=admin_only_refusal.status_code, detail=admin_only_refusal.detail)
+    request_body: Final = (
+        transcribe_owned_start_request(data, user_api_key_dict) if operation == TRANSCRIBE_PRICED_OPERATION else data
+    )
+    if isinstance(request_body, TranscribeRefusal):
+        raise HTTPException(status_code=request_body.status_code, detail=request_body.detail)
+    access_refusal: Final = (
+        await transcribe_job_access_refusal(
+            data.get("TranscriptionJobName"), user_api_key_dict, transcribe_job_lookup(aws_region_name)
+        )
+        if operation in TRANSCRIBE_OWNED_JOB_OPERATIONS
+        else None
+    )
+    if access_refusal is not None:
+        raise HTTPException(status_code=access_refusal.status_code, detail=access_refusal.detail)
 
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing, sign_aws_json_post
 
@@ -1381,7 +1408,7 @@ async def transcribe_proxy_route(
         service_name="transcribe",
         aws_region_name=aws_region_name,
         url=target_url,
-        body=json.dumps(data),
+        body=json.dumps(request_body),
         headers=MappingProxyType(
             {
                 "Content-Type": "application/x-amz-json-1.1",
@@ -1396,7 +1423,7 @@ async def transcribe_proxy_route(
         custom_headers=prepped.headers,
         custom_llm_provider=TRANSCRIBE_CUSTOM_LLM_PROVIDER,
     )
-    setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, data)
+    setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, request_body)
     setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepped.body)
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
 

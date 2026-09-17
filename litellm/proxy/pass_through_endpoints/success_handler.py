@@ -29,6 +29,7 @@ from .llm_provider_handlers.gemini_passthrough_logging_handler import (
 )
 from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
     TRANSCRIBE_CUSTOM_LLM_PROVIDER,
+    PassThroughLogDispatch,
     TranscribePassthroughLoggingHandler,
 )
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
@@ -52,10 +53,15 @@ def _safe_response_text(httpx_response: httpx.Response) -> str:
 
 
 class PassThroughEndpointLogging:
-    def __init__(self, transcribe_handler: TranscribePassthroughLoggingHandler | None = None):
+    def __init__(
+        self,
+        transcribe_handler: TranscribePassthroughLoggingHandler | None = None,
+        log_dispatch: PassThroughLogDispatch | None = None,
+    ):
         self.transcribe_passthrough_logging_handler: Final = (
             transcribe_handler if transcribe_handler is not None else TranscribePassthroughLoggingHandler()
         )
+        self._log_dispatch: Final = log_dispatch if log_dispatch is not None else self._handle_logging
         self.TRACKED_VERTEX_METHOD_ROUTES = (
             "generateContent",
             "streamGenerateContent",
@@ -351,7 +357,7 @@ class PassThroughEndpointLogging:
                 end_time=end_time,
                 cache_hit=cache_hit,
                 request_body=request_body,
-                log=self._handle_logging,
+                log=self._log_dispatch,
                 standard_pass_through_logging_payload=passthrough_logging_payload,
                 **kwargs,
             )
@@ -385,7 +391,7 @@ class PassThroughEndpointLogging:
             kwargs=kwargs,
         )
 
-        await self._handle_logging(
+        await self._log_dispatch(
             logging_obj=logging_obj,
             standard_logging_response_object=standard_logging_response_object,
             result=result,

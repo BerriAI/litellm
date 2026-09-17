@@ -3,7 +3,9 @@ import json
 import math
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from functools import lru_cache, partial
 from pathlib import Path
 from types import MappingProxyType
@@ -24,6 +26,7 @@ from litellm.constants import (
     TRANSCRIBE_MEASURABLE_MEDIA_FORMATS,
     TRANSCRIBE_MEDIA_DOWNLOAD_CONCURRENCY,
     TRANSCRIBE_MEDIA_FETCH_ATTEMPTS,
+    TRANSCRIBE_MEDIA_LAST_MODIFIED_TOLERANCE_SECONDS,
 )
 from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
@@ -32,7 +35,16 @@ from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.proxy._types import PassThroughEndpointLoggingResultValues, PassThroughEndpointLoggingTypedDict
+from litellm.proxy._types import (
+    PassThroughEndpointLoggingResultValues,
+    PassThroughEndpointLoggingTypedDict,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.common_utils.resource_ownership import (
+    get_primary_resource_owner_scope,
+    is_proxy_admin,
+    user_can_access_resource_owner,
+)
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.utils import StandardPassThroughResponseObject
 
@@ -45,9 +57,11 @@ TRANSCRIBE_UNPRICED_OPERATIONS: Final = frozenset(
 )
 TRANSCRIBE_SURCHARGE_MEMBERS: Final = ("ContentRedaction", "ToxicityDetection")
 TRANSCRIBE_TERMINAL_JOB_STATUSES: Final = frozenset({"COMPLETED", "FAILED"})
+TRANSCRIBE_OWNER_TAG: Final = "litellm-owner"
+TRANSCRIBE_OWNED_JOB_OPERATIONS: Final = frozenset({"GetTranscriptionJob", "DeleteTranscriptionJob"})
 
 JobLookup: TypeAlias = Callable[[str], Awaitable[Mapping[str, object]]]  # mutable-ok: Callable parameter syntax
-MediaDurationProbe: TypeAlias = Callable[[str], Awaitable[float | None]]  # mutable-ok: Callable parameter syntax
+MediaDurationProbe: TypeAlias = Callable[[str, float], Awaitable[float | None]]  # mutable-ok: Callable parameter syntax
 JobPricer: TypeAlias = Callable[[str, str, float], Awaitable[float]]  # mutable-ok: Callable parameter syntax
 
 
@@ -60,10 +74,18 @@ class _MediaRef(BaseModel):
     MediaFileUri: str | None = None
 
 
+class _JobTag(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    Key: str | None = None
+    Value: str | None = None
+
+
 class _TranscriptionJob(BaseModel):
     model_config = ConfigDict(frozen=True)
     TranscriptionJobStatus: str | None = None
+    CreationTime: float | None = None
     Media: _MediaRef | None = None
+    Tags: tuple[_JobTag, ...] = ()
 
 
 class _GetTranscriptionJobResponse(BaseModel):
@@ -77,6 +99,13 @@ class _PricedCostMapEntry(BaseModel):
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_JSON_OBJECTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+@dataclass(frozen=True, slots=True)
+class TranscribeRefusal:
+    status_code: int
+    detail: str
 
 
 class PassThroughLogDispatch(Protocol):
@@ -178,6 +207,60 @@ def requested_media_format(request_body: Mapping[str, object]) -> str | None:
     return suffix.lower() if dot else None
 
 
+def transcribe_admin_only_refusal(operation: str, user_api_key_dict: UserAPIKeyAuth) -> TranscribeRefusal | None:
+    if (
+        operation == TRANSCRIBE_PRICED_OPERATION
+        or operation in TRANSCRIBE_OWNED_JOB_OPERATIONS
+        or is_proxy_admin(user_api_key_dict)
+    ):
+        return None
+    return TranscribeRefusal(
+        403,
+        f"{operation} reaches every Amazon Transcribe resource in the AWS account, so only a proxy admin may call it;"
+        f" other keys may {TRANSCRIBE_PRICED_OPERATION} and {' or '.join(sorted(TRANSCRIBE_OWNED_JOB_OPERATIONS))}"
+        " for the jobs they started",
+    )
+
+
+def transcribe_owned_start_request(
+    request_body: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
+) -> dict[str, object] | TranscribeRefusal:
+    owner: Final = get_primary_resource_owner_scope(user_api_key_dict)
+    if owner is None:
+        return TranscribeRefusal(400, "The calling key has no identity to record as the owner of the transcription job")
+    try:
+        tags: Final = _JSON_OBJECTS.validate_python(request_body.get("Tags", ()))
+    except ValidationError:
+        return TranscribeRefusal(400, "Tags must be a list of objects with Key and Value members")
+    if any(tag.get("Key") == TRANSCRIBE_OWNER_TAG for tag in tags):
+        return TranscribeRefusal(
+            400, f"The {TRANSCRIBE_OWNER_TAG} tag is assigned by LiteLLM and cannot be supplied by the caller"
+        )
+    owner_tag: Final = _JobTag(Key=TRANSCRIBE_OWNER_TAG, Value=owner).model_dump()
+    return {**request_body, "Tags": (*tags, owner_tag)}  # mutable-ok: json.dumps and the body state key take a dict
+
+
+async def transcribe_job_access_refusal(
+    job_name: object, user_api_key_dict: UserAPIKeyAuth, get_job: JobLookup
+) -> TranscribeRefusal | None:
+    if is_proxy_admin(user_api_key_dict):
+        return None
+    if not isinstance(job_name, str):
+        return TranscribeRefusal(400, "TranscriptionJobName must be a string")
+    not_found: Final = TranscribeRefusal(
+        404, f"No transcription job named {job_name} was started through this proxy by the calling key"
+    )
+    try:
+        job: Final = _GetTranscriptionJobResponse.model_validate(await get_job(job_name)).TranscriptionJob
+    except Exception as e:  # noqa: BLE001  # a job that cannot be read cannot be shown to belong to the caller
+        verbose_proxy_logger.warning("Looking up Transcribe job %s for an ownership check failed: %s", job_name, e)
+        return not_found
+    owner: Final = (
+        next((tag.Value for tag in job.Tags if tag.Key == TRANSCRIBE_OWNER_TAG), None) if job is not None else None
+    )
+    return None if user_can_access_resource_owner(owner, user_api_key_dict) else not_found
+
+
 def transcription_job_cost(audio_seconds: float, cost_per_second: float) -> float:
     return math.ceil(audio_seconds) * cost_per_second
 
@@ -211,13 +294,14 @@ async def await_transcription_job(
 
 async def measure_media_seconds(
     media_uri: str,
+    job_created_at: float,
     media_seconds: MediaDurationProbe,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     attempts: int = TRANSCRIBE_MEDIA_FETCH_ATTEMPTS,
 ) -> float | None:
     for attempt in range(1, attempts + 1):
         try:
-            return await media_seconds(media_uri)
+            return await media_seconds(media_uri, job_created_at)
         except Exception as e:  # noqa: BLE001  # the media is retried, then charged at the maximum if still unreadable
             verbose_proxy_logger.warning("Measuring Transcribe media %s failed (attempt %d): %s", media_uri, attempt, e)
             if attempt < attempts:
@@ -236,7 +320,9 @@ async def price_transcription_job(
     """
     Amazon Transcribe bills every second of the media file, silence included, and reports no
     duration itself, so the job is polled to completion and the media it transcribed is measured.
-    Anything that stops the duration from being read is charged as the longest media AWS accepts.
+    The measurement only counts when the object has not been rewritten since the job was created,
+    which is what ties it to the bytes Transcribe read. Anything that stops the duration from
+    being read is charged as the longest media AWS accepts.
     """
     job: Final = await await_transcription_job(job_name, get_job, sleep=sleep, max_attempts=max_attempts)
     if job is None:
@@ -245,9 +331,9 @@ async def price_transcription_job(
     if job.TranscriptionJobStatus == "FAILED":
         return 0.0
     media_uri: Final = job.Media.MediaFileUri if job.Media is not None else None
-    if media_uri is None:
+    if media_uri is None or job.CreationTime is None:
         return transcribe_max_job_cost(cost_per_second)
-    audio_seconds: Final = await measure_media_seconds(media_uri, media_seconds, sleep=sleep)
+    audio_seconds: Final = await measure_media_seconds(media_uri, job.CreationTime, media_seconds, sleep=sleep)
     if audio_seconds is None:
         return transcribe_max_job_cost(cost_per_second)
     return transcription_job_cost(audio_seconds, cost_per_second)
@@ -303,6 +389,14 @@ def s3_media_url(media_uri: str, aws_region_name: str) -> str | None:
     return f"https://{bucket}.s3.{aws_region_name}.{dns_suffix}/{quote(key)}"
 
 
+def media_predates_job(headers: Mapping[str, str], job_created_at: float) -> bool:
+    try:
+        modified_at: Final = parsedate_to_datetime(headers["last-modified"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return False
+    return modified_at <= job_created_at + TRANSCRIBE_MEDIA_LAST_MODIFIED_TOLERANCE_SECONDS
+
+
 async def write_media_within_limit(response: httpx.Response, media_file: IO[bytes], max_bytes: int) -> bool:
     if int(response.headers.get("content-length", "0")) > max_bytes:
         return False
@@ -325,7 +419,7 @@ def transcribe_media_duration_probe(aws_region_name: str, download_slots: asynci
         S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
         return dict(aws_request.prepare().headers.items())  # mutable-ok: httpx request headers take a dict
 
-    async def media_seconds(media_uri: str) -> float | None:
+    async def media_seconds(media_uri: str, job_created_at: float) -> float | None:
         url: Final = s3_media_url(media_uri, aws_region_name)
         if url is None:
             return None
@@ -335,6 +429,11 @@ def transcribe_media_duration_probe(aws_region_name: str, download_slots: asynci
             with tempfile.NamedTemporaryFile() as media_file:
                 async with client.stream("GET", url, headers=headers) as response:
                     _ = response.raise_for_status()
+                    if not media_predates_job(response.headers, job_created_at):
+                        verbose_proxy_logger.warning(
+                            "Transcribe media %s was rewritten after the job was created, charging maximum", media_uri
+                        )
+                        return None
                     if not await write_media_within_limit(response, media_file, TRANSCRIBE_MAX_MEDIA_BYTES):
                         verbose_proxy_logger.warning(
                             "Transcribe media %s exceeds the size cap, charging maximum", media_uri
