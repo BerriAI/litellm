@@ -42,6 +42,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
+    MCPKeyedOAuthGrantRepository,
     MCPServerOAuthClientRepository,
     MCPServerRepository,
     MCPUserCredentialsRepository,
@@ -2091,3 +2092,79 @@ async def delete_user_env_vars(
     propagate to the caller instead of being silently swallowed.
     """
     await _user_env_var_actions(prisma_client).delete_many(where={"user_id": user_id, "server_id": server_id})
+
+
+KeyedGrantStatus = Literal["pending", "authorizing", "code", "exchanging", "active", "revoked"]
+
+
+class KeyedOAuthGrantStore:
+    def __init__(self, prisma_client: PrismaClient) -> None:
+        self._table = MCPKeyedOAuthGrantRepository(prisma_client).table
+
+    async def begin(self, grant_id: str, binding: str, expires_at: datetime) -> None:
+        now: Final = datetime.now(timezone.utc)
+        expired_filter: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantWhereInput] = {"expires_at": {"lte": now}}
+        expired: Final = await self._table.find_many(take=100, where=expired_filter)
+        if expired:
+            ids: Final = [row.id for row in expired]  # mutable-ok: generated Prisma in-filter requires a list
+            delete_filter: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantWhereInput] = {
+                "id": {"in": ids},
+                "expires_at": {"lte": now},
+            }
+            await self._table.delete_many(where=delete_filter)
+        create: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantCreateInput] = {
+            "id": grant_id,
+            "binding_b64": binding,
+            "expires_at": expires_at,
+        }
+        await self._table.create_many(data=(create,), skip_duplicates=True)
+
+    async def get(self, grant_id: str) -> "prisma_db_models.LiteLLM_MCPKeyedOAuthGrant | None":
+        where: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantWhereUniqueInput] = {"id": grant_id}
+        return await self._table.find_unique(where=where)
+
+    async def attempt(self, grant_id: str) -> bool:
+        where: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantWhereInput] = {
+            "id": grant_id,
+            "status": "pending",
+            "attempts": {"lt": 5},
+            "expires_at": {"gt": datetime.now(timezone.utc)},
+        }
+        data: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantUpdateManyMutationInput] = {"attempts": {"increment": 1}}
+        return await self._table.update_many(where=where, data=data) == 1
+
+    async def transition(
+        self,
+        grant_id: str,
+        previous: KeyedGrantStatus,
+        following: KeyedGrantStatus,
+        expires_at: datetime,
+        expected_hash: str | None = None,
+        code_hash: str | None = None,
+        refresh_hash: str | None = None,
+    ) -> bool:
+        where: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantWhereInput] = {
+            "id": grant_id,
+            "status": previous,
+            "expires_at": {"gt": datetime.now(timezone.utc)},
+            **(
+                ({"refresh_hash": expected_hash} if previous == "active" else {"code_hash": expected_hash})
+                if expected_hash
+                else {}
+            ),
+        }
+        data: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantUpdateManyMutationInput] = {
+            "status": following,
+            "expires_at": expires_at,
+            **({"code_hash": code_hash} if code_hash else {}),
+            **({"refresh_hash": refresh_hash} if refresh_hash else {}),
+        }
+        return await self._table.update_many(where=where, data=data) == 1
+
+    async def revoke(self, grant_id: str) -> None:
+        where: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantWhereInput] = {"id": grant_id}
+        data: Final[prisma_db_types.LiteLLM_MCPKeyedOAuthGrantUpdateManyMutationInput] = {
+            "status": "revoked",
+            "refresh_hash": None,
+        }
+        await self._table.update_many(where=where, data=data)

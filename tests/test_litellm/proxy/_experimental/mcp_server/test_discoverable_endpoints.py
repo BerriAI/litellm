@@ -12297,3 +12297,47 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
     proxy_server.prisma_client.db.litellm_mcpusercredentials.upsert.assert_not_called()
     proxy_server.prisma_client.db.litellm_usertable.create.assert_not_called()
     proxy_server.prisma_client.db.litellm_teamtable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_keyed_discovery_preserves_flow_into_browser_authorize(_no_proxy_base_url, _isolated_mcp_registry, monkeypatch):
+    from starlette.requests import Request
+    from urllib.parse import unquote, urlsplit
+    from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import start_keyed_oauth_flow
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "keyed-discovery-test-salt")
+    monkeypatch.setenv("PROXY_BASE_URL", "http://localhost:4000")
+    server: Final = _create_oauth2_server(server_name="interactive", alias="interactive", name="interactive")
+    _isolated_mcp_registry[server.server_id] = server
+    request: Final = Request({"type": "http", "method": "POST", "scheme": "http", "path": "/mcp", "headers": [(b"host", b"testserver"), (b"x-litellm-api-key", b"Bearer sk-owned")]})
+    flow: Final = start_keyed_oauth_flow(request, UserAPIKeyAuth(user_id="owner"), server.server_id)
+    client: Final = _prefixed_discovery_client([])
+    metadata: Final = client.get("/.well-known/oauth-protected-resource/mcp", params={"mcp_server_name": "interactive", "flow": flow})
+    assert metadata.status_code == 200
+    issuer: Final = metadata.json()["authorization_servers"][0]
+    assert "/mcp/keyed/" in issuer
+    authorization: Final = client.get("/.well-known/oauth-authorization-server" + urlsplit(issuer).path)
+    assert authorization.status_code == 200
+    assert authorization.json()["issuer"] == issuer
+    assert flow in unquote(authorization.json()["authorization_endpoint"])
+    assert authorization.json()["token_endpoint"].endswith("/token")
+    from types import SimpleNamespace
+    from datetime import datetime, timedelta, timezone
+    from litellm.proxy._experimental.mcp_server import keyed_oauth_flow
+
+    row: Final = SimpleNamespace(binding_b64="", status="pending", expires_at=datetime.now(timezone.utc) + timedelta(minutes=10))
+    async def begin(grant_id, binding, expiry):
+        row.binding_b64 = binding
+    store: Final = SimpleNamespace(begin=begin, get=AsyncMock(return_value=row))
+    monkeypatch.setattr(keyed_oauth_flow, "_store", lambda: store)
+    registered: Final = client.post(authorization.json()["registration_endpoint"], json={"redirect_uris": ["http://localhost:8787/callback"]})
+    page: Final = client.get(authorization.json()["authorization_endpoint"], params={
+        "client_id": registered.json()["client_id"], "redirect_uri": "http://localhost:8787/callback",
+        "response_type": "code", "code_challenge": "a" * 43, "code_challenge_method": "S256",
+        "resource": "http://localhost:4000/mcp",
+    })
+    assert page.status_code == 200
+    assert 'name="api_key"' in page.text
+    assert 'type="password"' in page.text
+    assert "/sso/key/generate" not in page.text

@@ -88,6 +88,10 @@ class ManagedVectorStoresRepository(PrismaTableRepository["prisma_models.LiteLLM
     table_name = "litellm_managedvectorstorestable"
 
 
+class MCPKeyedOAuthGrantRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPKeyedOAuthGrant"]):
+    table_name = "litellm_mcpkeyedoauthgrant"
+
+
 class MCPUserCredentialsRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPUserCredentials"]):
     table_name = "litellm_mcpusercredentials"
 

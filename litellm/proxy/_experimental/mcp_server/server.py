@@ -4097,6 +4097,13 @@ if MCP_AVAILABLE:
                     _path = get_route_relative_request_path(scope)
 
                     if _path.rstrip("/") == "/mcp":
+                        from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import start_keyed_oauth_flow
+
+                        keyed_flow = (
+                            start_keyed_oauth_flow(request, user_api_key_auth, server.server_id)
+                            if user_api_key_auth is not None and user_api_key_auth.via_virtual_key
+                            else None
+                        )
                         raise HTTPException(
                             status_code=401,
                             detail="Unauthorized",
@@ -4105,7 +4112,7 @@ if MCP_AVAILABLE:
                                     "www-authenticate": (
                                         f'Bearer resource_metadata="{base_url}/.well-known/'
                                         f"oauth-protected-resource{well_known_root_suffix()}/mcp?"
-                                        f'{urlencode((("mcp_server_name", server_name),))}"'
+                                        f'{urlencode((("mcp_server_name", server_name),) + ((("flow", keyed_flow),) if keyed_flow else ()))}"'
                                     )
                                 }
                             ),

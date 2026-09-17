@@ -541,6 +541,10 @@ class MCPRequestHandler:
                     bearer_presented=False,
                 )
 
+        from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import validate_keyed_bearer
+
+        validated_user_api_key_auth = await validate_keyed_bearer(request, validated_user_api_key_auth)
+
         # Leak-defense (single chokepoint): a gateway admission credential (session bearer or bridge
         # envelope) is NEVER a valid upstream token. Scrub it from EVERY egress context so no
         # client-forwarded, OBO, or passthrough path can send it upstream for replay. Anchored to the
@@ -573,7 +577,11 @@ class MCPRequestHandler:
         """True when a header value is a gateway admission credential — a session bearer or bridge
         envelope. It proves who signed in to the GATEWAY, never a valid UPSTREAM token, so it must never
         be forwarded (a hostile upstream could capture and replay it against the aggregate ``/mcp`` scope)."""
-        return value is not None and (is_session_bearer_shaped(value) or is_bridge_envelope_shaped(value))
+        from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import is_keyed_bearer_shaped
+
+        return value is not None and (
+            is_session_bearer_shaped(value) or is_bridge_envelope_shaped(value) or is_keyed_bearer_shaped(value)
+        )
 
     @staticmethod
     def _scrub_gateway_admission_credentials(

@@ -89,7 +89,7 @@ from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPTokenEndpointAuthMethod
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import LiteLLM_MCPServerTable
+    from litellm.proxy._types import LiteLLM_MCPServerTable, UserAPIKeyAuth
 
 # TTL cache for upstream OAuth metadata fetched from pass-through MCP servers.
 # Keeps us from hammering the upstream IdP on each discovery request.
@@ -149,6 +149,7 @@ def encode_state_with_base_url(
     dcr_client_secret: str | None = None,
     dcr_token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None,
     oauth_nonce: str | None = None,
+    keyed_grant_id: str | None = None,
 ) -> str:
     """
     Encode the base_url, original state, and PKCE parameters using encryption.
@@ -179,6 +180,7 @@ def encode_state_with_base_url(
     """
     state_data: Final = {
         "oauth_nonce": oauth_nonce,
+        "keyed_grant_id": keyed_grant_id,
         "base_url": base_url,
         "original_state": original_state,
         "code_challenge": code_challenge,
@@ -568,6 +570,7 @@ async def _store_per_user_token_server_side(
     user_id: str,
     token_response: dict[str, Any],
     identity_binding_proof: str | None = None,
+    require_persistence: bool = False,
 ) -> None:
     """Persist the OAuth token server-side and warm the Redis cache.
 
@@ -617,6 +620,8 @@ async def _store_per_user_token_server_side(
             server.server_id,
         )
     except Exception as exc:
+        if require_persistence:
+            raise HTTPException(status_code=503, detail="OAuth credential storage is unavailable") from exc
         verbose_logger.warning(
             "_store_per_user_token_server_side: DB storage failed for user=%s server=%s: %s",
             user_id,
@@ -877,6 +882,8 @@ async def authorize_with_server(
     response_type: str | None = None,
     scope: str | None = None,
     ephemeral_dcr_client: "EphemeralDcrClient | None" = None,
+    keyed_auth: "UserAPIKeyAuth | None" = None,
+    keyed_grant_id: str | None = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     resolved_server: Final = await _server_with_oauth_endpoints(mcp_server, _register_flow_needed_endpoint)
@@ -927,8 +934,10 @@ async def authorize_with_server(
     request_base_url: Final = get_request_base_url(request)
 
     # Seal the authenticated caller into state so the token exchange cannot select another credential owner.
-    litellm_user_id: str | None = None
-    if enforce_binding or (resolved_server.is_dcr_bridge and resolved_server.is_oauth_delegate):
+    litellm_user_id: str | None = keyed_auth.user_id if keyed_auth is not None else None
+    if keyed_auth is None and (
+        enforce_binding or (resolved_server.is_dcr_bridge and resolved_server.is_oauth_delegate)
+    ):
         subject: Final = await _resolve_oauth_authorization_user(
             request, resolved_server, redirect_uri, state, enforce_binding
         )
@@ -941,6 +950,7 @@ async def authorize_with_server(
         base_url=base_url,
         original_state=state,
         oauth_nonce=oauth_nonce,
+        keyed_grant_id=keyed_grant_id,
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method,
         client_redirect_uri=redirect_uri,
@@ -1007,6 +1017,7 @@ async def exchange_token_with_server(
     refresh_token: str | None = None,
     scope: str | None = None,
     client_token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None,
+    keyed_auth: "UserAPIKeyAuth | None" = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     if grant_type not in ("authorization_code", "refresh_token"):
@@ -1051,9 +1062,13 @@ async def exchange_token_with_server(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     request_user_id: Final = (
-        await _extract_user_id_from_request(request)
-        if resolved_server.needs_user_oauth_token or resolved_server.oauth_identity_binding is not None
-        else None
+        keyed_auth.user_id
+        if keyed_auth is not None
+        else (
+            await _extract_user_id_from_request(request)
+            if resolved_server.needs_user_oauth_token or resolved_server.oauth_identity_binding is not None
+            else None
+        )
     )
 
     bridge_identity: _BridgeAuthorizationCode | None = None
@@ -1232,11 +1247,15 @@ async def exchange_token_with_server(
                 # A sealed code delegates a verified user for this authorized server. Raw
                 # request credentials retain their own JWT/key restrictions during resolution.
                 can_store: Final = (
-                    await can_store_oauth_credential(
-                        request, await MCPRequestHandler.reload_admitted_user(user_id), resolved_server.server_id
+                    await can_store_oauth_credential(request, keyed_auth, resolved_server.server_id)
+                    if keyed_auth is not None
+                    else (
+                        await can_store_oauth_credential(
+                            request, await MCPRequestHandler.reload_admitted_user(user_id), resolved_server.server_id
+                        )
+                        if bridge_identity is not None
+                        else await authorize_oauth_credential_request(request, resolved_server.server_id) == user_id
                     )
-                    if bridge_identity is not None
-                    else await authorize_oauth_credential_request(request, resolved_server.server_id) == user_id
                 )
                 if can_store:
                     await _store_per_user_token_server_side(
@@ -1244,14 +1263,21 @@ async def exchange_token_with_server(
                         user_id=user_id,
                         token_response=token_response,
                         identity_binding_proof=binding_proof,
+                        require_persistence=keyed_auth is not None,
                     )
                 else:
+                    if keyed_auth is not None:
+                        raise HTTPException(status_code=403, detail="OAuth credential storage is not authorized")
                     verbose_logger.warning(
                         "OAuth credential storage not authorized for user=%s server=%s",
                         user_id,
                         resolved_server.server_id,
                     )
             except Exception as exc:
+                if keyed_auth is not None:
+                    raise HTTPException(
+                        status_code=503, detail="OAuth credential storage failed. Reconnect your client."
+                    ) from exc
                 verbose_logger.warning(
                     "exchange_token_with_server: server-side storage failed for user=%s server=%s: %s",
                     user_id,
@@ -1992,6 +2018,13 @@ async def token_endpoint(
     3. Return the token
     4. Return a virtual key in this response
     """
+    from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import exchange_keyed_token, is_keyed_bearer_shaped
+
+    if is_keyed_bearer_shaped(code) or is_keyed_bearer_shaped(refresh_token):
+        return await exchange_keyed_token(
+            request, grant_type, code, redirect_uri, client_id, code_verifier, refresh_token, resource, mcp_server_name
+        )
+
     if mcp_server_name is None and is_gateway_dcr_client_id(client_id):
         from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
             master_key,
@@ -2100,6 +2133,11 @@ async def revoke_endpoint(request: Request, token: str = Form(...), client_id: s
     """RFC 7009 revocation for the gateway's refresh tokens (``lite logout``): 200 for a known
     client whatever the token's state, 503 when the shared single-use record cannot be written;
     access tokens expire on their own."""
+    from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import is_keyed_bearer_shaped, revoke_keyed_token
+
+    if is_keyed_bearer_shaped(token):
+        return await revoke_keyed_token(request, token, client_id)
+
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
         master_key,
         user_api_key_cache,
@@ -2277,6 +2315,11 @@ async def callback(
                 ),
             )
 
+        keyed_grant_id: Final = state_data.get("keyed_grant_id")
+        if isinstance(keyed_grant_id, str) and keyed_grant_id:
+            from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import complete_keyed_callback
+
+            forwarded_code = await complete_keyed_callback(request, keyed_grant_id, forwarded_code)
         params = {"code": forwarded_code, "state": original_state}
         complete_returned_url = _append_query_params(redirect_uri, params)
         response = RedirectResponse(url=complete_returned_url, status_code=302)
@@ -2652,7 +2695,9 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
 # in registration order, and /.well-known/oauth-authorization-server/{name}
 # would otherwise capture the "/mcp" suffix as a server name.
 @router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp")
-async def oauth_protected_resource_aggregate(request: Request, mcp_server_name: str | None = None):
+async def oauth_protected_resource_aggregate(
+    request: Request, mcp_server_name: str | None = None, flow: str | None = None
+):
     """
     OAuth protected resource discovery for the aggregate /mcp endpoint.
 
@@ -2660,6 +2705,10 @@ async def oauth_protected_resource_aggregate(request: Request, mcp_server_name: 
     (those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously
     describes the aggregate resource.
     """
+    if flow is not None:
+        from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import keyed_resource_metadata
+
+        return keyed_resource_metadata(request, flow)
     if mcp_server_name is None:
         return _build_aggregate_protected_resource_response(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
@@ -2944,3 +2993,36 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
         fallback_client_id=mcp_server_name,
         client_redirect_uris=client_redirect_uris,
     )
+
+
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp/keyed/{'{flow}'}")
+async def keyed_authorization_metadata(request: Request, flow: str) -> Response:
+    from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import keyed_server_metadata
+
+    return keyed_server_metadata(request, flow)
+
+
+@router.get("/mcp/keyed/{flow}/authorize")
+async def keyed_authorization_entry(
+    request: Request,
+    flow: str,
+    client_id: str,
+    redirect_uri: str,
+    state: str = "",
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
+    response_type: str | None = None,
+    resource: str | None = None,
+) -> Response:
+    from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import keyed_authorize
+
+    return await keyed_authorize(
+        request, flow, client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type, resource
+    )
+
+
+@router.post("/mcp/keyed/confirm")
+async def keyed_authorization_confirm(request: Request) -> Response:
+    from litellm.proxy._experimental.mcp_server.keyed_oauth_flow import confirm_keyed_authorization
+
+    return await confirm_keyed_authorization(request)

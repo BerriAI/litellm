@@ -1704,3 +1704,72 @@ async def test_unverified_legacy_cache_cannot_bypass_enforcement(monkeypatch):
     await mcp_per_user_token_cache.set("alice", "srv", "bob", 60)
     assert await module.resolve_user_oauth_access_token("alice", server) is None
     assert await mcp_per_user_token_cache.get("alice", "srv") is None
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous, matched", (("code", True), ("code", False), ("active", True), ("active", False)))
+async def test_keyed_grant_consumption_requires_atomic_status_expiry_and_hash(previous: str, matched: bool) -> None:
+    from litellm.proxy._experimental.mcp_server.db import KeyedOAuthGrantStore
+
+    table: Final = SimpleNamespace(update_many=AsyncMock(return_value=1 if matched else 0))
+    client: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpkeyedoauthgrant=table))
+    store: Final = KeyedOAuthGrantStore(client)
+    expiry: Final = datetime.now(timezone.utc) + timedelta(hours=1)
+    consumed: Final = await store.transition(
+        "grant", previous, "active", expiry, expected_hash="presented-hash", refresh_hash="rotated-hash"
+    )
+    assert consumed is matched
+    query: Final = table.update_many.call_args.kwargs
+    assert query["where"]["id"] == "grant"
+    assert query["where"]["status"] == previous
+    assert query["where"]["expires_at"]["gt"] < expiry
+    assert query["where"]["refresh_hash" if previous == "active" else "code_hash"] == "presented-hash"
+    assert query["data"]["refresh_hash"] == "rotated-hash"
+    table.update_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_keyed_confirmation_limit_and_revocation_are_atomic() -> None:
+    from litellm.proxy._experimental.mcp_server.db import KeyedOAuthGrantStore
+
+    table: Final = SimpleNamespace(update_many=AsyncMock(side_effect=(1, 0, 1)))
+    store: Final = KeyedOAuthGrantStore(SimpleNamespace(db=SimpleNamespace(litellm_mcpkeyedoauthgrant=table)))
+    assert await store.attempt("grant") is True
+    assert await store.attempt("grant") is False
+    first: Final = table.update_many.call_args_list[0].kwargs
+    assert first["where"]["status"] == "pending"
+    assert first["where"]["attempts"]["lt"] == 5
+    assert first["where"]["expires_at"]["gt"].tzinfo is not None
+    assert first["data"]["attempts"] == {"increment": 1}
+    await store.revoke("grant")
+    assert table.update_many.call_args.kwargs == {
+        "where": {"id": "grant"},
+        "data": {"status": "revoked", "refresh_hash": None},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expired", (False, True))
+async def test_keyed_grant_begin_preserves_existing_binding_and_rechecks_cleanup_expiry(expired: bool) -> None:
+    from litellm.proxy._experimental.mcp_server.db import KeyedOAuthGrantStore
+
+    row: Final = SimpleNamespace(id="old-grant")
+    table: Final = SimpleNamespace(
+        find_many=AsyncMock(return_value=[row] if expired else []),
+        delete_many=AsyncMock(),
+        create_many=AsyncMock(),
+        find_unique=AsyncMock(return_value=row),
+    )
+    store: Final = KeyedOAuthGrantStore(SimpleNamespace(db=SimpleNamespace(litellm_mcpkeyedoauthgrant=table)))
+    expiry: Final = datetime.now(timezone.utc) + timedelta(minutes=10)
+    await store.begin("new-grant", "encrypted-binding", expiry)
+    assert table.create_many.call_args.kwargs["skip_duplicates"] is True
+    assert table.create_many.call_args.kwargs["data"][0]["binding_b64"] == "encrypted-binding"
+    assert table.find_many.call_args.kwargs["take"] <= 100
+    if expired:
+        deleted: Final = table.delete_many.call_args.kwargs["where"]
+        assert deleted["id"]["in"] == ["old-grant"]
+        assert deleted["expires_at"] == table.find_many.call_args.kwargs["where"]["expires_at"]
+    else:
+        table.delete_many.assert_not_awaited()
+    assert await store.get("new-grant") is row
+    assert table.find_unique.call_args.kwargs["where"] == {"id": "new-grant"}
