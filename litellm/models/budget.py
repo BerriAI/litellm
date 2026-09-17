@@ -30,6 +30,8 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     model_max_budget: dict | None = None
     budget_duration: str | None = None
     allowed_models: list[str] | None = None  # per-member model scope; empty = inherit team models
+    temp_budget_increase: float | None = None
+    temp_budget_expiry: datetime | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 

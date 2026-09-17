@@ -3692,6 +3692,8 @@ _MEMBER_BUDGET_PATCH_FIELDS: Final = {
     "rpm_limit": "rpm_limit",
     "budget_duration": "budget_duration",
     "allowed_models": "allowed_models",
+    "temp_budget_increase": "temp_budget_increase",
+    "temp_budget_expiry": "temp_budget_expiry",
 }
 
 
@@ -3862,6 +3864,8 @@ async def team_member_update(
         rpm_limit=data.rpm_limit,
         budget_duration=data.budget_duration,
         allowed_models=data.allowed_models,
+        temp_budget_increase=data.temp_budget_increase,
+        temp_budget_expiry=data.temp_budget_expiry,
     )
 
 

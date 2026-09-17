@@ -8461,3 +8461,121 @@ def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
 def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() -> None:
     assert request_skips_budget_checks(route="/v1/models", model=None, llm_router=None) is True
     assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False
+
+
+def test_effective_team_member_budget_applies_unexpired_increase() -> None:
+    from litellm.proxy.auth.auth_checks import _effective_team_member_budget
+
+    budget: Final = LiteLLM_BudgetTable(
+        max_budget=100.0,
+        temp_budget_increase=50.0,
+        temp_budget_expiry=datetime(2100, 1, 1),
+    )
+    assert _effective_team_member_budget(budget, now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 150.0
+
+
+def test_effective_team_member_budget_ignores_expired_increase() -> None:
+    from litellm.proxy.auth.auth_checks import _effective_team_member_budget
+
+    budget: Final = LiteLLM_BudgetTable(
+        max_budget=100.0,
+        temp_budget_increase=50.0,
+        temp_budget_expiry=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    assert _effective_team_member_budget(budget, now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 100.0
+
+
+def test_effective_team_member_budget_without_increase() -> None:
+    from litellm.proxy.auth.auth_checks import _effective_team_member_budget
+
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert _effective_team_member_budget(LiteLLM_BudgetTable(max_budget=100.0), now=now) == 100.0
+    assert _effective_team_member_budget(LiteLLM_BudgetTable(max_budget=None), now=now) is None
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_check_temp_budget_increase_extends_cap():
+    """Spend above max_budget but below max_budget + active temp increase
+    must not raise; once the increase expires the same spend must raise."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.utils import ProxyLogging
+
+    team_object = LiteLLM_TeamTable(team_id="test-team", metadata={})
+    user_object = LiteLLM_UserTable(user_id="test-user")
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    team_membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        spend=0.0,
+        budget_id="budget-1",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            max_budget=100.0,
+            temp_budget_increase=100.0,
+            temp_budget_expiry=datetime.now(timezone.utc) + timedelta(hours=1),
+        ),
+    )
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        if counter_key == "spend:team_member:test-user:test-team":
+            return 150.0
+        return fallback_spend
+
+    # $150 spend is over the $100 cap but under the $200 temp-extended cap.
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=team_membership,
+        ),
+    ):
+        await _check_team_member_budget(
+            team_object=team_object,
+            user_object=user_object,
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=DualCache(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    expired_membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        spend=0.0,
+        budget_id="budget-1",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            max_budget=100.0,
+            temp_budget_increase=100.0,
+            temp_budget_expiry=datetime.now(timezone.utc) - timedelta(hours=1),
+        ),
+    )
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=expired_membership,
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=user_object,
+                valid_token=valid_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=DualCache(),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+    assert exc_info.value.current_cost == 150.0
+    assert exc_info.value.max_budget == 100.0
