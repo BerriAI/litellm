@@ -48,7 +48,7 @@ import threading
 from collections import deque
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import closing, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import islice
 from pathlib import Path
@@ -94,16 +94,40 @@ from fixture_mode import (
     parse_fixture_mode,
 )
 from fixture_profile import IneligibleRequest, MatchProfile, match_profile, strict_identity
-from provider_cache import CacheEdge
+from provider_cache import SIGNATURE_HEADERS, CacheEdge, MountPolicy, is_bedrock
 from provider_cache_routing import LIVE_PROVIDER_REQUIRED
 from pydantic import JsonValue, TypeAdapter
+
+BEDROCK_REGIONS: Final[tuple[str, ...]] = ("us-east-1",)
 
 EDGE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "openai": "https://api.openai.com",
         "anthropic": "https://api.anthropic.com",
+        **{
+            f"bedrock/{region}": f"https://bedrock-runtime.{region}.amazonaws.com"
+            for region in BEDROCK_REGIONS
+        },
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedMount:
+    mount: str
+    upstream_base: str
+    upstream_path: str
+
+
+def resolve_mount(path: str, mounts: Mapping[str, str]) -> ResolvedMount | None:
+    """Longest mount prefix wins, so a region-qualified mount such as
+    ``bedrock/us-east-1`` resolves whole instead of leaving the region as the
+    first segment of the upstream path."""
+    trimmed: Final = path.lstrip("/")
+    for mount in sorted(mounts, key=len, reverse=True):
+        if trimmed == mount or trimmed.startswith(f"{mount}/"):
+            return ResolvedMount(mount, mounts[mount], trimmed[len(mount):].lstrip("/"))
+    return None
 
 REPLAY_MISS_STATUS: Final = 599
 
@@ -754,14 +778,14 @@ def _handle_record(
 
 def _handle_live(
     method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float,
-    cache: CacheEdge | None = None,
+    cache: CacheEdge | None = None, mount: str = "",
 ) -> EdgeOutcome:
     forwarded: Final = {
         name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
     }
     head: Final = (
         forward_stream(method, url, headers=forwarded, body=body, timeout=timeout)
-        if cache is None else cache.forward(method, url, forwarded, body, timeout)
+        if cache is None else cache.forward(mount, method, url, forwarded, body, timeout)
     )
     match head:
         case NetworkError(message=message):
@@ -796,10 +820,13 @@ def handle_edge_request(
     prefix, then record (forward + persist) or replay (serve from the bundle).
     Socket-free so unit tests exercise every branch without a server."""
     split: Final = urlsplit(raw_path)
-    mount, _, upstream_path = split.path.lstrip("/").partition("/")
-    upstream_base: Final = mounts.get(mount)
-    if upstream_base is None:
-        return _text_reply(404, f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(mounts))}")
+    resolved: Final = resolve_mount(split.path, mounts)
+    if resolved is None:
+        unknown: Final = split.path.lstrip("/").partition("/")[0]
+        return _text_reply(404, f"unknown provider mount {unknown!r}; known mounts: {', '.join(sorted(mounts))}")
+    mount: Final = resolved.mount
+    upstream_base: Final = resolved.upstream_base
+    upstream_path: Final = resolved.upstream_path
     profile: Final = (
         backend.recorder.profile
         if isinstance(backend, RecordEdge)
@@ -830,7 +857,8 @@ def handle_edge_request(
     match backend:
         case CacheEdge():
             return _handle_live(
-                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout, backend,
+                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
+                backend, mount,
             )
         case LiveEdge():
             return _handle_live(
@@ -891,7 +919,7 @@ class _EdgeHandler(BaseHTTPRequestHandler):
         )
         if isinstance(edge_server.backend, CacheEdge) and duplicate_headers:
             edge_server.backend.counters.increment("duplicate_header_bypass")
-            if urlsplit(self.path).path.lstrip("/").partition("/")[0] in edge_server.mounts:
+            if resolve_mount(urlsplit(self.path).path, edge_server.mounts) is not None:
                 edge_server.backend.counters.increment("upstream_attempts")
         outcome: Final = handle_edge_request(
             selected_backend,
@@ -1079,6 +1107,8 @@ def provider_edge_api_base(
                 return _shared_cache_edge(bind_host, advertise_host, forward_timeout).api_base(mount)
             return None
         case "record" | "replay":
+            if is_bedrock(mount):
+                return None
             if mount not in EDGE_MOUNTS:
                 raise ValueError(f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(EDGE_MOUNTS))}")
             return _shared_edge(mode, bundle_dir, bind_host, advertise_host, forward_timeout, match_profile()).api_base(
@@ -1108,7 +1138,22 @@ def configured_cache_backend() -> CacheEdge | None:
         return None
     from provider_cache_redis import configured_cache
 
-    return configured_cache()
+    cache: Final = configured_cache()
+    return None if cache is None else replace(cache, policies=bedrock_policies())
+
+
+@functools.lru_cache(maxsize=1)
+def bedrock_policies() -> Mapping[str, MountPolicy]:
+    """One policy per mounted Bedrock region, built lazily so a run that never
+    mounts Bedrock neither imports botocore nor resolves an AWS identity."""
+    from provider_edge_bedrock import bedrock_signer
+
+    return MappingProxyType(
+        {
+            f"bedrock/{region}": MountPolicy(sign=bedrock_signer(region), unkeyed_headers=SIGNATURE_HEADERS)
+            for region in BEDROCK_REGIONS
+        }
+    )
 
 
 @functools.lru_cache(maxsize=8)
