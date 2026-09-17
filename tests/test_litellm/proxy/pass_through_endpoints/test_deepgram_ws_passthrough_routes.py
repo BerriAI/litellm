@@ -1,10 +1,11 @@
 """Deepgram ``/v1/listen`` passthrough WebSocket route: registration, auth, credential injection, target URL."""
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -12,13 +13,16 @@ from fastapi.testclient import TestClient
 from starlette.routing import WebSocketRoute
 from starlette.websockets import WebSocketDisconnect
 
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._lazy_features import LAZY_FEATURES
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import _cache_key_object
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _websocket_relay,
     deepgram_listen_websocket_route,
     router,
 )
+from litellm.proxy.utils import hash_token
 
 GET_CREDENTIALS: Final = (
     "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials"
@@ -300,6 +304,62 @@ def test_deepgram_listen_authenticates_the_litellm_key_and_relays_to_deepgram(mo
             accept_websocket=False,
         )
     ]
+
+
+async def _cache_restricted_key(virtual_key: str, models: list[str]) -> DualCache:
+    cache = DualCache()
+    await _cache_key_object(
+        hashed_token=hash_token(virtual_key),
+        user_api_key_obj=UserAPIKeyAuth(token=hash_token(virtual_key), models=models),
+        user_api_key_cache=cache,
+        proxy_logging_obj=None,
+    )
+    return cache
+
+
+@pytest.mark.parametrize(
+    ("query", "expect_relay"),
+    [
+        pytest.param("model=nova-2", True, id="allowed model named"),
+        pytest.param("model=nova-3", False, id="denied model named"),
+        pytest.param("", False, id="model omitted, default denied"),
+        pytest.param("model=&language=en", False, id="model blank, default denied"),
+    ],
+)
+def test_deepgram_listen_authorizes_the_model_it_will_actually_send_upstream(query, expect_relay, monkeypatch):
+    """A key allowed only ``nova-2`` must not reach ``nova-3`` by leaving ``model`` out and letting the proxy fill
+    in its default: the real key auth path must see the same model the upstream target will carry."""
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    cache = asyncio.run(_cache_restricted_key("sk-only-nova-2", ["nova-2"]))
+    relay = _FakeRelay()
+    client = TestClient(_app_with_relay(relay))
+
+    with (
+        patch(GET_CREDENTIALS, return_value="dg-provider-key"),
+        patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
+            "litellm.proxy.proxy_server",
+            master_key="sk-master",
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+            llm_model_list=None,
+            llm_router=None,
+        ),
+    ):
+        if expect_relay:
+            with client.websocket_connect(
+                f"/deepgram/v1/listen?{query}", headers={"Authorization": "Bearer sk-only-nova-2"}
+            ):
+                pass
+            assert [call.target for call in relay.calls] == [f"wss://api.deepgram.com/v1/listen?{query}"]
+            return
+        with pytest.raises(WebSocketDisconnect) as disconnect:
+            with client.websocket_connect(
+                f"/deepgram/v1/listen?{query}", headers={"Authorization": "Bearer sk-only-nova-2"}
+            ):
+                pass
+
+    assert disconnect.value.code == 1008
+    assert relay.calls == []
 
 
 def test_deepgram_listen_echoes_the_browser_subprotocol_that_carries_the_litellm_key(monkeypatch):
