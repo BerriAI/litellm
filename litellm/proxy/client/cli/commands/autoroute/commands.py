@@ -88,14 +88,17 @@ def configure(ctx: click.Context) -> None:
     run_configure_wizard(ctx)
 
 
-@autoroute_group.command("start")
-@click.option(
+_PORT_OPTION: Final = click.option(
     "--port",
     type=click.IntRange(1, 65535),
     default=DEFAULT_AUTOROUTE_PORT,
     show_default=True,
     help="Loopback port for the ephemeral proxy; stable across runs so configured clients keep working.",
 )
+
+
+@autoroute_group.command("start")
+@_PORT_OPTION
 def start(port: int) -> None:
     """Launch the ephemeral auto-router proxy and route Claude Code through it"""
     if not CONFIG_PATH.exists():
@@ -239,6 +242,33 @@ def stop() -> None:
         click.echo(f"Restored {CLAUDE_SETTINGS_PATH} to its original contents.")
     else:
         click.echo(f"Removed {CLAUDE_SETTINGS_PATH} (it did not exist before `lite autoroute start`).")
+
+
+AUTOROUTE_ALIAS_DEPRECATION_NOTICE: Final = (
+    "`lite autoroute {retired}` is deprecated and will be removed in a future release; "
+    "run `lite autoroute {current}` instead, it takes the same options."
+)
+
+
+def _warn_deprecated_alias(retired: str, current: str) -> None:
+    click.secho(AUTOROUTE_ALIAS_DEPRECATION_NOTICE.format(retired=retired, current=current), err=True, fg="yellow")
+
+
+@autoroute_group.command("up", hidden=True)
+@_PORT_OPTION
+@click.pass_context
+def up(ctx: click.Context, port: int) -> None:
+    """Deprecated alias of `lite autoroute start`"""
+    _warn_deprecated_alias("up", "start")
+    ctx.invoke(start, port=port)
+
+
+@autoroute_group.command("down", hidden=True)
+@click.pass_context
+def down(ctx: click.Context) -> None:
+    """Deprecated alias of `lite autoroute stop`"""
+    _warn_deprecated_alias("down", "stop")
+    ctx.invoke(stop)
 
 
 __all__ = ["autoroute_group"]
