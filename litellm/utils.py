@@ -3054,10 +3054,13 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
 
     Returns a copy of the matching entry so the caller can inherit its defaults
     without mutating the shared built-in. Returns ``None`` when no candidate
-    exists under a provider ``get_model_info`` would accept for ``provider``.
+    exists under a provider ``get_model_info`` would accept for ``provider``, or,
+    when the value names none, for the provider prefix the key itself carries,
+    which is what ``get_model_info`` derives when it reads the key back.
     """
     candidates: Final[list[str]] = []
     segments: Final = key.split("/")
+    match_provider: Final = provider or (segments[0] if len(segments) > 1 and segments[0] in LlmProvidersSet else "")
     idx = 0
     while idx < len(segments) - 1 and segments[idx] in LlmProvidersSet:
         idx += 1
@@ -3068,14 +3071,18 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
         if base.startswith(region_prefix):
             candidates.append(base[len(region_prefix) :])
 
-    if provider:
-        stripped: Final = _strip_model_name(model=base, custom_llm_provider=provider)
+    if match_provider:
+        stripped: Final = _strip_model_name(model=base, custom_llm_provider=match_provider)
         if stripped != base:
             candidates.append(stripped)
 
     for candidate in candidates:
         entry = litellm.model_cost.get(candidate)
-        if entry is not None and entry.get("litellm_provider") is not None and _check_provider_match(entry, provider):
+        if (
+            entry is not None
+            and entry.get("litellm_provider") is not None
+            and _check_provider_match(entry, match_provider)
+        ):
             return dict(entry)
     return None
 

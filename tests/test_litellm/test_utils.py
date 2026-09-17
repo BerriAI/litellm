@@ -6272,3 +6272,28 @@ def test_provider_prefixed_lookup_never_outranks_an_existing_row(local_model_cos
         ("openrouter/openai/gpt-4o", "openrouter", "openrouter/openai/gpt-4o"),
     ):
         assert litellm.get_model_info(model=model, custom_llm_provider=provider)["key"] == expected_key
+
+
+def test_register_model_without_a_provider_never_inherits_another_providers_entry(monkeypatch):
+    """
+    The router registers a deployment's shared ``{provider}/{model}`` key without
+    ``litellm_provider``. Matching the built-in entry as a wildcard then handed
+    ``azure/claude-sonnet-4-6`` Anthropic's whole entry, provider included, and
+    reading the key back under the provider its prefix names raised "isn't mapped".
+    """
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    key: Final = "azure/claude-sonnet-4-6"
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    litellm.model_cost.pop(key, None)
+    try:
+        litellm.register_model(
+            {key: {"input_cost_per_token": 1e-07, "output_cost_per_token": 4e-07}}, persist_across_reloads=False
+        )
+        assert litellm.model_cost[key].get("litellm_provider") is None
+        info: Final = litellm.get_model_info(key)
+        assert info["litellm_provider"] == "azure"
+        assert info["input_cost_per_token"] == 1e-07
+        assert info["output_cost_per_token"] == 4e-07
+    finally:
+        _invalidate_model_cost_lowercase_map()
