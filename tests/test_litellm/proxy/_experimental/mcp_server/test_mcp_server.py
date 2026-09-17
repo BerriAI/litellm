@@ -1999,7 +1999,7 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
     stateless_handle: Final = AsyncMock(side_effect=handle_request)
     stateful_handle: Final = AsyncMock(side_effect=handle_request)
     with (
-        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
+        patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(
@@ -2012,11 +2012,11 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
             ),
         ),
         patch("litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+        patch(
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
             SimpleNamespace(handle_request=stateless_handle),
         ),
-        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+        patch(
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
             SimpleNamespace(handle_request=stateful_handle),
         ),
@@ -2339,7 +2339,7 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
         stateful_called.append(1)
 
     with (
-        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
+        patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(MagicMock(), None, ["progress_test"], None, None, None),
@@ -2451,7 +2451,7 @@ async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
         raise AssertionError("non-initialize POST should not reach stateful manager")
 
     with (
-        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
+        patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(MagicMock(), None, ["progress_test"], None, None, None),
@@ -2600,7 +2600,7 @@ async def test_mcp_routing_initialize_rejected_when_owner_at_session_cap():
         stateful_called.append(1)
 
     with (
-        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
+        patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(MagicMock(), None, ["progress_test"], None, None, None),
@@ -2692,7 +2692,7 @@ async def test_stateful_mcp_requests_refresh_session_auth_context():
         captured_context = callback_context.run(get_auth_context)
 
     with (
-        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
+        patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(
@@ -3228,7 +3228,7 @@ async def test_stateful_mcp_session_owner_mismatch_returns_403():
     handle_request_mock = AsyncMock()
 
     with (
-        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
+        patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
             return_value=(intruder_auth, None, None, None, None, None),

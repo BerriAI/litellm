@@ -92,12 +92,14 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   const handleSave = async () => {
     if (!accessToken) return;
     setSaving(true);
-    const results = await Promise.allSettled([
+    const [rangeResult] = await Promise.allSettled([
       persistList(accessToken, "mcp_internal_ip_ranges", {
         value: privateRanges,
         stored: storedRanges,
         setStored: setStoredRanges,
       }),
+    ]);
+    const [clientResult] = await Promise.allSettled([
       persistList(accessToken, "mcp_allowed_clients", {
         value: allowedClients,
         stored: storedClients,
@@ -105,7 +107,9 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
       }),
     ]);
     setSaving(false);
-    const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+    const failures = [rangeResult, clientResult].filter(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
     if (failures.length === 0) {
       toast.success("MCP network settings saved");
       return;

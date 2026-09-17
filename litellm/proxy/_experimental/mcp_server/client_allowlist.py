@@ -71,7 +71,6 @@ def parse_allowed_mcp_clients(raw_setting: object) -> frozenset[str] | None:
 
 
 def allowed_mcp_clients_from_general_settings(general_settings: object) -> frozenset[str] | None:
-    """Reads the allowlist out of the proxy's untyped general_settings mapping."""
     return parse_allowed_mcp_clients(
         _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings).get(MCP_ALLOWED_CLIENTS_SETTING)
     )
@@ -88,7 +87,6 @@ def extract_mcp_client_name(body: bytes) -> str | None:
 
 
 def check_mcp_client_allowed(body: bytes, allowed_clients: frozenset[str] | None) -> MCPClientRejection | None:
-    """None when the initialize is admitted, otherwise the rejection to send back as a 403."""
     if allowed_clients is None:
         return None
     client_name: Final = extract_mcp_client_name(body)
