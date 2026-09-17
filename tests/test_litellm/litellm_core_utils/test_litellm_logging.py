@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import datetime
+import json
 import os
 import sys
 from collections.abc import Callable
@@ -1224,8 +1225,6 @@ async def test_async_success_handler_truncates_large_base64_off_the_event_loop(m
 
     monkeypatch.setattr(logging_utils, "_truncate_base64_in_string", recording_scan)
     monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
-
-    import json
 
     logged = asyncio.Event()
     captured: dict = {}
