@@ -2063,6 +2063,7 @@ dependencies = [
  "aws-smithy-eventstream",
  "aws-smithy-types",
  "bytes",
+ "criterion",
  "futures-util",
  "rstest",
  "sse-stream",
