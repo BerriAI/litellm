@@ -106,6 +106,35 @@ pub fn decode_document(value: Value) -> Result<OcrDocument, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
+    use serde_json::json;
+
+    #[rstest]
+    #[case::omitted(json!({"type":"document_url", "document_url":"https://example.com/a.pdf"}))]
+    #[case::null(json!({"type":"document_url", "document_url":"https://example.com/a.pdf", "document_name":null}))]
+    fn ocr_contract_optional_document_name(#[case] document: Value) {
+        let decoded = decode_document(document).unwrap();
+        assert_eq!(decoded.source(), "https://example.com/a.pdf");
+    }
+
+    #[rstest]
+    #[case::non_object(json!([]), "document")]
+    #[case::missing_type(json!({"document_url":"https://example.com/a.pdf"}), "document")]
+    #[case::unsupported_type(json!({"type":"text"}), "document")]
+    #[case::missing_document_url(json!({"type":"document_url"}), "Document URL")]
+    #[case::missing_image_url(json!({"type":"image_url"}), "Document URL")]
+    fn ocr_contract_malformed_document_is_bad_request(
+        #[case] document: Value,
+        #[case] field: &str,
+    ) {
+        let error = decode_document(document).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::RequestField { .. } | Error::MissingDocumentUrl
+        ));
+        assert_eq!(error.http_status_code(), Some(400));
+        assert!(error.to_string().contains(field));
+    }
 
     #[test]
     fn option_projection_is_provider_specific_and_excludes_opaque_fields() {

@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use rstest::rstest;
 use serde_json::{Value, json};
 
 use super::OcrClient;
@@ -14,6 +15,59 @@ use super::{
     OcrHostOperation, OcrHostResult,
 };
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
+
+#[rstest]
+#[case::mistral("mistral/model", json!({}))]
+#[case::vertex("vertex_ai/mistral-ocr-latest", json!({"vertex_project":"test-project", "vertex_location":"us-central1"}))]
+#[tokio::test]
+async fn ocr_contract_upstream_error_preserves_status_body_and_headers(
+    #[case] model: &str,
+    #[case] options: Value,
+) {
+    let payload = json!({"message": format!("{} END-OF-PROVIDER-BODY", "x".repeat(4096))});
+    let expected_body = serde_json::to_string(&payload).unwrap();
+    let (base, seen, server) = mock_server(vec![MockResponse {
+        status: 422,
+        headers: vec![
+            ("Retry-After", "17".into()),
+            ("X-Request-ID", "request-123".into()),
+            ("X-Future-Header", "retained".into()),
+        ],
+        body: payload,
+    }])
+    .await;
+    let error = perform_ocr(wire_request(model, &base, options))
+        .await
+        .unwrap_err();
+    server.await.unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    let super::Error::Provider {
+        status,
+        body,
+        headers,
+    } = error
+    else {
+        panic!("expected provider error, got {error:?}");
+    };
+    assert_eq!(status, 422);
+    for (name, value) in [
+        ("retry-after", "17"),
+        ("x-request-id", "request-123"),
+        ("x-future-header", "retained"),
+    ] {
+        assert!(
+            headers
+                .iter()
+                .any(|(key, actual)| key.eq_ignore_ascii_case(name) && actual == value)
+        );
+    }
+    assert_eq!(
+        body.len(),
+        expected_body.len(),
+        "provider error body was truncated"
+    );
+    assert_eq!(body, expected_body);
+}
 
 #[test]
 fn request_boundary_selects_mistral_and_rejects_unknown_providers() {
