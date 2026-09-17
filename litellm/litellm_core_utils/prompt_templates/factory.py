@@ -32,6 +32,7 @@ from litellm.types.llms.openai import (
     ChatCompletionFileObject,
     ChatCompletionFunctionMessage,
     ChatCompletionImageObject,
+    ChatCompletionSystemMessage,
     ChatCompletionTextObject,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
@@ -5148,28 +5149,32 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
     return tool_block_list
 
 
-# Function call template
-def function_call_prompt(messages: list, functions: list):
-    function_prompt = """Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}} The following functions are available to you:"""
-    for function in functions:
-        function_prompt += f"""\n{function}\n"""
-
-    new_messages = [
-        {
+def _append_function_prompt_to_message(message: Any, function_prompt: str) -> Any:
+    if "system" not in message["role"]:
+        return message
+    content: Final = message["content"]
+    if isinstance(content, str):
+        updated_str_msg: Final[ChatCompletionSystemMessage] = {
             **message,
-            "content": (
-                f"{message['content']} {function_prompt}"
-                if isinstance(message["content"], str)
-                else [*message["content"], {"type": "text", "text": f" {function_prompt}"}]
-            ),
+            "content": f"{content} {function_prompt}",
         }
-        if "system" in message["role"]
-        else message
-        for message in messages
-    ]
+        return updated_str_msg
+    text_part: Final[ChatCompletionTextObject] = {"type": "text", "text": f" {function_prompt}"}
+    updated_list_msg: Final[ChatCompletionSystemMessage] = {
+        **message,
+        "content": [*content, text_part],  # mutable-ok: OpenAI content list contract
+    }
+    return updated_list_msg
+
+
+# Function call template
+def function_call_prompt(messages: list, functions: list):  # mutable-ok: public signature accepts list
+    header: Final = 'Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}} The following functions are available to you:'
+    function_prompt: Final = header + "".join(f"\n{function}\n" for function in functions)
     if any("system" in message["role"] for message in messages):
-        return new_messages
-    return [*new_messages, {"role": "system", "content": function_prompt}]
+        return [_append_function_prompt_to_message(message, function_prompt) for message in messages]  # mutable-ok: OpenAI messages contract requires list
+    new_system_msg: Final[ChatCompletionSystemMessage] = {"role": "system", "content": function_prompt}
+    return [*messages, new_system_msg]  # mutable-ok: OpenAI messages contract requires list
 
 
 def response_schema_prompt(model: str, response_schema: dict) -> str:

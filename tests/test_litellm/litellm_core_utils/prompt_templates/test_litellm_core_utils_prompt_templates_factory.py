@@ -3,6 +3,9 @@ import json
 import logging
 import os
 import re
+from collections.abc import Sequence
+from copy import deepcopy
+from functools import reduce
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -16,9 +19,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
-    _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
     _convert_to_bedrock_tool_call_result,
+    _rename_duplicate_bedrock_document_names,
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
@@ -29,9 +32,15 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
     ChatCompletionSystemMessage,
+    ChatCompletionTextObject,
+    ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
+    ChatCompletionUserMessage,
 )
+from litellm.utils import validate_and_fix_openai_messages
 
 
 def _get_gemini_function_response_inline_data_parts(result):
@@ -3828,69 +3837,91 @@ def test_convert_to_anthropic_tool_invoke_keeps_paired_server_tool_use():
     ]
 
 
+def _build_turn_pair(turn: int) -> tuple[ChatCompletionAssistantMessage, ChatCompletionToolMessage]:
+    tool_call_chunk: Final[ChatCompletionToolCallFunctionChunk] = {
+        "name": "read_file",
+        "arguments": json.dumps({"path": f"file_{turn}"}),
+    }
+    tool_call: Final[ChatCompletionAssistantToolCall] = {
+        "id": f"call_{turn}",
+        "type": "function",
+        "function": tool_call_chunk,
+    }
+    assistant_msg: Final[ChatCompletionAssistantMessage] = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [tool_call],  # mutable-ok: OpenAI tool_calls list contract
+    }
+    tool_msg: Final[ChatCompletionToolMessage] = {
+        "role": "tool",
+        "tool_call_id": f"call_{turn}",
+        "content": f"File {turn} contents",
+    }
+    return (assistant_msg, tool_msg)
+
+
+_SYS_STR: Final[ChatCompletionSystemMessage] = {"role": "system", "content": "You are helpful."}
+_SYS_TEXT_PART: Final[ChatCompletionTextObject] = {"type": "text", "text": "You are helpful."}
+_SYS_LIST: Final[ChatCompletionSystemMessage] = {
+    "role": "system",
+    "content": [_SYS_TEXT_PART],  # mutable-ok: OpenAI content list contract
+}
+_SYS_CACHE_PART: Final[ChatCompletionTextObject] = {
+    "type": "text",
+    "text": "Use tools.",
+    "cache_control": {"type": "ephemeral"},
+}
+_SYS_MULTI: Final[ChatCompletionSystemMessage] = {
+    "role": "system",
+    "content": [_SYS_CACHE_PART],  # mutable-ok: OpenAI content list contract
+}
+
+
 @pytest.mark.parametrize(
     "system_messages",
-    [
-        [],
-        [{"role": "system", "content": "You are helpful."}],
-        [{"role": "system", "content": [{"type": "text", "text": "You are helpful."}]}],
-        [
-            {"role": "system", "content": "You are helpful."},
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": "Use tools.", "cache_control": {"type": "ephemeral"}}],
-            },
-        ],
-    ],
+    (
+        (),
+        (_SYS_STR,),
+        (_SYS_LIST,),
+        (_SYS_STR, _SYS_MULTI),
+    ),
 )
-@pytest.mark.parametrize("validate_messages", [False, True])
+@pytest.mark.parametrize("validate_messages", (False, True))
 def test_function_call_prompt_does_not_inflate_multi_turn_history(
-    system_messages: list[ChatCompletionSystemMessage], validate_messages: bool
+    system_messages: Sequence[ChatCompletionSystemMessage], validate_messages: bool
 ) -> None:
-    from copy import deepcopy
-    from litellm.utils import validate_and_fix_openai_messages
-
-    functions = [
-        {
+    user_msg: Final[ChatCompletionUserMessage] = {"role": "user", "content": "Read the files."}
+    functions: Final = [  # mutable-ok: OpenAI function schema list contract
+        {  # mutable-ok: OpenAI function schema dict contract
             "name": "read_file",
             "description": "Read the contents of a file.",
-            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},  # mutable-ok: JSON schema dict
         }
     ]
-    original_functions = deepcopy(functions)
-    messages: list[AllMessageValues] = [*deepcopy(system_messages), {"role": "user", "content": "Read the files."}]
-    for turn in range(4):
-        messages.extend(
-            [
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": f"call_{turn}",
-                            "type": "function",
-                            "function": {"name": "read_file", "arguments": json.dumps({"path": f"file_{turn}"})},
-                        }
-                    ],
-                },
-                {"role": "tool", "tool_call_id": f"call_{turn}", "content": f"File {turn} contents"},
-            ]
+    original_functions: Final = deepcopy(functions)
+
+    def _run_turn(history: Sequence[AllMessageValues], turn: int) -> Sequence[AllMessageValues]:
+        turn_messages: Final = [  # mutable-ok: OpenAI messages list contract
+            *history,
+            *_build_turn_pair(turn),
+        ]
+        original_messages: Final = deepcopy(turn_messages)
+        prepared_messages: Final = (
+            validate_and_fix_openai_messages(turn_messages) if validate_messages else turn_messages
         )
-        original_messages = deepcopy(messages)
-        prepared_messages = validate_and_fix_openai_messages(messages) if validate_messages else messages
-        original_prepared_messages = deepcopy(prepared_messages)
+        original_prepared_messages: Final = deepcopy(prepared_messages)
 
-        result = function_call_prompt(prepared_messages, functions)
+        result: Final = function_call_prompt(prepared_messages, functions)
 
-        assert messages == original_messages
+        assert turn_messages == original_messages
         assert prepared_messages == original_prepared_messages
         assert functions == original_functions
         assert result is not prepared_messages
         assert result == function_call_prompt(prepared_messages, functions)
-        assert [m for m in result if m["role"] != "system"] == [
+        assert tuple(m for m in result if m["role"] != "system") == tuple(
             m for m in prepared_messages if m["role"] != "system"
-        ]
-        result_system_messages = [m for m in result if m["role"] == "system"]
+        )
+        result_system_messages: Final = tuple(m for m in result if m["role"] == "system")
         assert len(result_system_messages) == max(1, len(system_messages))
         for index, message in enumerate(result_system_messages):
             assert json.dumps(message["content"]).count("Produce JSON OUTPUT ONLY!") == 1
@@ -3902,4 +3933,12 @@ def test_function_call_prompt_does_not_inflate_multi_turn_history(
                     assert message["content"] is not prepared_messages[index]["content"]
                 else:
                     assert message["content"].startswith(original_content + " ")
+        return turn_messages
+
+    initial_history: Final = [  # mutable-ok: OpenAI messages list contract
+        *deepcopy(system_messages),
+        user_msg,
+    ]
+    reduce(_run_turn, range(4), initial_history)
+
 
