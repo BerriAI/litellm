@@ -9307,3 +9307,84 @@ class TestErrorLogCarriesCallId:
         record: Final = caplog.records[-1]
         assert record.litellm_call_id == call_id
         assert call_id in record.getMessage()
+
+
+def _request_with_headers(**headers: str) -> Request:
+    """A Request carrying the given headers, built the way the proxy receives one."""
+    encoded: Final = [(k.replace("_", "-").encode(), v.encode()) for k, v in headers.items()]
+    return Request({"type": "http", "method": "POST", "headers": encoded})
+
+
+def _response_with_usage(**usage_kwargs: object):
+    from litellm.types.utils import ModelResponse, Usage
+
+    return ModelResponse(usage=Usage(**usage_kwargs))  # type: ignore[arg-type]
+
+
+class TestIncludeCostInUsage:
+    """
+    usage.cost carries the gateway's own figure, opt-in per request.
+
+    The invariants that matter are that a caller who did not ask sees no change at
+    all, and that a caller who did ask can read the field without first working out
+    which deployment served the request.
+    """
+
+    def test_off_by_default(self):
+        assert ProxyBaseLLMRequestProcessing._should_include_cost_in_usage(_request_with_headers()) is False
+
+    @pytest.mark.parametrize("value", ["true", "TRUE", "1", "yes", " true "])
+    def test_header_opts_in(self, value):
+        request: Final = _request_with_headers(x_litellm_include_cost_in_usage=value)
+        assert ProxyBaseLLMRequestProcessing._should_include_cost_in_usage(request) is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "anything-else"])
+    def test_header_opts_out(self, value, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_usage", True, raising=False)
+        request: Final = _request_with_headers(x_litellm_include_cost_in_usage=value)
+        assert ProxyBaseLLMRequestProcessing._should_include_cost_in_usage(request) is False
+
+    def test_setting_applies_when_no_header_is_sent(self, monkeypatch):
+        monkeypatch.setattr(litellm, "include_cost_in_usage", True, raising=False)
+        assert ProxyBaseLLMRequestProcessing._should_include_cost_in_usage(_request_with_headers()) is True
+
+    def test_cost_is_recorded_on_usage(self):
+        response: Final = _response_with_usage(prompt_tokens=11, completion_tokens=5, total_tokens=16)
+        ProxyBaseLLMRequestProcessing._set_usage_cost(response, 5.85e-06)
+        assert response.usage.cost == 5.85e-06  # type: ignore[attr-defined]
+
+    def test_a_provider_supplied_cost_is_replaced(self):
+        """
+        OpenRouter reports its own cost under this name. It is a different number,
+        computed by a different party, so the gateway's figure has to win - otherwise
+        the meaning of the field would depend on which deployment served the request.
+        """
+        response: Final = _response_with_usage(prompt_tokens=11, completion_tokens=5, total_tokens=16, cost=8.775e-06)
+        ProxyBaseLLMRequestProcessing._set_usage_cost(response, 5.85e-06)
+        assert response.usage.cost == 5.85e-06  # type: ignore[attr-defined]
+
+    @pytest.mark.parametrize("unpriced", ["", None, "None"])
+    def test_an_unpriced_deployment_leaves_the_field_absent(self, unpriced):
+        """
+        Absence is not zero. A deployment with no configured price must not serialize
+        as a free call, which is the failure mode that looks like a real result.
+        """
+        response: Final = _response_with_usage(prompt_tokens=11, completion_tokens=5, total_tokens=16)
+        ProxyBaseLLMRequestProcessing._set_usage_cost(response, unpriced)
+        assert "cost" not in response.model_dump()["usage"]
+
+    def test_a_real_zero_is_recorded(self):
+        """Unbilled non-inference calls cost 0.0, and that zero is an answer."""
+        response: Final = _response_with_usage(prompt_tokens=11, completion_tokens=5, total_tokens=16)
+        ProxyBaseLLMRequestProcessing._set_usage_cost(response, 0.0)
+        assert response.model_dump()["usage"]["cost"] == 0.0
+
+    def test_untouched_usage_does_not_serialize_a_cost(self):
+        """The opted-out path has to be byte-identical, not merely null-valued."""
+        response: Final = _response_with_usage(prompt_tokens=11, completion_tokens=5, total_tokens=16)
+        assert "cost" not in response.model_dump()["usage"]
+
+    def test_a_response_without_usage_is_left_alone(self):
+        sentinel: Final = SimpleNamespace(usage=None)
+        ProxyBaseLLMRequestProcessing._set_usage_cost(sentinel, 5.85e-06)
+        assert sentinel.usage is None

@@ -43,6 +43,7 @@ from litellm.constants import (
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
+    X_LITELLM_INCLUDE_COST_IN_USAGE,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import (
@@ -2820,6 +2821,11 @@ class ProxyBaseLLMRequestProcessing:
             else llm_cost_for_headers
         )
 
+        # Same value the x-litellm-response-cost header carries below, so the body and
+        # the header cannot report different costs for one request.
+        if self._should_include_cost_in_usage(request):
+            self._set_usage_cost(response, response_cost_for_headers)
+
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
         if requested_model_from_client:
@@ -4090,6 +4096,48 @@ class ProxyBaseLLMRequestProcessing:
         if cost_from_logging_obj is not None:
             return cost_from_logging_obj
         return ProxyBaseLLMRequestProcessing._completion_cost_or_none(model_response, model_name, service_tier)
+
+    @staticmethod
+    def _should_include_cost_in_usage(request: Request) -> bool:
+        """
+        Whether this request asked for the gateway's cost on ``usage.cost``.
+
+        The decision is per-request. A caller that did not ask gets the body it would
+        have received before this existed, so turning the feature on for a proxy cannot
+        change the response shape for consumers who never opted in.
+
+        The ``x-litellm-include-cost-in-usage`` header wins over
+        ``litellm.include_cost_in_usage`` in both directions, so a deployment that turns
+        it on globally can still be opted out of for one request.
+        """
+        header_value: Final = request.headers.get(X_LITELLM_INCLUDE_COST_IN_USAGE)
+        if header_value is not None and header_value.strip() != "":
+            return header_value.strip().lower() in ("true", "1", "yes")
+        return bool(getattr(litellm, "include_cost_in_usage", False))
+
+    @staticmethod
+    def _set_usage_cost(response: object, cost: float | str | None) -> None:
+        """
+        Record what the gateway charged on the response's usage object.
+
+        ``usage.cost`` carries one meaning: the figure this gateway billed, which is the
+        same value ``x-litellm-response-cost`` reports. Some upstreams (OpenRouter) send
+        a cost of their own under that name - a different number, computed by a
+        different party, against pricing we did not apply - so it is replaced rather
+        than left in place. A caller reading ``usage.cost`` should never have to know
+        which deployment served the request to know what the number means.
+
+        A non-numeric cost means the deployment carries no configured price. The field
+        is then left unset, so an unpriced request stays distinguishable from a free
+        one - the same reason ``x-litellm-response-cost`` is omitted rather than sent as
+        ``0.0``. A real ``0.0``, as unbilled non-inference calls produce, is recorded.
+        """
+        if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+            return
+        usage: Final = getattr(response, "usage", None)
+        if not isinstance(usage, Usage):
+            return
+        usage.cost = float(cost)
 
     @staticmethod
     def _inject_cost_into_usage_dict(
