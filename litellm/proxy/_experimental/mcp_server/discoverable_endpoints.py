@@ -2256,11 +2256,14 @@ async def callback(
         description: Final = (
             "The OAuth session cookie set when authorization started did not arrive at the callback. "
             "This usually means the authorize and callback requests used different origins. "
-            "Ask the gateway operator to set PROXY_BASE_URL to the public URL of this gateway, then retry."
+            "Ask the gateway operator to set PROXY_BASE_URL to the public URL of this gateway "
+            "(or configure mcp_trusted_proxy_ranges), then retry."
             if not cookie_present
             else "The OAuth session could not be decoded. Start the authorization again."
         )
-        return _render_oauth_error_html("invalid_request", description)
+        response = _render_oauth_error_html("invalid_request", description)
+        _clear_oauth_state_cookie(response, request, state)
+        return response
     try:
         original_state = state_data["original_state"]
 
