@@ -202,9 +202,10 @@ impl MistralOCRConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
     use serde_json::{Value, json};
+
+    use super::*;
 
     #[test]
     fn explicit_null_model_does_not_use_the_missing_model_default() {

@@ -1,6 +1,6 @@
-use super::Error;
 use serde_json::{Map, Value};
 
+use super::Error;
 use super::types::{
     ChatCompletionsResponse, ChatMessage, ChatMessageContent, ProviderChatRequestData,
     ProviderChatResponseData,

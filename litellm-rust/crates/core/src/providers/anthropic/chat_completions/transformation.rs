@@ -2,6 +2,7 @@ use serde_json::{Map, Value, json};
 
 use crate::chat_completions::Error;
 use crate::chat_completions::conversation::{Conversation, build_conversation};
+use crate::chat_completions::response_utils::{finish_reason_for, unix_now, usage_from_parts};
 use crate::chat_completions::transformation::{
     ChatCompletionsAuth, ChatCompletionsProviderConfig, Unsupported, unsupported_message,
     unsupported_param,
@@ -14,8 +15,6 @@ use crate::constants::ANTHROPIC_OAUTH_TOKEN_PREFIX;
 use crate::providers::anthropic::messages::transformation::{
     complete_anthropic_url, resolve_anthropic_api_key,
 };
-
-use crate::chat_completions::response_utils::{finish_reason_for, unix_now, usage_from_parts};
 
 /// Anthropic parameter names, post `map_openai_params`, that the Rust path can
 /// place verbatim in the Messages body.

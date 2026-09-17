@@ -381,8 +381,9 @@ impl IntoIterator for CallArguments {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[test]
     fn composition_preserves_extensions_and_applies_shallow_explicit_overrides() {

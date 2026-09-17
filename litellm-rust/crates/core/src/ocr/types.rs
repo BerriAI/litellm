@@ -4,11 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use litellm_auth::{InputSource, Sourced, TokenProviderHandle};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
-
-use litellm_auth::{InputSource, Sourced, TokenProviderHandle};
 
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
@@ -583,8 +582,9 @@ fn ocr_object() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     fn document() -> OcrDocument {
         OcrDocument::try_from(

@@ -906,10 +906,11 @@ impl litellm_auth::TokenProvider for PendingToken {
 
 #[tokio::test]
 async fn cancellation_waits_for_provider_capture_drop_even_when_acknowledgement_is_cancelled() {
-    use crate::call_lifecycle::host::HostFailure;
     use std::future::Future;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::Poll;
+
+    use crate::call_lifecycle::host::HostFailure;
 
     for interrupt_acknowledgement in [false, true] {
         let entered = Arc::new(tokio::sync::Notify::new());

@@ -1,3 +1,7 @@
+use litellm_auth::{InputSource, Sourced};
+use litellm_auth_azure::AzureAuthInputs;
+use serde_json::Value;
+
 use crate::call_arguments::CallArguments;
 use crate::constants::AZURE_AI_OCR_PATH;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
@@ -8,9 +12,6 @@ use crate::ocr::prepare::credential_env;
 use crate::ocr::types::{LiteLLMOcrResponse, OcrConnection, OcrDocument, PreparedOcrRequest};
 use crate::params::OpaqueParams;
 use crate::url_utils::ApiUrl;
-use litellm_auth::{InputSource, Sourced};
-use litellm_auth_azure::AzureAuthInputs;
-use serde_json::Value;
 
 const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
 const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";

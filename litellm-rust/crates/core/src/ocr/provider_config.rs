@@ -1,3 +1,5 @@
+use strum::{EnumString, IntoStaticStr};
+
 use super::OcrClient;
 use super::types::{
     LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument, PreparedOcrRequest,
@@ -13,7 +15,6 @@ use crate::llms::reducto::ocr::transformation::{ReductoParseLegacyConfig, Reduct
 use crate::llms::vertex_ai::ocr::deepseek_transformation::VertexAIDeepSeekOCRConfig;
 use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
 use crate::providers::custom_llm_provider::{CustomLlmProvider, get_custom_llm_provider};
-use strum::{EnumString, IntoStaticStr};
 
 macro_rules! dispatch_config {
     ($config:expr, $method:ident($($argument:expr),* $(,)?)) => {
@@ -185,9 +186,10 @@ fn is_document_intelligence_model(model: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use litellm_auth::{InputSource, Sourced};
     use rstest::rstest;
+
+    use super::*;
 
     #[rstest]
     #[case("cohere")]

@@ -344,8 +344,9 @@ fn invalid_api_base() -> crate::ocr::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[tokio::test]
     async fn composed_body_preserves_native_document_fields_and_untyped_overrides() {

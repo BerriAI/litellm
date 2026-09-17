@@ -1,3 +1,5 @@
+use serde_json::{Map, Value};
+
 use crate::messages::Error;
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 use crate::messages::types::{
@@ -7,7 +9,6 @@ use crate::messages::types::{
 use crate::providers::anthropic::messages::transformation::{
     ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
 };
-use serde_json::{Map, Value};
 
 const AZURE_API_KEY_ENV: &str = "AZURE_API_KEY";
 const AZURE_API_BASE_ENV: &str = "AZURE_API_BASE";
@@ -191,8 +192,9 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     fn request_from(value: serde_json::Value) -> AnthropicMessagesRequest {
         serde_json::from_value(value).expect("valid request")

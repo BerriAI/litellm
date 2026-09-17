@@ -1,9 +1,9 @@
-use super::Error;
-use crate::http_utils::string_headers as shared_string_headers;
-use crate::providers::anthropic::chat_completions::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG;
 use serde_json::{Map, Value};
 
+use super::Error;
 use super::transformation::ChatCompletionsProviderConfig;
+use crate::http_utils::string_headers as shared_string_headers;
+use crate::providers::anthropic::chat_completions::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG;
 
 const HEADER_CONTEXT: &str = "chat completions";
 

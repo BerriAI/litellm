@@ -1,7 +1,6 @@
+use litellm_auth_gcp::{self as vertex, VertexConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-
-use litellm_auth_gcp::{self as vertex, VertexConfig};
 
 use super::transformation::VertexAIOCRConfig;
 use crate::call_arguments::CallArguments;
@@ -410,16 +409,18 @@ impl VertexAIDeepSeekOCRConfig {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{Value, json};
+
     use super::{
         DeepSeekOcrParams, DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig, normalize_response,
         provider_model,
     };
-    use serde_json::{Value, json};
 
     #[test]
     fn unconsumed_options_remain_available_for_body_composition() {
-        use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
         use serde_json::json;
+
+        use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
 
         let arguments =
             serde_json::from_value(json!({"temperature":0.5,"extension":null})).unwrap();
@@ -615,8 +616,9 @@ mod tests {
         }
     }
 
-    use crate::ocr::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
     use litellm_auth::InputSource;
+
+    use crate::ocr::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
 
     fn request_body(request: &str) -> Value {
         serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
