@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
@@ -50,8 +51,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        _non_default_params: Final[dict[str, Any]] = dict(non_default_params)
-        _optional_params: Final[dict[str, Any]] = dict(optional_params)
+        _non_default_params: Final[dict[str, Any]] = dict(non_default_params)  # mutable-ok: working copy mutated below
+        _optional_params: Final[dict[str, Any]] = dict(optional_params)  # mutable-ok: working copy mutated below
 
         _response_format: Final = _non_default_params.get("response_format")
         if _response_format is not None and isinstance(_response_format, dict):
@@ -80,20 +81,20 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                         model=model,
                         llm_provider="deepseek",
                     )
-                _tool_choice: Final = {
+                _tool_choice: Final[ChatCompletionNamedToolChoiceParam] = {
                     "type": "function",
                     "function": {"name": RESPONSE_FORMAT_TOOL_NAME},
                 }
                 _tool: Final = self._create_json_tool_call_for_response_format(
                     json_schema=json_schema,
                 )
-                _optional_params["tools"] = [_tool]
+                _optional_params["tools"] = [_tool]  # mutable-ok: tools are a JSON array on the wire
                 _optional_params["tool_choice"] = _tool_choice
                 _optional_params["json_mode"] = True
                 _non_default_params.pop("response_format", None)
                 _non_default_params.pop("tools", None)
 
-        mapped_params: Final[dict[str, Any]] = dict(
+        mapped_params: Final[dict[str, Any]] = dict(  # mutable-ok: mapped params are a mutable JSON object
             super().map_openai_params(_non_default_params, _optional_params, model, drop_params)
         )
 
@@ -101,11 +102,13 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         reasoning_effort: Final = mapped_params.pop("reasoning_effort", None)
 
         if mapped_params.get("json_mode") is True:
-            mapped_params["thinking"] = {"type": "disabled"}
+            mapped_params["thinking"] = {"type": "disabled"}  # mutable-ok: DeepSeek thinking payload
         elif isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):
-            mapped_params["thinking"] = {"type": thinking_value["type"]}
+            mapped_params["thinking"] = {"type": thinking_value["type"]}  # mutable-ok: DeepSeek thinking payload
         elif reasoning_effort is not None:
-            mapped_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
+            mapped_params["thinking"] = {  # mutable-ok: DeepSeek thinking payload
+                "type": "disabled" if reasoning_effort == "none" else "enabled",
+            }
 
         return mapped_params
 

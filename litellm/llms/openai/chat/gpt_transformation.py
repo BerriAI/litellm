@@ -72,6 +72,7 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+_EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -844,7 +845,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ):
+    ) -> None:
         super().__init__(streaming_response, sync_stream, json_mode=json_mode)
         self._last_function_name: str | None = None
 
@@ -898,10 +899,10 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
                 for choice in choices:
-                    delta = choice.get("delta", {})
+                    delta = choice.get("delta", _EMPTY_MAPPING)
                     tool_calls = delta.get("tool_calls")
                     if tool_calls:
-                        function_name = tool_calls[0].get("function", {}).get("name")
+                        function_name = tool_calls[0].get("function", _EMPTY_MAPPING).get("name")
                         if function_name is not None:
                             self._last_function_name = function_name
 
@@ -909,7 +910,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                             self._last_function_name == RESPONSE_FORMAT_TOOL_NAME
                             or function_name == RESPONSE_FORMAT_TOOL_NAME
                         ):
-                            args = tool_calls[0].get("function", {}).get("arguments")
+                            args = tool_calls[0].get("function", _EMPTY_MAPPING).get("arguments")
                             if args is not None:
                                 delta["content"] = args
                             delta["tool_calls"] = None
