@@ -1,12 +1,8 @@
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-use super::Error;
-use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -205,60 +201,6 @@ impl ResponsesWsInstrumentation {
     }
 }
 
-type LifecycleFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
-
-impl CallLifecycleHooks<(), (), ()> for ResponsesWsInstrumentation {
-    type Error = Error;
-    type PreCallFuture<'a> = LifecycleFuture<'a, ()>;
-    type DuringCallFuture<'a> = LifecycleFuture<'a, ()>;
-    type SuccessFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
-    type FailureFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
-
-    fn async_pre_call_hook<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        request: (),
-    ) -> Self::PreCallFuture<'a> {
-        Box::pin(async move { Ok(request) })
-    }
-
-    fn async_during_call_hook<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        request: (),
-    ) -> Self::DuringCallFuture<'a> {
-        Box::pin(async move { Ok(request) })
-    }
-
-    fn async_log_success_event<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        _response: &'a (),
-        _timing: &'a CallLifecycleTiming,
-    ) -> Self::SuccessFuture<'a> {
-        Box::pin(async move {
-            let outcome = self.success_outcome();
-            if let Ok(mut state) = self.state.lock() {
-                state.outcome = Some(outcome);
-            }
-        })
-    }
-
-    fn async_log_failure_event<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        _error: &'a Error,
-        _timing: &'a CallLifecycleTiming,
-    ) -> Self::FailureFuture<'a> {
-        Box::pin(async move {
-            let outcome = self.failure_outcome();
-            if let Ok(mut state) = self.state.lock() {
-                state.outcome = Some(outcome);
-            }
-        })
-    }
-}
-
 fn build_payload(state: &InstrumentationState) -> ResponsesWsLogPayload {
     ResponsesWsLogPayload {
         id: state.id.clone(),
@@ -326,31 +268,6 @@ mod tests {
         assert!(matches!(
             instrumentation.failure_outcome(),
             ResponsesWsLogOutcome::Failure { .. }
-        ));
-    }
-
-    #[tokio::test]
-    async fn lifecycle_records_success_outcome_for_provider_completion() {
-        let instrumentation =
-            ResponsesWsInstrumentation::new("call-1", "gpt-5", ResponsesWsMetadata::default());
-        let result = crate::call_lifecycle::CallLifecycle::default()
-            .run(
-                crate::call_lifecycle::CallLifecycleContext::new(
-                    "responses_websocket",
-                    "gpt-5",
-                    "openai",
-                    "call-1",
-                ),
-                (),
-                &instrumentation,
-                |_| async { Ok::<(), Error>(()) },
-            )
-            .await;
-
-        assert!(result.is_ok());
-        assert!(matches!(
-            instrumentation.take_outcome(),
-            Some(ResponsesWsLogOutcome::Success { .. })
         ));
     }
 

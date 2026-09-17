@@ -1,12 +1,10 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::Value;
 
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrDocument, ResolvedOcrRequest};
-use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use crate::ocr::Error;
 
 pub type OcrHookFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -37,6 +35,20 @@ pub struct OcrPostCallRequest {
     pub original_response: Value,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OcrCallContext {
+    pub call_type: String,
+    pub model: String,
+    pub custom_llm_provider: String,
+    pub litellm_call_id: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OcrCallTiming {
+    pub start_time: f64,
+    pub end_time: f64,
+}
+
 pub trait OcrHooks: Send + Sync {
     fn intercepts_requests(&self) -> bool {
         false
@@ -55,17 +67,17 @@ pub trait OcrHooks: Send + Sync {
     }
     fn success<'a>(
         &'a self,
-        _context: &'a CallLifecycleContext,
+        _context: &'a OcrCallContext,
         _response: &'a LiteLLMOcrResponse,
-        _timing: &'a CallLifecycleTiming,
+        _timing: &'a OcrCallTiming,
     ) -> OcrLogFuture<'a> {
         Box::pin(async {})
     }
     fn failure<'a>(
         &'a self,
-        _context: &'a CallLifecycleContext,
+        _context: &'a OcrCallContext,
         _error: &'a Error,
-        _timing: &'a CallLifecycleTiming,
+        _timing: &'a OcrCallTiming,
     ) -> OcrLogFuture<'a> {
         Box::pin(async {})
     }
@@ -74,74 +86,30 @@ pub trait OcrHooks: Send + Sync {
 pub struct NoopOcrHooks;
 impl OcrHooks for NoopOcrHooks {}
 
-pub(crate) struct OcrLifecycleHooks {
-    pub hooks: Arc<dyn OcrHooks>,
-    pub provider_name: String,
-}
-
-impl CallLifecycleHooks<ResolvedOcrRequest, ResolvedOcrRequest, LiteLLMOcrResponse>
-    for OcrLifecycleHooks
-{
-    type Error = crate::ocr::Error;
-    type PreCallFuture<'a> = OcrHookFuture<'a, ResolvedOcrRequest>;
-    type DuringCallFuture<'a> = OcrHookFuture<'a, ResolvedOcrRequest>;
-    type SuccessFuture<'a> = OcrLogFuture<'a>;
-    type FailureFuture<'a> = OcrLogFuture<'a>;
-
-    fn async_pre_call_hook<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        request: ResolvedOcrRequest,
-    ) -> Self::PreCallFuture<'a> {
-        Box::pin(async move {
-            if !self.hooks.intercepts_requests() {
-                return Ok(request);
-            }
-            let changed = self
-                .hooks
-                .pre_call(OcrPreCallRequest {
-                    model: request.model.clone(),
-                    custom_llm_provider: self.provider_name.clone(),
-                    document: request.document,
-                    optional_params: Value::Object(request.optional_params.into()),
-                })
-                .await?;
-            let Value::Object(optional_params) = changed.optional_params else {
-                return Err(super::Error::RequestField {
-                    path: "guardrail.optional_params".into(),
-                });
-            };
-            Ok(LiteLLMOcrRequest {
-                document: changed.document,
-                optional_params: optional_params.into(),
-                ..request
-            })
+pub(crate) async fn pre_call(
+    hooks: &dyn OcrHooks,
+    provider_name: &str,
+    request: ResolvedOcrRequest,
+) -> Result<ResolvedOcrRequest, Error> {
+    if !hooks.intercepts_requests() {
+        return Ok(request);
+    }
+    let changed = hooks
+        .pre_call(OcrPreCallRequest {
+            model: request.model.clone(),
+            custom_llm_provider: provider_name.to_owned(),
+            document: request.document,
+            optional_params: Value::Object(request.optional_params.into()),
         })
-    }
-
-    fn async_during_call_hook<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        request: ResolvedOcrRequest,
-    ) -> Self::DuringCallFuture<'a> {
-        Box::pin(async move { Ok(request) })
-    }
-
-    fn async_log_success_event<'a>(
-        &'a self,
-        context: &'a CallLifecycleContext,
-        response: &'a LiteLLMOcrResponse,
-        timing: &'a CallLifecycleTiming,
-    ) -> Self::SuccessFuture<'a> {
-        self.hooks.success(context, response, timing)
-    }
-
-    fn async_log_failure_event<'a>(
-        &'a self,
-        context: &'a CallLifecycleContext,
-        error: &'a Error,
-        timing: &'a CallLifecycleTiming,
-    ) -> Self::FailureFuture<'a> {
-        self.hooks.failure(context, error, timing)
-    }
+        .await?;
+    let Value::Object(optional_params) = changed.optional_params else {
+        return Err(Error::RequestField {
+            path: "guardrail.optional_params".into(),
+        });
+    };
+    Ok(LiteLLMOcrRequest {
+        document: changed.document,
+        optional_params: optional_params.into(),
+        ..request
+    })
 }

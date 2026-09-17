@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use super::OcrClient;
-use super::hooks::{OcrHooks, OcrLifecycleHooks, OcrPostCallRequest};
+use super::hooks::{OcrCallContext, OcrCallTiming, OcrHooks, OcrPostCallRequest};
 use super::types::{LiteLLMOcrResponse, PreparedOcrRequest, ResolvedOcrRequest};
-use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
 use crate::llms::base_llm::ocr::transformation::OcrResponseContext;
 
 pub(crate) async fn perform_ocr_request(
@@ -11,27 +10,42 @@ pub(crate) async fn perform_ocr_request(
     request: ResolvedOcrRequest,
 ) -> Result<LiteLLMOcrResponse, super::Error> {
     request.response_format()?;
-    let context = CallLifecycleContext::new(
-        "ocr",
-        request.model.clone(),
-        request.provider_name(),
-        request
+    let context = OcrCallContext {
+        call_type: "ocr".into(),
+        model: request.model.clone(),
+        custom_llm_provider: request.provider_name().to_owned(),
+        litellm_call_id: request
             .litellm_call_id
             .clone()
             .unwrap_or_else(|| format!("ocr-{:032x}", rand::random::<u128>())),
-    );
-    let hooks = OcrLifecycleHooks {
-        hooks: request.hooks.clone(),
-        provider_name: context.custom_llm_provider.clone(),
     };
-    CallLifecycle::default()
-        .run(context, request, &hooks, |request| async move {
-            PreparedOcrCall::prepare(client.clone(), request)
-                .await?
-                .execute()
-                .await
-        })
-        .await
+    let hooks = request.hooks.clone();
+    let start_time = epoch_seconds();
+    let result = async {
+        let request =
+            super::hooks::pre_call(&*hooks, &context.custom_llm_provider, request).await?;
+        PreparedOcrCall::prepare(client.clone(), request)
+            .await?
+            .execute()
+            .await
+    }
+    .await;
+    let timing = OcrCallTiming {
+        start_time,
+        end_time: epoch_seconds(),
+    };
+    match &result {
+        Ok(response) => hooks.success(&context, response, &timing).await,
+        Err(error) => hooks.failure(&context, error, &timing).await,
+    }
+    result
+}
+
+fn epoch_seconds() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 pub(crate) struct PreparedOcrCall {
