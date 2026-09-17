@@ -5968,7 +5968,7 @@ def responses_with_retries(*args, **kwargs):
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    from litellm.responses.main import responses
+    from litellm.responses.dispatch import responses
 
     num_retries: Final = kwargs.pop("num_retries", 3)
     # reset retries in .responses()
@@ -5998,7 +5998,7 @@ async def aresponses_with_retries(*args, **kwargs):
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    from litellm.responses.main import aresponses
+    from litellm.responses.dispatch import aresponses
 
     num_retries: Final = kwargs.pop("num_retries", 3)
     kwargs["max_retries"] = 0

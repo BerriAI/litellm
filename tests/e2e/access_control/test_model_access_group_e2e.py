@@ -23,7 +23,7 @@ from access_control_client import (
     MODEL_ACCESS_DENIED_MARKER,
     TEAM_MODEL_ACCESS_DENIED_MARKER,
 )
-from e2e_config import unique_marker
+from e2e_config import settle_propagation, unique_marker
 from lifecycle import ResourceManager
 from models import (
     ChatResponse,
@@ -31,6 +31,7 @@ from models import (
     LiteLLMParamsBody,
     ModelInfoBody,
     ModelNewBody,
+    TeamInfoResponse,
 )
 
 pytestmark = pytest.mark.e2e
@@ -111,20 +112,6 @@ def _await_group_members(client: AccessControlClient, access_group: str, expecte
     )
 
 
-def _await_team_allowlist(client: AccessControlClient, team_id: str, access_group: str) -> None:
-    deadline = time.monotonic() + client.proxy.poll_timeout
-    listed: list[str] | None = None
-    while time.monotonic() < deadline:
-        listed = client.team_models(team_id)
-        if listed == [access_group]:
-            return
-        time.sleep(client.proxy.poll_interval)
-    pytest.fail(
-        f"/team/info never settled the team's allow-list to [{access_group!r}] after the team-scoped "
-        f"deployment was registered; last read {listed}"
-    )
-
-
 @pytest.fixture(scope="module")
 def grouped(client: AccessControlClient) -> Iterator[GroupedDeployments]:
     marker: Final = unique_marker()
@@ -168,9 +155,15 @@ def team_grant(client: AccessControlClient) -> Iterator[TeamGrant]:
         ),
         listed_for=key,
     )
-    client.set_team_models(team_id, team_alias, [access_group])
     try:
-        _await_team_allowlist(client, team_id, access_group)
+        client.set_team_models(team_id, team_alias, [access_group])
+        written_at: Final = time.monotonic()
+        _ = client.proxy.read_body_back_everywhere(
+            f"/team/info?team_id={team_id}",
+            TeamInfoResponse,
+            settled=lambda response: response.team_id == team_id and response.team_info.models == [access_group],
+        )
+        settle_propagation(written_at)
         yield TeamGrant(access_group=access_group, team_id=team_id, key=key)
     finally:
         client.proxy.delete_model(model_id)
