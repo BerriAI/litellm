@@ -1034,12 +1034,15 @@ async def test_reasoning_then_text_announces_message_item_before_text_events(syn
     events: Final = await _collect_events(iterator, sync_mode)
 
     announced_message_ids: set[str] = set()
+    announced_indexes_by_item_type: dict[str, int] = {}
     content_part_added_seen = False
     saw_text_delta = False
     for event in events:
         event_type = getattr(event, "type", None)
-        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and _is_message_item(event):
-            announced_message_ids.add(event.item.id)
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
+            announced_indexes_by_item_type[event.item.type] = event.output_index
+            if _is_message_item(event):
+                announced_message_ids.add(event.item.id)
         elif event_type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED:
             content_part_added_seen = True
         elif event_type in (
@@ -1054,6 +1057,10 @@ async def test_reasoning_then_text_announces_message_item_before_text_events(syn
         elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _is_message_item(event):
             assert event.item.id in announced_message_ids
     assert saw_text_delta
+    assert "".join(
+        event.delta for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+    ) == "Hello!"
+    assert announced_indexes_by_item_type["message"] != announced_indexes_by_item_type["reasoning"]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
