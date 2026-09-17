@@ -32,7 +32,6 @@ from litellm.types.llms.openai import (
     ChatCompletionFileObject,
     ChatCompletionFunctionMessage,
     ChatCompletionImageObject,
-    ChatCompletionSystemMessage,
     ChatCompletionTextObject,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
@@ -5149,32 +5148,45 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
     return tool_block_list
 
 
-def _with_function_prompt(message: AllMessageValues, function_prompt: str) -> AllMessageValues:
-    if "system" not in message["role"]:
+def _append_function_prompt_to_message(
+    message: dict[str, object],  # mutable-ok: OpenAI message dict contract
+    function_prompt: str,
+) -> dict[str, object]:  # mutable-ok: OpenAI message dict contract
+    role: Final = message.get("role")
+    if not isinstance(role, str) or "system" not in role:
         return message
-    content: Final = message["content"]
+    content: Final = message.get("content")
     if isinstance(content, str):
-        updated_str_msg: Final[ChatCompletionSystemMessage] = {
+        return {  # mutable-ok: system message dict contract
             **message,
             "content": f"{content} {function_prompt}",
         }
-        return updated_str_msg
-    text_part: Final[ChatCompletionTextObject] = {"type": "text", "text": f" {function_prompt}"}
-    updated_list_msg: Final[ChatCompletionSystemMessage] = {
+    existing_items: Final[Sequence[object]] = (  # pyright: ignore[reportUnknownVariableType]  # list narrowing
+        content if isinstance(content, list) else ()
+    )
+    return {  # mutable-ok: system message dict contract
         **message,
-        "content": [*content, text_part],  # mutable-ok: OpenAI content list contract
+        "content": [  # mutable-ok: content block list contract
+            *existing_items,
+            {"type": "text", "text": f" {function_prompt}"},  # mutable-ok: text block dict
+        ],
     }
-    return updated_list_msg
 
 
 # Function call template
-def function_call_prompt(messages: list, functions: list):  # mutable-ok: public signature accepts list
+def function_call_prompt(
+    messages: list[dict[str, object]],  # mutable-ok: public signature accepts list
+    functions: list[dict[str, object]],  # mutable-ok: public signature accepts list
+) -> list[dict[str, object]]:  # mutable-ok: public signature returns list
     header: Final = 'Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}} The following functions are available to you:'
     function_prompt: Final = header + "".join(f"\n{function}\n" for function in functions)
-    if any("system" in message["role"] for message in messages):
-        return [_with_function_prompt(m, function_prompt) for m in messages]  # mutable-ok: OpenAI messages contract
-    new_system_msg: Final[ChatCompletionSystemMessage] = {"role": "system", "content": function_prompt}
-    return [*messages, new_system_msg]  # mutable-ok: OpenAI messages contract requires list
+    has_system: Final = any(isinstance(m.get("role"), str) and "system" in str(m.get("role")) for m in messages)
+    if has_system:
+        return [_append_function_prompt_to_message(m, function_prompt) for m in messages]  # mutable-ok: OpenAI messages
+    return [  # mutable-ok: OpenAI messages list contract
+        *messages,
+        {"role": "system", "content": function_prompt},  # mutable-ok: system message dict contract
+    ]
 
 
 def response_schema_prompt(model: str, response_schema: dict) -> str:
