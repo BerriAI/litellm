@@ -4837,7 +4837,9 @@ if MCP_AVAILABLE:
                 scope, receive, send, sse_body, _sse_client_ip
             ):
                 return
-            sse_receive: Final = _replay_consumed_messages(sse_consumed_messages, receive)
+            sse_receive: Final = (
+                _replay_consumed_messages(sse_consumed_messages, receive) if sse_consumed_messages else receive
+            )
 
             async with _gateway_initialize_instructions_request_scope(
                 user_api_key_auth,
