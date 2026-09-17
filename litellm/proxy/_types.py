@@ -70,6 +70,7 @@ from litellm.types.utils import (
     StandardLoggingVectorStoreRequest,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
+    TranscriptionResponse,
 )
 from litellm.types.videos.main import VideoObject
 
@@ -487,6 +488,7 @@ class LiteLLMRoutes(enum.Enum):
         "/gigachat",
         "/watsonx",
         "/nvidia_nim",
+        "/deepgram",
     ]
 
     #########################################################
@@ -4694,6 +4696,7 @@ PassThroughEndpointLoggingResultValues = (
     | VideoObject
     | StandardPassThroughResponseObject
     | ResponsesAPIResponse
+    | TranscriptionResponse
 )
 
 

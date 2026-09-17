@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.deepgram.common_utils import deepgram_listen_websocket_target
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
@@ -2573,7 +2574,7 @@ async def _openai_websocket_refusal(
     return None
 
 
-class _OpenAIWebsocketRelay(Protocol):
+class _WebsocketRelay(Protocol):
     async def __call__(
         self,
         *,
@@ -2593,7 +2594,7 @@ def _proxy_general_settings() -> Mapping[str, object]:
     return general_settings
 
 
-def _openai_websocket_relay() -> _OpenAIWebsocketRelay:
+def _websocket_relay() -> _WebsocketRelay:
     return websocket_passthrough_request
 
 
@@ -2611,6 +2612,19 @@ def _proxy_model_allowlists() -> _OpenAIWebsocketModelAllowlists:
     return resolve
 
 
+def _negotiated_websocket_subprotocol(websocket: WebSocket) -> str | None:
+    """
+    The first subprotocol the client offered, echoed back so browsers that carry the LiteLLM key in
+    ``Sec-WebSocket-Protocol`` complete the handshake
+    """
+    requested_subprotocols: Final = tuple(
+        protocol.strip()
+        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if protocol.strip()
+    )
+    return requested_subprotocols[0] if requested_subprotocols else None
+
+
 @router.websocket("/openai_passthrough/{endpoint:path}")
 @router.websocket("/openai/{endpoint:path}")
 async def openai_websocket_proxy_route(
@@ -2618,16 +2632,11 @@ async def openai_websocket_proxy_route(
     endpoint: str,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
     general_settings: Annotated[Mapping[str, object], Depends(_proxy_general_settings)],
-    relay: Annotated[_OpenAIWebsocketRelay, Depends(_openai_websocket_relay)],
+    relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
     model_allowlists: Annotated[_OpenAIWebsocketModelAllowlists, Depends(_proxy_model_allowlists)],
 ) -> None:
     """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
-    requested_subprotocols: Final = tuple(
-        protocol.strip()
-        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
-        if protocol.strip()
-    )
-    negotiated_subprotocol: Final = requested_subprotocols[0] if requested_subprotocols else None
+    negotiated_subprotocol: Final = _negotiated_websocket_subprotocol(websocket)
 
     refusal: Final = await _openai_websocket_refusal(user_api_key_dict, general_settings, model_allowlists)
     if refusal is not None:
@@ -2679,6 +2688,47 @@ async def openai_websocket_proxy_route(
         websocket=websocket,
         target=wss_target,
         custom_headers=custom_headers,
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint=websocket.url.path,
+        accept_websocket=False,
+    )
+
+
+_DEEPGRAM_WS_MISSING_KEY_REASON: Final = (
+    "Required 'DEEPGRAM_API_KEY' in environment to make pass-through calls to Deepgram."
+)
+
+
+@router.websocket("/deepgram/v1/listen")
+@router.websocket("/deepgram/listen")
+async def deepgram_listen_websocket_route(
+    websocket: WebSocket,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
+    relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
+) -> None:
+    """
+    Streaming speech to text through Deepgram's ``/v1/listen`` socket. Audio frames and transcript frames are
+    relayed unchanged; the call is billed on the audio duration Deepgram reports when the socket closes
+    """
+    deepgram_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=litellm.LlmProviders.DEEPGRAM.value,
+        region_name=None,
+    )
+    if deepgram_api_key is None:
+        await websocket.close(code=1011, reason=_DEEPGRAM_WS_MISSING_KEY_REASON)
+        return
+
+    await websocket.accept(subprotocol=_negotiated_websocket_subprotocol(websocket))
+    await relay(
+        websocket=websocket,
+        target=deepgram_listen_websocket_target(
+            api_base=get_secret_str("DEEPGRAM_API_BASE"),
+            query_string=websocket.url.query,
+        ),
+        custom_headers={  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
+            "Authorization": f"Token {deepgram_api_key}"
+        },
         user_api_key_dict=user_api_key_dict,
         forward_headers=False,
         endpoint=websocket.url.path,
