@@ -13,12 +13,15 @@ pub mod types;
 pub mod wire;
 
 pub use client::{OcrClient, ocr};
-pub use document::{encode_file_document, mime_type_for_name, upload_mime_type};
+pub use document::{encode_file_document, mime_type_for_name, read_path_document};
 pub use lifecycle::{
     NativeOutcome, NativeResult, NoopOcrHost, OcrAdmission, OcrCall, OcrCallStep, OcrDecline,
     OcrHookHost, OcrHost, OcrHostOperation, OcrHostResult,
 };
-pub use types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
+pub use types::{
+    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrDocumentInput,
+    OcrFileContent,
+};
 
 #[cfg(test)]
 #[path = "../../tests/azure_ai_ocr.rs"]
