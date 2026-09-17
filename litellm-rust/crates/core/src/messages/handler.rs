@@ -40,6 +40,7 @@ pub(super) async fn execute_messages_provider_call(
     request
         .config
         .transform_anthropic_messages_response(&request.model, response)
+        .map_err(Error::from)
 }
 
 pub(super) async fn execute_messages_provider_stream(

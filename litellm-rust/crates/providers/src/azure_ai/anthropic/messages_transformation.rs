@@ -1,9 +1,9 @@
 use serde_json::{Map, Value};
 
-use crate::llms::anthropic::experimental_pass_through::messages::transformation::{
+use crate::anthropic::experimental_pass_through::messages::transformation::{
     ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
 };
-use crate::llms::base_llm::anthropic_messages::transformation::{
+use crate::base_llm::anthropic_messages::transformation::{
     BaseAnthropicMessagesConfig, MessagesAuthStrategy,
 };
 use crate::messages::Error;

@@ -10,7 +10,7 @@ use crate::http_utils::has_header;
 use crate::litellm_core_utils::get_llm_provider_logic::{
     CustomLlmProvider, get_custom_llm_provider,
 };
-use crate::llms::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth};
+use litellm_providers::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth};
 
 pub(super) fn resolve_provider_config<'a>(
     model: &'a str,
