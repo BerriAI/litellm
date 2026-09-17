@@ -300,6 +300,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_general_settings = {}
         mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
         mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
         route_type = "acompletion"
 
         # Call the actual method.
@@ -313,6 +314,7 @@ class TestProxyBaseLLMRequestProcessing:
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=mock_proxy_config,
             route_type=route_type,
+            llm_router=self._router_with_free_and_paid_models(),
         )
 
         mock_proxy_logging_obj.pre_call_hook.assert_called_once()
@@ -364,14 +366,17 @@ class TestProxyBaseLLMRequestProcessing:
             "add_litellm_data_to_request",
             mock_add_litellm_data_to_request,
         )
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
 
         returned_data, _ = await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
             user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
             proxy_logging_obj=mock_proxy_logging_obj,
-            proxy_config=MagicMock(spec=ProxyConfig),
+            proxy_config=mock_proxy_config,
             route_type="acompletion",
+            llm_router=self._router_with_free_and_paid_models(),
         )
 
         persisted_body = returned_data["proxy_server_request"]["body"]
@@ -1905,6 +1910,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_general_settings = {}
         mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
         mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
         route_type = "acompletion"
 
         (
@@ -1917,6 +1923,7 @@ class TestProxyBaseLLMRequestProcessing:
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=mock_proxy_config,
             route_type=route_type,
+            llm_router=self._router_with_free_and_paid_models(),
         )
 
         # Verify queue_time_seconds is set and non-negative. Ends at start_time

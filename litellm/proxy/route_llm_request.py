@@ -580,6 +580,7 @@ async def route_request(
 def _router_can_route(
     data: Mapping[str, object],
     llm_router: LitellmRouter | None,
+    user_model: str | None,
     route_type: str,
 ) -> bool:
     """Pure predicate mirroring the branch structure of _route_request_single_attempt.
@@ -587,17 +588,18 @@ def _router_can_route(
     Returns True when the existing routing tree would dispatch this request
     somewhere instead of falling through to the final ProxyModelNotFoundError.
     """
-    if llm_router is None:
-        return True
     if route_type in _NO_MODEL_ROUTING_ROUTE_TYPES:
         return True
     if "api_key" in data or "api_base" in data:
         return True
     model: Final = data.get("model")
-    if route_type == "acompletion" and isinstance(model, str) and "," in model:
+    if route_type == "acompletion" and isinstance(model, str) and "," in model and llm_router is not None:
         return True
     if "user_config" in data or "router_settings_override" in data:
         return True
+    if llm_router is None:
+        return user_model is not None or route_type == "allm_passthrough_route"
+    _raise_if_model_fully_blocked(llm_router=llm_router, model_name=model, team_id=get_team_id_from_data(dict(data)))
     if (
         route_type in _EVAL_ROUTE_TYPES
         or route_type in _CONTAINER_ROUTE_TYPES
@@ -657,7 +659,7 @@ async def raise_if_model_not_routable(
     Lets pre-call steps (e.g. guardrails) skip work for requests that can never
     route, and mirrors route_request's registry read-through retry.
     """
-    if _router_can_route(data=data, llm_router=llm_router, route_type=route_type):
+    if _router_can_route(data=data, llm_router=llm_router, user_model=user_model, route_type=route_type):
         return
     requested_model: Final = data.get("model")
     if isinstance(requested_model, str) and requested_model:
@@ -667,7 +669,7 @@ async def raise_if_model_not_routable(
         )
 
         if await model_registry_read_through.attempt(requested_model) and _router_can_route(
-            data=data, llm_router=proxy_server.llm_router, route_type=route_type
+            data=data, llm_router=proxy_server.llm_router, user_model=user_model, route_type=route_type
         ):
             return
     raise ProxyModelNotFoundError(
