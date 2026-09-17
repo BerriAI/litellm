@@ -22,6 +22,7 @@ import { useMCPServerHealth } from "@/app/(dashboard)/hooks/mcpServers/useMCPSer
 import { toast } from "@/lib/toast";
 import { deleteMCPServer } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
+import { MCPGatewaySessionsTab } from "./MCPGatewaySessionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
 import CreateMCPServer from "./CreateMCPServer";
 import ImportMCPServers from "./ImportMCPServers";
@@ -560,6 +561,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 Submitted MCPs
               </TabsTrigger>
             )}
+            {isAdminRole(userRole) && (
+              <TabsTrigger value="connections" className="flex-none rounded-none px-4 py-2">
+                Live Connections
+              </TabsTrigger>
+            )}
           </TabsList>
           <TabsContent value="servers" keepMounted>
             {selectedServerId ? (
@@ -745,6 +751,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           {isAdminRole(userRole) && (
             <TabsContent value="submitted" keepMounted>
               <MCPSubmissionsTab accessToken={accessToken} />
+            </TabsContent>
+          )}
+          {isAdminRole(userRole) && (
+            <TabsContent value="connections">
+              <MCPGatewaySessionsTab accessToken={accessToken} />
             </TabsContent>
           )}
         </Tabs>

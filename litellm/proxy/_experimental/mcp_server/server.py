@@ -9,6 +9,7 @@ import contextlib
 import contextvars
 import hashlib
 import json
+import os
 import time
 import traceback
 import types
@@ -84,7 +85,13 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
 )
-from litellm.types.mcp import MCPAuth, MCPSpecVersion
+from litellm.types.mcp import (
+    MCPAuth,
+    MCPGatewaySession,
+    MCPGatewaySessionGroupCount,
+    MCPGatewaySessionsResponse,
+    MCPSpecVersion,
+)
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
@@ -454,6 +461,8 @@ if MCP_AVAILABLE:
         StreamableHTTPSessionManager = None
     from mcp.types import (
         CallToolResult,
+        Implementation,
+        InitializeRequest,
         ListToolsResult,
         Prompt,
         TextContent,
@@ -607,6 +616,7 @@ if MCP_AVAILABLE:
     # still reading the shared object.
     _stateful_session_locks: Final[dict[str, asyncio.Lock]] = {}
     _stateful_session_active_request_counts: Final[dict[str, int]] = {}
+    _stateful_session_client_info: Final[dict[str, Implementation]] = {}  # mutable-ok: cleared on session teardown
 
     class _TerminableTransport(Protocol):
         async def terminate(self) -> None: ...
@@ -625,6 +635,7 @@ if MCP_AVAILABLE:
         _stateful_session_owners.pop(session_id, None)
         _stateful_session_locks.pop(session_id, None)
         _stateful_session_active_request_counts.pop(session_id, None)
+        _stateful_session_client_info.pop(session_id, None)
 
     # Keep this alias so existing references to session_manager still work
     session_manager: Final = session_manager_stateless
@@ -3816,6 +3827,63 @@ if MCP_AVAILABLE:
         except (json.JSONDecodeError, TypeError):
             return False
 
+    def _extract_initialize_client_info(body: bytes) -> Implementation | None:
+        try:
+            return InitializeRequest.model_validate_json(body).params.clientInfo
+        except ValidationError:
+            return None
+
+    def _group_session_counts(
+        sessions: Sequence[MCPGatewaySession],
+        label_for: Callable[[MCPGatewaySession], str | None],
+    ) -> tuple[MCPGatewaySessionGroupCount, ...]:
+        labels: Final = tuple(label_for(session) for session in sessions)
+        return tuple(
+            sorted(
+                (MCPGatewaySessionGroupCount(label=label, count=labels.count(label)) for label in frozenset(labels)),
+                key=lambda group: (-group.count, group.label is None, group.label or ""),
+            )
+        )
+
+    def _gateway_session_for(session_id: str, auth_user: MCPAuthenticatedUser, now: float) -> MCPGatewaySession:
+        client_info: Final = _stateful_session_client_info.get(session_id)
+        key_auth: Final = auth_user.user_api_key_auth
+        return MCPGatewaySession(
+            session_id_prefix=session_id[:8],
+            client_name=client_info.name if client_info is not None else None,
+            client_version=client_info.version if client_info is not None else None,
+            user_id=key_auth.user_id if key_auth is not None else None,
+            user_email=key_auth.user_email if key_auth is not None else None,
+            key_alias=key_auth.key_alias if key_auth is not None else None,
+            team_id=key_auth.team_id if key_auth is not None else None,
+            team_alias=key_auth.team_alias if key_auth is not None else None,
+            client_ip=auth_user.client_ip,
+            idle_seconds=max(0.0, now - _stateful_session_auth_context_last_seen.get(session_id, now)),
+            in_flight_requests=_stateful_session_active_request_counts.get(session_id, 0),
+        )
+
+    def get_mcp_gateway_sessions_report(now: float | None = None) -> MCPGatewaySessionsResponse:
+        """Live stateful Streamable HTTP sessions held by this worker process.
+
+        Only sessions whose transport is still registered with the stateful
+        session manager are reported; SSE and stateless requests hold no
+        session and are never counted.
+        """
+        report_time: Final = time.monotonic() if now is None else now
+        live_session_ids: Final = frozenset(_stateful_server_instances())
+        sessions: Final = tuple(
+            _gateway_session_for(session_id, auth_user, report_time)
+            for session_id, auth_user in tuple(_stateful_session_auth_contexts.items())
+            if session_id in live_session_ids
+        )
+        return MCPGatewaySessionsResponse(
+            worker_pid=os.getpid(),
+            total_sessions=len(sessions),
+            by_client=_group_session_counts(sessions, lambda session: session.client_name),
+            by_user=_group_session_counts(sessions, lambda session: session.user_id),
+            sessions=sessions,
+        )
+
     async def _read_request_body_for_routing(
         receive: Receive,
     ) -> tuple[list[Message], bytes]:
@@ -4652,6 +4720,7 @@ if MCP_AVAILABLE:
                         auth_user,
                         _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip),
                         _track_initialized_stateful_session,
+                        client_info=_extract_initialize_client_info(body),
                     )
 
                 async with _gateway_initialize_instructions_request_scope(
@@ -4965,6 +5034,7 @@ if MCP_AVAILABLE:
         auth_user: MCPAuthenticatedUser,
         owner_fingerprint: str,
         on_session_registered: Callable[[str], None] | None = None,
+        client_info: Implementation | None = None,
     ) -> Send:
         async def wrapped_send(message: Message) -> None:
             if message.get("type") == "http.response.start":
@@ -4979,6 +5049,8 @@ if MCP_AVAILABLE:
                         _stateful_session_auth_contexts[session_id] = auth_user
                         _stateful_session_auth_context_last_seen[session_id] = time.monotonic()
                         _stateful_session_owners[session_id] = owner_fingerprint
+                        if client_info is not None:
+                            _stateful_session_client_info[session_id] = client_info
                         break
             await send(message)
 
