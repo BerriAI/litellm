@@ -14,6 +14,19 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
+class _SpendCoercingProxy:
+    __slots__ = ("_target",)
+
+    def __init__(self, target: object):
+        self._target: Final = target
+
+    def __getattr__(self, item: str) -> object:
+        val = getattr(self._target, item)
+        if item == "spend" and val is None:
+            return 0.0
+        return val
+
+
 class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     user_id: str
     blocked: bool
@@ -35,16 +48,8 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
             if values.get("spend") is None:
                 return {**values, "spend": 0.0}
             return values
-        if hasattr(values, "model_dump") and callable(values.model_dump):
-            data: Final = values.model_dump()
-            if data.get("spend") is None:
-                return {**data, "spend": 0.0}
-            return data
-        if hasattr(values, "__dict__"):
-            data: Final = dict(values.__dict__)
-            if data.get("spend") is None:
-                return {**data, "spend": 0.0}
-            return data
+        if getattr(values, "spend", None) is None:
+            return _SpendCoercingProxy(values)
         return values
 
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())

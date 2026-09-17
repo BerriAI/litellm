@@ -463,6 +463,29 @@ class TestEndUserTable:
         assert table.spend == 0.0
         assert table.blocked is True
 
+    def test_end_user_from_property_backed_instance(self):
+        class PropertyBackedUser:
+            def __init__(self, uid):
+                self._uid = uid
+
+            @property
+            def user_id(self):
+                return self._uid
+
+            @property
+            def blocked(self):
+                return True
+
+            @property
+            def spend(self):
+                return None
+
+        record = PropertyBackedUser("prop-1")
+        table = LiteLLM_EndUserTable.model_validate(record)
+        assert table.user_id == "prop-1"
+        assert table.spend == 0.0
+        assert table.blocked is True
+
 
 class TestBudgetTableFull:
     def test_full_adds_server_managed_fields(self):
