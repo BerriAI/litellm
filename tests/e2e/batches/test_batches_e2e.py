@@ -21,21 +21,18 @@ import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import pytest
-from pydantic import BaseModel
-
-from e2e_config import MASTER_KEY, PROXY_BASE_URL, unique_marker
-
 from batch_cleanup import cleanup_batch, cleanup_file
 from batch_client import (
     AZURE_FILE_EXPIRY_SECONDS,
-    batch_upload_form,
     UPLOAD_FILENAME,
     BatchClient,
     BatchCreateBody,
     BatchObject,
     FileObject,
+    batch_upload_form,
     is_model_access_denied,
     is_result_access_denied,
 )
@@ -57,6 +54,7 @@ from capabilities import (
     openai_batch_params,
     raw_id_matches_provider,
 )
+from e2e_config import MASTER_KEY, PROXY_BASE_URL, unique_marker
 from e2e_http import (
     FileUploadForm,
     Result,
@@ -68,6 +66,7 @@ from e2e_http import (
 )
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, KeyMetadata, LiteLLMParamsBody, SpendLogRow
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -1003,6 +1002,81 @@ class TestBedrockBatchAssumeRole:
         assert_batch_object(batch)
 
         fetched = unwrap(client.retrieve_batch(batch.id, key=key))
+        assert fetched.id == batch.id
+
+
+GOVCLOUD_REGION: Final = "us-gov-west-1"
+GOVCLOUD_RAW_MODEL: Final = "bedrock/amazon.nova-lite-v1:0"
+
+
+def _govcloud_params() -> LiteLLMParamsBody:
+    return LiteLLMParamsBody(
+        model=GOVCLOUD_RAW_MODEL,
+        aws_access_key_id="os.environ/AWS_GOVCLOUD_ACCESS_KEY_ID",
+        aws_secret_access_key="os.environ/AWS_GOVCLOUD_SECRET_ACCESS_KEY",
+        aws_region_name=GOVCLOUD_REGION,
+        s3_region_name=GOVCLOUD_REGION,
+        s3_bucket_name="os.environ/AWS_GOVCLOUD_BATCH_S3_BUCKET",
+        s3_access_key_id="os.environ/AWS_GOVCLOUD_ACCESS_KEY_ID",
+        s3_secret_access_key="os.environ/AWS_GOVCLOUD_SECRET_ACCESS_KEY",
+        aws_batch_role_arn="os.environ/AWS_GOVCLOUD_BATCH_ROLE_ARN",
+    )
+
+
+class TestBedrockBatchGovCloud:
+    """Bedrock batch lifecycle in the AWS GovCloud partition (us-gov-west-1).
+
+    The deployment carries a GovCloud region for both Bedrock and S3, so the proxy has to
+    sign the file upload against the us-gov S3 endpoint and submit the job to the us-gov
+    Bedrock endpoint. Commercial-partition hostnames or arn:aws: ARNs reject the GovCloud
+    key, so a partition regression fails the upload instead of passing silently.
+    """
+
+    @pytest.mark.covers(
+        "llm.batches.bedrock.govcloud_partition.nonstream.works",
+        "llm.files.bedrock.govcloud_partition.nonstream.works",
+        exercised_on=["batches", "files"],
+    )
+    def test_unified_file_upload_and_batch_create_in_govcloud(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
+        model_name: Final = batch_model_name("bedrock-govcloud-batch")
+        model_id: Final = client.create_model(model_name, _govcloud_params())
+        resources.defer(lambda: client.delete_model(model_id))
+        key: Final = resources.key()
+        file: Final = unwrap(
+            client.upload_file(
+                content=render_jsonl(GOVCLOUD_RAW_MODEL),
+                form=FileUploadForm(purpose="batch", target_model_names=model_name),
+                key=key,
+            )
+        )
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
+        assert_file_object(file, provider="bedrock")
+
+        downloaded: Final = client.proxy.transport.download(
+            f"/v1/files/{file.id}/content",
+            headers=client.proxy.transport.bearer(key),
+        )
+        assert downloaded.status_code == 200, (
+            f"GovCloud file content must be 200, got {downloaded.status_code}: {downloaded.body[:300]}"
+        )
+        assert downloaded.body.strip(), "GovCloud file content download returned an empty body"
+
+        created: Final = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
+        require_successful_call(created)
+        batch: Final = BatchObject.model_validate_json(created.body)
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
+
+        assert is_managed_id(batch.id), (
+            f"GovCloud create via target_model_names must return a managed batch id, got {batch.id!r}"
+        )
+        assert batch.status in CREATED_BATCH_STATUSES, (
+            f"GovCloud batch has non-transitional status {batch.status!r}"
+        )
+        assert_batch_object(batch)
+
+        fetched: Final = unwrap(client.retrieve_batch(batch.id, key=key))
         assert fetched.id == batch.id
 
 

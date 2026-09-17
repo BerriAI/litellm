@@ -21,6 +21,10 @@ failures are hard test failures (see `tests/e2e/CLAUDE.md`).
 | Vertex AI | yes | yes | yes | yes | yes (provider-transformed) | GCS (`gcs_bucket_name` / `GCS_BUCKET_NAME` on model) |
 | Bedrock   | yes (unified only) | yes | yes | yes (unfiltered managed list) | yes (provider-transformed) | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
 
+The GovCloud partition test requires `AWS_GOVCLOUD_ACCESS_KEY_ID`,
+`AWS_GOVCLOUD_SECRET_ACCESS_KEY`, `AWS_GOVCLOUD_BATCH_S3_BUCKET`, and
+`AWS_GOVCLOUD_BATCH_ROLE_ARN` in the proxy environment
+
 Bedrock cancel maps to `StopModelInvocationJob` and comes back `cancelling`; the
 lifecycle asserts it the same way it does for OpenAI (`_CANCEL_ASSERTED_PROVIDERS`).
 Bedrock has no provider-side list, so list is the proxy's DB-backed managed view: the
