@@ -1,4 +1,4 @@
-use litellm_callback_protocol::lifecycle::host::{HostFailure, HostLifecycle, HostPhase};
+use litellm_bridge::protocol::{HostFailure, HostLifecycle, HostPhase};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Error(String);

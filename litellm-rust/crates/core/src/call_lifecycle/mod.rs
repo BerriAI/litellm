@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-pub mod host;
 pub mod types;
 
 pub use types::{

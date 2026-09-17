@@ -7,7 +7,7 @@ repository.workspace = true
 autotests = false
 
 [dependencies]
-litellm-callback-protocol.workspace = true
+litellm-bridge.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 base64.workspace = true

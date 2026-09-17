@@ -695,7 +695,7 @@ async fn path_documents_are_read_by_core_without_a_host_operation() {
 
 #[tokio::test]
 async fn public_finalization_failure_never_dispatches_success_or_replays_provider() {
-    use crate::call_lifecycle::host::{HostFailure, HostPhase};
+    use litellm_bridge::protocol::{HostFailure, HostPhase};
 
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
     let mut request = Some(wire_request("mistral/model", &base, json!({})));
@@ -757,7 +757,7 @@ async fn public_finalization_failure_never_dispatches_success_or_replays_provide
 
 #[tokio::test]
 async fn cancellation_at_provider_hook_prevents_execution_and_further_resumption() {
-    use crate::call_lifecycle::host::HostFailure;
+    use litellm_bridge::protocol::HostFailure;
 
     let request = super::LiteLLMOcrRequest {
         hooks: Arc::new(AdmissionSpy {
@@ -805,7 +805,7 @@ async fn cancellation_acknowledges_blocking_preparation_completion() {
     use std::io::Write;
     use std::task::Poll;
 
-    use crate::call_lifecycle::host::HostFailure;
+    use litellm_bridge::protocol::HostFailure;
 
     let path = std::env::temp_dir().join(format!("litellm-ocr-{}.fifo", rand::random::<u64>()));
     assert!(
@@ -880,7 +880,7 @@ async fn cancellation_acknowledges_blocking_preparation_completion() {
 
 #[tokio::test]
 async fn missing_host_result_preserves_pending_operation() {
-    use crate::call_lifecycle::host::HostPhase;
+    use litellm_bridge::protocol::HostPhase;
 
     let NativeOutcome::Completed(mut call) =
         OcrCall::admit(super::test_support::ocr_client(), OcrAdmission::all())
@@ -1041,7 +1041,7 @@ async fn cancellation_waits_for_provider_capture_drop_even_when_acknowledgement_
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::Poll;
 
-    use crate::call_lifecycle::host::HostFailure;
+    use litellm_bridge::protocol::HostFailure;
 
     for interrupt_acknowledgement in [false, true] {
         let entered = Arc::new(tokio::sync::Notify::new());

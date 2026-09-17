@@ -7,6 +7,6 @@ repository.workspace = true
 
 [dependencies]
 litellm-auth.workspace = true
-litellm-callback-protocol.workspace = true
+litellm-bridge.workspace = true
 litellm-python-interop.workspace = true
 pyo3.workspace = true

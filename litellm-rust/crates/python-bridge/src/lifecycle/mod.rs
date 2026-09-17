@@ -6,8 +6,8 @@ use litellm_python_api as python_api;
 use litellm_python_api::DeploymentHooks;
 pub(crate) use litellm_python_api::LegacyPythonLogger;
 #[cfg(test)]
-use litellm_core::call_lifecycle::host::HostCallFuture;
-use litellm_core::call_lifecycle::host::{
+use litellm_bridge::protocol::HostCallFuture;
+use litellm_bridge::protocol::{
     HostCall as NativeCall, HostCallStep as NativeCallStep, HostFailure, HostPhase, HostStep,
 };
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};

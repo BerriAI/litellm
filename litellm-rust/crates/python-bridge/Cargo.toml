@@ -18,6 +18,7 @@ panic-test = []
 [dependencies]
 bytes.workspace = true
 futures-util.workspace = true
+litellm-bridge.workspace = true
 litellm-core.workspace = true
 litellm-python-api.workspace = true
 litellm-auth.workspace = true
