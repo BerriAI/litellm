@@ -12,11 +12,10 @@ use crate::ocr::types::{
     PreparedOcrRequest,
 };
 use crate::params::OpaqueParams;
-use crate::providers::model::{ModelNamespace, ProviderModel, RoutedModel};
 use crate::url_utils::ApiUrl;
 
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
-const MODEL_NAMESPACE: &str = "deepseek-ai";
+const MODEL_PREFIX: &str = "deepseek-ai/";
 const DEFAULT_LOCATION: &str = "us-central1";
 const DEEPSEEK_OCR_PARAMS: &[&str] = &["stream", "temperature", "max_tokens", "top_p", "n", "stop"];
 
@@ -24,7 +23,7 @@ pub(crate) type DeepSeekOcrParams = OpaqueParams;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct DeepSeekOcrRequest {
-    pub model: ProviderModel<DeepSeekAi>,
+    pub model: String,
     pub messages: Vec<DeepSeekOcrMessage>,
     #[serde(flatten)]
     pub params: OpaqueParams,
@@ -85,13 +84,6 @@ struct DeepSeekPage {
     markdown: String,
     images: Option<Vec<OcrPageImage>>,
     dimensions: Option<OcrPageDimensions>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct DeepSeekAi;
-
-impl ModelNamespace for DeepSeekAi {
-    const NAME: &'static str = MODEL_NAMESPACE;
 }
 
 #[derive(Clone, Debug)]
@@ -367,12 +359,14 @@ fn response_field(field: &str) -> crate::ocr::Error {
     }
 }
 
-pub(crate) fn provider_model(model: &str) -> Result<ProviderModel<DeepSeekAi>, crate::ocr::Error> {
-    RoutedModel::new(model)
-        .and_then(RoutedModel::into_provider::<DeepSeekAi>)
-        .map_err(|_| crate::ocr::Error::RequestField {
+pub(crate) fn provider_model(model: &str) -> Result<String, crate::ocr::Error> {
+    let local_model = model.trim_start_matches(MODEL_PREFIX);
+    if local_model.is_empty() {
+        return Err(crate::ocr::Error::RequestField {
             path: "model".into(),
-        })
+        });
+    }
+    Ok(format!("{MODEL_PREFIX}{local_model}"))
 }
 
 impl VertexAIDeepSeekOCRConfig {
@@ -443,13 +437,11 @@ mod tests {
     #[test]
     fn config_owns_model_namespace_and_endpoint() {
         assert_eq!(
-            provider_model("deepseek-ocr-maas").unwrap().as_str(),
+            provider_model("deepseek-ocr-maas").unwrap(),
             "deepseek-ai/deepseek-ocr-maas"
         );
         assert_eq!(
-            provider_model("deepseek-ai/deepseek-ocr-maas")
-                .unwrap()
-                .as_str(),
+            provider_model("deepseek-ai/deepseek-ocr-maas").unwrap(),
             "deepseek-ai/deepseek-ocr-maas"
         );
         assert_eq!(
