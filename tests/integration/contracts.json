@@ -187,6 +187,23 @@
     ],
     "tests/integration/spend/test_filtered_ledger.py::test_rotated_keys_users_and_model_groups_preserve_success_failure_cache_ledger": [
       "quota_management.spend_tracking.filtered_ledger_preserves_owner_identity_and_totals"
+    ],
+    "tests/integration/management/test_partial_update_sequences.py::test_restricted_actor_cannot_detach_key_from_project": [
+      "mgmt.key.update.project_detach_denied_to_restricted_actor"
+    ],
+    "tests/integration/management/test_partial_update_sequences.py::test_cross_tenant_actor_cannot_read_update_or_detach_project_key": [
+      "mgmt.key.info.cross_tenant_key_is_denied",
+      "mgmt.key.update.cross_tenant_key_is_denied",
+      "mgmt.key.update.cross_tenant_project_detach_is_denied"
+    ],
+    "tests/integration/management/test_project_lifecycle.py::test_project_new_persists_real_state": [
+      "mgmt.project.new.real_route_persists"
+    ],
+    "tests/integration/management/test_project_lifecycle.py::test_project_update_persists_real_state": [
+      "mgmt.project.update.real_route_persists"
+    ],
+    "tests/integration/management/test_project_lifecycle.py::test_project_delete_with_attached_key_refuses_and_preserves_state": [
+      "mgmt.project.delete.attached_key_refusal_preserves_state"
     ]
   },
   "browser": {

@@ -15,6 +15,7 @@ litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-gcp.workspace = true
+litellm-framing.workspace = true
 moka.workspace = true
 mime_guess = "2.0.5"
 rand.workspace = true
@@ -30,9 +31,12 @@ subtle.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-tungstenite.workspace = true
 thiserror.workspace = true
+time.workspace = true
 sha2.workspace = true
 url.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+aws-smithy-eventstream = "=0.61.1"
+aws-smithy-types = "1.6.1"
 rstest.workspace = true

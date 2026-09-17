@@ -48,10 +48,7 @@ pub(crate) fn core_error_to_pyerr(error: Error) -> PyErr {
         }
         Error::Messages(error) => match error {
             messages::Error::Auth(source) => auth_is_value_error(source),
-            messages::Error::InvalidProvider(_)
-            | messages::Error::InvalidRequest(_)
-            | messages::Error::Headers(_) => true,
-            _ => false,
+            _ => error.is_request(),
         },
         Error::AudioTranscription(error) => match error {
             audio_transcription::Error::Auth(source) => auth_is_value_error(source),

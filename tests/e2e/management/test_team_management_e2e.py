@@ -32,6 +32,7 @@ from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import (
     KeyGenerateBody,
+    OrgNewBody,
     TeamInfoParams,
     TeamMemberAddBody,
     TeamMemberDeleteBody,
@@ -45,6 +46,8 @@ pytestmark = pytest.mark.e2e
 TeamRole = Literal["admin", "user"]
 
 _TEAM_TPM_LIMIT: Final = 1000
+_TEAM_MAX_BUDGET: Final = 10.0
+_ORG_MAX_BUDGET: Final = 100.0
 
 
 class TeamBlockBody(BaseModel):
@@ -114,7 +117,12 @@ class TeamInfoRead(BaseModel):
 
 class TeamWithAdminNewBody(TeamNewBody):
     tpm_limit: int
+    max_budget: float | None = None
     members_with_roles: list[TeamMemberEntry]
+
+
+class OrgWithBudgetNewBody(OrgNewBody):
+    max_budget: float
 
 
 class TeamSettingsChange(PartialBody, TeamSettings):
@@ -414,13 +422,26 @@ def tpm_limit_editable_by_team_admins(client: ManagementClient) -> Generator[Non
         yield
 
 
-def _team_with_admin(client: ManagementClient, resources: ResourceManager) -> tuple[str, str]:
+@pytest.fixture(scope="class")
+def rpm_limit_and_max_budget_editable_by_team_admins(client: ManagementClient) -> Generator[None]:
+    with _team_admins_may_edit(client, ["rpm_limit", "max_budget"]):
+        yield
+
+
+def _team_with_admin(
+    client: ManagementClient,
+    resources: ResourceManager,
+    max_budget: float | None = None,
+    organization_id: str | None = None,
+) -> tuple[str, str]:
     """A team with a tpm_limit, and the key of a user who is an admin of that team."""
     admin_id = _create_user(client, resources, f"e2e-team-admin-{unique_marker()}@example.com")
     team_id = client.create_team(
         TeamWithAdminNewBody(
             team_alias=f"e2e-team-admin-{unique_marker()}",
             tpm_limit=_TEAM_TPM_LIMIT,
+            max_budget=max_budget,
+            organization_id=organization_id,
             members_with_roles=[TeamMemberEntry(role="admin", user_id=admin_id)],
         )
     )
@@ -580,3 +601,93 @@ class TestTeamAdminWithTpmLimitEnabled:
         assert after.budget_limits == budgeted.budget_limits, (
             f"the team admin pushed the budget window resets from {budgeted.budget_limits} to {after.budget_limits}"
         )
+
+
+@pytest.mark.usefixtures("rpm_limit_and_max_budget_editable_by_team_admins")
+class TestTeamAdminWithRpmLimitAndMaxBudgetEnabled:
+    """A proxy admin has enabled rpm_limit and max_budget, so a team admin may change the RPM limit and keep or
+    lower the team's budget. Raising or removing the budget stays with the proxy admin."""
+
+    @pytest.mark.covers("mgmt.team.update.team_admin_limited_to_enabled_fields")
+    @pytest.mark.parametrize(
+        "current_budget",
+        [pytest.param(_TEAM_MAX_BUDGET, id="lower"), pytest.param(None, id="first-budget")],
+    )
+    def test_team_admin_saves_a_new_rpm_limit_and_a_tighter_budget(
+        self, client: ManagementClient, resources: ResourceManager, current_budget: float | None
+    ) -> None:
+        team_id, admin_key = _team_with_admin(client, resources, max_budget=current_budget)
+        access = _read_team(client, team_id, admin_key).team_info.caller_edit_access
+        assert access == CallerEditAccess(kind="team_admin", editable_fields=["max_budget", "rpm_limit"]), (
+            f"/team/info should list max_budget and rpm_limit as the team admin's editable fields, got {access}"
+        )
+        before = _read_team(client, team_id).team_info
+
+        outcome = _update_team_as(
+            client, admin_key, TeamSettingsUpdate(team_id=team_id, rpm_limit=50, max_budget=_TEAM_MAX_BUDGET / 2)
+        )
+
+        assert outcome.status_code == 200, (
+            f"a team admin setting an RPM limit and tightening the budget from {current_budget} must succeed, "
+            f"got {outcome.status_code}: {outcome.body[:300]}"
+        )
+        after = _poll_team(
+            client,
+            team_id,
+            lambda info: info.rpm_limit == 50 and info.max_budget == _TEAM_MAX_BUDGET / 2,
+            f"/team/info never reflected rpm_limit=50 and max_budget={_TEAM_MAX_BUDGET / 2}",
+        )
+        assert after.model_copy(update={"rpm_limit": before.rpm_limit, "max_budget": before.max_budget}) == before, (
+            f"the update changed more than rpm_limit and max_budget: before {before}, after {after}"
+        )
+
+    @pytest.mark.covers("mgmt.team.update.team_admin_cannot_grow_budget")
+    @pytest.mark.parametrize(
+        ("max_budget", "refusal"),
+        [
+            pytest.param(_TEAM_MAX_BUDGET * 2, "Only a proxy admin can raise", id="raise"),
+            pytest.param(None, "Only a proxy admin can remove", id="remove"),
+        ],
+    )
+    def test_team_admin_cannot_raise_or_remove_the_budget(
+        self, client: ManagementClient, resources: ResourceManager, max_budget: float | None, refusal: str
+    ) -> None:
+        team_id, admin_key = _team_with_admin(client, resources, max_budget=_TEAM_MAX_BUDGET)
+        before = _read_team(client, team_id).team_info
+
+        outcome = _update_team_as(
+            client, admin_key, TeamSettingsUpdate(team_id=team_id, rpm_limit=50, max_budget=max_budget)
+        )
+
+        assert outcome.status_code == 403, (
+            f"a team admin changing max_budget from {_TEAM_MAX_BUDGET} to {max_budget} must be 403, "
+            f"got {outcome.status_code}: {outcome.body[:300]}"
+        )
+        assert refusal in outcome.body, f"403 body should say {refusal!r}, got: {outcome.body[:300]}"
+        after = _read_team(client, team_id).team_info
+        assert after == before, (
+            f"the refused update still wrote to the team, the rpm_limit included: before {before}, after {after}"
+        )
+
+    @pytest.mark.covers("mgmt.team.update.team_admin_cannot_grow_budget")
+    def test_team_admin_cannot_raise_an_org_team_budget_under_the_org_cap(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        org_id = client.create_org(
+            OrgWithBudgetNewBody(organization_alias=f"e2e-team-admin-org-{unique_marker()}", max_budget=_ORG_MAX_BUDGET)
+        )
+        resources.defer(lambda: client.delete_org(org_id))
+        team_id, admin_key = _team_with_admin(client, resources, max_budget=_TEAM_MAX_BUDGET, organization_id=org_id)
+        before = _read_team(client, team_id).team_info
+
+        outcome = _update_team_as(
+            client, admin_key, TeamSettingsUpdate(team_id=team_id, max_budget=_ORG_MAX_BUDGET / 2)
+        )
+
+        assert outcome.status_code == 403, (
+            f"a team admin raising an org team's max_budget from {_TEAM_MAX_BUDGET} to {_ORG_MAX_BUDGET / 2}, "
+            f"under the org's {_ORG_MAX_BUDGET}, must be 403, got {outcome.status_code}: {outcome.body[:300]}"
+        )
+        assert "Only a proxy admin can raise" in outcome.body, f"403 body should say why, got: {outcome.body[:300]}"
+        after = _read_team(client, team_id).team_info
+        assert after == before, f"the refused update still wrote to the team: before {before}, after {after}"
