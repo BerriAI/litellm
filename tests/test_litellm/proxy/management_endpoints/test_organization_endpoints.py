@@ -1,7 +1,7 @@
 import asyncio
 import json
 from litellm._uuid import uuid
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, Mapping, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1438,3 +1438,82 @@ def test_organization_routes_reach_their_handler_with_enterprise_license(monkeyp
     assert any(
         message in response.text for message in (CommonProxyErrors.db_not_connected_error.value, "No db connected")
     )
+
+
+class _JWTMappingRow:
+    def __init__(self, token, jwt_claim_name, jwt_claim_value, jwt_issuer=None):
+        self.token = token
+        self.jwt_claim_name = jwt_claim_name
+        self.jwt_claim_value = jwt_claim_value
+        self.jwt_issuer = jwt_issuer
+
+
+class _CascadingJWTMappingTable:
+    """Mapping rows that LiteLLM_JWTKeyMapping_token_fkey drops when their key row is deleted."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def find_many(self, where, **kwargs):
+        return [row for row in self.rows if row.token in where["token"]["in"]]
+
+    def cascade(self, deleted_tokens):
+        self.rows = [row for row in self.rows if row.token not in deleted_tokens]
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monkeypatch):
+    """/organization/delete bulk-deletes the org's keys without going through /key/delete, so the
+    key objects and the jwt_key_mapping entries (issuer-scoped ones included) pointing at them
+    must be evicted here, or a deleted key keeps authenticating and a JWT identity keeps resolving
+    a token hash that no longer exists until the TTLs expire. The FK cascade drops the mapping
+    rows with the key rows, so the cache keys have to be read before the delete (LIT-5387)."""
+    from litellm.proxy._types import DeleteOrganizationRequest, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.organization_endpoints import delete_organization
+
+    doomed_cache_keys: Final = (
+        "hashed-org-key",
+        jwt_key_mapping_cache_key("sub", "svc-account", None),
+        jwt_key_mapping_cache_key("sub", "svc-account", "https://issuer.example"),
+    )
+    kept_cache_keys: Final = ("hashed-other-key", jwt_key_mapping_cache_key("sub", "other-account", None))
+    kept_row: Final = _JWTMappingRow("hashed-other-key", "sub", "other-account")
+    jwt_table: Final = _CascadingJWTMappingTable(
+        [
+            _JWTMappingRow("hashed-org-key", "sub", "svc-account"),
+            _JWTMappingRow("hashed-org-key", "sub", "svc-account", "https://issuer.example"),
+            kept_row,
+        ]
+    )
+    cache: Final = UserApiKeyCache()
+    for cache_key in (*doomed_cache_keys, *kept_cache_keys):
+        cache.set_cache(key=cache_key, value={"retained": True})
+
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[SimpleNamespace(token="hashed-org-key")]
+    )
+
+    async def cascading_delete_many(where):
+        jwt_table.cascade(("hashed-org-key",))
+        return 1
+
+    prisma_client.db.litellm_verificationtoken.delete_many = AsyncMock(side_effect=cascading_delete_many)
+    prisma_client.db.litellm_jwtkeymapping = jwt_table
+    prisma_client.db.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+
+    await delete_organization(
+        data=DeleteOrganizationRequest(organization_ids=["org-doomed"]),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
+    assert all(cache.get_cache(key=cache_key) == {"retained": True} for cache_key in kept_cache_keys)
+    assert jwt_table.rows == [kept_row]

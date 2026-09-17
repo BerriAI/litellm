@@ -9180,6 +9180,175 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     assert cache.get_cache(key="unrelated-key") == {"retained": True}
 
 
+class _JWTMappingRow:
+    def __init__(self, token, jwt_claim_name, jwt_claim_value, jwt_issuer=None):
+        self.token = token
+        self.jwt_claim_name = jwt_claim_name
+        self.jwt_claim_value = jwt_claim_value
+        self.jwt_issuer = jwt_issuer
+
+
+class _CascadingJWTMappingTable:
+    """Mapping rows that LiteLLM_JWTKeyMapping_token_fkey drops when their key row is deleted."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def find_many(self, where, **kwargs):
+        return [row for row in self.rows if row.token in where["token"]["in"]]
+
+    def cascade(self, deleted_tokens):
+        self.rows = [row for row in self.rows if row.token not in deleted_tokens]
+
+
+def _seed_jwt_mapping_cache(cache, mapping_rows):
+    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
+
+    cache_keys = tuple(
+        jwt_key_mapping_cache_key(row.jwt_claim_name, row.jwt_claim_value, row.jwt_issuer) for row in mapping_rows
+    )
+    for cache_key, row in zip(cache_keys, mapping_rows):
+        cache.set_cache(key=cache_key, value=row.token)
+    return cache_keys
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_evicts_jwt_key_mapping_cache_of_the_keys_it_deletes(monkeypatch):
+    """The member's team keys are deleted in bulk here, not through /key/delete, so the
+    jwt_key_mapping cache entries pointing at them must be evicted here too, or every JWT call
+    from that identity resolves the deleted token hash and 401s until the mapping TTL expires.
+    The FK cascade drops the mapping rows with the key rows, so the cache keys have to be read
+    before the delete (LIT-5387)."""
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.key_management_endpoints import LiteLLM_VerificationToken
+
+    doomed_rows: Final = (
+        _JWTMappingRow("hashed-token-1", "sub", "user-123"),
+        _JWTMappingRow("hashed-token-1", "sub", "user-123", "https://issuer.example"),
+    )
+    kept_row: Final = _JWTMappingRow("hashed-other-key", "sub", "user-999")
+    jwt_table: Final = _CascadingJWTMappingTable([*doomed_rows, kept_row])
+
+    team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="test-team",
+        members_with_roles=[Member(user_id="user-123", role="admin")],
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+    )
+    key1 = LiteLLM_VerificationToken(token="hashed-token-1", user_id="user-123", team_id="team-1")
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[MagicMock(user_id="user-123", teams=["team-1"])]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key1])
+
+    async def cascading_delete_many(where):
+        jwt_table.cascade(("hashed-token-1",))
+
+    mock_prisma_client.db.litellm_verificationtoken.delete_many = AsyncMock(side_effect=cascading_delete_many)
+    mock_prisma_client.db.litellm_jwtkeymapping = jwt_table
+    _wire_member_delete_tx(mock_prisma_client)
+
+    cache: Final = UserApiKeyCache()
+    doomed_cache_keys: Final = _seed_jwt_mapping_cache(cache, doomed_rows)
+    (kept_cache_key,) = _seed_jwt_mapping_cache(cache, (kept_row,))
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    monkeypatch.setattr("litellm.proxy.management_endpoints.team_endpoints._is_user_team_admin", lambda **kwargs: True)
+
+    await team_member_delete(
+        data=TeamMemberDeleteRequest(team_id="team-1", user_id="user-123"),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value
+        ),
+    )
+
+    assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
+    assert cache.get_cache(key=kept_cache_key) == "hashed-other-key"
+    assert jwt_table.rows == [kept_row]
+
+
+@pytest.mark.asyncio
+async def test_delete_team_evicts_jwt_key_mapping_cache_of_the_keys_it_deletes(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
+    """Same contract as /team/member_delete for the bulk key delete in /team/delete: the
+    jwt_key_mapping cache entries of the team's keys, issuer-scoped ones included, are gone
+    after the delete while entries pointing at other keys survive (LIT-5387)."""
+    from litellm.proxy._types import DeleteTeamRequest, LiteLLM_VerificationToken
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    doomed_rows: Final = (
+        _JWTMappingRow("hashed-doomed-key", "sub", "svc-account"),
+        _JWTMappingRow("hashed-doomed-key", "sub", "svc-account", "https://issuer.example"),
+    )
+    kept_row: Final = _JWTMappingRow("hashed-unrelated-key", "sub", "svc-account", "https://other-issuer.example")
+    jwt_table: Final = _CascadingJWTMappingTable([*doomed_rows, kept_row])
+
+    team = LiteLLM_TeamTable(
+        team_id="team-doomed",
+        team_alias="doomed-team",
+        members_with_roles=[],
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+
+    async def cascading_delete_data(team_id_list, table_name):
+        jwt_table.cascade(("hashed-doomed-key",))
+        return {"deleted_keys": 1}
+
+    mock_prisma_client.delete_data = AsyncMock(side_effect=cascading_delete_data)
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[LiteLLM_VerificationToken(token="hashed-doomed-key", team_id="team-doomed")]
+    )
+    mock_prisma_client.db.litellm_jwtkeymapping = jwt_table
+    mock_prisma_client.db.execute_raw = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
+
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_tx_cm = MagicMock()
+    mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+    _wire_team_delete_tx(mock_prisma_client)
+
+    cache: Final = UserApiKeyCache()
+    doomed_cache_keys: Final = _seed_jwt_mapping_cache(cache, doomed_rows)
+    (kept_cache_key,) = _seed_jwt_mapping_cache(cache, (kept_row,))
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    await delete_team(
+        data=DeleteTeamRequest(team_ids=["team-doomed"]),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value
+        ),
+        litellm_changed_by="admin-user",
+    )
+
+    assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
+    assert cache.get_cache(key=kept_cache_key) == "hashed-unrelated-key"
+    assert jwt_table.rows == [kept_row]
+
+
 @pytest.mark.asyncio
 async def test_new_team_negative_max_budget():
     """
