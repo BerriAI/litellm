@@ -33,6 +33,7 @@ from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
     auth_metadata,
+    metadata_from_request_data,
     model_from_request_data,
 )
 from litellm.integrations.otel.model.payloads import (
@@ -554,6 +555,7 @@ class OpenTelemetryV2(CustomLogger):
             capture_content=self.config.capture_span_content,
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
             request_route=request_root_http_route(),
+            trace=call.trace,
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
@@ -678,7 +680,12 @@ class OpenTelemetryV2(CustomLogger):
     #  / errors are the FastAPI instrumentor's job, so we don't touch it here.
     # ====================================================================== #
 
-    def seed_request_identity(self, user_api_key_dict: object, model: str | None = None) -> None:
+    def seed_request_identity(
+        self,
+        user_api_key_dict: object,
+        model: str | None = None,
+        request_metadata: Mapping[str, object] | None = None,
+    ) -> None:
         """Attach request-identity Baggage to the current context + server span.
 
         Seeding identity into Baggage makes **every** span emitted afterwards for
@@ -690,7 +697,7 @@ class OpenTelemetryV2(CustomLogger):
         isn't determined yet, which is correct.
         """
         try:
-            identity: Final = RequestIdentity.from_user_api_key_auth(user_api_key_dict)
+            identity: Final = RequestIdentity.from_user_api_key_auth(user_api_key_dict, request_metadata)
             bag: Final = promoted_baggage(
                 identity,
                 model,
@@ -742,6 +749,7 @@ class OpenTelemetryV2(CustomLogger):
         self.seed_request_identity(
             user_api_key_dict,
             model=model_from_request_data(data),
+            request_metadata=metadata_from_request_data(data),
         )
         return data
 
@@ -984,8 +992,8 @@ def build_otel_v2_logger(
 
 
 def _logger_class(config: OpenTelemetryV2Config) -> type[OpenTelemetryV2]:
-    if "langfuse" not in config.mapper_names or not config.capture_span_content:
+    if "langfuse" not in config.mapper_names:
         return OpenTelemetryV2
-    from litellm.integrations.otel.langfuse_logger import LangfuseOpenTelemetryV2
+    from litellm.integrations.otel.langfuse_logger import LangfuseContentOpenTelemetryV2, LangfuseOpenTelemetryV2
 
-    return LangfuseOpenTelemetryV2
+    return LangfuseContentOpenTelemetryV2 if config.capture_span_content else LangfuseOpenTelemetryV2

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import openai from "openai";
 import { makeOpenAIResponsesRequest } from "./responses_api";
 import { MessageType } from "../chat_ui/types";
 import type { TokenUsage } from "../chat_ui/ResponseMetrics";
@@ -609,5 +610,48 @@ describe("responses_api response cache", () => {
     );
 
     expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ servedFromResponseCache: true }), "");
+  });
+});
+
+describe("responses_api custom headers", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("sends custom headers alongside the tags header on the OpenAI client", async () => {
+    mockResponsesCreate.mockReturnValueOnce(nonStreamingResponse({ id: "resp_1", output: [] }));
+
+    await makeOpenAIResponsesRequest(
+      [{ role: "user", content: "Hello" }],
+      vi.fn(),
+      "gpt-4",
+      "test-token",
+      ["team-a"],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      { "anthropic-beta": "context-1m-2025-08-07" },
+    );
+
+    expect(vi.mocked(openai.OpenAI).mock.calls[0][0]).toMatchObject({
+      defaultHeaders: { "x-litellm-tags": "team-a", "anthropic-beta": "context-1m-2025-08-07" },
+    });
   });
 });

@@ -400,7 +400,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
         Anthropic web search tools have:
         - type starting with "web_search" (e.g., "web_search_20260209")
-        - name = "web_search"
+        - legacy name = "web_search" without a client input_schema
 
         Args:
             tool: Tool definition dict
@@ -410,7 +410,9 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         tool_type: Final = tool.get("type", "")
         tool_name: Final = tool.get("name", "")
-        return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search"
+        return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or (
+            tool_name == "web_search" and "input_schema" not in tool
+        )
 
     def translate_anthropic_messages_to_openai(
         self,
@@ -1178,7 +1180,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self._add_system_message_to_messages(new_messages, anthropic_message_request)
 
         new_kwargs: Final[ChatCompletionRequest] = {
-            "model": anthropic_message_request["model"],
+            "model": anthropic_message_request.get("model", ""),
             "messages": new_messages,
         }
         ## CONVERT METADATA (user_id + litellm metadata)

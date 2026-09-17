@@ -52,6 +52,7 @@ from typing import Annotated, Final, Protocol, TypeAlias, cast
 from pydantic import AliasChoices, BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from litellm.proxy.db.pgbouncer import database_url_is_pooled
 from litellm.proxy.db.token_auth import (
     AZURE_POSTGRESQL_AUTH_ENV_VAR,
     DEFAULT_POSTGRES_PORT,
@@ -73,6 +74,8 @@ DisablePreparedStatementsFlag = Annotated[
     bool, BeforeValidator(partial(token_auth_flag_enabled, env_var=DISABLE_PREPARED_STATEMENTS_ENV_VAR))
 ]
 MAX_IDLE_CONNECTION_LIFETIME_ENV_VAR: Final = "DATABASE_MAX_IDLE_CONNECTION_LIFETIME"
+DATABASE_SSLMODE_ENV_VAR: Final = "DATABASE_SSLMODE"
+DATABASE_SSLROOTCERT_ENV_VAR: Final = "DATABASE_SSLROOTCERT"
 
 # schema.prisma pins `provider = "postgresql"`, so these are the only schemes
 # Prisma can actually connect with.
@@ -134,6 +137,7 @@ def add_missing_query_params(url: str, params: Mapping[str, str | int | float]) 
 
 
 LIBPQ_VERIFY_SSLMODES: Final[frozenset[str]] = frozenset({"verify-ca", "verify-full"})
+PRISMA_TLS_PARAM_KEYS: Final[frozenset[str]] = frozenset({"sslmode", "sslcert", "sslaccept"})
 PEM_CERT_HEADER: Final = b"-----BEGIN CERTIFICATE-----"
 PG_SSL_REQUEST: Final = struct.pack("!ii", 8, 80877103)
 TLS_PROBE_TIMEOUT_SECONDS: Final = 10.0
@@ -262,6 +266,19 @@ def connection_params_from_url(url: str) -> Mapping[str, str | int | float]:
     )
 
 
+def token_refresh_params_from_url(url: str) -> Mapping[str, str | int | float]:
+    """Return the params a re-minted token URL carries over from the URL it replaces.
+
+    The pool and timeout params plus Prisma's TLS params (already translated from
+    libpq spelling), so a refreshed URL keeps verifying the server the way the
+    first one did.
+    """
+    kept: Final = CONNECTION_PARAM_KEYS | PRISMA_TLS_PARAM_KEYS
+    return MappingProxyType(
+        {key: value for key, value in urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query) if key in kept}
+    )
+
+
 def unsupported_db_scheme(database_url: str) -> str | None:
     """Return the connection URL scheme when it is not PostgreSQL, else None.
 
@@ -311,6 +328,9 @@ class DatabaseURLSettings(BaseSettings):
         default=None, validation_alias=MAX_IDLE_CONNECTION_LIFETIME_ENV_VAR
     )
 
+    database_sslmode: str | None = Field(default=None, validation_alias=DATABASE_SSLMODE_ENV_VAR)
+    database_sslrootcert: str | None = Field(default=None, validation_alias=DATABASE_SSLROOTCERT_ENV_VAR)
+
     # Writer
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
     direct_url: str | None = Field(default=None, validation_alias="DIRECT_URL")
@@ -352,14 +372,43 @@ class DatabaseURLSettings(BaseSettings):
             azure_postgresql_auth=self.azure_postgresql_auth,
         )
 
+    def tls_params(self) -> Mapping[str, str]:
+        """``sslmode`` / ``sslrootcert`` query params for every URL assembled from the discrete vars.
+
+        A root cert on its own means ``verify-full``: under libpq's default
+        ``prefer`` the CA would never be consulted, and PgBouncer would dial
+        Postgres unverified with the bundle loaded.
+        """
+        sslmode: Final = self.database_sslmode or ("verify-full" if self.database_sslrootcert else None)
+        return MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("sslmode", sslmode),
+                    ("sslrootcert", self.database_sslrootcert),
+                )
+                if value
+            }
+        )
+
     def build_writer_url(self) -> str | None:
         """Return the writer URL to set, or ``None`` to leave it as-is.
 
         Raises ``RuntimeError`` (naming the offending vars) when token auth is
         enabled but a required field is missing — the proxy cannot recover
         from this and a clear startup error beats a Prisma connect failure.
+        A ``DATABASE_URL`` the supervisor pointed at the in-container PgBouncer
+        is kept even under token auth: the pooler renews the token upstream.
         """
+        assembled: Final = self._assemble_writer_url()
+        if assembled is None:
+            return None
+        return add_missing_query_params(assembled, self.tls_params())
+
+    def _assemble_writer_url(self) -> str | None:
         auth: Final = self.token_auth()
+        if auth is not None and database_url_is_pooled():
+            return None
         if auth is not None:
             missing: Final = tuple(
                 env
@@ -406,6 +455,12 @@ class DatabaseURLSettings(BaseSettings):
         pre-existing ``DATABASE_URL_READ_REPLICA``. Reader fields fall back
         to the writer's values.
         """
+        assembled: Final = self._assemble_reader_url()
+        if assembled is None:
+            return None
+        return add_missing_query_params(assembled, self.tls_params())
+
+    def _assemble_reader_url(self) -> str | None:
         if not self.database_host_read_replica:
             return None  # reader is opt-in
         if self.database_url_read_replica:

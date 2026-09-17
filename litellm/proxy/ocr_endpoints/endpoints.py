@@ -21,6 +21,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_au
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
 router: Final = APIRouter()
+_MAX_FILE_BYTES: Final = 50 * 1024 * 1024
 
 
 def _build_document_from_upload(
@@ -28,23 +29,14 @@ def _build_document_from_upload(
     filename: str | None,
     content_type: str | None,
 ) -> dict[str, str]:
-    """
-    Convert uploaded file bytes into a Mistral-format document dict with base64 data URI.
-
-    Delegates to convert_file_document_to_url_document after resolving MIME type
-    from the upload's content_type header or filename.
-    """
-    mime_type = content_type.split(";")[0].strip() if content_type else None
-    if not mime_type or mime_type == "application/octet-stream":
-        if filename:
-            mime_type = get_mime_type(filename)
-
+    supplied_mime: Final = content_type.split(";")[0].strip() if content_type else None
+    mime_type: Final = (
+        get_mime_type(filename)
+        if filename and (not supplied_mime or supplied_mime == "application/octet-stream")
+        else supplied_mime
+    )
     return convert_file_document_to_url_document(
-        {
-            "type": "file",
-            "file": file_content,
-            "mime_type": mime_type or "application/octet-stream",
-        }
+        {"type": "file", "file": file_content, "mime_type": mime_type or "application/octet-stream"}
     )
 
 
@@ -120,9 +112,11 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
 
     # Seek to start in case the file was already partially read by middleware
     await uploaded_file.seek(0)
-    file_content: Final = await uploaded_file.read()
+    file_content: Final = await uploaded_file.read(_MAX_FILE_BYTES + 1)
     if not file_content:
         raise ValueError("Uploaded file is empty")
+    if len(file_content) > _MAX_FILE_BYTES:
+        raise ValueError("OCR file exceeds the size limit")
 
     document: Final = _build_document_from_upload(
         file_content=file_content,

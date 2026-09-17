@@ -170,6 +170,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         admitted_user_context,
         build_effective_auth_contexts,
+        can_access_mcp_server,
         is_ui_session_credential,
     )
     from litellm.proxy._types import (
@@ -1253,7 +1254,7 @@ if MCP_AVAILABLE:
         """
         user_mcp_management_mode: Final = _get_user_mcp_management_mode()
 
-        if user_mcp_management_mode == "view_all":
+        if user_mcp_management_mode == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
             return [{"server_id": server.server_id, "status": server.status} for server in servers]
 
@@ -2278,6 +2279,28 @@ if MCP_AVAILABLE:
         """Persist the OAuth2 access token obtained by the calling user."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         await _authorize_and_fetch_mcp_server(prisma_client, user_api_key_dict, server_id)
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # keep manager import lazy
+            global_mcp_server_manager as _manager,
+        )
+
+        # This endpoint accepts an opaque token with no upstream identity validation, so it must be
+        # closed for identity-bound servers or it becomes a bypass of the token-relay binding check.
+        registry_server: Final = _manager.get_mcp_server_by_id(server_id)
+        binding: Final = registry_server.oauth_identity_binding if registry_server else None
+        if binding is not None and binding.mode == "enforce":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={  # mutable-ok: FastAPI exception detail requires a JSON-serializable dictionary
+                    "error": "oauth_identity_binding_enforced",
+                    "error_description": (
+                        "Direct credential storage is disabled for this server: its OAuth identity "
+                        "binding is enforced and this endpoint cannot validate the token's principal. "
+                        "Complete the OAuth flow through the gateway instead."
+                    ),
+                    "server_id": server_id,
+                    "credential_stored": False,
+                },
+            )
         user_id: Final = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
@@ -2461,10 +2484,11 @@ if MCP_AVAILABLE:
                 )
             return server
 
-        allowed_server_ids: Final[set[str]] = set()
-        for auth_context in await build_effective_auth_contexts(user_api_key_dict):
-            allowed_server_ids.update(await global_mcp_server_manager.get_allowed_mcp_servers(auth_context))
-        if server is None or server.server_id not in allowed_server_ids:
+        if server is None or not await can_access_mcp_server(
+            user_api_key_dict,
+            server.server_id,
+            global_mcp_server_manager.get_allowed_mcp_servers,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
