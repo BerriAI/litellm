@@ -50,6 +50,7 @@ _DEPLOYMENT_OPTIONS: Final = frozenset(
         "max_retries",
         "num_retries",
         "max_parallel_requests",
+        "max_parallel_requests_queue_size",
         "input_cost_per_token",
         "output_cost_per_token",
         "cache_read_input_token_cost",
