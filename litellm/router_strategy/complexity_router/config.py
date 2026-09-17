@@ -673,6 +673,31 @@ class CapabilityClassifierConfig(BaseModel):
         return self
 
 
+class JevClassifierConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str = "jev-latest"
+    api_key: str | None = Field(default=None, description="TypeSafe API key, falling back to TYPESAFE_API_KEY")
+    api_base: str | None = Field(
+        default=None,
+        description="TypeSafe API base, falling back to TYPESAFE_API_BASE and then https://api.typesafe.ai",
+    )
+    timeout_ms: int = Field(default=3000, ge=1)
+    instructions: str | None = Field(
+        default=None,
+        description="Replaces the built-in Jev question instructions",
+    )
+    circuit_breaker_enabled: bool = True
+    circuit_breaker_cooldown_seconds: float = Field(default=30.0, gt=0.0)
+
+    @field_validator("instructions")
+    @classmethod
+    def _reject_blank_instructions(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("jev_classifier_config.instructions must be non-empty; omit it to use the default")
+        return value
+
+
 MAX_CUSTOM_PATTERN_REPEAT: Final[int] = 64
 MAX_CUSTOM_PATTERN_WORK: Final[int] = 2048
 MAX_CUSTOM_DIMENSIONS_WORK: Final[int] = 8192
@@ -814,7 +839,7 @@ class ComplexityRouterConfig(BaseModel):
             "that relays or reformats information rather than reasoning about it. Off by default: "
             "turning it on adds a rung to this router's ladder, a bullet to the LLM classifier's "
             "rubric, and a value the classifier may return, all of which move tier decisions and "
-            "spend on an already-deployed router. Requires an LLM classifier or a custom classifier "
+            "spend on an already-deployed router. Requires an LLM, Jev, or custom classifier "
             "plugin, since the heuristic scorers cannot produce the tier, and a model in `tiers` "
             "under the NON_REASONING key. Escalation still walks up from it, and it is never the "
             "savings baseline or a `heuristic_v2` prediction."
@@ -829,7 +854,7 @@ class ComplexityRouterConfig(BaseModel):
             "becomes that tier's rubric bullet; entries named after a built-in tier may omit the "
             "description and inherit the built-in criteria. List order is ascending severity and "
             "decides which tier wins when several keyword_tier_rules match. Requires classifier_type "
-            "'llm' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, "
+            "'llm', 'jev' or 'custom', a fallback_tier, and `tiers` keys matching the defined names exactly. Escalation, "
             "adaptive selection, session affinity, plugins, tier_labels, and the calibration-example "
             "rubric presets are unavailable with a custom tier set: the first four are built on the "
             "built-in tier ladder, and the last two rename or exemplify tiers the set replaces."
@@ -965,7 +990,15 @@ class ComplexityRouterConfig(BaseModel):
 
     # Classifier strategy
     classifier_type: Literal[
-        "heuristic", "heuristic_v2", "llm", "capability", "llm_v2", "custom", "heuristic_first", "hybrid"
+        "heuristic",
+        "heuristic_v2",
+        "llm",
+        "capability",
+        "llm_v2",
+        "custom",
+        "heuristic_first",
+        "hybrid",
+        "jev",
     ] = Field(
         default="heuristic",
         description=(
@@ -973,7 +1006,7 @@ class ComplexityRouterConfig(BaseModel):
             "an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, "
             "a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the "
             "local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer "
-            "everywhere except when its score lands near a tier boundary"
+            "everywhere except when its score lands near a tier boundary, or 'jev', a TypeSafe AI Jev structured choice call"
         ),
     )
     llm_v2_config: LLMV2Config | None = Field(
@@ -1002,6 +1035,7 @@ class ComplexityRouterConfig(BaseModel):
             "and otherwise routes to capable_tier"
         ),
     )
+    jev_classifier_config: JevClassifierConfig | None = None
     heuristic_first_max_tier: str | None = Field(
         default=None,
         description=(
@@ -1538,6 +1572,17 @@ class ComplexityRouterConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_jev_classifier_config(self) -> "ComplexityRouterConfig":
+        jev: Final = self.jev_classifier_config
+        if self.classifier_type != "jev":
+            if jev is not None:
+                raise ValueError("jev_classifier_config requires classifier_type 'jev'; otherwise it has no effect")
+            return self
+        if jev is None:
+            raise ValueError("jev_classifier_config is required when classifier_type is 'jev'")
+        return self
+
+    @model_validator(mode="after")
     def _validate_capability_classifier_tiers(self) -> "ComplexityRouterConfig":
         capability: Final = self.capability_classifier_config
         if self.classifier_type != "capability" or capability is None:
@@ -1850,9 +1895,9 @@ class ComplexityRouterConfig(BaseModel):
                 "enable_non_reasoning_tier cannot be combined with tier_definitions: a custom tier set "
                 f"replaces the built-in ladder, so name a tier {non_reasoning_key} in tier_definitions instead"
             )
-        if self.classifier_type not in ("llm", "custom"):
+        if self.classifier_type not in ("llm", "custom", "jev"):
             raise ValueError(
-                f"enable_non_reasoning_tier requires classifier_type 'llm' or 'custom', got "
+                f"enable_non_reasoning_tier requires classifier_type 'llm', 'jev' or 'custom', got "
                 f"{self.classifier_type!r}: the heuristic scorers only produce the four tiers from SIMPLE up, "
                 f"so nothing would ever classify as {non_reasoning_key}"
             )
@@ -1885,7 +1930,7 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError(f"tier_definitions names must be unique (case-insensitive): {', '.join(duplicated)}")
         if self.classifier_type in ("heuristic", "heuristic_v2", "capability", "heuristic_first", "hybrid"):
             raise ValueError(
-                "tier_definitions requires classifier_type 'llm' or 'custom': the heuristic scorer only "
+                "tier_definitions requires classifier_type 'llm', 'jev' or 'custom': the heuristic scorer only "
                 "produces the built-in tiers from SIMPLE up, as does heuristic_v2"
             )
         conflicts: Final = self._tier_definition_conflicts()
