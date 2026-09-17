@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import List
 
 import pytest
+from pydantic import BaseModel, computed_field
 
 import litellm
 from litellm._logging import (
@@ -1000,6 +1001,20 @@ def test_scrubbed_record_is_scanned_for_secrets_once(monkeypatch, formatter):
     assert counting.scanned_chars == len(f"receiving data: {_REQUEST_DUMP}")
 
 
+def test_stamped_record_is_not_scanned_again(monkeypatch):
+    """JSON mode puts the filter on a third-party logger and again on the root handler its
+    records propagate to, so the second filter must trust the stamp instead of rescanning."""
+    counting = _CountingPattern(secret_redaction._SECRET_RE)
+    monkeypatch.setattr(secret_redaction, "_SECRET_RE", counting)
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.DEBUG, "receiving data: %s", (_REQUEST_DUMP,))
+
+    assert SecretRedactionFilter().filter(record) is True
+    assert SecretRedactionFilter().filter(record) is True
+
+    assert counting.calls == 1
+
+
 def test_stack_info_is_scrubbed_before_the_plain_formatter(monkeypatch):
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.INFO, "call failed")
@@ -1012,8 +1027,23 @@ def test_stack_info_is_scrubbed_before_the_plain_formatter(monkeypatch):
     assert "Stack (most recent call last):" in rendered
 
 
-@pytest.mark.parametrize("extra", ({1, "a"}, {"nested": {1, "a"}}), ids=("mixed_set", "nested_mixed_set"))
+class _BrokenModel(BaseModel):
+    name: str
+
+    @computed_field
+    @property
+    def snapshot(self) -> str:
+        raise RuntimeError("snapshot unavailable")
+
+
+@pytest.mark.parametrize(
+    "extra",
+    ({1, "a"}, {"nested": {1, "a"}}, _BrokenModel(name="gpt-4o"), {"request": _BrokenModel(name="gpt-4o")}),
+    ids=("mixed_set", "nested_mixed_set", "raising_model", "nested_raising_model"),
+)
 def test_unserializable_extra_never_breaks_the_filter(monkeypatch, extra):
+    """A pydantic computed field that raises escapes model_dump() and str() alike, and a
+    logging filter that lets it through raises into the caller's own log call."""
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.WARNING, "request sent")
     record.payload = extra
