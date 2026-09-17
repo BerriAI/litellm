@@ -1025,8 +1025,6 @@ async def _delete_organization_keys(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
-    """Delete the organization's keys and drop every cache entry that still resolves to them,
-    including the jwt_key_mapping entries the FK cascade removes from the table but not from the cache."""
     key_filter: Final[_OrganizationIdFilter] = {"organization_id": organization_id}
     keys_to_delete: Final = await _table(VerificationTokenRepository(prisma_client)).find_many(where=key_filter)
     hashed_tokens_to_delete: Final = tuple(key.token for key in keys_to_delete)
