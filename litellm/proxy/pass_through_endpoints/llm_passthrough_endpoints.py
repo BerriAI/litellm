@@ -1338,7 +1338,9 @@ async def transcribe_proxy_route(
     from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
         TRANSCRIBE_CUSTOM_LLM_PROVIDER,
         TRANSCRIBE_TARGET_PREFIX,
+        transcribe_cost_per_second,
         transcribe_supported_operations,
+        transcribe_unpriceable_request_reason,
     )
 
     if operation not in transcribe_supported_operations():
@@ -1366,6 +1368,9 @@ async def transcribe_proxy_route(
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not an Amazon Transcribe request member")
+    unpriceable_reason: Final = transcribe_unpriceable_request_reason(operation, data, transcribe_cost_per_second())
+    if unpriceable_reason is not None:
+        raise HTTPException(status_code=400, detail=unpriceable_reason)
 
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing, sign_aws_json_post
 

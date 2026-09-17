@@ -5301,7 +5301,9 @@ class TestTranscribeProxyRoute:
     )
 
     def test_signs_and_forwards_start_transcription_job(self, transcribe_client: TestClient) -> None:
-        upstream_body = {"TranscriptionJob": {"TranscriptionJobName": "litellm-job-1", "TranscriptionJobStatus": "IN_PROGRESS"}}
+        upstream_body = {
+            "TranscriptionJob": {"TranscriptionJobName": "litellm-job-1", "TranscriptionJobStatus": "IN_PROGRESS"}
+        }
         with respx.mock(assert_all_called=True) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=upstream_body))
             response = transcribe_client.post(
@@ -5311,9 +5313,11 @@ class TestTranscribeProxyRoute:
             )
 
         assert (response.status_code, response.json()) == (200, upstream_body)
-        sent = route.calls.last.request
+        targets = [call.request.headers["x-amz-target"] for call in route.calls]
+        assert targets[0] == "Transcribe.StartTranscriptionJob"
+        assert set(targets[1:]) <= {"Transcribe.GetTranscriptionJob"}
+        sent = route.calls[0].request
         assert json.loads(sent.content) == dict(self.START_JOB_BODY)
-        assert sent.headers["x-amz-target"] == "Transcribe.StartTranscriptionJob"
         assert sent.headers["content-type"] == "application/x-amz-json-1.1"
         assert sent.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=test-access-key/")
         assert "/us-west-2/transcribe/aws4_request" in sent.headers["authorization"]
@@ -5334,7 +5338,10 @@ class TestTranscribeProxyRoute:
                 },
             )
 
-        assert (response.status_code, response.json()) == (200, {"TranscriptionJob": {"TranscriptionJobStatus": "COMPLETED"}})
+        assert (response.status_code, response.json()) == (
+            200,
+            {"TranscriptionJob": {"TranscriptionJobStatus": "COMPLETED"}},
+        )
         sent = route.calls.last.request
         assert sent.headers["x-amz-target"] == "Transcribe.GetTranscriptionJob"
         assert "Credential=test-access-key/" in sent.headers["authorization"]
@@ -5344,15 +5351,25 @@ class TestTranscribeProxyRoute:
         aws_error = {"__type": "BadRequestException", "Message": "The requested job couldn't be found."}
         with respx.mock(assert_all_called=True) as upstream:
             upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(400, json=aws_error))
-            response = transcribe_client.post("/transcribe/GetTranscriptionJob", json={"TranscriptionJobName": "missing"})
+            response = transcribe_client.post(
+                "/transcribe/GetTranscriptionJob", json={"TranscriptionJobName": "missing"}
+            )
 
         assert (response.status_code, response.json()) == (400, aws_error)
 
     @pytest.mark.parametrize(
         "operation",
-        ["Start-Transcription-Job", "Transcribe.StartTranscriptionJob", "a" * 200, "starttranscriptionjob", "DetectEntitiesV2"],
+        [
+            "Start-Transcription-Job",
+            "Transcribe.StartTranscriptionJob",
+            "a" * 200,
+            "starttranscriptionjob",
+            "DetectEntitiesV2",
+        ],
     )
-    def test_rejects_unsupported_operations_without_calling_aws(self, transcribe_client: TestClient, operation: str) -> None:
+    def test_rejects_unsupported_operations_without_calling_aws(
+        self, transcribe_client: TestClient, operation: str
+    ) -> None:
         with respx.mock(assert_all_called=False) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
             response = transcribe_client.post(f"/transcribe/{operation}", json={})
@@ -5386,6 +5403,40 @@ class TestTranscribeProxyRoute:
 
         assert response.status_code == 400
         assert "AWS region" in response.json()["detail"]
+        assert not route.called
+
+    @pytest.mark.parametrize(
+        ("operation", "body", "detail_fragment"),
+        [
+            ("StartMedicalTranscriptionJob", {"MedicalTranscriptionJobName": "j"}, "StartMedicalTranscriptionJob"),
+            ("StartCallAnalyticsJob", {"CallAnalyticsJobName": "j"}, "StartCallAnalyticsJob"),
+            ("StartMedicalScribeJob", {"MedicalScribeJobName": "j"}, "StartMedicalScribeJob"),
+            ("StartTranscriptionJob", {"ContentRedaction": {"RedactionType": "PII"}}, "ContentRedaction"),
+            ("StartTranscriptionJob", {"ToxicityDetection": [{"ToxicityCategories": ["ALL"]}]}, "ToxicityDetection"),
+            ("StartTranscriptionJob", {"ModelSettings": {"LanguageModelName": "clm"}}, "LanguageModelName"),
+        ],
+    )
+    def test_rejects_unpriced_billable_jobs_without_calling_aws(
+        self, transcribe_client: TestClient, operation: str, body: dict[str, object], detail_fragment: str
+    ) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post(f"/transcribe/{operation}", json={**dict(self.START_JOB_BODY), **body})
+
+        assert response.status_code == 400
+        assert detail_fragment in response.json()["detail"]
+        assert not route.called
+
+    def test_rejects_start_transcription_job_when_the_cost_map_has_no_rate(
+        self, transcribe_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delitem(litellm.model_cost, "transcribe/StartTranscriptionJob")
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM)
+            response = transcribe_client.post("/transcribe/StartTranscriptionJob", json=dict(self.START_JOB_BODY))
+
+        assert response.status_code == 400
+        assert "model cost map" in response.json()["detail"]
         assert not route.called
 
     @pytest.mark.parametrize("target_header", ["", "Transcribe", "ComprehendMedical_20181030.DetectPHI", "Transcribe."])

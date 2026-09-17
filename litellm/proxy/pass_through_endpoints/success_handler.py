@@ -52,7 +52,10 @@ def _safe_response_text(httpx_response: httpx.Response) -> str:
 
 
 class PassThroughEndpointLogging:
-    def __init__(self):
+    def __init__(self, transcribe_handler: TranscribePassthroughLoggingHandler | None = None):
+        self.transcribe_passthrough_logging_handler: Final = (
+            transcribe_handler if transcribe_handler is not None else TranscribePassthroughLoggingHandler()
+        )
         self.TRACKED_VERTEX_METHOD_ROUTES = (
             "generateContent",
             "streamGenerateContent",
@@ -335,6 +338,23 @@ class PassThroughEndpointLogging:
             return
         elif self.is_langfuse_route(url_route):
             # Don't log langfuse pass-through requests
+            return
+        elif self.is_transcribe_route(custom_llm_provider) and TranscribePassthroughLoggingHandler.is_priced_job_start(
+            httpx_response
+        ):
+            self.transcribe_passthrough_logging_handler.schedule_priced_job_logging(
+                httpx_response=httpx_response,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                log=self._handle_logging,
+                standard_pass_through_logging_payload=passthrough_logging_payload,
+                **kwargs,
+            )
             return
         else:
             normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(

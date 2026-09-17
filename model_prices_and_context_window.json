@@ -45747,6 +45747,16 @@
             "/v1/audio/speech"
         ]
     },
+    "transcribe/StartTranscriptionJob": {
+        "input_cost_per_second": 0.0001,
+        "litellm_provider": "transcribe",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://aws.amazon.com/transcribe/pricing/",
+        "metadata": {
+            "notes": "Amazon Transcribe standard batch transcription, billed per second of audio with no minimum. Same rate in every region of the AWS Price List offer file for transcribe (checked 2026-09-17)"
+        }
+    },
     "aws_polly/standard": {
         "input_cost_per_character": 4e-06,
         "litellm_provider": "aws_polly",
