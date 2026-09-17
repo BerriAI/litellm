@@ -18,8 +18,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_AccessGroupTable
 from litellm.types.agents import AgentResponse
 
-AgentLoader: TypeAlias = Callable[[str], Awaitable[AgentResponse | None]]
-AccessGroupLoader: TypeAlias = Callable[[str], Awaitable[LiteLLM_AccessGroupTable | None]]
+AgentLoader: TypeAlias = Callable[[str], Awaitable[AgentResponse | None]]  # mutable-ok: Callable parameter syntax
+LoadedAccessGroup: TypeAlias = LiteLLM_AccessGroupTable | None
+AccessGroupLoader: TypeAlias = Callable[[str], Awaitable[LoadedAccessGroup]]  # mutable-ok: Callable parameter syntax
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +39,7 @@ async def _load_agent(agent_id: str) -> AgentResponse | None:
     return await get_agent_with_read_through(agent_id)
 
 
-async def _load_access_group(access_group_id: str) -> LiteLLM_AccessGroupTable | None:
+async def _load_access_group(access_group_id: str) -> LoadedAccessGroup:
     from litellm.proxy.auth.auth_checks import get_access_object
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
