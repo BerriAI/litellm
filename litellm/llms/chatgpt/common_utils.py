@@ -307,6 +307,19 @@ def get_chatgpt_client_credential(headers: Mapping[str, str]) -> ChatGPTClientCr
     return ChatGPTClientCredential(access_token=access_token, account_id=account_id)
 
 
+def select_chatgpt_client_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    if get_chatgpt_client_credential(headers) is None:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in headers.items()
+            if (key.lower() == "authorization" and is_chatgpt_oauth_key(value))
+            or key.lower() == CHATGPT_ACCOUNT_ID_HEADER.lower()
+        }
+    )
+
+
 def strip_chatgpt_client_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return MappingProxyType(
         {

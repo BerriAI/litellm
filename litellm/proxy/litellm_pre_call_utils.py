@@ -3429,7 +3429,7 @@ def add_provider_specific_headers_to_request(
     headers: dict,
 ):
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
-    from litellm.llms.chatgpt.common_utils import CHATGPT_ACCOUNT_ID_HEADER, is_chatgpt_oauth_key
+    from litellm.llms.chatgpt.common_utils import select_chatgpt_client_credential_headers
 
     anthropic_api_headers: Final = {header: headers[header] for header in ANTHROPIC_API_HEADERS if header in headers}
     anthropic_oauth_credential_headers: Final = {
@@ -3437,18 +3437,9 @@ def add_provider_specific_headers_to_request(
         for header, value in headers.items()
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
-    has_chatgpt_oauth_bearer: Final = any(
-        header.lower() == "authorization" and is_chatgpt_oauth_key(value) for header, value in headers.items()
+    chatgpt_oauth_credential_headers: Final = dict(  # mutable-ok: ProviderSpecificHeader.extra_headers is a dict field
+        select_chatgpt_client_credential_headers(headers)
     )
-    chatgpt_oauth_credential_headers: Final = {  # mutable-ok: ProviderSpecificHeader.extra_headers is a dict field
-        header: value
-        for header, value in headers.items()
-        if has_chatgpt_oauth_bearer
-        and (
-            (header.lower() == "authorization" and is_chatgpt_oauth_key(value))
-            or header.lower() == CHATGPT_ACCOUNT_ID_HEADER.lower()
-        )
-    }
 
     scoped_headers: Final = [
         ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
