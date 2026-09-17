@@ -1,10 +1,11 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use litellm_auth::Error as AuthError;
 use litellm_auth::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 
 use super::handler::perform_ocr_request;
 use super::hooks::{
@@ -321,6 +322,7 @@ struct OcrExecution {
     operations_rx: mpsc::UnboundedReceiver<PendingOperation>,
     pending_result: Option<oneshot::Sender<OcrHostResult>>,
     execution: Option<tokio::task::JoinHandle<Result<LiteLLMOcrResponse, Error>>>,
+    blocking_preparation: Arc<BlockingPreparation>,
     completed: bool,
     azure_ad_token_provider: bool,
     terminal: Arc<std::sync::Mutex<Option<(CallLifecycleContext, CallLifecycleTiming)>>>,
@@ -336,6 +338,7 @@ impl OcrExecution {
             operations_rx,
             pending_result: None,
             execution: None,
+            blocking_preparation: Arc::new(BlockingPreparation::default()),
             completed: false,
             azure_ad_token_provider: false,
             terminal: Arc::default(),
@@ -406,8 +409,9 @@ impl OcrExecution {
             terminal: self.terminal.clone(),
         });
         request.hooks = hooks.clone();
+        let blocking_preparation = self.blocking_preparation.clone();
         self.execution = Some(tokio::spawn(async move {
-            let request = prepare_request_document(request, &hooks).await?;
+            let request = prepare_request_document(request, &hooks, blocking_preparation).await?;
             perform_ocr_request(&client, request).await
         }));
     }
@@ -424,13 +428,47 @@ impl OcrExecution {
         if let Some(execution) = self.execution.as_mut() {
             let _ = execution.await;
         }
+        self.blocking_preparation.wait().await;
         self.execution = None;
+    }
+}
+
+#[derive(Default)]
+struct BlockingPreparation {
+    running: AtomicBool,
+    finished: Notify,
+}
+
+impl BlockingPreparation {
+    fn start(self: &Arc<Self>) -> BlockingPreparationGuard {
+        self.running.store(true, Ordering::Release);
+        BlockingPreparationGuard(self.clone())
+    }
+
+    async fn wait(&self) {
+        loop {
+            let finished = self.finished.notified();
+            if !self.running.load(Ordering::Acquire) {
+                return;
+            }
+            finished.await;
+        }
+    }
+}
+
+struct BlockingPreparationGuard(Arc<BlockingPreparation>);
+
+impl Drop for BlockingPreparationGuard {
+    fn drop(&mut self) {
+        self.0.running.store(false, Ordering::Release);
+        self.0.finished.notify_waiters();
     }
 }
 
 async fn prepare_request_document(
     request: LiteLLMOcrRequest<OcrDocumentInput>,
     hooks: &ProtocolHooks,
+    blocking_preparation: Arc<BlockingPreparation>,
 ) -> Result<super::types::ResolvedOcrRequest, Error> {
     let request = match &request.document {
         OcrDocumentInput::HostReader { mime_type } => {
@@ -454,11 +492,15 @@ async fn prepare_request_document(
     if let OcrDocumentInput::Document(_) = &request.document {
         return request.map_document(super::document::prepare_document);
     }
-    tokio::task::spawn_blocking(move || request.map_document(super::document::prepare_document))
-        .await
-        .map_err(|error| {
-            Error::InvalidRequest(format!("OCR document preparation task failed: {error}"))
-        })?
+    let guard = blocking_preparation.start();
+    tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        request.map_document(super::document::prepare_document)
+    })
+    .await
+    .map_err(|error| {
+        Error::InvalidRequest(format!("OCR document preparation task failed: {error}"))
+    })?
 }
 
 impl Drop for OcrExecution {
