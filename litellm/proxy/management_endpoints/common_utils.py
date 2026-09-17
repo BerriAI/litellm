@@ -578,6 +578,8 @@ async def _upsert_budget_and_membership(
             default_budget_dict: Final = default_budget_row.model_dump()
             for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS:
                 value = default_budget_dict.get(field)
+                if field == "max_budget" and value == 0 and not is_shared_default:
+                    continue
                 if _is_set_budget_value(value):
                     create_data[field] = value
 
