@@ -28,7 +28,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
-from litellm.utils import get_llm_provider
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -66,6 +65,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
+from litellm.utils import get_llm_provider
 
 router: Final = APIRouter()
 

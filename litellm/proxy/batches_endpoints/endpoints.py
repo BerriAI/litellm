@@ -303,11 +303,11 @@ async def create_batch(
                 # Forward the deployment's real model id (not the public alias):
                 # Bedrock dispatches on `model` at provider-config load. Leave the
                 # caller-supplied model untouched when it resolves to no deployment.
-                deployment_model: Final = get_deployment_provider_model_name(
+                deployment_model_from_param: Final = get_deployment_provider_model_name(
                     llm_router=llm_router, model_id=model_param
                 )
-                if deployment_model is not None:
-                    _create_batch_data["model"] = deployment_model
+                if deployment_model_from_param is not None:
+                    _create_batch_data["model"] = deployment_model_from_param
 
                 # Create batch using model credentials
                 response = await litellm.acreate_batch(
