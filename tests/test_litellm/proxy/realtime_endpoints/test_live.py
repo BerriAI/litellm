@@ -8,8 +8,15 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
+from prisma.builder import QueryBuilder
 
 from litellm.llms.chatgpt.live import LiveDeployment
+from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.organization import LiteLLM_OrganizationTable
+from litellm.models.project import LiteLLM_ProjectTable
+from litellm.models.team import LiteLLM_TeamTable
+from litellm.models.team_membership import LiteLLM_TeamMembership
+from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.realtime_endpoints import live
 
@@ -76,6 +83,30 @@ def test_handle_serializes_mappingproxy_without_losing_pinned_deployment():
     )
     original = live._new_handle("sess_upstream", "voice", deployment, UserAPIKeyAuth(api_key="owner"), None)
     assert live._pinned(live.decode_session(live.encode_session(original), original.owner)) == deployment
+
+
+def test_json_value_iteratively_serializes_nested_mappingproxy_tuple_and_shared_subtree():
+    shared = MappingProxyType({"deep": (1, 2)})
+    value = MappingProxyType({"left": shared, "right": (shared,)})
+
+    assert live._json_value(value) == {"left": {"deep": [1, 2]}, "right": [{"deep": [1, 2]}]}
+
+
+@pytest.mark.parametrize("value", [{1: "invalid"}, {"invalid": object()}])
+def test_json_value_rejects_non_json_objects_and_keys(value):
+    with pytest.raises(ValueError, match="validation error"):
+        live._json_value(value)
+
+
+def test_json_value_rejects_cycles_and_excessive_depth():
+    cycle = {}
+    cycle["self"] = cycle
+    with pytest.raises(ValueError, match="depth"):
+        live._json_value(cycle)
+
+    nested = json.loads('{"value":' * 257 + "null" + "}" * 257)
+    with pytest.raises(ValueError, match="depth"):
+        live._json_value(nested)
 
 
 def test_only_protocol_session_ids_are_rewritten_and_application_values_survive():
@@ -322,9 +353,19 @@ async def test_websocket_delegation_model_update_is_authorized_before_forwarding
     "limits",
     [
         {"rpm_limit": 1},
+        {"rpm_limit": 0},
         {"model_max_budget": {"backend": 1}},
+        {"rpm_limit_per_model": {"backend": 0}},
+        {"tpm_limit_per_model": {"backend": 0}},
         {"team_tpm_limit": 10},
+        {"organization_rpm_limit": 0},
+        {"organization_tpm_limit": 0},
+        {"team_member_rpm_limit": 0},
+        {"team_member_tpm_limit": 0},
+        {"end_user_rpm_limit": 0},
+        {"end_user_tpm_limit": 0},
         {"team_metadata": {"model_rpm_limit": {"backend": 1}}},
+        {"metadata": {"scopes": [{"nested": {"model_tpm_limit": {"backend": 0}}}]}},
     ],
 )
 async def test_managed_delegation_fails_closed_for_unenforceable_constraints(limits):
@@ -336,13 +377,173 @@ async def test_managed_delegation_fails_closed_for_unenforceable_constraints(lim
 
 
 @pytest.mark.asyncio
-async def test_restricted_webrtc_cannot_change_managed_model_outside_proxy(monkeypatch):
+@pytest.mark.parametrize("delegation", [{"type": "responses"}, {"type": "responses", "responses": {}}])
+async def test_restricted_session_update_can_retain_backend_delegation_model(
+    delegation,
+):
+    body = {"type": "session.update", "session": {"delegation": delegation}}
+    result = await live._authorize_delegation(body, UserAPIKeyAuth(api_key="owner", models=["voice", "backend"]))
+    assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session", [{}, {"delegation": None}, {"delegation": {"type": "client"}}])
+async def test_constrained_webrtc_client_delegation_allows_frontend_updates(
+    session,
+):
+    result = await live._authorize_delegation(
+        {"session": session, "transport": {"type": "webrtc"}},
+        UserAPIKeyAuth(api_key="owner", models=["voice"], rpm_limit=10),
+    )
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"max_budget": 1},
+        {"team_max_budget": 1},
+        {"user_max_budget": 1},
+        {"end_user_max_budget": 1},
+        {"organization_max_budget": 1},
+        {"budget_limits": [{"budget_duration": "1d", "max_budget": 1}]},
+    ],
+)
+def test_managed_constraints_detect_scalar_and_window_budgets(limits):
+    assert live._managed_constraints(UserAPIKeyAuth(api_key="owner", **limits)) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "member_limit, default_limit, blocked",
+    [(0, None, True), (1, None, True), (None, 1, True), (None, 0, False), (None, None, False)],
+)
+async def test_managed_delegation_checks_authoritative_member_and_default_budget(
+    monkeypatch, member_limit, default_limit, blocked
+):
+    auth = UserAPIKeyAuth(
+        api_key="owner", team_id="team", user_id="user", team_metadata={"team_member_budget_id": "budget"}
+    )
+    from litellm.proxy import proxy_server
+
+    membership = AsyncMock(
+        return_value=SimpleNamespace(litellm_budget_table=LiteLLM_BudgetTable(max_budget=member_limit))
+    )
+    db = SimpleNamespace(
+        litellm_teammembership=SimpleNamespace(find_unique=membership),
+        litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
+        litellm_budgettable=SimpleNamespace(
+            find_unique=AsyncMock(return_value=LiteLLM_BudgetTable(max_budget=default_limit))
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(
+        proxy_server, "user_api_key_cache", SimpleNamespace(async_get_cache=AsyncMock(return_value=None))
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(live, "_authorize", AsyncMock())
+    body = {"session": {"delegation": {"type": "responses", "responses": {"model": "backend"}}}}
+
+    if blocked:
+        with pytest.raises(HTTPException) as rejected:
+            await live._authorize_delegation(body, auth)
+        assert rejected.value.status_code == 400
+        assert "client delegation" in rejected.value.detail
+    else:
+        await live._authorize_delegation(body, auth)
+    assert membership.await_args.kwargs["where"] == {"user_id_team_id": {"user_id": "user", "team_id": "team"}}
+
+
+@pytest.mark.asyncio
+async def test_managed_delegation_rejects_unverifiable_member_budget_but_allows_client(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    db = SimpleNamespace(
+        litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(side_effect=RuntimeError("Database unavailable")))
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(
+        proxy_server, "user_api_key_cache", SimpleNamespace(async_get_cache=AsyncMock(return_value=None))
+    )
+    auth = UserAPIKeyAuth(api_key="owner", team_id="team", user_id="user")
+    body = {"session": {"delegation": {"type": "responses", "responses": {"model": "backend"}}}}
+    with pytest.raises(HTTPException) as rejected:
+        await live._authorize_delegation(body, auth)
+    assert rejected.value.status_code == 503
+    await live._authorize_delegation({"session": {"delegation": {"type": "client"}}}, auth)
+
+
+def test_managed_constraints_fails_closed_after_metadata_node_limit():
+    auth = UserAPIKeyAuth(api_key="owner")
+    auth.metadata = {"items": [{} for _ in range(4097)]}
+
+    assert live._managed_constraints(auth) is True
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"model_max_budget": {}},
+        {"team_metadata": {"model_rpm_limit": {}}},
+        {"metadata": {"nested": [{"model_max_budget": {}}]}},
+    ],
+)
+def test_empty_model_limit_maps_do_not_mark_delegation_as_managed(limits):
+    assert live._managed_constraints(UserAPIKeyAuth(api_key="owner", **limits)) is False
+
+
+def test_managed_constraints_terminates_on_cyclic_metadata_without_a_limit():
+    metadata = {}
+    metadata["self"] = metadata
+    auth = UserAPIKeyAuth(api_key="owner")
+    auth.metadata = metadata
+
+    assert live._managed_constraints(auth) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"access_group_ids": ["restricted-group"]},
+        {"project_id": "restricted-project"},
+        {"org_id": "restricted-org"},
+        {"team_id": "restricted-team"},
+        {"team_id": "restricted-team", "user_id": "restricted-member"},
+    ],
+)
+async def test_restricted_scopes_cannot_delegate_without_an_explicit_backend_model(monkeypatch, scope):
+    monkeypatch.setattr(live, "_managed_member_budget", AsyncMock(return_value=False))
+    body = {"session": {"delegation": {"type": "responses", "responses": {}}}}
+
+    with pytest.raises(HTTPException) as rejected:
+        await live._authorize_delegation(body, UserAPIKeyAuth(api_key="owner", **scope))
+
+    assert rejected.value.status_code == 400
+    assert "explicit authorized delegation.responses.model" in rejected.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope",
+    [
+        {"models": ["voice", "backend"]},
+        {"access_group_ids": ["restricted-group"]},
+        {"matched_model_access_groups": ["restricted-group"]},
+        {"project_id": "restricted-project"},
+        {"org_id": "restricted-org"},
+        {"team_id": "restricted-team"},
+        {"team_id": "restricted-team", "user_id": "restricted-member"},
+    ],
+)
+async def test_restricted_webrtc_cannot_change_managed_model_outside_proxy(monkeypatch, scope):
+    monkeypatch.setattr(live, "_managed_member_budget", AsyncMock(return_value=False))
     monkeypatch.setattr(live, "_authorize", AsyncMock())
     body = {
         "session": {"delegation": {"type": "responses", "responses": {"model": "backend"}}},
         "transport": {"type": "webrtc", "sdp": "offer"},
     }
-    auth = UserAPIKeyAuth(api_key="owner", models=["voice", "backend"])
+    auth = UserAPIKeyAuth(api_key="owner", **scope)
     with pytest.raises(HTTPException) as rejected:
         await live._authorize_delegation(body, auth)
     assert rejected.value.status_code == 400
@@ -465,9 +666,7 @@ async def test_inherited_managed_fork_cannot_bypass_new_key_constraints():
 
 
 @pytest.mark.parametrize("protocol", ["http", "websocket"])
-@pytest.mark.parametrize(
-    "startup_policy", [{}, {"delegation": {"type": "responses", "responses": {"model": "allowed"}}}]
-)
+@pytest.mark.parametrize("startup_policy", [{"delegation": {"type": "responses", "responses": {"model": "allowed"}}}])
 @pytest.mark.parametrize("overrides", [{}, {"delegation": {"responses": {}}}])
 def test_restricted_fork_never_trusts_startup_delegation(route_client, protocol, startup_policy, overrides):
     from starlette.websockets import WebSocketDisconnect
@@ -504,9 +703,9 @@ async def test_explicit_fork_backend_is_authorized_even_when_startup_policy_diff
     assert rejected.value.status_code == 403
 
 
-def test_restricted_fork_can_explicitly_select_client_delegation(route_client):
+def test_restricted_client_fork_can_inherit_delegation(route_client):
     route_client.auth.models = ["voice"]
-    body = {"session": {"delegation": {"type": "client"}}}
+    body = {"session": {}}
     token = live.encode_session(handle())
     route_client.transport.request.return_value = httpx.Response(
         200, json={"session": {"id": "sess_fork"}, "transport": {"type": "webrtc", "sdp": "answer"}}
@@ -517,26 +716,13 @@ def test_restricted_fork_can_explicitly_select_client_delegation(route_client):
     route_client.transport.request.assert_awaited_once_with("POST", "live/sessions/sess_upstream/fork", body=body)
 
 
-@pytest.mark.parametrize("protocol", ["http", "websocket"])
+@pytest.mark.asyncio
 @pytest.mark.parametrize("limits", [{"rpm_limit": 10}, {"tpm_limit": 100}, {"model_max_budget": {"backend": 1}}])
-def test_fork_with_new_limits_cannot_trust_old_client_policy(route_client, protocol, limits):
-    from starlette.websockets import WebSocketDisconnect
-
-    # An unrestricted source could have switched to managed delegation after its handle was issued.
-    for key, value in limits.items():
-        setattr(route_client.auth, key, value)
-    token = live.encode_session(handle())
-    path = f"/v1/live/sessions/{token}/fork"
-    if protocol == "http":
-        response = route_client.client.post(path, json={"session": {}})
-        assert response.status_code == 400
-    else:
-        with route_client.client.websocket_connect(path, headers={"Authorization": "Bearer owner"}) as ws:
-            ws.send_json({"type": "session.start", "session": {}})
-            with pytest.raises(WebSocketDisconnect) as rejected:
-                ws.receive_json()
-            assert rejected.value.code == 1008
-    route_client.factory.assert_not_called()
+async def test_client_fork_can_inherit_immutable_delegation_with_new_limits(
+    limits,
+):
+    result = await live._authorize_fork_policy({"session": {}}, handle(), UserAPIKeyAuth(api_key="owner", **limits))
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -928,3 +1114,301 @@ async def test_live_observer_becomes_ready_without_session_started_event(monkeyp
         for supervisor in supervisors:
             await supervisor.close()
     assert observer.closed
+
+
+@pytest.fixture
+def isolated_live_model_auth(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(live, "can_key_call_resolved_model", AsyncMock())
+    monkeypatch.setattr(proxy_server, "llm_model_list", [])
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+
+
+@pytest.mark.asyncio
+async def test_authorize_enforces_authoritative_personal_user_models(monkeypatch, isolated_live_model_auth):
+    user_loader = AsyncMock(return_value=LiteLLM_UserTable(user_id="user-only", models=["voice"]))
+    monkeypatch.setattr(live, "get_user_object", user_loader)
+    auth = UserAPIKeyAuth(api_key="owner", models=[], user_id="user-only")
+
+    await live._authorize("voice", auth)
+    with pytest.raises(Exception, match="user can only access"):
+        await live._authorize("backend", auth)
+
+    assert user_loader.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_authorize_enforces_authoritative_organization_models(monkeypatch, isolated_live_model_auth):
+    org_loader = AsyncMock(
+        return_value=LiteLLM_OrganizationTable(
+            organization_id="org-only",
+            budget_id="budget",
+            created_by="admin",
+            updated_by="admin",
+            models=["voice"],
+        )
+    )
+    monkeypatch.setattr(live, "get_org_object", org_loader)
+    auth = UserAPIKeyAuth(api_key="owner", models=[], org_id="org-only")
+
+    await live._authorize("voice", auth)
+    with pytest.raises(Exception, match="org can only access"):
+        await live._authorize("backend", auth)
+
+    assert org_loader.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "auth_kwargs", "loader_name"),
+    [
+        ("user", {"user_id": "user-only"}, "get_user_object"),
+        ("organization", {"org_id": "org-only"}, "get_org_object"),
+    ],
+)
+async def test_authorize_fails_closed_when_principal_grant_lookup_fails(
+    monkeypatch, isolated_live_model_auth, scope, auth_kwargs, loader_name
+):
+    loader = AsyncMock(side_effect=RuntimeError(f"{scope} lookup unavailable"))
+    monkeypatch.setattr(live, loader_name, loader)
+
+    with pytest.raises(HTTPException) as rejected:
+        await live._authorize("backend", UserAPIKeyAuth(api_key="owner", **auth_kwargs))
+
+    assert rejected.value.status_code == 503
+    assert "verify Live" in str(rejected.value.detail)
+
+
+def test_restricted_models_marks_user_scoped_identity_as_restricted():
+    assert live._restricted_models(UserAPIKeyAuth(api_key="owner", user_id="user-only")) is True
+
+
+@pytest.mark.asyncio
+async def test_sparse_responses_update_without_model_remains_valid_for_user_scoped_identity():
+    result = await live._authorize_delegation(
+        {"type": "session.update", "session": {"delegation": {"type": "responses", "responses": {}}}},
+        UserAPIKeyAuth(api_key="owner", user_id="user-only"),
+    )
+    assert result is None
+
+
+def test_managed_constraints_uses_exact_metadata_keys():
+    for key in ("max_budget_alert_emails", "model_max_budget_usage"):
+        assert live._managed_constraints(UserAPIKeyAuth(api_key="owner", metadata={key: {"backend": 1}})) is False
+
+
+@pytest.mark.asyncio
+async def test_managed_budget_reads_authoritative_member_budget(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    membership = LiteLLM_TeamMembership(
+        user_id="member",
+        team_id="team",
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1),
+    )
+
+    def find_unique(*, where, include):
+        QueryBuilder(method="find_unique", arguments={"where": where}).build_query()
+        return membership
+
+    db = SimpleNamespace(
+        litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(side_effect=find_unique)),
+        litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
+    )
+    cache = SimpleNamespace(async_get_cache=AsyncMock(return_value=None), async_set_cache=AsyncMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+
+    assert await live._managed_member_budget(UserAPIKeyAuth(api_key="owner", team_id="team", user_id="member")) is True
+
+
+@pytest.mark.asyncio
+async def test_managed_budget_fails_closed_when_membership_repository_is_unreadable(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    failure = RuntimeError("database unavailable")
+    db = SimpleNamespace(
+        litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(side_effect=failure)),
+    )
+    cache = SimpleNamespace(async_get_cache=AsyncMock(return_value=None), async_set_cache=AsyncMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+
+    with pytest.raises(HTTPException) as rejected:
+        await live._managed_member_budget(UserAPIKeyAuth(api_key="owner", team_id="team", user_id="member"))
+
+    assert rejected.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_managed_budget_checks_project_team_and_model_group_tables(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    project = LiteLLM_ProjectTable(
+        project_id="project",
+        budget_id="project-budget",
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1),
+    )
+    team = LiteLLM_TeamTable(team_id="team", budget_limits=[{"budget_duration": "1d", "max_budget": 1}])
+    group = SimpleNamespace(
+        access_group_name="group",
+        litellm_budget_table=SimpleNamespace(max_budget=1),
+    )
+
+    def find_project(*, where, include):
+        QueryBuilder(method="find_unique", arguments={"where": where}).build_query()
+        return project
+
+    def find_groups(*, where, include):
+        QueryBuilder(method="find_many", arguments={"where": where}).build_query()
+        return [group]
+
+    db = SimpleNamespace(
+        litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=team)),
+        litellm_projecttable=SimpleNamespace(find_unique=AsyncMock(side_effect=find_project)),
+        litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=AsyncMock(side_effect=find_groups)),
+    )
+    cache = SimpleNamespace(async_get_cache=AsyncMock(return_value=None), async_set_cache=AsyncMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(live, "collect_matched_model_access_groups", AsyncMock(return_value=("group",)))
+
+    assert await live._managed_member_budget(UserAPIKeyAuth(api_key="owner", project_id="project")) is True
+    assert await live._managed_member_budget(UserAPIKeyAuth(api_key="owner", team_id="team")) is True
+    assert (
+        await live._managed_member_budget(
+            UserAPIKeyAuth(api_key="owner", matched_model_access_groups=["voice-group"]), model="backend"
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend_budget, blocked", [(None, False), (0, False), (1, True)])
+async def test_managed_budget_uses_the_delegated_model_group(monkeypatch, backend_budget, blocked):
+    from litellm.proxy import proxy_server
+
+    rows = [
+        SimpleNamespace(access_group_name="voice-group", litellm_budget_table=SimpleNamespace(max_budget=1)),
+        SimpleNamespace(
+            access_group_name="backend-group", litellm_budget_table=SimpleNamespace(max_budget=backend_budget)
+        ),
+    ]
+    db = SimpleNamespace(
+        litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=AsyncMock(return_value=rows)),
+    )
+    cache = SimpleNamespace(async_get_cache=AsyncMock(return_value=None), async_set_cache=AsyncMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "llm_router", SimpleNamespace())
+    monkeypatch.setattr(live, "collect_matched_model_access_groups", AsyncMock(return_value=("backend-group",)))
+
+    auth = UserAPIKeyAuth(api_key="owner", models=["voice", "backend-group"])
+    assert await live._managed_member_budget(auth, model="backend") is blocked
+
+
+@pytest.mark.asyncio
+async def test_responses_delegation_fails_closed_when_inherited_org_lookup_fails(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth import auth_checks
+
+    team = LiteLLM_TeamTable(team_id="team", organization_id="org", models=["*"])
+    group = SimpleNamespace(
+        access_group_name="backend-group",
+        litellm_budget_table=SimpleNamespace(max_budget=1),
+    )
+    db = SimpleNamespace(
+        litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=team)),
+        litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=AsyncMock(return_value=[group])),
+    )
+    cache = SimpleNamespace(async_get_cache=AsyncMock(return_value=None), async_set_cache=AsyncMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(get_model_access_groups=lambda model_name, team_id=None: {"backend-group"}),
+    )
+    monkeypatch.setattr(
+        auth_checks,
+        "get_org_object",
+        AsyncMock(side_effect=RuntimeError("organization lookup unavailable")),
+    )
+    monkeypatch.setattr(live, "_authorize", AsyncMock())
+
+    with pytest.raises(HTTPException) as rejected:
+        await live._authorize_delegation(
+            {"session": {"delegation": {"type": "responses", "responses": {"model": "backend"}}}},
+            UserAPIKeyAuth(api_key="owner", models=["*"], team_id="team"),
+        )
+
+    assert rejected.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_authorize_checks_organization_inherited_from_team(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    team = SimpleNamespace(organization_id="org")
+    org = SimpleNamespace(models=["backend"])
+    team_loader = AsyncMock(return_value=team)
+    org_loader = AsyncMock(return_value=org)
+    org_check = Mock()
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", object())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", None)
+    monkeypatch.setattr(proxy_server, "llm_model_list", [])
+    monkeypatch.setattr(proxy_server, "llm_router", object())
+    monkeypatch.setattr(live, "can_key_call_resolved_model", AsyncMock())
+    monkeypatch.setattr(live, "get_team_object", team_loader, raising=False)
+    monkeypatch.setattr(live, "get_org_object", org_loader)
+    monkeypatch.setattr(live, "can_org_access_model", org_check)
+
+    await live._authorize("backend", UserAPIKeyAuth(api_key="owner", team_id="team"))
+
+    team_loader.assert_awaited_once()
+    org_loader.assert_awaited_once()
+    org_check.assert_called_once_with(model="backend", org_object=org, llm_router=proxy_server.llm_router)
+
+
+@pytest.mark.asyncio
+async def test_managed_budget_fails_closed_when_member_scope_lookup_fails_after_snapshot(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    team = LiteLLM_TeamTable(team_id="team", models=["*"])
+    membership = LiteLLM_TeamMembership(
+        user_id="member",
+        team_id="team",
+        litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["backend-group"]),
+    )
+    group = SimpleNamespace(
+        access_group_name="backend-group",
+        litellm_budget_table=SimpleNamespace(max_budget=1),
+    )
+    db = SimpleNamespace(
+        litellm_teammembership=SimpleNamespace(
+            find_unique=AsyncMock(side_effect=[membership, RuntimeError("membership lookup unavailable")])
+        ),
+        litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=team)),
+        litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=AsyncMock(return_value=[group])),
+    )
+    cache = SimpleNamespace(async_get_cache=AsyncMock(return_value=None), async_set_cache=AsyncMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(get_model_access_groups=lambda model_name, team_id=None: {"backend-group"}),
+    )
+    monkeypatch.setattr(live, "_authorize", AsyncMock())
+
+    with pytest.raises(HTTPException) as rejected:
+        await live._authorize_delegation(
+            {"session": {"delegation": {"type": "responses", "responses": {"model": "backend"}}}},
+            UserAPIKeyAuth(api_key="owner", models=["*"], team_id="team", user_id="member"),
+        )
+
+    assert rejected.value.status_code == 503
