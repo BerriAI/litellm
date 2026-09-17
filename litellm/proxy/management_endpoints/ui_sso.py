@@ -354,7 +354,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
             status_code=400,
             detail=(
                 "Your litellm CLI is out of date and uses a login flow this proxy no longer supports. "
-                "Upgrade it with `pip install -U 'litellm[proxy]'` and run `litellm-proxy login` again."
+                "Upgrade it with `pip install -U 'litellm[proxy]'` and run `lite login` again."
             ),
         )
     if not _is_valid_cli_sso_login_id(login_id):
@@ -375,7 +375,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
         raise HTTPException(
             status_code=400,
             detail=(
-                "CLI login session not found or expired. Run `litellm-proxy login` again. "
+                "CLI login session not found or expired. Run `lite login` again. "
                 "If this happens immediately after starting a login, the proxy is likely running multiple "
                 "replicas without a shared cache; configure a Redis cache "
                 "so every replica can see the login session."
