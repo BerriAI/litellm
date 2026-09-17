@@ -4,14 +4,22 @@ Static checks that every proxy Docker image installs the `bedrock-realtime` extr
 Bedrock Nova Sonic speech-to-speech (`/v1/realtime`) needs `aws-sdk-bedrock-runtime`,
 which only ships in the `bedrock-realtime` extra. An image whose `uv sync` stages
 omit the extra fails every Nova Sonic realtime session with
-"Missing aws_sdk_bedrock_runtime. Install with: pip install aws-sdk-bedrock-runtime".
+"Missing aws_sdk_bedrock_runtime for Bedrock realtime".
 """
 
 import os
 import re
+import sys
 from typing import Final
 
 import pytest
+
+from litellm.constants import BEDROCK_REALTIME_SDK_DISTRIBUTION, BEDROCK_REALTIME_SDK_SUPPORTED_RANGE
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 REPO_ROOT: Final = os.path.join(os.path.dirname(__file__), "..", "..")
 
@@ -53,4 +61,17 @@ def test_every_uv_sync_installs_bedrock_realtime_extra(relative_path: str):
         f"{relative_path}: {len(missing)} of {len(invocations)} `uv sync` invocations omit "
         "`--extra bedrock-realtime`, so aws-sdk-bedrock-runtime is absent and Bedrock Nova Sonic "
         "/v1/realtime sessions fail with 'Missing aws_sdk_bedrock_runtime'"
+    )
+
+
+def test_bedrock_realtime_extra_pins_the_range_named_in_the_runtime_error():
+    with open(os.path.join(REPO_ROOT, "pyproject.toml"), "rb") as f:
+        extra_specs: Final = tomllib.load(f)["project"]["optional-dependencies"]["bedrock-realtime"]
+
+    sdk_specs: Final = tuple(spec for spec in extra_specs if spec.startswith(BEDROCK_REALTIME_SDK_DISTRIBUTION))
+    assert len(sdk_specs) == 1, f"expected exactly one {BEDROCK_REALTIME_SDK_DISTRIBUTION} spec, got {extra_specs}"
+    requirement: Final = sdk_specs[0].split(";")[0].strip()
+    assert requirement == f"{BEDROCK_REALTIME_SDK_DISTRIBUTION}[awscrt]{BEDROCK_REALTIME_SDK_SUPPORTED_RANGE}", (
+        f"pyproject pins {requirement!r} but the handler's install hint names "
+        f"{BEDROCK_REALTIME_SDK_SUPPORTED_RANGE!r} with the awscrt extra; keep them in sync"
     )
