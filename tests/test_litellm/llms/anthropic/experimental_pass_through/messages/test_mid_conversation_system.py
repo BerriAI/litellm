@@ -1,9 +1,19 @@
-import time
+from collections import Counter
 
 from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
     convert_mid_conversation_system_turns,
 )
+
+
+class RoleReadCountingMessage(dict):
+    def __init__(self, role: str, content: object, reads: Counter):
+        super().__init__(role=role, content=content)
+        self.reads = reads
+
+    def get(self, key, default=None):
+        self.reads[key] += 1
+        return super().get(key, default)
 
 
 def test_convert_mid_conversation_system_turns_converts_system_to_user_in_place():
@@ -64,17 +74,16 @@ def test_convert_mid_conversation_system_turns_moves_system_after_tool_result():
     assert result[2]["content"][0]["text"] == CONVERTED_SYSTEM_NOTE
 
 
-def test_convert_mid_conversation_system_turns_handles_long_system_run_in_linear_time():
-    system_run = [{"role": "system", "content": f"reminder {i}"} for i in range(20_000)]
-    tool_result = {
-        "role": "user",
-        "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "Rainy"}],
-    }
+def test_convert_mid_conversation_system_turns_reads_each_role_a_bounded_number_of_times():
+    reads = Counter()
+    system_run = [RoleReadCountingMessage("system", f"reminder {i}", reads) for i in range(2_000)]
+    tool_result = RoleReadCountingMessage(
+        "user", [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "Rainy"}], reads
+    )
+    messages = [RoleReadCountingMessage("user", "hi", reads), *system_run, tool_result]
 
-    started = time.perf_counter()
-    result = convert_mid_conversation_system_turns([{"role": "user", "content": "hi"}, *system_run, tool_result])
-    elapsed = time.perf_counter() - started
+    result = convert_mid_conversation_system_turns(messages)
 
-    assert elapsed < 5
+    assert reads["role"] <= 3 * len(messages)
     assert result[1] is tool_result
     assert [m["content"][1]["text"] for m in result[2:]] == [m["content"] for m in system_run]
