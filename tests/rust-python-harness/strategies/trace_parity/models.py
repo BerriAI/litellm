@@ -2,14 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, Literal, TypeAlias, cast
+from typing import Final, Literal, cast
 
 from ...shared.parity.recorded_http import RecordedResponse
 from ...shared.reporting.models import SdkFunction
-from ...shared.tracing.steps import Engine, TraceMapping
 
-TraceEngine = Literal["python", "rust", "both"]
-TraceFailureSource = Literal["python", "rust", "harness"]
+TraceFailureSource = Literal["python", "harness"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,30 +46,19 @@ class RouteFixture:
 class RouteSpec:
     route: SdkFunction
     python_entrypoints: tuple[str, str]
-    rust_entrypoints: tuple[str, str] | None
-    fixture: Callable[[Engine, str], RouteFixture]
-
-
-@dataclass(frozen=True, slots=True)
-class GatewayRouteSpec:
-    route: SdkFunction
-    rust_supported: bool = True
-
-
-TraceRouteSpec: TypeAlias = RouteSpec | GatewayRouteSpec
+    fixture: Callable[[str], RouteFixture]
 
 
 @dataclass(frozen=True, slots=True)
 class TraceScenario:
     name: str
-    fixture: Callable[[Engine, str], RouteFixture]
-    mappings: tuple[TraceMapping, ...]
+    fixture: Callable[[str], RouteFixture]
     asynchronous: bool
 
 
 @dataclass(frozen=True, slots=True)
 class TraceSuite:
-    route: TraceRouteSpec
+    route: RouteSpec
     scenarios: tuple[TraceScenario, ...]
 
 

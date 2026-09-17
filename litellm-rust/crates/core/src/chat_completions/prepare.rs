@@ -1,8 +1,8 @@
 use serde_json::Value;
 
-use crate::error::Error;
+use super::Error;
 use crate::http_utils::has_header;
-use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
+use crate::providers::custom_llm_provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::common_utils::{chat_completions_provider_config, string_headers};
 use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
@@ -62,7 +62,6 @@ pub(super) fn resolve_request(
     })
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn validate_environment(
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,

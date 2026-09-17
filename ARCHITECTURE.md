@@ -45,7 +45,7 @@ sequenceDiagram
     ProxyServer->>Auth: user_api_key_auth()
     Auth->>Redis: Check API key cache
     Redis-->>Auth: Key info + spend limits
-    ProxyServer->>Hooks: max_budget_limiter, parallel_request_limiter
+    ProxyServer->>Hooks: parallel_request_limiter, cache_control_check
     Hooks->>Redis: Check/increment rate limit counters
     ProxyServer->>Router: route_request()
     Router->>Main: litellm.acompletion()
@@ -145,7 +145,6 @@ graph TD
 
 | Hook | File | Purpose |
 |------|------|---------|
-| `max_budget_limiter` | `proxy/hooks/max_budget_limiter.py` | Enforce budget limits |
 | `parallel_request_limiter` | `proxy/hooks/parallel_request_limiter_v3.py` | Rate limiting per key/user |
 | `cache_control_check` | `proxy/hooks/cache_control_check.py` | Cache validation |
 | `responses_id_security` | `proxy/hooks/responses_id_security.py` | Response ID validation |

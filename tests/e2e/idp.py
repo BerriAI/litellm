@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import secrets
+import signal
+import subprocess
+import sys
+import time
 import warnings
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from contextlib import ExitStack
+from dataclasses import dataclass, field, replace
+from types import FrameType
 from typing import Final, Literal
 
 import pytest
@@ -14,11 +21,15 @@ from e2e_http import (
     AuthHeaders,
     ExternalWrite,
     NetworkError,
+    NoBody,
     Result,
     Success,
+    UnknownApiError,
     delete_external,
+    get_external,
     post_form_external,
     post_json_external,
+    unwrap,
 )
 from pydantic import BaseModel, Field
 
@@ -46,7 +57,9 @@ class TokenGrantForm(BaseModel):
     grant_type: Literal["password"] = "password"
     client_id: str
     username: str
-    password: str
+    password: str = Field(repr=False)
+    client_secret: str | None = Field(default=None, repr=False)
+    scope: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -63,7 +76,7 @@ class GroupCreateBody(BaseModel):
 
 class PasswordCredential(BaseModel):
     type: Literal["password"] = "password"
-    value: str
+    value: str = Field(repr=False)
     temporary: bool = False
 
 
@@ -101,8 +114,20 @@ class Identity:
     user_id: str
     username: str
     password: str = field(repr=False)
-    group: str
-    group_id: str
+    groups: tuple[str, ...]
+    group_ids: tuple[str, ...]
+
+    @property
+    def group(self) -> str:
+        if len(self.groups) != 1:
+            raise ValueError("A single-group identity is required")
+        return self.groups[0]
+
+    @property
+    def group_id(self) -> str:
+        if len(self.group_ids) != 1:
+            raise ValueError("A single-group identity is required")
+        return self.group_ids[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +136,10 @@ class Keycloak:
     realm: str
     admin_username: str
     admin_password: str = field(repr=False)
+    strict_cleanup: bool = False
+
+    def with_strict_cleanup(self) -> Keycloak:
+        return replace(self, strict_cleanup=True)
 
     @property
     def issuer(self) -> str:
@@ -150,7 +179,9 @@ class Keycloak:
             f"group {name}",
         )
 
-    def create_user(self, *, username: str, email: str, password: str, group: str) -> str:
+    def create_user(
+        self, *, username: str, email: str, password: str, group: str | None = None, groups: tuple[str, ...] = ()
+    ) -> str:
         return created_id(
             post_json_external(
                 self._admin_url("/users"),
@@ -158,7 +189,7 @@ class Keycloak:
                 json=UserCreateBody(
                     username=username,
                     email=email,
-                    groups=(group,),
+                    groups=(group,) if group is not None else groups,
                     credentials=(PasswordCredential(value=password),),
                 ),
             ),
@@ -171,14 +202,28 @@ class Keycloak:
     def delete_group(self, group_id: str) -> None:
         self._delete(f"/groups/{group_id}")
 
+    def assert_absent(self, kind: Literal["users", "groups", "clients"], resource_id: str) -> None:
+        result: Final = get_external(
+            self._admin_url(f"/{kind}/{resource_id}"),
+            headers=self._admin_headers(),
+            response_type=NoBody,
+        )
+        assert isinstance(result, UnknownApiError) and result.status_code == 404, (
+            f"Owned IdP {kind} still exists: {result}"
+        )
+
     def _delete(self, path: str) -> None:
         try:
             headers: Final = self._admin_headers()
         except pytest.fail.Exception as exc:
+            if self.strict_cleanup:
+                raise RuntimeError(f"Keycloak cleanup could not authenticate for {path}") from exc
             warnings.warn(f"Keycloak cleanup could not authenticate for {path}: {exc}", RuntimeWarning, stacklevel=2)
             return
         result: Final = delete_external(self._admin_url(path), headers=headers)
         if result.status_code not in (204, 404):
+            if self.strict_cleanup:
+                raise RuntimeError(f"Keycloak cleanup failed for {path}: HTTP {result.status_code}")
             warnings.warn(
                 f"Keycloak cleanup failed for {path}: HTTP {result.status_code} {result.body[:300]}",
                 RuntimeWarning,
@@ -188,15 +233,34 @@ class Keycloak:
     def provision(self, *, marker: str, group: str, defer: Callable[[Callable[[], object]], None]) -> Identity:
         """Create `group` and a user in it, credentialed with a password generated
         for this test alone, and hand back the identity a token can be minted for."""
-        group_id: Final = self.create_group(group)
-        defer(lambda: self.delete_group(group_id))
+        return self.provision_groups(marker=marker, groups=(group,), defer=defer)
+
+    def provision_groups(
+        self, *, marker: str, groups: tuple[str, ...], defer: Callable[[Callable[[], object]], None]
+    ) -> Identity:
+        def provision_group(name: str) -> str:
+            created: Final = self.create_group(name)
+            defer(lambda: self.delete_group(created))
+            return created
+
+        group_ids: Final = tuple(provision_group(group) for group in groups)
+        return self.provision_user(marker=marker, groups=groups, group_ids=group_ids, defer=defer)
+
+    def provision_user(
+        self,
+        *,
+        marker: str,
+        groups: tuple[str, ...],
+        group_ids: tuple[str, ...],
+        defer: Callable[[Callable[[], object]], None],
+    ) -> Identity:
         username: Final = f"e2e-jwt-user-{marker}"
         password: Final = secrets.token_urlsafe(24)
         user_id: Final = self.create_user(
-            username=username, email=f"{username}@example.com", password=password, group=group
+            username=username, email=f"{username}@example.com", password=password, groups=groups
         )
         defer(lambda: self.delete_user(user_id))
-        return Identity(user_id=user_id, username=username, password=password, group=group, group_id=group_id)
+        return Identity(user_id=user_id, username=username, password=password, groups=groups, group_ids=group_ids)
 
     def access_token(
         self, identity: Identity, *, client_id: str = TESTS_CLIENT_ID, issuer_host: str | None = None
@@ -210,6 +274,65 @@ class Keycloak:
             headers=TokenRequestHeaders(host=issuer_host),
         )
         return self._token(result, f"a token for {identity.username}")
+
+    def discovery(self) -> Discovery:
+        return unwrap(get_external(f"{self.issuer}/.well-known/openid-configuration", response_type=Discovery))
+
+    def browser_client(self, *, callback_url: str, defer: Callable[[Callable[[], object]], None]) -> BrowserClient:
+        client: Final = BrowserClient(
+            client_id=f"e2e-browser-{secrets.token_hex(8)}",
+            secret=secrets.token_urlsafe(32),
+            callback_url=callback_url,
+        )
+        resource_id: Final = created_id(
+            post_json_external(
+                self._admin_url("/clients"),
+                headers=self._admin_headers(),
+                json=BrowserClientBody(
+                    clientId=client.client_id,
+                    secret=client.secret,
+                    redirectUris=(callback_url,),
+                ),
+            ),
+            "browser client",
+        )
+        defer(lambda: self._delete(f"/clients/{resource_id}"))
+        configured: Final = unwrap(
+            get_external(
+                self._admin_url(f"/clients/{resource_id}"),
+                headers=self._admin_headers(),
+                response_type=BrowserClientBody,
+            )
+        )
+        assert configured.redirect_uris == (callback_url,)
+        assert configured.standard_flow_enabled and not configured.public_client
+        assert configured.attributes.pkce == "S256"
+        return client
+
+    def browser_token(self, identity: Identity, client: BrowserClient) -> str:
+        return self._token(
+            post_form_external(
+                self.token_url(self.realm),
+                form=TokenGrantForm(
+                    client_id=client.client_id,
+                    client_secret=client.secret,
+                    username=identity.username,
+                    password=identity.password,
+                    scope="openid email",
+                ),
+                response_type=TokenResponse,
+            ),
+            "browser-profile identity mapping",
+        )
+
+    def userinfo(self, token: str) -> UserInfo:
+        return unwrap(
+            get_external(
+                f"{self.issuer}/protocol/openid-connect/userinfo",
+                headers=AuthHeaders(authorization=f"Bearer {token}"),
+                response_type=UserInfo,
+            )
+        )
 
 
 def keycloak_from_env() -> Keycloak:
@@ -226,3 +349,137 @@ def keycloak_from_env() -> Keycloak:
         admin_username=admin_username,
         admin_password=admin_password,
     )
+
+
+class TokenClaims(BaseModel):
+    sub: str
+    iss: str
+    aud: str | tuple[str, ...]
+    exp: int
+    scope: str = ""
+    groups: tuple[str, ...] = ()
+
+
+class Discovery(BaseModel):
+    issuer: str
+    authorization_endpoint: str
+    token_endpoint: str
+    userinfo_endpoint: str
+    jwks_uri: str
+
+
+class UserInfo(BaseModel):
+    sub: str
+    email: str
+
+
+class BrowserAttributes(BaseModel):
+    pkce: str = Field(default="S256", alias="pkce.code.challenge.method")
+
+
+class AudienceConfig(BaseModel):
+    audience: str = Field(default="litellm-e2e", alias="included.custom.audience")
+    access_token: str = Field(default="true", alias="access.token.claim")
+    id_token: str = Field(default="false", alias="id.token.claim")
+
+
+class AudienceMapper(BaseModel):
+    name: str = "litellm-audience"
+    protocol: str = "openid-connect"
+    mapper: str = Field(default="oidc-audience-mapper", alias="protocolMapper")
+    config: AudienceConfig = Field(default_factory=AudienceConfig)
+
+
+class BrowserClientBody(BaseModel):
+    client_id: str = Field(alias="clientId")
+    secret: str = Field(repr=False)
+    redirect_uris: tuple[str, ...] = Field(alias="redirectUris")
+    enabled: bool = True
+    public_client: bool = Field(default=False, alias="publicClient")
+    standard_flow_enabled: bool = Field(default=True, alias="standardFlowEnabled")
+    direct_access_grants_enabled: bool = Field(default=True, alias="directAccessGrantsEnabled")
+    default_client_scopes: tuple[str, ...] = Field(default=("email", "basic"), alias="defaultClientScopes")
+    attributes: BrowserAttributes = Field(default_factory=BrowserAttributes)
+    protocol_mappers: tuple[AudienceMapper, ...] = Field(default=(AudienceMapper(),), alias="protocolMappers")
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserClient:
+    client_id: str
+    secret: str = field(repr=False)
+    callback_url: str
+
+    def environment(self, discovery: Discovery) -> dict[str, str]:
+        return {
+            "GENERIC_CLIENT_ID": self.client_id,
+            "GENERIC_CLIENT_SECRET": self.secret,
+            "GENERIC_USER_ID_ATTRIBUTE": "sub",
+            "GENERIC_AUTHORIZATION_ENDPOINT": discovery.authorization_endpoint,
+            "GENERIC_TOKEN_ENDPOINT": discovery.token_endpoint,
+            "GENERIC_USERINFO_ENDPOINT": discovery.userinfo_endpoint,
+            "GENERIC_CLIENT_USE_PKCE": "true",
+            "GENERIC_SCOPE": "openid email",
+        }
+
+
+def token_claims(token: str) -> TokenClaims:
+    payload: Final = token.split(".")[1]
+    return TokenClaims.model_validate_json(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+
+
+def _signal_process_group(process_id: int, signum: int) -> bool:
+    try:
+        os.killpg(process_id, signum)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _stop_process_group(child: subprocess.Popen[bytes]) -> None:
+    _signal_process_group(child.pid, signal.SIGTERM)
+    deadline: Final = time.monotonic() + 5
+    while _process_group_exists(child.pid):
+        child.poll()
+        if time.monotonic() >= deadline:
+            _signal_process_group(child.pid, signal.SIGKILL)
+            break
+        time.sleep(0.05)
+    child.wait()
+
+
+def _process_group_exists(process_id: int) -> bool:
+    try:
+        os.killpg(process_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def run_oidc_profile(proxy_url: str, command: list[str]) -> int:
+    idp: Final = keycloak_from_env().with_strict_cleanup()
+    with ExitStack() as cleanup:
+
+        def terminate(signum: int, frame: FrameType | None) -> None:
+            raise SystemExit(128 + signum)
+
+        previous: Final = signal.signal(signal.SIGTERM, terminate)
+        cleanup.callback(signal.signal, signal.SIGTERM, previous)
+
+        def defer(callback: Callable[[], object]) -> None:
+            cleanup.callback(callback)
+
+        client: Final = idp.browser_client(callback_url=f"{proxy_url.rstrip('/')}/sso/callback", defer=defer)
+        environment: Final = {**os.environ, **client.environment(idp.discovery()), "PROXY_BASE_URL": proxy_url}
+        with subprocess.Popen(command, env=environment, start_new_session=True) as child:
+            try:
+                return child.wait()
+            finally:
+                _stop_process_group(child)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        raise SystemExit("Usage: idp.py PROXY_URL COMMAND [ARG ...]; requires a running test IdP")
+    raise SystemExit(run_oidc_profile(sys.argv[1], sys.argv[2:]))
