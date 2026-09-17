@@ -179,6 +179,51 @@ Configure capability forecasting through YAML or the model-management API.
 The dashboard preserves its classifier and calibration on an untouched save;
 it does not provide a capability-card editor
 
+### Fuse v2 profile presets
+
+Fuse v2 accepts maintained model and runtime descriptions instead of requiring
+custom prose for both solvers and the harness. Select profiles explicitly for
+all deployments behind your configured model groups and their actual settings.
+Group names do not select profiles automatically
+
+```yaml
+complexity_router_config:
+  classifier_type: llm_v2
+  classifier_llm_config:
+    model: your-judge-group
+  tiers:
+    SIMPLE: your-efficient-group
+    REASONING: your-capable-group
+  llm_v2_config:
+    efficient_profile_preset: claude-sonnet-5-v1
+    capable_profile_preset: claude-fable-5-1-v1
+    harness_preset: claude-code-v1
+    max_quality_gap: 0.05
+```
+
+`GET /public/complexity_router/fuse_presets` returns the catalog version, model
+profiles, and runtime descriptions, including source URLs. The bundled catalog
+is loaded once per process without network requests. Sources are citations only
+
+Each of `efficient_profile`, `capable_profile`, and `harness` requires either
+nonblank custom text or its corresponding preset reference. Custom text wins
+when both are supplied, but an unknown or wrong-kind preset is still rejected.
+Explicit blank text is invalid even with a valid preset. Custom text remains
+limited to 4000 characters
+
+Saved configurations retain preset references and explicit text separately.
+Preset text is resolved when building the classifier prompt, not copied into
+stored custom fields. Existing all-custom configurations keep the same prompt.
+Versioned preset IDs identify immutable content: revised wording receives a new
+ID, and older referenced entries must remain available
+
+The runtime presets do not imply a repository, runnable tests, network access,
+additional tools, or a step, time, or spending budget. mini-SWE-agent describes
+an agent interface, not a SWE-bench task. Model descriptions summarize provider
+positioning without solve rates or guaranteed rankings. Wording is an evaluation
+input, not a calibrated quality claim. Existing Fuse licensing, policy,
+calibration, and prompt version are unchanged
+
 ### Heuristic v2
 
 Set `classifier_type: heuristic_v2` to classify with the bundled calibrated
