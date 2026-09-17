@@ -348,6 +348,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "audio_transcription",
             "audio_speech",
             "responses",
+            "evaluation",
             "ocr",
             "realtime",
         ]
