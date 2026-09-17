@@ -20245,6 +20245,9 @@ export interface paths {
         /**
          * Agent Skills Archive
          * @description Stored skill upload, repacked so SKILL.md sits at the archive root.
+         *
+         *     Anonymous while the public index is on; otherwise needs a LiteLLM key
+         *     with access to the skill's owner scope.
          */
         get: operations["agent_skills_archive_v1_skills__skill_id__archive_get"];
         put?: never;
