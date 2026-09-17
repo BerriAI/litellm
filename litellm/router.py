@@ -62,6 +62,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MAX_PINNED_RETRY_DELAY,
     OUTPUT_TOKEN_CEILING_PARAMS,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
@@ -8051,8 +8052,10 @@ class Router:
         condition 1 does not hold for this request even though the model group still
         has healthy deployments, because a pre-call check pinned the request to a
         deployment that cannot serve it yet. Such an error may also carry
-        ``retry_after_seconds``, the whole window the pin lasts, which is honored in
-        full rather than capped at the one minute an ordinary retry allows.
+        ``retry_after_seconds``, the whole window the pin lasts, which is honored past
+        the point an ordinary retry stops waiting and up to
+        ``MAX_PINNED_RETRY_DELAY``. That ceiling bounds how long one request can hold
+        a worker slot waiting on a window it does not control.
         """
 
         pinned_to_unavailable_deployment: Final = getattr(e, "no_compatible_deployment_available", False)
@@ -8089,7 +8092,7 @@ class Router:
             )
 
         if pinned_to_unavailable_deployment:
-            advertised_backoff: Final[float] = float(getattr(e, "retry_after_seconds", 0))
+            advertised_backoff: Final[float] = min(float(getattr(e, "retry_after_seconds", 0)), MAX_PINNED_RETRY_DELAY)
             return max(timeout, advertised_backoff)
 
         return timeout

@@ -22,6 +22,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm import Router
+from litellm.constants import MAX_PINNED_RETRY_DELAY
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -15862,4 +15863,31 @@ def test_an_unpinned_rate_limit_still_fails_over_to_a_healthy_deployment_instant
             all_deployments=router.model_list,
         )
         == 0
+    )
+
+
+def test_a_pinned_wait_is_capped_so_one_request_cannot_hold_a_worker_indefinitely():
+    router: Final = Router(model_list=_two_encryption_boundaries())
+    pinned: Final = litellm.RateLimitError(
+        message="origin cooling down",
+        llm_provider="",
+        model=_AFFINITY_GROUP,
+        response=httpx.Response(
+            status_code=429,
+            headers={"retry-after": "86400"},
+            request=httpx.Request("POST", "https://litellm.ai/"),
+        ),
+    )
+    pinned.no_compatible_deployment_available = True
+    pinned.retry_after_seconds = 86400
+
+    assert (
+        router._time_to_sleep_before_retry(
+            e=pinned,
+            remaining_retries=2,
+            num_retries=2,
+            healthy_deployments=[{"model_info": {"id": _AFFINITY_NON_PEER}}],
+            all_deployments=router.model_list,
+        )
+        == MAX_PINNED_RETRY_DELAY
     )
