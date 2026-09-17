@@ -1323,9 +1323,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         user_api_key_cache=user_api_key_cache,
     )
 
-    for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(_OPTIONAL_PromptInjectionDetection):
-        if isinstance(callback, _OPTIONAL_PromptInjectionDetection):
-            callback.update_environment(router=llm_router)
+    ProxyStartupEvent._attach_router_to_prompt_injection_detectors(llm_router=llm_router)
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
     if prisma_client is not None and litellm.max_budget > 0:
@@ -9338,6 +9336,14 @@ def giveup(e):
 
 
 class ProxyStartupEvent:
+    @staticmethod
+    def _attach_router_to_prompt_injection_detectors(llm_router: Router | None) -> None:
+        for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(
+            _OPTIONAL_PromptInjectionDetection
+        ):
+            if isinstance(callback, _OPTIONAL_PromptInjectionDetection):
+                callback.update_environment(router=llm_router)
+
     @staticmethod
     def _warn_budget_without_db(max_budget: float | None, prisma_client: PrismaClient | None) -> None:
         if prisma_client is not None or not max_budget or max_budget <= 0:
