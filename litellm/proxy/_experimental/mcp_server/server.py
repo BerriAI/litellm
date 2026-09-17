@@ -14,6 +14,7 @@ import time
 import traceback
 import types
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
@@ -3837,10 +3838,10 @@ if MCP_AVAILABLE:
         sessions: Sequence[MCPGatewaySession],
         label_for: Callable[[MCPGatewaySession], str | None],
     ) -> tuple[MCPGatewaySessionGroupCount, ...]:
-        labels: Final = tuple(label_for(session) for session in sessions)
+        counts: Final = Counter(label_for(session) for session in sessions)
         return tuple(
             sorted(
-                (MCPGatewaySessionGroupCount(label=label, count=labels.count(label)) for label in frozenset(labels)),
+                (MCPGatewaySessionGroupCount(label=label, count=count) for label, count in counts.items()),
                 key=lambda group: (-group.count, group.label is None, group.label or ""),
             )
         )
