@@ -105,6 +105,7 @@ from .config import (
     ComplexityRouterConfig,
     ComplexityTier,
     CustomDimension,
+    JevClassifierConfig,
     TierDefinition,
 )
 from .jev_classifier import (
@@ -1265,6 +1266,18 @@ class ComplexityRouter(CustomLogger):
     - Question complexity (multiple questions)
     """
 
+    @staticmethod
+    def _build_jev_client(config: JevClassifierConfig) -> JevClassifierClient:
+        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
+        if not api_key:
+            raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
+        api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        return HttpJevClassifierClient(
+            api_key=api_key,
+            api_base=api_base,
+            http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+        )
+
     def __init__(
         self,
         model_name: str,
@@ -1301,19 +1314,13 @@ class ComplexityRouter(CustomLogger):
             self.config.default_model = default_model
 
         jev_config: Final = self.config.jev_classifier_config
-        if self.config.classifier_type == "jev" and jev_client is None and jev_config is not None:
-            api_key: Final = jev_config.api_key or get_secret_str("TYPESAFE_API_KEY")
-            if not api_key:
-                raise ValueError(
-                    "jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'"
-                )
-            api_base: Final = jev_config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
-            jev_client = HttpJevClassifierClient(
-                api_key=api_key,
-                api_base=api_base,
-                http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
-            )
-        self._jev_client = jev_client
+        self._jev_client: JevClassifierClient | None = (
+            jev_client
+            if jev_client is not None
+            else self._build_jev_client(jev_config)
+            if self.config.classifier_type == "jev" and jev_config is not None
+            else None
+        )
 
         self._tier_affinity_config = hashlib.sha256(
             self.config.model_dump_json(include=MappingProxyType({"tiers": True, "tier_model_configs": True})).encode()
