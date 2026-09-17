@@ -56,6 +56,7 @@ from litellm.proxy.auth.auth_checks import (
     common_checks,
     get_end_user_object,
     get_jwt_key_mapping_object,
+    get_key_end_user_budget_id,
     get_object_permission,
     get_project_object,
     get_team_membership,
@@ -64,6 +65,7 @@ from litellm.proxy.auth.auth_checks import (
     is_valid_fallback_model,
     jwt_key_mapping_cache_key,
     resolve_and_validate_end_user_id,
+    resolve_default_end_user_budget,
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_method import AuthMethod
@@ -706,6 +708,8 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.end_user_rpm_limit = end_user_params["end_user_rpm_limit"]
     if end_user_params.get("end_user_tpd_limit") is not None:
         valid_token.end_user_tpd_limit = end_user_params["end_user_tpd_limit"]
+    if end_user_params.get("end_user_max_budget") is not None:
+        valid_token.end_user_max_budget = end_user_params["end_user_max_budget"]
     if end_user_params.get("allowed_model_region") is not None:
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
     if end_user_params.get("end_user_model_max_budget") is not None:
@@ -2680,6 +2684,7 @@ async def _run_centralized_common_checks(
     # resolved the end-user id and attached it here. Reuse that to avoid a
     # second extraction pass; fall back to extracting locally when the
     # function is invoked in isolation (e.g. in direct unit tests).
+    key_end_user_budget_id: Final = get_key_end_user_budget_id(user_api_key_auth_obj.metadata)
     end_user_id = user_api_key_auth_obj.end_user_id
     if end_user_id is None:
         raw_end_user_id: Final = get_end_user_id_from_request_body(request_data, _safe_get_request_headers(request))
@@ -2690,7 +2695,10 @@ async def _run_centralized_common_checks(
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
             route=route,
+            key_end_user_budget_id=key_end_user_budget_id,
         )
+        if end_user_id is not None and key_end_user_budget_id is not None:
+            user_api_key_auth_obj.end_user_id = end_user_id
 
     fetch_coros: Final = []
     if user_api_key_auth_obj.team_id is not None and user_api_key_auth_obj.team_id != UI_TEAM_ID:
@@ -2753,6 +2761,7 @@ async def _run_centralized_common_checks(
                     proxy_logging_obj=proxy_logging_obj,
                     route=route,
                     token_end_user_max_budget=user_api_key_auth_obj.end_user_max_budget,
+                    key_end_user_budget_id=key_end_user_budget_id,
                 ),
             )
         )
@@ -2857,6 +2866,16 @@ async def _run_centralized_common_checks(
         user_api_key_auth_obj.project_metadata = project_object.metadata
         user_api_key_auth_obj.project_alias = project_object.project_alias
 
+    if end_user_id and key_end_user_budget_id is not None and prisma_client is not None:
+        await _apply_key_end_user_default_budget_to_token(
+            valid_token=user_api_key_auth_obj,
+            end_user_object=end_user_object,
+            key_end_user_budget_id=key_end_user_budget_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+        )
+
     skip_budget_checks: Final = _should_skip_budget_checks(
         request_data=request_data,
         route=route,
@@ -2943,6 +2962,37 @@ async def _noop_none() -> None:
     """Sentinel coroutine for asyncio.gather when a fetch is unnecessary
     (e.g. token has no team_id). Keeps the result tuple positional."""
     return
+
+
+async def _apply_key_end_user_default_budget_to_token(
+    valid_token: UserAPIKeyAuth,
+    end_user_object: LiteLLM_EndUserTable | None,
+    key_end_user_budget_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+) -> None:
+    """The builder's end-user pass runs before the key is resolved, so only here can the key's
+    ``end_user_budget_id`` win over the proxy-wide default on the token that reservation reads.
+    The budget replaces the proxy-wide one wholesale: a key budget with no cap also lifts the cap."""
+    default_budget: Final = (
+        end_user_object.litellm_budget_table
+        if end_user_object is not None
+        else await resolve_default_end_user_budget(
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            key_end_user_budget_id=key_end_user_budget_id,
+            parent_otel_span=parent_otel_span,
+        )
+    )
+    if default_budget is None:
+        return
+
+    valid_token.end_user_max_budget = default_budget.max_budget
+    valid_token.end_user_tpm_limit = default_budget.tpm_limit
+    valid_token.end_user_rpm_limit = default_budget.rpm_limit
+    valid_token.end_user_tpd_limit = default_budget.tpd_limit
+    valid_token.end_user_model_max_budget = default_budget.model_max_budget
 
 
 async def _reserve_budget_after_common_checks(
@@ -3094,6 +3144,7 @@ async def _authorize_authenticated_request(
                 parent_otel_span=user_api_key_auth_obj.parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
                 route=route,
+                key_end_user_budget_id=get_key_end_user_budget_id(user_api_key_auth_obj.metadata),
             )
             if resolved_end_user_id is not None:
                 user_api_key_auth_obj.end_user_id = resolved_end_user_id
@@ -3371,6 +3422,7 @@ async def _lookup_end_user_and_apply_budget(
 ):
     """Look up end_user from DB and apply budget limits to valid_token."""
     end_user_object = None
+    key_end_user_budget_id: Final = get_key_end_user_budget_id(valid_token.metadata)
     try:
         end_user_object = await get_end_user_object(
             end_user_id=valid_token.end_user_id,
@@ -3380,6 +3432,7 @@ async def _lookup_end_user_and_apply_budget(
             proxy_logging_obj=proxy_logging_obj,
             route=route,
             token_end_user_max_budget=valid_token.end_user_max_budget,
+            key_end_user_budget_id=key_end_user_budget_id,
         )
         if end_user_object is not None:
             end_user_params = {
@@ -3395,12 +3448,11 @@ async def _lookup_end_user_and_apply_budget(
             valid_token = update_valid_token_with_end_user_params(
                 valid_token=valid_token, end_user_params=end_user_params
             )
-        elif litellm.max_end_user_budget_id is not None:
-            from litellm.proxy.auth.auth_checks import get_default_end_user_budget
-
-            default_budget: Final = await get_default_end_user_budget(
+        elif key_end_user_budget_id is not None or litellm.max_end_user_budget_id is not None:
+            default_budget: Final = await resolve_default_end_user_budget(
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
+                key_end_user_budget_id=key_end_user_budget_id,
                 parent_otel_span=parent_otel_span,
             )
             if default_budget is not None:

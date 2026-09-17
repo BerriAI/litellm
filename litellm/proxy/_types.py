@@ -1215,6 +1215,7 @@ class KeyRequestBase(GenerateRequestBase):
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     budget_id: str | None = None
+    end_user_budget_id: str | None = None
     tags: list[str] | None = None
     disable_global_guardrails: bool | None = None
     enable_prompt_caching: bool | None = None
@@ -4721,6 +4722,7 @@ LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "enforced_file_expires_after",
     "throttle_on_budget_exceeded",
     "enable_prompt_caching",
+    "end_user_budget_id",
 ]
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium: Final = [

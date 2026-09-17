@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -4780,6 +4781,28 @@ async def test_resolve_end_user_preserves_id_when_default_budget_configured(_val
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cached_verdict", [None, "invalid"])
+async def test_resolve_end_user_preserves_id_when_only_the_key_default_budget_is_configured(
+    _validate_flag_on, monkeypatch, cached_verdict
+):
+    """With no proxy-wide default, a key-level end_user_budget_id still keeps an unregistered id
+    alive so the key's budget can be applied to that new customer downstream."""
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    _patch_validation_helpers(monkeypatch)
+    cache = _validation_cache()
+    cache.async_get_cache = AsyncMock(return_value=cached_verdict)
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="new-customer",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+        key_end_user_budget_id="svc-a-budget",
+    )
+    assert result == "new-customer"
+
+
+@pytest.mark.asyncio
 async def test_resolve_end_user_drops_unknown_email(_validate_flag_on, monkeypatch):
     from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
 
@@ -6606,6 +6629,208 @@ async def test_get_end_user_object_token_budget_gate_keeps_fetching_unrestricted
     assert result.spend == 100.0
     mock_prisma.db.litellm_endusertable.find_unique.assert_awaited_once()
     mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
+
+
+def _budget_lookup_by_id(budgets: Mapping[str, float]) -> AsyncMock:
+    """A ``litellm_budgettable.find_unique`` double that serves the given budgets by id."""
+
+    async def _find_unique(where: Mapping[str, str]) -> MagicMock | None:
+        budget_id = where["budget_id"]
+        if budget_id not in budgets:
+            return None
+        row = MagicMock()
+        row.dict = lambda: {"budget_id": budget_id, "max_budget": budgets[budget_id]}
+        return row
+
+    return AsyncMock(side_effect=_find_unique)
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_key_default_budget_beats_global_default_without_leaking_across_keys(
+    monkeypatch,
+):
+    """Two service-account keys with different ``end_user_budget_id`` values must each see their
+    own default on the same unknown-but-existing end user, and the proxy-wide default must lose
+    to both. The row is cached after the first call, so the second call exercises the cache path.
+    """
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "global-eu-budget")
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-shared"))
+    mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id(
+        {"global-eu-budget": 100.0, "svc-a-budget": 0.5, "svc-b-budget": 7.0}
+    )
+    cache = UserApiKeyCache()
+
+    for_key_a = await get_end_user_object(
+        end_user_id="eu-shared",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+        key_end_user_budget_id="svc-a-budget",
+    )
+    for_key_b = await get_end_user_object(
+        end_user_id="eu-shared",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+        key_end_user_budget_id="svc-b-budget",
+    )
+    for_plain_key = await get_end_user_object(
+        end_user_id="eu-shared",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+
+    assert for_key_a is not None and for_key_a.litellm_budget_table is not None
+    assert for_key_a.litellm_budget_table.max_budget == 0.5
+    assert for_key_b is not None and for_key_b.litellm_budget_table is not None
+    assert for_key_b.litellm_budget_table.max_budget == 7.0
+    assert for_plain_key is not None and for_plain_key.litellm_budget_table is not None
+    assert for_plain_key.litellm_budget_table.max_budget == 100.0
+    mock_prisma.db.litellm_endusertable.find_unique.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_cached_row_does_not_carry_another_keys_default_budget(monkeypatch):
+    """A key without a default must see the end user unrestricted even after a key with a default
+    populated the shared per-end-user cache entry for the same id."""
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-shared"))
+    mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5})
+    cache = UserApiKeyCache()
+
+    for_key_a = await get_end_user_object(
+        end_user_id="eu-shared",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+        key_end_user_budget_id="svc-a-budget",
+    )
+    for_plain_key = await get_end_user_object(
+        end_user_id="eu-shared",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+    )
+
+    assert for_key_a is not None and for_key_a.litellm_budget_table is not None
+    assert for_key_a.litellm_budget_table.max_budget == 0.5
+    assert for_plain_key is not None
+    assert for_plain_key.litellm_budget_table is None
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_caches_row_with_global_default_but_never_a_key_default(monkeypatch):
+    """The cached row is what post-request readers (Prometheus customer gauges) see: it must keep
+    the proxy-wide default exactly as before, while a key default stays on the request copy."""
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+    from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "global-budget")
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-cached"))
+    mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5, "global-budget": 7.0})
+    cache = UserApiKeyCache()
+
+    for_key_a = await get_end_user_object(
+        end_user_id="eu-cached",
+        prisma_client=mock_prisma,
+        user_api_key_cache=cache,
+        key_end_user_budget_id="svc-a-budget",
+    )
+    cached = await cache.async_get_cache(key=end_user_cache_key("eu-cached"), model_type=LiteLLM_EndUserTable)
+
+    assert for_key_a is not None and for_key_a.litellm_budget_table is not None
+    assert for_key_a.litellm_budget_table.max_budget == 0.5
+    assert cached is not None and cached.litellm_budget_table is not None
+    assert cached.litellm_budget_table.max_budget == 7.0
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_key_default_budget_loads_unrestricted_row_without_global_default(
+    end_user_registry_skip_enabled,
+):
+    """With no proxy-wide default, a key default alone must keep the registry skip off, otherwise
+    the unrestricted row is never loaded and the key default is never enforced.
+    """
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=_end_user_db_row("eu-anon-1", spend=3.0))
+    mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 2.0})
+
+    result = await get_end_user_object(
+        end_user_id="eu-anon-1",
+        prisma_client=mock_prisma,
+        user_api_key_cache=UserApiKeyCache(),
+        key_end_user_budget_id="svc-a-budget",
+    )
+
+    assert result is not None
+    assert result.spend == 3.0
+    assert result.litellm_budget_table is not None
+    assert result.litellm_budget_table.max_budget == 2.0
+    mock_prisma.db.litellm_endusertable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_object_explicit_end_user_budget_beats_key_default(monkeypatch):
+    from litellm.proxy.auth.auth_checks import get_end_user_object
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_endusertable.find_unique = AsyncMock(
+        return_value=_end_user_db_row(
+            "eu-vip",
+            budget_id="vip-budget",
+            litellm_budget_table={"budget_id": "vip-budget", "max_budget": 500.0},
+        )
+    )
+    mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"svc-a-budget": 0.5})
+
+    result = await get_end_user_object(
+        end_user_id="eu-vip",
+        prisma_client=mock_prisma,
+        user_api_key_cache=UserApiKeyCache(),
+        key_end_user_budget_id="svc-a-budget",
+    )
+
+    assert result is not None and result.litellm_budget_table is not None
+    assert result.litellm_budget_table.max_budget == 500.0
+    mock_prisma.db.litellm_budgettable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_default_end_user_budget_falls_back_to_global_when_key_budget_is_missing(monkeypatch):
+    from litellm.proxy.auth.auth_checks import resolve_default_end_user_budget
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "global-eu-budget")
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_budgettable.find_unique = _budget_lookup_by_id({"global-eu-budget": 100.0})
+
+    resolved = await resolve_default_end_user_budget(
+        prisma_client=mock_prisma,
+        user_api_key_cache=UserApiKeyCache(),
+        key_end_user_budget_id="deleted-budget",
+    )
+
+    assert resolved is not None
+    assert resolved.budget_id == "global-eu-budget"
+    assert resolved.max_budget == 100.0
 
 
 @pytest.mark.asyncio
