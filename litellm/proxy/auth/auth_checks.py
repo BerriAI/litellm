@@ -14,6 +14,7 @@ import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
@@ -5295,6 +5296,24 @@ async def _virtual_key_max_budget_alert_check(
                 )
 
 
+def _effective_team_member_budget(budget: LiteLLM_BudgetTable, now: datetime) -> float | None:
+    """Per-member cap including an unexpired temp_budget_increase. Naive
+    temp_budget_expiry values are treated as UTC (same convention as
+    _get_temp_budget_increase for keys)."""
+    if budget.max_budget is None:
+        return None
+    if budget.temp_budget_increase is None or budget.temp_budget_expiry is None:
+        return budget.max_budget
+    expiry: Final = (
+        budget.temp_budget_expiry.replace(tzinfo=timezone.utc)
+        if budget.temp_budget_expiry.tzinfo is None
+        else budget.temp_budget_expiry
+    )
+    if expiry <= now:
+        return budget.max_budget
+    return budget.max_budget + budget.temp_budget_increase
+
+
 async def _check_team_member_budget(
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
@@ -5330,7 +5349,10 @@ async def _check_team_member_budget(
             and loaded_membership.litellm_budget_table is not None
             and loaded_membership.litellm_budget_table.max_budget is not None
         ):
-            team_member_budget = loaded_membership.litellm_budget_table.max_budget
+            team_member_budget = _effective_team_member_budget(
+                loaded_membership.litellm_budget_table,
+                now=get_utc_datetime(),
+            )
         else:
             default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
             if isinstance(default_budget_id, str):
