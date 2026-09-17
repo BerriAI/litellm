@@ -43,12 +43,25 @@ pub struct AnthropicStreamMessage {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AnthropicContentBlockDelta {
-    TextDelta { text: String },
-    InputJsonDelta { partial_json: String },
-    Citations { citation: Value },
-    ThinkingDelta { thinking: String },
-    SignatureDelta { signature: String },
-    CompactionDelta { content: String },
+    TextDelta {
+        text: String,
+    },
+    InputJsonDelta {
+        partial_json: String,
+    },
+    #[serde(rename = "citations_delta")]
+    Citations {
+        citation: Value,
+    },
+    ThinkingDelta {
+        thinking: String,
+    },
+    SignatureDelta {
+        signature: String,
+    },
+    CompactionDelta {
+        content: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -216,6 +229,28 @@ mod tests {
                 },
             }]
         );
+    }
+
+    #[test]
+    fn decodes_citations_delta_events() {
+        let event = decode_anthropic_sse_frame(SseFrame {
+            event: Some("content_block_delta".into()),
+            data: Some(
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"type":"char_location"}}}"#
+                    .into(),
+            ),
+            id: None,
+            retry: None,
+        })
+        .unwrap();
+
+        assert!(matches!(
+            event,
+            AnthropicMessagesStreamEvent::ContentBlockDelta {
+                delta: AnthropicContentBlockDelta::Citations { .. },
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
