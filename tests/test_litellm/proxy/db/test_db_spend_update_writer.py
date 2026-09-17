@@ -15,8 +15,9 @@ import pytest
 from redis.exceptions import DataError
 
 import litellm
-from litellm.proxy._types import Litellm_EntityType
+from litellm.proxy._types import Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
@@ -1176,30 +1177,34 @@ async def test_batch_database_updates_without_project_id_touches_no_project_row(
 
 
 @pytest.mark.asyncio
-async def test_project_enqueue_failure_does_not_stop_sibling_spend_updates():
+async def test_failed_project_enqueue_does_not_drop_the_rest_of_the_batch():
+    class _ProjectRejectingQueue(SpendUpdateQueue):
+        async def add_update(self, update: SpendUpdateQueueItem):
+            if update.get("entity_type") is Litellm_EntityType.PROJECT:
+                raise RuntimeError("project enqueue boom")
+            await super().add_update(update)
+
     db_writer: Final = DBSpendUpdateWriter()
-    db_writer._update_project_db = AsyncMock(side_effect=RuntimeError("project queue boom"))
-    db_writer._update_tag_db = AsyncMock()
-    db_writer._update_agent_db = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
+    db_writer.spend_update_queue = _ProjectRejectingQueue()
 
     await db_writer._batch_database_updates(
-        response_cost=0.1,
+        response_cost=0.25,
         user_id="u1",
         hashed_token="t1",
         team_id="team-1",
-        org_id=None,
+        org_id="org-1",
         end_user_id=None,
         prisma_client=MagicMock(),
         litellm_proxy_budget_name=None,
-        payload={"request_id": "req-1", "model": "gpt-4o-mini", "spend": 0.1, "request_tags": ["t"]},
+        payload={"request_id": "req-1", "model": "gpt-4o-mini", "spend": 0.25, "request_tags": ["tag-1"]},
         project_id="proj-1",
     )
 
-    db_writer._update_project_db.assert_awaited_once()
-    db_writer._update_tag_db.assert_awaited_once()
-    db_writer._update_agent_db.assert_awaited_once()
-    db_writer.add_spend_log_transaction_to_daily_user_transaction.assert_awaited_once()
+    transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["project_list_transactions"] == {}
+    assert transactions["tag_list_transactions"] == {"tag-1": 0.25}
+    assert transactions["key_list_transactions"] == {"t1": 0.25}
+    assert transactions["team_list_transactions"] == {"team-1": 0.25}
 
 
 @pytest.mark.asyncio
