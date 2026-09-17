@@ -1379,8 +1379,9 @@ class CustomGuardrail(CustomLogger):
         raise e
 
     def _inputs_were_modified(self, original_inputs: Mapping[str, object], response: Mapping[str, object]) -> bool:
-        """True when any key of either mapping differs between them (mask), False otherwise (allow)."""
-        return any(original_inputs.get(key) != response.get(key) for key in original_inputs.keys() | response.keys())
+        """True when any content key of either mapping differs between them (mask), False otherwise (allow)."""
+        compared_keys: Final = (original_inputs.keys() | response.keys()) - _STREAM_CONTROL_KEYS
+        return any(original_inputs.get(key) != response.get(key) for key in compared_keys)
 
     def mask_content_in_string(
         self,
@@ -1490,6 +1491,7 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
 _PRE_CALL_CONTENT_KEYS: Final = frozenset(
     {"messages", "input", "prompt", "system", "instructions", "tools", "functions", "function_call", "tool_choice"}
 )
+_STREAM_CONTROL_KEYS: Final = frozenset({"stream_holdback_chars"})
 
 
 def _original_inputs_for(
