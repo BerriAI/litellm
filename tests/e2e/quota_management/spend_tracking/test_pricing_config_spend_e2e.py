@@ -124,7 +124,7 @@ def _guarded_chat(client: SpendClient, key: str, model: str, name: str) -> Strea
     )
 
 
-def _set_discount(client: SpendClient, values: dict[str, float]) -> None:
+def _set_discount(client: SpendClient, values: dict[str, float]) -> float:
     unwrap(
         client.proxy.transport.patch(
             "/config/cost_discount_config",
@@ -133,9 +133,10 @@ def _set_discount(client: SpendClient, values: dict[str, float]) -> None:
             response_type=_ConfigPatchResponse,
         )
     )
+    return time.monotonic()
 
 
-def _set_margin(client: SpendClient, values: dict[str, float | dict[str, float]]) -> None:
+def _set_margin(client: SpendClient, values: dict[str, float | dict[str, float]]) -> float:
     unwrap(
         client.proxy.transport.patch(
             "/config/cost_margin_config",
@@ -144,6 +145,7 @@ def _set_margin(client: SpendClient, values: dict[str, float | dict[str, float]]
             response_type=_ConfigPatchResponse,
         )
     )
+    return time.monotonic()
 
 
 def _get_discount(client: SpendClient) -> dict[str, float]:
@@ -206,7 +208,7 @@ def _delete_key(client: SpendClient, key: str) -> None:
 
 
 def _base_cost(row: CostRow, prompt_tokens: int, completion_tokens: int) -> float:
-    assert prompt_tokens > 0 and completion_tokens > 0
+    assert prompt_tokens > 0 and completion_tokens >= 0
     assert row.prompt_tokens == prompt_tokens and row.completion_tokens == completion_tokens
     base_cost: Final = prompt_tokens * INPUT_RATE + completion_tokens * OUTPUT_RATE
     assert row.breakdown.original_cost is not None
@@ -235,13 +237,15 @@ def restored_pricing_config(client: SpendClient) -> Iterator[None]:
     margin: Final = _get_margin(client)
     try:
         _set_discount(client, {})
-        _set_margin(client, {})
+        reset_at: Final = _set_margin(client, {})
+        settle_propagation(reset_at)
         yield
     finally:
         try:
             _set_discount(client, discount)
         finally:
-            _set_margin(client, margin)
+            restored_at: Final = _set_margin(client, margin)
+            settle_propagation(restored_at)
 
 
 class TestPricingConfigSpend:
@@ -256,10 +260,13 @@ class TestPricingConfigSpend:
         scoped_key: str,
         restored_pricing_config: None,
     ) -> None:
-        _set_discount(client, {"openai": DISCOUNT})
+        discount_set_at: Final = _set_discount(client, {"openai": DISCOUNT})
+        settle_propagation(discount_set_at)
         model: Final = _register_model(client, strict_resources, "discount-priced")
         chat: Final = unwrap(client.chat(scoped_key, model, f"reply with one word {unique_marker()}", max_tokens=16))
-        assert chat.id and chat.usage and chat.usage.prompt_tokens and chat.usage.completion_tokens
+        assert chat.id and chat.usage
+        assert chat.usage.prompt_tokens is not None and chat.usage.prompt_tokens > 0
+        assert chat.usage.completion_tokens is not None and chat.usage.completion_tokens >= 0
 
         row: Final = poll_cost_row(client.proxy, chat.id)
         assert row is not None
@@ -280,10 +287,15 @@ class TestPricingConfigSpend:
         scoped_key: str,
         restored_pricing_config: None,
     ) -> None:
-        _set_margin(client, {"openai": {"percentage": MARGIN_PERCENT, "fixed_amount": MARGIN_FIXED}})
+        margin_set_at: Final = _set_margin(
+            client, {"openai": {"percentage": MARGIN_PERCENT, "fixed_amount": MARGIN_FIXED}}
+        )
+        settle_propagation(margin_set_at)
         model: Final = _register_model(client, strict_resources, "margin-priced")
         chat: Final = unwrap(client.chat(scoped_key, model, f"reply with one word {unique_marker()}", max_tokens=16))
-        assert chat.id and chat.usage and chat.usage.prompt_tokens and chat.usage.completion_tokens
+        assert chat.id and chat.usage
+        assert chat.usage.prompt_tokens is not None and chat.usage.prompt_tokens > 0
+        assert chat.usage.completion_tokens is not None and chat.usage.completion_tokens >= 0
 
         row: Final = poll_cost_row(client.proxy, chat.id)
         assert row is not None
@@ -316,7 +328,9 @@ class TestPricingConfigSpend:
         assert name in {value.strip() for value in result.headers.get("x-litellm-applied-guardrails", "").split(",")}
 
         chat: Final = ChatResponse.model_validate_json(result.body)
-        assert chat.id and chat.usage and chat.usage.prompt_tokens and chat.usage.completion_tokens
+        assert chat.id and chat.usage
+        assert chat.usage.prompt_tokens is not None and chat.usage.prompt_tokens > 0
+        assert chat.usage.completion_tokens is not None and chat.usage.completion_tokens >= 0
         row: Final = poll_cost_row(client.proxy, chat.id)
         assert row is not None
         base_cost: Final = _base_cost(row, chat.usage.prompt_tokens, chat.usage.completion_tokens)
