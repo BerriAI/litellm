@@ -16,6 +16,8 @@ TeamIdSearchMatch = Literal["exact", "prefix"]
 
 MAX_BULK_TEAM_MEMBER_DELETES: Final = 500
 
+MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES: Final = 500
+
 
 class GetTeamMemberPermissionsRequest(BaseModel):
     """Request to get the team member permissions for a team"""
@@ -123,7 +125,7 @@ class BulkTeamMemberAddResponse(BaseModel):
 
 
 class TeamMemberRef(MemberDeleteRequest):
-    """One member to remove, named by exactly one of `user_id` or `user_email`."""
+    """One member, named by exactly one of `user_id` or `user_email`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -153,6 +155,47 @@ class TeamMemberDeleteResult(BaseModel):
 
 class BulkTeamMemberDeleteResponse(ResourceResponse[tuple[TeamMemberDeleteResult, ...]]):
     """`{data: [...]}` with one `TeamMemberDeleteResult` per requested member, in request order."""
+
+
+class TeamMemberBudgetPatch(TeamMemberRef):
+    """One member's per-member limits, merge-patch style: a field left out of the row is
+    untouched, a field sent as null is cleared, and clearing the last limit drops the
+    member back to the team default."""
+
+    max_budget_in_team: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    allowed_models: tuple[str, ...] | None = None
+
+
+class BulkTeamMemberBudgetUpdateRequest(BaseModel):
+    """Body of `POST /management/v1/teams/{team_id}/members/bulk_update`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    members: tuple[TeamMemberBudgetPatch, ...] = Field(min_length=1, max_length=MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES)
+
+
+class TeamMemberBudgetUpdateResult(BaseModel):
+    """Outcome for one requested member, in request order, carrying the limits in force
+    after the write rather than the ones that were asked for."""
+
+    user_id: str | None = None
+    user_email: str | None = None
+    success: bool
+    error: str | None = None
+    budget_id: str | None = None
+    max_budget: float | None = None
+    max_budget_source: Literal["member", "team_default"] | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    allowed_models: tuple[str, ...] | None = None
+
+
+class BulkTeamMemberBudgetUpdateResponse(ResourceResponse[tuple[TeamMemberBudgetUpdateResult, ...]]):
+    """`{data: [...]}` with one `TeamMemberBudgetUpdateResult` per requested member, in request order."""
 
 
 class TeamMemberInfoResponse(LiteLLM_TeamMembership):
