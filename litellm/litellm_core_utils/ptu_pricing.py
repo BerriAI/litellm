@@ -17,6 +17,7 @@ from litellm.types.router import ModelInfo
 from litellm.types.utils import CustomPricingLiteLLMParams, MirroredPricingParams
 
 PTU_COST_ATTRIBUTION_ENV_VAR: Final = "LITELLM_ENABLE_PTU_COST_ATTRIBUTION"
+AZURE_SPILLOVER_HEADER: Final = "x-ms-is-spilled-over"
 
 
 def is_ptu_cost_attribution_enabled() -> bool:
@@ -235,3 +236,22 @@ def zeroed_ptu_pricing(
             ),
         }
     )
+
+
+def is_spilled_over_ptu_request(
+    model_info: Mapping[str, object],
+    response_headers: Mapping[str, object] | None,
+    additional_headers: Mapping[str, object] | None,
+) -> bool:
+    """Whether Azure served this request from pay-as-you-go capacity, so the zeroed PTU rates must not apply."""
+    if ptu_terms(model_info) is None:
+        return False
+    if not is_ptu_cost_attribution_enabled():
+        return False
+    for headers, key in (
+        (response_headers, AZURE_SPILLOVER_HEADER),
+        (additional_headers, f"llm_provider-{AZURE_SPILLOVER_HEADER}"),
+    ):
+        if headers is not None and str(headers.get(key)).lower() == "true":
+            return True
+    return False
