@@ -10,7 +10,7 @@ use crate::llms::azure_ai::ocr::document_intelligence::transformation::AzureDocu
 use crate::llms::azure_ai::ocr::transformation::AzureAIOCRConfig;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrResponseContext};
 use crate::llms::cohere::ocr::transformation::CohereParseConfig;
-use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
+use crate::llms::mistral::ocr::transformation::MistralOcrConfig;
 use crate::llms::reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config};
 use crate::llms::vertex_ai::ocr::deepseek_transformation::VertexAIDeepSeekOCRConfig;
 use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
@@ -26,7 +26,7 @@ macro_rules! dispatch_config {
     (@arms $config:expr, $method:ident($($argument:expr),*), $($suffix:tt)*) => {
         match $config {
             OcrConfigKind::Cohere => CohereParseConfig.$method($($argument),*)$($suffix)*,
-            OcrConfigKind::Mistral => MistralOCRConfig.$method($($argument),*)$($suffix)*,
+            OcrConfigKind::Mistral => MistralOcrConfig.$method($($argument),*)$($suffix)*,
             OcrConfigKind::AzureAi => AzureAIOCRConfig.$method($($argument),*)$($suffix)*,
             OcrConfigKind::AzureCohere => AzureAICohereParseConfig.$method($($argument),*)$($suffix)*,
             OcrConfigKind::AzureDocumentIntelligence => AzureDocumentIntelligenceOCRConfig.$method($($argument),*)$($suffix)*,
