@@ -2,17 +2,19 @@ import logging
 
 import pytest
 from fastapi import HTTPException
+from prisma.errors import DataError
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import SubjectIdentity, SubjectTokenRefusal
 from litellm.proxy._experimental.mcp_server.idp_token_exchange import (
     REJECTED_SUBJECT_TOKEN,
+    SUBJECT_TOKEN_CHECK_UNAVAILABLE,
     TokenExchangePrerequisites,
     identity_from_subject_token,
     token_exchange_available,
 )
 from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth, ProxyException
-from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.handle_jwt import JWKSUnreachableError, JWTHandler, jwks_unavailable_exception
 
 IDP_JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.idp-signature"
 REQUEST_HEADERS = {"x-litellm-team-id": "team-b", "user-agent": "lite/0.1"}
@@ -23,6 +25,7 @@ EVERY_GATE_HOLDS = {
     "maps_jwts_to_virtual_keys": False,
 }
 JWKS_URL = "https://idp.example.com/.well-known/jwks.json"
+JWKS_DOWN = jwks_unavailable_exception(JWKSUnreachableError(f"ConnectError fetching {JWKS_URL} after 3 attempts"))
 
 
 def _authorized(user_id="u1", team_id="team-b"):
@@ -162,6 +165,7 @@ def test_availability_is_read_from_the_running_proxy(
         (Exception("Validation fails: signature verification failed"), "signature verification failed"),
         (Exception("Invalid JWT Submitted"), "Invalid JWT"),
         (Exception(f"Failed to fetch keys from {JWKS_URL}: 502 Bad Gateway from the IdP"), JWKS_URL),
+        (ValueError("User doesn't exist in db. 'user_id'=u1. Got error - not found"), "not found"),
     ],
 )
 async def test_a_jwt_the_proxy_rejects_is_refused_with_the_reason_kept_in_the_log(raised, reason, caplog):
@@ -179,3 +183,32 @@ async def test_a_jwt_that_resolves_no_user_cannot_be_exchanged():
     assert refusal == SubjectTokenRefusal(
         error="invalid_request", description="subject_token names no user the gateway knows"
     )
+
+
+def _user_lookup_wrapping_a_database_outage():
+    p1001 = DataError(
+        data={"user_facing_error": {"message": "Can't reach database server at `127.0.0.1`:`5432`", "meta": {}}}
+    )
+    try:
+        raise p1001
+    except DataError as outage:
+        try:
+            raise ValueError(f"User doesn't exist in db. 'user_id'=u1. Got error - {outage}")
+        except ValueError as wrapped:
+            return wrapped
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raised, reason",
+    [
+        (JWKS_DOWN, JWKS_URL),
+        (HTTPException(status_code=503, detail="the auth database is not reachable"), "not reachable"),
+        (_user_lookup_wrapping_a_database_outage(), "Can't reach database server"),
+    ],
+)
+async def test_an_idp_or_gateway_outage_is_reported_as_retryable_not_as_a_bad_token(raised, reason, caplog):
+    caplog.set_level(logging.ERROR, logger="LiteLLM Proxy")
+    refusal = await _identity(_Authorizer(raises=raised))
+    assert refusal == SubjectTokenRefusal(error="temporarily_unavailable", description=SUBJECT_TOKEN_CHECK_UNAVAILABLE)
+    assert reason in caplog.text

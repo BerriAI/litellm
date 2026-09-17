@@ -221,7 +221,7 @@ class SubjectIdentity(BaseModel):
 
 class SubjectTokenRefusal(BaseModel):
     model_config = ConfigDict(frozen=True)
-    error: Literal["unsupported_grant_type", "invalid_request"]
+    error: Literal["unsupported_grant_type", "invalid_request", "temporarily_unavailable"]
     description: str = Field(min_length=1)
 
 
@@ -1136,6 +1136,16 @@ def _reload_failure_response(failure: ReloadUserFailure) -> Response:
             assert_never(failure)
 
 
+def _subject_token_refusal_response(refusal: SubjectTokenRefusal) -> Response:
+    match refusal.error:
+        case "temporarily_unavailable":
+            return _oauth_error(503, refusal.error, refusal.description)
+        case "unsupported_grant_type" | "invalid_request":
+            return _oauth_error(400, refusal.error, refusal.description)
+        case _:
+            assert_never(refusal.error)
+
+
 def _mint_failure_response(failure: ProxyCredentialMintFailure) -> Response:
     match failure:
         case "not_a_member":
@@ -1314,7 +1324,7 @@ class _GrantIssuer:
             return target_refusal
         identity: Final = await exchange_subject_token(subject_token, self._request)
         if isinstance(identity, SubjectTokenRefusal):
-            return _oauth_error(400, identity.error, identity.description)
+            return _subject_token_refusal_response(identity)
         principal: Final = SessionPrincipal(
             user_id=identity.user_id, client_id=client_id, audience=PROXY_API_AUDIENCE, team_id=identity.team_id
         )
