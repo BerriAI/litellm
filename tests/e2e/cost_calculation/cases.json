@@ -1,0 +1,231 @@
+{
+  "deployments": [
+    {
+      "map_key": "azure/gpt-5.4-mini",
+      "litellm_model": "azure/cc-pinned-deployment",
+      "base_model": "azure/gpt-5.4-mini"
+    }
+  ],
+  "cases": [
+    {
+      "name": "basic",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40}
+    },
+    {
+      "name": "cache_read",
+      "usage": {"fresh_input_tokens": 100, "cache_read_tokens": 50, "output_tokens": 30},
+      "requires_rates": ["cache_read_input_token_cost"],
+      "requires_caps": ["cache_read"]
+    },
+    {
+      "name": "cache_write_5m",
+      "usage": {"fresh_input_tokens": 90, "cache_write_5m_tokens": 60, "output_tokens": 30},
+      "requires_rates": ["cache_creation_input_token_cost"],
+      "requires_caps": ["cache_write_5m"]
+    },
+    {
+      "name": "cache_write_1h",
+      "usage": {"fresh_input_tokens": 90, "cache_write_5m_tokens": 20, "cache_write_1h_tokens": 40, "output_tokens": 30},
+      "requires_rates": ["cache_creation_input_token_cost_above_1hr", "cache_creation_input_token_cost"],
+      "requires_caps": ["cache_write_1h"]
+    },
+    {
+      "name": "reasoning",
+      "usage": {"fresh_input_tokens": 100, "output_tokens": 30, "reasoning_tokens": 70},
+      "requires_rates": ["output_cost_per_reasoning_token"],
+      "requires_caps": ["reasoning"]
+    },
+    {
+      "name": "audio",
+      "usage": {"fresh_input_tokens": 100, "audio_input_tokens": 25, "output_tokens": 30, "audio_output_tokens": 15},
+      "requires_rates": ["input_cost_per_audio_token", "output_cost_per_audio_token"],
+      "requires_caps": ["audio"]
+    },
+    {
+      "name": "tiered",
+      "usage": {"fresh_input_tokens": 200001, "output_tokens": 30},
+      "requires_rates": ["input_cost_per_token_above_200k_tokens", "output_cost_per_token_above_200k_tokens"]
+    },
+    {
+      "name": "service_tier_flex",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "service_tier": "flex",
+      "requires_rates": ["input_cost_per_token_flex", "output_cost_per_token_flex"]
+    },
+    {
+      "name": "service_tier_priority",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "service_tier": "priority",
+      "requires_rates": ["input_cost_per_token_priority", "output_cost_per_token_priority"]
+    },
+    {
+      "name": "web_search",
+      "usage": {"fresh_input_tokens": 100, "output_tokens": 30, "web_search_calls": 3},
+      "requires_rates": ["search_context_cost_per_query"],
+      "requires_caps": ["web_search"]
+    },
+    {
+      "name": "stream",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "stream": true
+    },
+    {
+      "name": "stream_no_usage",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "stream": true,
+      "stream_usage": "absent",
+      "exact_spend": false,
+      "requires_caps": ["absent_usage"]
+    },
+    {
+      "name": "response_model_override",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "response_model_override": true,
+      "requires_caps": ["response_model"]
+    },
+    {
+      "name": "stream_response_model_override",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "stream": true,
+      "response_model_override": true,
+      "requires_caps": ["response_model"]
+    },
+    {
+      "name": "tool_call",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "tool_call": true,
+      "requires_caps": ["tool_call"]
+    },
+    {
+      "name": "stream_tool_call",
+      "usage": {"fresh_input_tokens": 80, "output_tokens": 25},
+      "stream": true,
+      "tool_call": true,
+      "requires_caps": ["tool_call"]
+    },
+    {
+      "name": "stream_no_usage_tool_call",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "stream": true,
+      "stream_usage": "absent",
+      "tool_call": true,
+      "exact_spend": false,
+      "requires_caps": ["absent_usage", "tool_call"]
+    },
+    {
+      "name": "stream_no_usage_image_input",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "stream": true,
+      "stream_usage": "absent",
+      "image_input": true,
+      "exact_spend": false,
+      "requires_caps": ["absent_usage", "image_input"]
+    },
+    {
+      "name": "stream_incomplete",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "stream": true,
+      "terminal": "incomplete",
+      "requires_caps": ["responses_terminal"]
+    },
+    {
+      "name": "stream_no_usage_incomplete",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "stream": true,
+      "stream_usage": "absent",
+      "terminal": "incomplete",
+      "exact_spend": false,
+      "requires_caps": ["responses_terminal"]
+    },
+    {
+      "name": "stream_unvalidated",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "stream": true,
+      "terminal": "unvalidated",
+      "requires_caps": ["responses_terminal"]
+    },
+    {
+      "name": "stream_no_usage_unvalidated",
+      "usage": {"fresh_input_tokens": 120, "output_tokens": 40},
+      "stream": true,
+      "stream_usage": "absent",
+      "terminal": "unvalidated",
+      "exact_spend": false,
+      "requires_caps": ["responses_terminal"]
+    },
+    {
+      "name": "prompt_blocked",
+      "usage": {"fresh_input_tokens": 1000, "output_tokens": 0},
+      "terminal": "prompt_blocked",
+      "response_model_override": true,
+      "requires_caps": ["prompt_blocked"]
+    },
+    {
+      "name": "stream_prompt_blocked",
+      "usage": {"fresh_input_tokens": 1000, "output_tokens": 0},
+      "stream": true,
+      "terminal": "prompt_blocked",
+      "response_model_override": true,
+      "requires_caps": ["prompt_blocked"]
+    },
+    {
+      "name": "all_components_chat",
+      "usage": {
+        "fresh_input_tokens": 80,
+        "cache_read_tokens": 40,
+        "cache_write_5m_tokens": 20,
+        "cache_write_1h_tokens": 10,
+        "output_tokens": 25,
+        "reasoning_tokens": 15,
+        "audio_input_tokens": 5,
+        "audio_output_tokens": 3
+      },
+      "wires": ["openai_chat", "azure_chat", "together_chat"]
+    },
+    {
+      "name": "all_components_fireworks",
+      "usage": {"fresh_input_tokens": 80, "cache_read_tokens": 40, "output_tokens": 25},
+      "wires": ["fireworks_chat"]
+    },
+    {
+      "name": "all_components_anthropic",
+      "usage": {
+        "fresh_input_tokens": 80,
+        "cache_read_tokens": 40,
+        "cache_write_5m_tokens": 20,
+        "cache_write_1h_tokens": 10,
+        "output_tokens": 25
+      },
+      "wires": ["anthropic_messages", "bedrock_converse"]
+    },
+    {
+      "name": "all_components_anthropic_stream",
+      "usage": {
+        "fresh_input_tokens": 80,
+        "cache_read_tokens": 40,
+        "cache_write_5m_tokens": 20,
+        "cache_write_1h_tokens": 10,
+        "output_tokens": 25
+      },
+      "stream": true,
+      "wires": ["anthropic_messages"]
+    },
+    {
+      "name": "all_components_gemini",
+      "usage": {
+        "fresh_input_tokens": 80,
+        "cache_read_tokens": 40,
+        "output_tokens": 25,
+        "reasoning_tokens": 15,
+        "audio_input_tokens": 5,
+        "audio_output_tokens": 3
+      },
+      "wires": ["gemini_generate", "vertex_generate"]
+    },
+    {
+      "name": "all_components_responses",
+      "usage": {"fresh_input_tokens": 80, "cache_read_tokens": 40, "output_tokens": 25, "reasoning_tokens": 15},
+      "wires": ["openai_responses"]
+    }
+  ]
+}

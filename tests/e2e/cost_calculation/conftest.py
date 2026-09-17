@@ -1,10 +1,12 @@
 """Cost-calculation suite fixtures.
 
 Runs against a dedicated proxy whose whole model cost map is the test-owned
-``tests/e2e/cost_map.json`` (LITELLM_MODEL_COST_MAP_URL), so every deployment
-bills at rates the test asserts literal arithmetic on. Provider calls are
-answered by the scripted-provider sidecar (``scripted_provider.py``), registered
-per scenario over its control API.
+``tests/e2e/cost_map.json`` (LITELLM_MODEL_COST_MAP_URL); every map entry is a
+deployment under test, the request shapes live in ``cases.json``, and the
+asserted goldens live in ``expected.json`` (regenerate proposals with
+``generate_expected.py``). Provider calls are answered by the
+scripted-provider sidecar (``scripted_provider.py``), registered per scenario
+over its control API.
 
 Deselected unless E2E_COST_MAP_STACK is set (marker `cost_map_stack`).
 """

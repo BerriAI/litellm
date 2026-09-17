@@ -1,0 +1,2004 @@
+{
+  "anthropic.claude-sonnet-5-v1:0|all_components_anthropic": {
+    "completion_tokens": 25,
+    "input_cost": 0.03128,
+    "output_cost": 0.0085,
+    "prompt_tokens": 150,
+    "spend": 0.03978
+  },
+  "anthropic.claude-sonnet-5-v1:0|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.0204,
+    "output_cost": 0.013600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.034
+  },
+  "anthropic.claude-sonnet-5-v1:0|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.01785,
+    "output_cost": 0.0102,
+    "prompt_tokens": 150,
+    "spend": 0.028050000000000002
+  },
+  "anthropic.claude-sonnet-5-v1:0|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.052700000000000004,
+    "output_cost": 0.0102,
+    "prompt_tokens": 150,
+    "spend": 0.06290000000000001
+  },
+  "anthropic.claude-sonnet-5-v1:0|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.0459,
+    "output_cost": 0.0102,
+    "prompt_tokens": 150,
+    "spend": 0.056100000000000004
+  },
+  "anthropic.claude-sonnet-5-v1:0|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.0204,
+    "output_cost": 0.013600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.034
+  },
+  "anthropic.claude-sonnet-5-v1:0|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.013600000000000001,
+    "output_cost": 0.0085,
+    "prompt_tokens": 80,
+    "spend": 0.0221
+  },
+  "anthropic.claude-sonnet-5-v1:0|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.0204,
+    "output_cost": 0.013600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.034
+  },
+  "azure/gpt-5.4-mini|all_components_chat": {
+    "completion_tokens": 43,
+    "input_cost": 0.03424,
+    "output_cost": 0.02336,
+    "prompt_tokens": 155,
+    "spend": 0.0576
+  },
+  "azure/gpt-5.4-mini|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.04,
+    "output_cost": 0.0264,
+    "prompt_tokens": 125,
+    "spend": 0.0664
+  },
+  "azure/gpt-5.4-mini|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.019200000000000002,
+    "output_cost": 0.0128,
+    "prompt_tokens": 120,
+    "spend": 0.032
+  },
+  "azure/gpt-5.4-mini|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.0168,
+    "output_cost": 0.009600000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.0264
+  },
+  "azure/gpt-5.4-mini|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.049600000000000005,
+    "output_cost": 0.009600000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.0592
+  },
+  "azure/gpt-5.4-mini|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.0432,
+    "output_cost": 0.009600000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.0528
+  },
+  "azure/gpt-5.4-mini|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.016,
+    "output_cost": 0.0656,
+    "prompt_tokens": 100,
+    "spend": 0.0816
+  },
+  "azure/gpt-5.4-mini|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.019200000000000002,
+    "output_cost": 0.0128,
+    "prompt_tokens": 120,
+    "spend": 0.032
+  },
+  "azure/gpt-5.4-mini|service_tier_flex": {
+    "completion_tokens": 40,
+    "input_cost": 0.0288,
+    "output_cost": 0.016,
+    "prompt_tokens": 120,
+    "spend": 0.0448
+  },
+  "azure/gpt-5.4-mini|service_tier_priority": {
+    "completion_tokens": 40,
+    "input_cost": 0.03264,
+    "output_cost": 0.01728,
+    "prompt_tokens": 120,
+    "spend": 0.049920000000000006
+  },
+  "azure/gpt-5.4-mini|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.019200000000000002,
+    "output_cost": 0.0128,
+    "prompt_tokens": 120,
+    "spend": 0.032
+  },
+  "azure/gpt-5.4-mini|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.019200000000000002,
+    "output_cost": 0.0128,
+    "prompt_tokens": 120,
+    "spend": 0.032
+  },
+  "azure/gpt-5.4-mini|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.0128,
+    "output_cost": 0.008,
+    "prompt_tokens": 80,
+    "spend": 0.0208
+  },
+  "azure/gpt-5.4-mini|tiered": {
+    "completion_tokens": 30,
+    "input_cost": 256.00128,
+    "output_cost": 0.0432,
+    "prompt_tokens": 200001,
+    "spend": 256.04448
+  },
+  "azure/gpt-5.4-mini|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.019200000000000002,
+    "output_cost": 0.0128,
+    "prompt_tokens": 120,
+    "spend": 0.032
+  },
+  "azure/gpt-5.4-mini|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.016,
+    "output_cost": 0.009600000000000001,
+    "prompt_tokens": 100,
+    "spend": 0.0456
+  },
+  "azure/gpt-5.6|all_components_chat": {
+    "completion_tokens": 43,
+    "input_cost": 0.0321,
+    "output_cost": 0.0219,
+    "prompt_tokens": 155,
+    "spend": 0.05399999999999999
+  },
+  "azure/gpt-5.6|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.0375,
+    "output_cost": 0.02475,
+    "prompt_tokens": 125,
+    "spend": 0.06225
+  },
+  "azure/gpt-5.6|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.018,
+    "output_cost": 0.011999999999999999,
+    "prompt_tokens": 120,
+    "spend": 0.03
+  },
+  "azure/gpt-5.6|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.01575,
+    "output_cost": 0.009,
+    "prompt_tokens": 150,
+    "spend": 0.02475
+  },
+  "azure/gpt-5.6|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.0465,
+    "output_cost": 0.009,
+    "prompt_tokens": 150,
+    "spend": 0.0555
+  },
+  "azure/gpt-5.6|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.040499999999999994,
+    "output_cost": 0.009,
+    "prompt_tokens": 150,
+    "spend": 0.049499999999999995
+  },
+  "azure/gpt-5.6|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.015,
+    "output_cost": 0.0615,
+    "prompt_tokens": 100,
+    "spend": 0.0765
+  },
+  "azure/gpt-5.6|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.019200000000000002,
+    "output_cost": 0.0128,
+    "prompt_tokens": 120,
+    "spend": 0.032
+  },
+  "azure/gpt-5.6|service_tier_flex": {
+    "completion_tokens": 40,
+    "input_cost": 0.027,
+    "output_cost": 0.015,
+    "prompt_tokens": 120,
+    "spend": 0.041999999999999996
+  },
+  "azure/gpt-5.6|service_tier_priority": {
+    "completion_tokens": 40,
+    "input_cost": 0.030600000000000002,
+    "output_cost": 0.0162,
+    "prompt_tokens": 120,
+    "spend": 0.0468
+  },
+  "azure/gpt-5.6|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.018,
+    "output_cost": 0.011999999999999999,
+    "prompt_tokens": 120,
+    "spend": 0.03
+  },
+  "azure/gpt-5.6|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.019200000000000002,
+    "output_cost": 0.0128,
+    "prompt_tokens": 120,
+    "spend": 0.032
+  },
+  "azure/gpt-5.6|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.011999999999999999,
+    "output_cost": 0.0075,
+    "prompt_tokens": 80,
+    "spend": 0.019499999999999997
+  },
+  "azure/gpt-5.6|tiered": {
+    "completion_tokens": 30,
+    "input_cost": 240.00119999999998,
+    "output_cost": 0.0405,
+    "prompt_tokens": 200001,
+    "spend": 240.0417
+  },
+  "azure/gpt-5.6|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.018,
+    "output_cost": 0.011999999999999999,
+    "prompt_tokens": 120,
+    "spend": 0.03
+  },
+  "azure/gpt-5.6|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.015,
+    "output_cost": 0.009,
+    "prompt_tokens": 100,
+    "spend": 0.044
+  },
+  "claude-haiku-4-5|all_components_anthropic": {
+    "completion_tokens": 25,
+    "input_cost": 0.012880000000000003,
+    "output_cost": 0.0035000000000000005,
+    "prompt_tokens": 150,
+    "spend": 0.016380000000000002
+  },
+  "claude-haiku-4-5|all_components_anthropic_stream": {
+    "completion_tokens": 25,
+    "input_cost": 0.012880000000000003,
+    "output_cost": 0.0035000000000000005,
+    "prompt_tokens": 150,
+    "spend": 0.016380000000000002
+  },
+  "claude-haiku-4-5|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.008400000000000001,
+    "output_cost": 0.005600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.014000000000000002
+  },
+  "claude-haiku-4-5|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.007350000000000001,
+    "output_cost": 0.004200000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.011550000000000001
+  },
+  "claude-haiku-4-5|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.021700000000000004,
+    "output_cost": 0.004200000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.025900000000000006
+  },
+  "claude-haiku-4-5|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.0189,
+    "output_cost": 0.004200000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.023100000000000002
+  },
+  "claude-haiku-4-5|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.006,
+    "output_cost": 0.004,
+    "prompt_tokens": 120,
+    "spend": 0.01
+  },
+  "claude-haiku-4-5|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.008400000000000001,
+    "output_cost": 0.005600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.014000000000000002
+  },
+  "claude-haiku-4-5|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.006,
+    "output_cost": 0.004,
+    "prompt_tokens": 120,
+    "spend": 0.01
+  },
+  "claude-haiku-4-5|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.005600000000000001,
+    "output_cost": 0.0035000000000000005,
+    "prompt_tokens": 80,
+    "spend": 0.0091
+  },
+  "claude-haiku-4-5|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.008400000000000001,
+    "output_cost": 0.005600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.014000000000000002
+  },
+  "claude-haiku-4-5|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.007000000000000001,
+    "output_cost": 0.004200000000000001,
+    "prompt_tokens": 100,
+    "spend": 0.0712
+  },
+  "claude-opus-5|all_components_anthropic": {
+    "completion_tokens": 25,
+    "input_cost": 0.0092,
+    "output_cost": 0.0025,
+    "prompt_tokens": 150,
+    "spend": 0.0117
+  },
+  "claude-opus-5|all_components_anthropic_stream": {
+    "completion_tokens": 25,
+    "input_cost": 0.0092,
+    "output_cost": 0.0025,
+    "prompt_tokens": 150,
+    "spend": 0.0117
+  },
+  "claude-opus-5|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.006,
+    "output_cost": 0.004,
+    "prompt_tokens": 120,
+    "spend": 0.01
+  },
+  "claude-opus-5|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.00525,
+    "output_cost": 0.003,
+    "prompt_tokens": 150,
+    "spend": 0.00825
+  },
+  "claude-opus-5|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.0155,
+    "output_cost": 0.003,
+    "prompt_tokens": 150,
+    "spend": 0.0185
+  },
+  "claude-opus-5|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.013500000000000002,
+    "output_cost": 0.003,
+    "prompt_tokens": 150,
+    "spend": 0.0165
+  },
+  "claude-opus-5|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.007200000000000001,
+    "output_cost": 0.0048000000000000004,
+    "prompt_tokens": 120,
+    "spend": 0.012
+  },
+  "claude-opus-5|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.006,
+    "output_cost": 0.004,
+    "prompt_tokens": 120,
+    "spend": 0.01
+  },
+  "claude-opus-5|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.007200000000000001,
+    "output_cost": 0.0048000000000000004,
+    "prompt_tokens": 120,
+    "spend": 0.012
+  },
+  "claude-opus-5|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.004,
+    "output_cost": 0.0025,
+    "prompt_tokens": 80,
+    "spend": 0.006500000000000001
+  },
+  "claude-opus-5|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.006,
+    "output_cost": 0.004,
+    "prompt_tokens": 120,
+    "spend": 0.01
+  },
+  "claude-opus-5|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.005,
+    "output_cost": 0.003,
+    "prompt_tokens": 100,
+    "spend": 0.068
+  },
+  "claude-sonnet-5|all_components_anthropic": {
+    "completion_tokens": 25,
+    "input_cost": 0.011040000000000001,
+    "output_cost": 0.0030000000000000005,
+    "prompt_tokens": 150,
+    "spend": 0.014040000000000002
+  },
+  "claude-sonnet-5|all_components_anthropic_stream": {
+    "completion_tokens": 25,
+    "input_cost": 0.011040000000000001,
+    "output_cost": 0.0030000000000000005,
+    "prompt_tokens": 150,
+    "spend": 0.014040000000000002
+  },
+  "claude-sonnet-5|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.007200000000000001,
+    "output_cost": 0.0048000000000000004,
+    "prompt_tokens": 120,
+    "spend": 0.012
+  },
+  "claude-sonnet-5|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.006300000000000001,
+    "output_cost": 0.0036000000000000003,
+    "prompt_tokens": 150,
+    "spend": 0.0099
+  },
+  "claude-sonnet-5|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.018600000000000002,
+    "output_cost": 0.0036000000000000003,
+    "prompt_tokens": 150,
+    "spend": 0.0222
+  },
+  "claude-sonnet-5|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.016200000000000003,
+    "output_cost": 0.0036000000000000003,
+    "prompt_tokens": 150,
+    "spend": 0.0198
+  },
+  "claude-sonnet-5|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.008400000000000001,
+    "output_cost": 0.005600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.014000000000000002
+  },
+  "claude-sonnet-5|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.007200000000000001,
+    "output_cost": 0.0048000000000000004,
+    "prompt_tokens": 120,
+    "spend": 0.012
+  },
+  "claude-sonnet-5|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.008400000000000001,
+    "output_cost": 0.005600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.014000000000000002
+  },
+  "claude-sonnet-5|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.0048000000000000004,
+    "output_cost": 0.0030000000000000005,
+    "prompt_tokens": 80,
+    "spend": 0.007800000000000001
+  },
+  "claude-sonnet-5|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.007200000000000001,
+    "output_cost": 0.0048000000000000004,
+    "prompt_tokens": 120,
+    "spend": 0.012
+  },
+  "claude-sonnet-5|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.006000000000000001,
+    "output_cost": 0.0036000000000000003,
+    "prompt_tokens": 100,
+    "spend": 0.0696
+  },
+  "fireworks_ai/deepseek-v4p1-flash|all_components_fireworks": {
+    "completion_tokens": 25,
+    "input_cost": 0.011760000000000001,
+    "output_cost": 0.007000000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.018760000000000002
+  },
+  "fireworks_ai/deepseek-v4p1-flash|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.030500000000000003,
+    "output_cost": 0.019950000000000002,
+    "prompt_tokens": 125,
+    "spend": 0.05045000000000001
+  },
+  "fireworks_ai/deepseek-v4p1-flash|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.016800000000000002,
+    "output_cost": 0.011200000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.028000000000000004
+  },
+  "fireworks_ai/deepseek-v4p1-flash|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.014700000000000001,
+    "output_cost": 0.008400000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.023100000000000002
+  },
+  "fireworks_ai/deepseek-v4p1-flash|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.0368,
+    "output_cost": 0.008400000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.045200000000000004
+  },
+  "fireworks_ai/deepseek-v4p1-flash|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.0324,
+    "output_cost": 0.008400000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.0408
+  },
+  "fireworks_ai/deepseek-v4p1-flash|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.014000000000000002,
+    "output_cost": 0.0469,
+    "prompt_tokens": 100,
+    "spend": 0.060899999999999996
+  },
+  "fireworks_ai/deepseek-v4p1-flash|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.014400000000000001,
+    "output_cost": 0.009600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.024
+  },
+  "fireworks_ai/deepseek-v4p1-flash|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.016800000000000002,
+    "output_cost": 0.011200000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.028000000000000004
+  },
+  "fireworks_ai/deepseek-v4p1-flash|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.014400000000000001,
+    "output_cost": 0.009600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.024
+  },
+  "fireworks_ai/deepseek-v4p1-flash|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.011200000000000002,
+    "output_cost": 0.007000000000000001,
+    "prompt_tokens": 80,
+    "spend": 0.0182
+  },
+  "fireworks_ai/deepseek-v4p1-flash|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.016800000000000002,
+    "output_cost": 0.011200000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.028000000000000004
+  },
+  "fireworks_ai/deepseek-v4p1-flash|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.014000000000000002,
+    "output_cost": 0.008400000000000001,
+    "prompt_tokens": 100,
+    "spend": 0.04240000000000001
+  },
+  "fireworks_ai/kimi-k3|all_components_fireworks": {
+    "completion_tokens": 25,
+    "input_cost": 0.01008,
+    "output_cost": 0.006000000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.01608
+  },
+  "fireworks_ai/kimi-k3|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.028500000000000004,
+    "output_cost": 0.01875,
+    "prompt_tokens": 125,
+    "spend": 0.04725
+  },
+  "fireworks_ai/kimi-k3|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.014400000000000001,
+    "output_cost": 0.009600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.024
+  },
+  "fireworks_ai/kimi-k3|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.012600000000000002,
+    "output_cost": 0.007200000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.0198
+  },
+  "fireworks_ai/kimi-k3|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.035,
+    "output_cost": 0.007200000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.0422
+  },
+  "fireworks_ai/kimi-k3|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.030600000000000002,
+    "output_cost": 0.007200000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.0378
+  },
+  "fireworks_ai/kimi-k3|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.012000000000000002,
+    "output_cost": 0.0457,
+    "prompt_tokens": 100,
+    "spend": 0.0577
+  },
+  "fireworks_ai/kimi-k3|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.015600000000000003,
+    "output_cost": 0.010400000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.026000000000000002
+  },
+  "fireworks_ai/kimi-k3|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.014400000000000001,
+    "output_cost": 0.009600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.024
+  },
+  "fireworks_ai/kimi-k3|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.015600000000000003,
+    "output_cost": 0.010400000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.026000000000000002
+  },
+  "fireworks_ai/kimi-k3|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.009600000000000001,
+    "output_cost": 0.006000000000000001,
+    "prompt_tokens": 80,
+    "spend": 0.015600000000000003
+  },
+  "fireworks_ai/kimi-k3|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.014400000000000001,
+    "output_cost": 0.009600000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.024
+  },
+  "fireworks_ai/kimi-k3|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.012000000000000002,
+    "output_cost": 0.007200000000000001,
+    "prompt_tokens": 100,
+    "spend": 0.0392
+  },
+  "fireworks_ai/qwen3p8-max|all_components_fireworks": {
+    "completion_tokens": 25,
+    "input_cost": 0.010920000000000001,
+    "output_cost": 0.006500000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.01742
+  },
+  "fireworks_ai/qwen3p8-max|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.029500000000000002,
+    "output_cost": 0.01935,
+    "prompt_tokens": 125,
+    "spend": 0.048850000000000005
+  },
+  "fireworks_ai/qwen3p8-max|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.015600000000000003,
+    "output_cost": 0.010400000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.026000000000000002
+  },
+  "fireworks_ai/qwen3p8-max|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.01365,
+    "output_cost": 0.007800000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.021450000000000004
+  },
+  "fireworks_ai/qwen3p8-max|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.0359,
+    "output_cost": 0.007800000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.0437
+  },
+  "fireworks_ai/qwen3p8-max|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.0315,
+    "output_cost": 0.007800000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.0393
+  },
+  "fireworks_ai/qwen3p8-max|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.013000000000000001,
+    "output_cost": 0.0463,
+    "prompt_tokens": 100,
+    "spend": 0.059300000000000005
+  },
+  "fireworks_ai/qwen3p8-max|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.016800000000000002,
+    "output_cost": 0.011200000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.028000000000000004
+  },
+  "fireworks_ai/qwen3p8-max|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.015600000000000003,
+    "output_cost": 0.010400000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.026000000000000002
+  },
+  "fireworks_ai/qwen3p8-max|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.016800000000000002,
+    "output_cost": 0.011200000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.028000000000000004
+  },
+  "fireworks_ai/qwen3p8-max|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.010400000000000001,
+    "output_cost": 0.006500000000000001,
+    "prompt_tokens": 80,
+    "spend": 0.016900000000000002
+  },
+  "fireworks_ai/qwen3p8-max|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.015600000000000003,
+    "output_cost": 0.010400000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.026000000000000002
+  },
+  "fireworks_ai/qwen3p8-max|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.013000000000000001,
+    "output_cost": 0.007800000000000001,
+    "prompt_tokens": 100,
+    "spend": 0.0408
+  },
+  "gemini-3.1-pro-preview|all_components_gemini": {
+    "completion_tokens": 43,
+    "input_cost": 0.023940000000000003,
+    "output_cost": 0.030660000000000003,
+    "prompt_tokens": 125,
+    "spend": 0.05460000000000001
+  },
+  "gemini-3.1-pro-preview|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.052500000000000005,
+    "output_cost": 0.03465,
+    "prompt_tokens": 125,
+    "spend": 0.08715
+  },
+  "gemini-3.1-pro-preview|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.0252,
+    "output_cost": 0.016800000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.042
+  },
+  "gemini-3.1-pro-preview|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.02205,
+    "output_cost": 0.0126,
+    "prompt_tokens": 150,
+    "spend": 0.03465
+  },
+  "gemini-3.1-pro-preview|prompt_blocked": {
+    "completion_tokens": 0,
+    "input_cost": 0.2,
+    "output_cost": 0.0,
+    "prompt_tokens": 1000,
+    "spend": 0.2
+  },
+  "gemini-3.1-pro-preview|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.021,
+    "output_cost": 0.0861,
+    "prompt_tokens": 100,
+    "spend": 0.1071
+  },
+  "gemini-3.1-pro-preview|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.024,
+    "output_cost": 0.016,
+    "prompt_tokens": 120,
+    "spend": 0.04
+  },
+  "gemini-3.1-pro-preview|service_tier_flex": {
+    "completion_tokens": 40,
+    "input_cost": 0.0378,
+    "output_cost": 0.020999999999999998,
+    "prompt_tokens": 120,
+    "spend": 0.0588
+  },
+  "gemini-3.1-pro-preview|service_tier_priority": {
+    "completion_tokens": 40,
+    "input_cost": 0.04284,
+    "output_cost": 0.02268,
+    "prompt_tokens": 120,
+    "spend": 0.06552
+  },
+  "gemini-3.1-pro-preview|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.0252,
+    "output_cost": 0.016800000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.042
+  },
+  "gemini-3.1-pro-preview|stream_prompt_blocked": {
+    "completion_tokens": 0,
+    "input_cost": 0.2,
+    "output_cost": 0.0,
+    "prompt_tokens": 1000,
+    "spend": 0.2
+  },
+  "gemini-3.1-pro-preview|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.024,
+    "output_cost": 0.016,
+    "prompt_tokens": 120,
+    "spend": 0.04
+  },
+  "gemini-3.1-pro-preview|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.016800000000000002,
+    "output_cost": 0.0105,
+    "prompt_tokens": 80,
+    "spend": 0.027300000000000005
+  },
+  "gemini-3.1-pro-preview|tiered": {
+    "completion_tokens": 30,
+    "input_cost": 336.00168,
+    "output_cost": 0.0567,
+    "prompt_tokens": 200001,
+    "spend": 336.05838
+  },
+  "gemini-3.1-pro-preview|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.0252,
+    "output_cost": 0.016800000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.042
+  },
+  "gemini-3.1-pro-preview|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.021,
+    "output_cost": 0.0126,
+    "prompt_tokens": 100,
+    "spend": 0.0936
+  },
+  "gemini-3.8-flash|all_components_gemini": {
+    "completion_tokens": 43,
+    "input_cost": 0.022799999999999997,
+    "output_cost": 0.0292,
+    "prompt_tokens": 125,
+    "spend": 0.052
+  },
+  "gemini-3.8-flash|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.05,
+    "output_cost": 0.033,
+    "prompt_tokens": 125,
+    "spend": 0.083
+  },
+  "gemini-3.8-flash|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.024,
+    "output_cost": 0.016,
+    "prompt_tokens": 120,
+    "spend": 0.04
+  },
+  "gemini-3.8-flash|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.021,
+    "output_cost": 0.012,
+    "prompt_tokens": 150,
+    "spend": 0.033
+  },
+  "gemini-3.8-flash|prompt_blocked": {
+    "completion_tokens": 0,
+    "input_cost": 0.21000000000000002,
+    "output_cost": 0.0,
+    "prompt_tokens": 1000,
+    "spend": 0.21000000000000002
+  },
+  "gemini-3.8-flash|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.02,
+    "output_cost": 0.082,
+    "prompt_tokens": 100,
+    "spend": 0.10200000000000001
+  },
+  "gemini-3.8-flash|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0252,
+    "output_cost": 0.016800000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.042
+  },
+  "gemini-3.8-flash|service_tier_flex": {
+    "completion_tokens": 40,
+    "input_cost": 0.036,
+    "output_cost": 0.02,
+    "prompt_tokens": 120,
+    "spend": 0.055999999999999994
+  },
+  "gemini-3.8-flash|service_tier_priority": {
+    "completion_tokens": 40,
+    "input_cost": 0.0408,
+    "output_cost": 0.0216,
+    "prompt_tokens": 120,
+    "spend": 0.062400000000000004
+  },
+  "gemini-3.8-flash|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.024,
+    "output_cost": 0.016,
+    "prompt_tokens": 120,
+    "spend": 0.04
+  },
+  "gemini-3.8-flash|stream_prompt_blocked": {
+    "completion_tokens": 0,
+    "input_cost": 0.21000000000000002,
+    "output_cost": 0.0,
+    "prompt_tokens": 1000,
+    "spend": 0.21000000000000002
+  },
+  "gemini-3.8-flash|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0252,
+    "output_cost": 0.016800000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.042
+  },
+  "gemini-3.8-flash|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.016,
+    "output_cost": 0.01,
+    "prompt_tokens": 80,
+    "spend": 0.026000000000000002
+  },
+  "gemini-3.8-flash|tiered": {
+    "completion_tokens": 30,
+    "input_cost": 320.0016,
+    "output_cost": 0.054,
+    "prompt_tokens": 200001,
+    "spend": 320.05559999999997
+  },
+  "gemini-3.8-flash|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.024,
+    "output_cost": 0.016,
+    "prompt_tokens": 120,
+    "spend": 0.04
+  },
+  "gemini-3.8-flash|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.02,
+    "output_cost": 0.012,
+    "prompt_tokens": 100,
+    "spend": 0.092
+  },
+  "gemini/gemini-3.1-pro-preview|all_components_gemini": {
+    "completion_tokens": 43,
+    "input_cost": 0.010260000000000002,
+    "output_cost": 0.01314,
+    "prompt_tokens": 125,
+    "spend": 0.023400000000000004
+  },
+  "gemini/gemini-3.1-pro-preview|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.0225,
+    "output_cost": 0.014849999999999999,
+    "prompt_tokens": 125,
+    "spend": 0.037349999999999994
+  },
+  "gemini/gemini-3.1-pro-preview|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.0108,
+    "output_cost": 0.007200000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.018000000000000002
+  },
+  "gemini/gemini-3.1-pro-preview|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.009450000000000002,
+    "output_cost": 0.0054,
+    "prompt_tokens": 150,
+    "spend": 0.014850000000000002
+  },
+  "gemini/gemini-3.1-pro-preview|prompt_blocked": {
+    "completion_tokens": 0,
+    "input_cost": 0.08,
+    "output_cost": 0.0,
+    "prompt_tokens": 1000,
+    "spend": 0.08
+  },
+  "gemini/gemini-3.1-pro-preview|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.009000000000000001,
+    "output_cost": 0.0369,
+    "prompt_tokens": 100,
+    "spend": 0.0459
+  },
+  "gemini/gemini-3.1-pro-preview|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.009600000000000001,
+    "output_cost": 0.0064,
+    "prompt_tokens": 120,
+    "spend": 0.016
+  },
+  "gemini/gemini-3.1-pro-preview|service_tier_flex": {
+    "completion_tokens": 40,
+    "input_cost": 0.0162,
+    "output_cost": 0.009000000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.0252
+  },
+  "gemini/gemini-3.1-pro-preview|service_tier_priority": {
+    "completion_tokens": 40,
+    "input_cost": 0.01836,
+    "output_cost": 0.00972,
+    "prompt_tokens": 120,
+    "spend": 0.02808
+  },
+  "gemini/gemini-3.1-pro-preview|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.0108,
+    "output_cost": 0.007200000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.018000000000000002
+  },
+  "gemini/gemini-3.1-pro-preview|stream_prompt_blocked": {
+    "completion_tokens": 0,
+    "input_cost": 0.08,
+    "output_cost": 0.0,
+    "prompt_tokens": 1000,
+    "spend": 0.08
+  },
+  "gemini/gemini-3.1-pro-preview|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.009600000000000001,
+    "output_cost": 0.0064,
+    "prompt_tokens": 120,
+    "spend": 0.016
+  },
+  "gemini/gemini-3.1-pro-preview|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.007200000000000001,
+    "output_cost": 0.0045000000000000005,
+    "prompt_tokens": 80,
+    "spend": 0.011700000000000002
+  },
+  "gemini/gemini-3.1-pro-preview|tiered": {
+    "completion_tokens": 30,
+    "input_cost": 144.00072,
+    "output_cost": 0.024300000000000002,
+    "prompt_tokens": 200001,
+    "spend": 144.02502
+  },
+  "gemini/gemini-3.1-pro-preview|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.0108,
+    "output_cost": 0.007200000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.018000000000000002
+  },
+  "gemini/gemini-3.1-pro-preview|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.009000000000000001,
+    "output_cost": 0.0054,
+    "prompt_tokens": 100,
+    "spend": 0.0744
+  },
+  "gemini/gemini-3.8-flash|all_components_gemini": {
+    "completion_tokens": 43,
+    "input_cost": 0.00912,
+    "output_cost": 0.01168,
+    "prompt_tokens": 125,
+    "spend": 0.0208
+  },
+  "gemini/gemini-3.8-flash|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.02,
+    "output_cost": 0.0132,
+    "prompt_tokens": 125,
+    "spend": 0.0332
+  },
+  "gemini/gemini-3.8-flash|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.009600000000000001,
+    "output_cost": 0.0064,
+    "prompt_tokens": 120,
+    "spend": 0.016
+  },
+  "gemini/gemini-3.8-flash|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.0084,
+    "output_cost": 0.0048000000000000004,
+    "prompt_tokens": 150,
+    "spend": 0.0132
+  },
+  "gemini/gemini-3.8-flash|prompt_blocked": {
+    "completion_tokens": 0,
+    "input_cost": 0.09000000000000001,
+    "output_cost": 0.0,
+    "prompt_tokens": 1000,
+    "spend": 0.09000000000000001
+  },
+  "gemini/gemini-3.8-flash|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.008,
+    "output_cost": 0.0328,
+    "prompt_tokens": 100,
+    "spend": 0.0408
+  },
+  "gemini/gemini-3.8-flash|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0108,
+    "output_cost": 0.007200000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.018000000000000002
+  },
+  "gemini/gemini-3.8-flash|service_tier_flex": {
+    "completion_tokens": 40,
+    "input_cost": 0.0144,
+    "output_cost": 0.008,
+    "prompt_tokens": 120,
+    "spend": 0.0224
+  },
+  "gemini/gemini-3.8-flash|service_tier_priority": {
+    "completion_tokens": 40,
+    "input_cost": 0.01632,
+    "output_cost": 0.00864,
+    "prompt_tokens": 120,
+    "spend": 0.024960000000000003
+  },
+  "gemini/gemini-3.8-flash|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.009600000000000001,
+    "output_cost": 0.0064,
+    "prompt_tokens": 120,
+    "spend": 0.016
+  },
+  "gemini/gemini-3.8-flash|stream_prompt_blocked": {
+    "completion_tokens": 0,
+    "input_cost": 0.09000000000000001,
+    "output_cost": 0.0,
+    "prompt_tokens": 1000,
+    "spend": 0.09000000000000001
+  },
+  "gemini/gemini-3.8-flash|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0108,
+    "output_cost": 0.007200000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.018000000000000002
+  },
+  "gemini/gemini-3.8-flash|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.0064,
+    "output_cost": 0.004,
+    "prompt_tokens": 80,
+    "spend": 0.0104
+  },
+  "gemini/gemini-3.8-flash|tiered": {
+    "completion_tokens": 30,
+    "input_cost": 128.00064,
+    "output_cost": 0.0216,
+    "prompt_tokens": 200001,
+    "spend": 128.02224
+  },
+  "gemini/gemini-3.8-flash|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.009600000000000001,
+    "output_cost": 0.0064,
+    "prompt_tokens": 120,
+    "spend": 0.016
+  },
+  "gemini/gemini-3.8-flash|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.008,
+    "output_cost": 0.0048000000000000004,
+    "prompt_tokens": 100,
+    "spend": 0.0728
+  },
+  "gpt-5.3-codex|all_components_responses": {
+    "completion_tokens": 40,
+    "input_cost": 0.00252,
+    "output_cost": 0.0037500000000000007,
+    "prompt_tokens": 120,
+    "spend": 0.006270000000000001
+  },
+  "gpt-5.3-codex|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.0036000000000000003,
+    "output_cost": 0.0024000000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.006
+  },
+  "gpt-5.3-codex|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.0031500000000000005,
+    "output_cost": 0.0018000000000000002,
+    "prompt_tokens": 150,
+    "spend": 0.00495
+  },
+  "gpt-5.3-codex|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.0030000000000000005,
+    "output_cost": 0.0123,
+    "prompt_tokens": 100,
+    "spend": 0.015300000000000001
+  },
+  "gpt-5.3-codex|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0024000000000000002,
+    "output_cost": 0.0016,
+    "prompt_tokens": 120,
+    "spend": 0.004
+  },
+  "gpt-5.3-codex|service_tier_flex": {
+    "completion_tokens": 40,
+    "input_cost": 0.0054,
+    "output_cost": 0.003,
+    "prompt_tokens": 120,
+    "spend": 0.008400000000000001
+  },
+  "gpt-5.3-codex|service_tier_priority": {
+    "completion_tokens": 40,
+    "input_cost": 0.00612,
+    "output_cost": 0.00324,
+    "prompt_tokens": 120,
+    "spend": 0.00936
+  },
+  "gpt-5.3-codex|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.0036000000000000003,
+    "output_cost": 0.0024000000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.006
+  },
+  "gpt-5.3-codex|stream_incomplete": {
+    "completion_tokens": 40,
+    "input_cost": 0.0036000000000000003,
+    "output_cost": 0.0024000000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.006
+  },
+  "gpt-5.3-codex|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0024000000000000002,
+    "output_cost": 0.0016,
+    "prompt_tokens": 120,
+    "spend": 0.004
+  },
+  "gpt-5.3-codex|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.0024000000000000002,
+    "output_cost": 0.0015000000000000002,
+    "prompt_tokens": 80,
+    "spend": 0.0039000000000000007
+  },
+  "gpt-5.3-codex|stream_unvalidated": {
+    "completion_tokens": 40,
+    "input_cost": 0.0036000000000000003,
+    "output_cost": 0.0024000000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.006
+  },
+  "gpt-5.3-codex|tiered": {
+    "completion_tokens": 30,
+    "input_cost": 48.000240000000005,
+    "output_cost": 0.0081,
+    "prompt_tokens": 200001,
+    "spend": 48.008340000000004
+  },
+  "gpt-5.3-codex|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.0036000000000000003,
+    "output_cost": 0.0024000000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.006
+  },
+  "gpt-5.3-codex|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.0030000000000000005,
+    "output_cost": 0.0018000000000000002,
+    "prompt_tokens": 100,
+    "spend": 0.0648
+  },
+  "gpt-5.4-mini|all_components_chat": {
+    "completion_tokens": 43,
+    "input_cost": 0.00856,
+    "output_cost": 0.00584,
+    "prompt_tokens": 155,
+    "spend": 0.0144
+  },
+  "gpt-5.4-mini|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.01,
+    "output_cost": 0.0066,
+    "prompt_tokens": 125,
+    "spend": 0.0166
+  },
+  "gpt-5.4-mini|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.0048000000000000004,
+    "output_cost": 0.0032,
+    "prompt_tokens": 120,
+    "spend": 0.008
+  },
+  "gpt-5.4-mini|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.0042,
+    "output_cost": 0.0024000000000000002,
+    "prompt_tokens": 150,
+    "spend": 0.0066
+  },
+  "gpt-5.4-mini|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.012400000000000001,
+    "output_cost": 0.0024000000000000002,
+    "prompt_tokens": 150,
+    "spend": 0.0148
+  },
+  "gpt-5.4-mini|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.0108,
+    "output_cost": 0.0024000000000000002,
+    "prompt_tokens": 150,
+    "spend": 0.0132
+  },
+  "gpt-5.4-mini|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.004,
+    "output_cost": 0.0164,
+    "prompt_tokens": 100,
+    "spend": 0.0204
+  },
+  "gpt-5.4-mini|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0012000000000000001,
+    "output_cost": 0.0008,
+    "prompt_tokens": 120,
+    "spend": 0.002
+  },
+  "gpt-5.4-mini|service_tier_flex": {
+    "completion_tokens": 40,
+    "input_cost": 0.0072,
+    "output_cost": 0.004,
+    "prompt_tokens": 120,
+    "spend": 0.0112
+  },
+  "gpt-5.4-mini|service_tier_priority": {
+    "completion_tokens": 40,
+    "input_cost": 0.00816,
+    "output_cost": 0.00432,
+    "prompt_tokens": 120,
+    "spend": 0.012480000000000002
+  },
+  "gpt-5.4-mini|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.0048000000000000004,
+    "output_cost": 0.0032,
+    "prompt_tokens": 120,
+    "spend": 0.008
+  },
+  "gpt-5.4-mini|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0012000000000000001,
+    "output_cost": 0.0008,
+    "prompt_tokens": 120,
+    "spend": 0.002
+  },
+  "gpt-5.4-mini|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.0032,
+    "output_cost": 0.002,
+    "prompt_tokens": 80,
+    "spend": 0.0052
+  },
+  "gpt-5.4-mini|tiered": {
+    "completion_tokens": 30,
+    "input_cost": 64.00032,
+    "output_cost": 0.0108,
+    "prompt_tokens": 200001,
+    "spend": 64.01112
+  },
+  "gpt-5.4-mini|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.0048000000000000004,
+    "output_cost": 0.0032,
+    "prompt_tokens": 120,
+    "spend": 0.008
+  },
+  "gpt-5.4-mini|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.004,
+    "output_cost": 0.0024000000000000002,
+    "prompt_tokens": 100,
+    "spend": 0.0264
+  },
+  "gpt-5.5-pro|all_components_responses": {
+    "completion_tokens": 40,
+    "input_cost": 0.00168,
+    "output_cost": 0.0025,
+    "prompt_tokens": 120,
+    "spend": 0.00418
+  },
+  "gpt-5.5-pro|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.0024000000000000002,
+    "output_cost": 0.0016,
+    "prompt_tokens": 120,
+    "spend": 0.004
+  },
+  "gpt-5.5-pro|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.0021,
+    "output_cost": 0.0012000000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.0033
+  },
+  "gpt-5.5-pro|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.002,
+    "output_cost": 0.0082,
+    "prompt_tokens": 100,
+    "spend": 0.0102
+  },
+  "gpt-5.5-pro|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0036000000000000003,
+    "output_cost": 0.0024000000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.006
+  },
+  "gpt-5.5-pro|service_tier_flex": {
+    "completion_tokens": 40,
+    "input_cost": 0.0036,
+    "output_cost": 0.002,
+    "prompt_tokens": 120,
+    "spend": 0.0056
+  },
+  "gpt-5.5-pro|service_tier_priority": {
+    "completion_tokens": 40,
+    "input_cost": 0.00408,
+    "output_cost": 0.00216,
+    "prompt_tokens": 120,
+    "spend": 0.006240000000000001
+  },
+  "gpt-5.5-pro|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.0024000000000000002,
+    "output_cost": 0.0016,
+    "prompt_tokens": 120,
+    "spend": 0.004
+  },
+  "gpt-5.5-pro|stream_incomplete": {
+    "completion_tokens": 40,
+    "input_cost": 0.0024000000000000002,
+    "output_cost": 0.0016,
+    "prompt_tokens": 120,
+    "spend": 0.004
+  },
+  "gpt-5.5-pro|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0036000000000000003,
+    "output_cost": 0.0024000000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.006
+  },
+  "gpt-5.5-pro|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.0016,
+    "output_cost": 0.001,
+    "prompt_tokens": 80,
+    "spend": 0.0026
+  },
+  "gpt-5.5-pro|stream_unvalidated": {
+    "completion_tokens": 40,
+    "input_cost": 0.0024000000000000002,
+    "output_cost": 0.0016,
+    "prompt_tokens": 120,
+    "spend": 0.004
+  },
+  "gpt-5.5-pro|tiered": {
+    "completion_tokens": 30,
+    "input_cost": 32.00016,
+    "output_cost": 0.0054,
+    "prompt_tokens": 200001,
+    "spend": 32.00556
+  },
+  "gpt-5.5-pro|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.0024000000000000002,
+    "output_cost": 0.0016,
+    "prompt_tokens": 120,
+    "spend": 0.004
+  },
+  "gpt-5.5-pro|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.002,
+    "output_cost": 0.0012000000000000001,
+    "prompt_tokens": 100,
+    "spend": 0.06319999999999999
+  },
+  "gpt-5.6|all_components_chat": {
+    "completion_tokens": 43,
+    "input_cost": 0.00214,
+    "output_cost": 0.00146,
+    "prompt_tokens": 155,
+    "spend": 0.0036
+  },
+  "gpt-5.6|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.0025,
+    "output_cost": 0.00165,
+    "prompt_tokens": 125,
+    "spend": 0.00415
+  },
+  "gpt-5.6|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.0012000000000000001,
+    "output_cost": 0.0008,
+    "prompt_tokens": 120,
+    "spend": 0.002
+  },
+  "gpt-5.6|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.00105,
+    "output_cost": 0.0006000000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.00165
+  },
+  "gpt-5.6|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.0031000000000000003,
+    "output_cost": 0.0006000000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.0037
+  },
+  "gpt-5.6|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.0027,
+    "output_cost": 0.0006000000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.0033
+  },
+  "gpt-5.6|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.001,
+    "output_cost": 0.0041,
+    "prompt_tokens": 100,
+    "spend": 0.0051
+  },
+  "gpt-5.6|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0048000000000000004,
+    "output_cost": 0.0032,
+    "prompt_tokens": 120,
+    "spend": 0.008
+  },
+  "gpt-5.6|service_tier_flex": {
+    "completion_tokens": 40,
+    "input_cost": 0.0018,
+    "output_cost": 0.001,
+    "prompt_tokens": 120,
+    "spend": 0.0028
+  },
+  "gpt-5.6|service_tier_priority": {
+    "completion_tokens": 40,
+    "input_cost": 0.00204,
+    "output_cost": 0.00108,
+    "prompt_tokens": 120,
+    "spend": 0.0031200000000000004
+  },
+  "gpt-5.6|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.0012000000000000001,
+    "output_cost": 0.0008,
+    "prompt_tokens": 120,
+    "spend": 0.002
+  },
+  "gpt-5.6|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0048000000000000004,
+    "output_cost": 0.0032,
+    "prompt_tokens": 120,
+    "spend": 0.008
+  },
+  "gpt-5.6|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.0008,
+    "output_cost": 0.0005,
+    "prompt_tokens": 80,
+    "spend": 0.0013
+  },
+  "gpt-5.6|tiered": {
+    "completion_tokens": 30,
+    "input_cost": 16.00008,
+    "output_cost": 0.0027,
+    "prompt_tokens": 200001,
+    "spend": 16.00278
+  },
+  "gpt-5.6|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.0012000000000000001,
+    "output_cost": 0.0008,
+    "prompt_tokens": 120,
+    "spend": 0.002
+  },
+  "gpt-5.6|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.001,
+    "output_cost": 0.0006000000000000001,
+    "prompt_tokens": 100,
+    "spend": 0.0216
+  },
+  "meta.llama4-maverick-17b-instruct-v1:0|all_components_anthropic": {
+    "completion_tokens": 25,
+    "input_cost": 0.020900000000000002,
+    "output_cost": 0.0095,
+    "prompt_tokens": 150,
+    "spend": 0.030400000000000003
+  },
+  "meta.llama4-maverick-17b-instruct-v1:0|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.0228,
+    "output_cost": 0.015200000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.038000000000000006
+  },
+  "meta.llama4-maverick-17b-instruct-v1:0|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.0228,
+    "output_cost": 0.015200000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.038000000000000006
+  },
+  "meta.llama4-maverick-17b-instruct-v1:0|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.015200000000000002,
+    "output_cost": 0.0095,
+    "prompt_tokens": 80,
+    "spend": 0.0247
+  },
+  "meta.llama4-maverick-17b-instruct-v1:0|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.0228,
+    "output_cost": 0.015200000000000002,
+    "prompt_tokens": 120,
+    "spend": 0.038000000000000006
+  },
+  "together_ai/moonshotai/Kimi-K3|all_components_chat": {
+    "completion_tokens": 43,
+    "input_cost": 0.0214,
+    "output_cost": 0.0146,
+    "prompt_tokens": 155,
+    "spend": 0.036
+  },
+  "together_ai/moonshotai/Kimi-K3|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.025,
+    "output_cost": 0.0165,
+    "prompt_tokens": 125,
+    "spend": 0.0415
+  },
+  "together_ai/moonshotai/Kimi-K3|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.012,
+    "output_cost": 0.008,
+    "prompt_tokens": 120,
+    "spend": 0.02
+  },
+  "together_ai/moonshotai/Kimi-K3|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.0105,
+    "output_cost": 0.006,
+    "prompt_tokens": 150,
+    "spend": 0.0165
+  },
+  "together_ai/moonshotai/Kimi-K3|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.031,
+    "output_cost": 0.006,
+    "prompt_tokens": 150,
+    "spend": 0.037
+  },
+  "together_ai/moonshotai/Kimi-K3|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.027000000000000003,
+    "output_cost": 0.006,
+    "prompt_tokens": 150,
+    "spend": 0.033
+  },
+  "together_ai/moonshotai/Kimi-K3|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.01,
+    "output_cost": 0.041,
+    "prompt_tokens": 100,
+    "spend": 0.051000000000000004
+  },
+  "together_ai/moonshotai/Kimi-K3|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0132,
+    "output_cost": 0.0088,
+    "prompt_tokens": 120,
+    "spend": 0.022
+  },
+  "together_ai/moonshotai/Kimi-K3|service_tier_flex": {
+    "completion_tokens": 40,
+    "input_cost": 0.018000000000000002,
+    "output_cost": 0.01,
+    "prompt_tokens": 120,
+    "spend": 0.028000000000000004
+  },
+  "together_ai/moonshotai/Kimi-K3|service_tier_priority": {
+    "completion_tokens": 40,
+    "input_cost": 0.0204,
+    "output_cost": 0.0108,
+    "prompt_tokens": 120,
+    "spend": 0.031200000000000002
+  },
+  "together_ai/moonshotai/Kimi-K3|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.012,
+    "output_cost": 0.008,
+    "prompt_tokens": 120,
+    "spend": 0.02
+  },
+  "together_ai/moonshotai/Kimi-K3|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.0132,
+    "output_cost": 0.0088,
+    "prompt_tokens": 120,
+    "spend": 0.022
+  },
+  "together_ai/moonshotai/Kimi-K3|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.008,
+    "output_cost": 0.005,
+    "prompt_tokens": 80,
+    "spend": 0.013000000000000001
+  },
+  "together_ai/moonshotai/Kimi-K3|tiered": {
+    "completion_tokens": 30,
+    "input_cost": 160.0008,
+    "output_cost": 0.027000000000000003,
+    "prompt_tokens": 200001,
+    "spend": 160.02779999999998
+  },
+  "together_ai/moonshotai/Kimi-K3|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.012,
+    "output_cost": 0.008,
+    "prompt_tokens": 120,
+    "spend": 0.02
+  },
+  "together_ai/moonshotai/Kimi-K3|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.01,
+    "output_cost": 0.006,
+    "prompt_tokens": 100,
+    "spend": 0.036000000000000004
+  },
+  "together_ai/zai-org/GLM-5.3|all_components_chat": {
+    "completion_tokens": 43,
+    "input_cost": 0.023540000000000002,
+    "output_cost": 0.01606,
+    "prompt_tokens": 155,
+    "spend": 0.0396
+  },
+  "together_ai/zai-org/GLM-5.3|audio": {
+    "completion_tokens": 45,
+    "input_cost": 0.027500000000000004,
+    "output_cost": 0.01815,
+    "prompt_tokens": 125,
+    "spend": 0.04565
+  },
+  "together_ai/zai-org/GLM-5.3|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.0132,
+    "output_cost": 0.0088,
+    "prompt_tokens": 120,
+    "spend": 0.022
+  },
+  "together_ai/zai-org/GLM-5.3|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.011550000000000001,
+    "output_cost": 0.0066,
+    "prompt_tokens": 150,
+    "spend": 0.01815
+  },
+  "together_ai/zai-org/GLM-5.3|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.034100000000000005,
+    "output_cost": 0.0066,
+    "prompt_tokens": 150,
+    "spend": 0.04070000000000001
+  },
+  "together_ai/zai-org/GLM-5.3|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.029699999999999997,
+    "output_cost": 0.0066,
+    "prompt_tokens": 150,
+    "spend": 0.0363
+  },
+  "together_ai/zai-org/GLM-5.3|reasoning": {
+    "completion_tokens": 100,
+    "input_cost": 0.011000000000000001,
+    "output_cost": 0.0451,
+    "prompt_tokens": 100,
+    "spend": 0.056100000000000004
+  },
+  "together_ai/zai-org/GLM-5.3|response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.012,
+    "output_cost": 0.008,
+    "prompt_tokens": 120,
+    "spend": 0.02
+  },
+  "together_ai/zai-org/GLM-5.3|service_tier_flex": {
+    "completion_tokens": 40,
+    "input_cost": 0.019799999999999998,
+    "output_cost": 0.011000000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.0308
+  },
+  "together_ai/zai-org/GLM-5.3|service_tier_priority": {
+    "completion_tokens": 40,
+    "input_cost": 0.022439999999999998,
+    "output_cost": 0.01188,
+    "prompt_tokens": 120,
+    "spend": 0.034319999999999996
+  },
+  "together_ai/zai-org/GLM-5.3|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.0132,
+    "output_cost": 0.0088,
+    "prompt_tokens": 120,
+    "spend": 0.022
+  },
+  "together_ai/zai-org/GLM-5.3|stream_response_model_override": {
+    "completion_tokens": 40,
+    "input_cost": 0.012,
+    "output_cost": 0.008,
+    "prompt_tokens": 120,
+    "spend": 0.02
+  },
+  "together_ai/zai-org/GLM-5.3|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.0088,
+    "output_cost": 0.0055000000000000005,
+    "prompt_tokens": 80,
+    "spend": 0.0143
+  },
+  "together_ai/zai-org/GLM-5.3|tiered": {
+    "completion_tokens": 30,
+    "input_cost": 176.00088,
+    "output_cost": 0.0297,
+    "prompt_tokens": 200001,
+    "spend": 176.03058
+  },
+  "together_ai/zai-org/GLM-5.3|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.0132,
+    "output_cost": 0.0088,
+    "prompt_tokens": 120,
+    "spend": 0.022
+  },
+  "together_ai/zai-org/GLM-5.3|web_search": {
+    "completion_tokens": 30,
+    "input_cost": 0.011000000000000001,
+    "output_cost": 0.0066,
+    "prompt_tokens": 100,
+    "spend": 0.0376
+  },
+  "us.anthropic.claude-opus-5-v1:0|all_components_anthropic": {
+    "completion_tokens": 25,
+    "input_cost": 0.033120000000000004,
+    "output_cost": 0.009000000000000001,
+    "prompt_tokens": 150,
+    "spend": 0.042120000000000005
+  },
+  "us.anthropic.claude-opus-5-v1:0|basic": {
+    "completion_tokens": 40,
+    "input_cost": 0.0216,
+    "output_cost": 0.014400000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.036000000000000004
+  },
+  "us.anthropic.claude-opus-5-v1:0|cache_read": {
+    "completion_tokens": 30,
+    "input_cost": 0.018900000000000004,
+    "output_cost": 0.0108,
+    "prompt_tokens": 150,
+    "spend": 0.029700000000000004
+  },
+  "us.anthropic.claude-opus-5-v1:0|cache_write_1h": {
+    "completion_tokens": 30,
+    "input_cost": 0.0558,
+    "output_cost": 0.0108,
+    "prompt_tokens": 150,
+    "spend": 0.0666
+  },
+  "us.anthropic.claude-opus-5-v1:0|cache_write_5m": {
+    "completion_tokens": 30,
+    "input_cost": 0.048600000000000004,
+    "output_cost": 0.0108,
+    "prompt_tokens": 150,
+    "spend": 0.05940000000000001
+  },
+  "us.anthropic.claude-opus-5-v1:0|stream": {
+    "completion_tokens": 40,
+    "input_cost": 0.0216,
+    "output_cost": 0.014400000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.036000000000000004
+  },
+  "us.anthropic.claude-opus-5-v1:0|stream_tool_call": {
+    "completion_tokens": 25,
+    "input_cost": 0.014400000000000001,
+    "output_cost": 0.009000000000000001,
+    "prompt_tokens": 80,
+    "spend": 0.023400000000000004
+  },
+  "us.anthropic.claude-opus-5-v1:0|tool_call": {
+    "completion_tokens": 40,
+    "input_cost": 0.0216,
+    "output_cost": 0.014400000000000001,
+    "prompt_tokens": 120,
+    "spend": 0.036000000000000004
+  }
+}
