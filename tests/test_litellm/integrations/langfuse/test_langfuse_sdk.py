@@ -555,6 +555,33 @@ def test_sdk_client_without_keys_is_built_disabled_and_fails_auth_check(monkeypa
     assert client.auth_check() is False
 
 
+@pytest.mark.parametrize("raw", ["1.5", "-0.5", "abc"])
+def test_sdk_client_is_built_despite_an_unusable_sample_rate(monkeypatch: pytest.MonkeyPatch, raw: str):
+    """The SDK parses ``LANGFUSE_SAMPLE_RATE`` itself and would raise, which took the whole callback down."""
+    monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", raw)
+    requests = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(401, json={"message": "unauthorized"})
+
+    client = build_langfuse_client(
+        parameters={
+            "public_key": "pk-sr-test-" + raw,
+            "secret_key": "sk",
+            "base_url": "http://127.0.0.1:1",
+            "httpx_client": httpx.Client(transport=httpx.MockTransport(record)),
+        },
+        environment=None,
+        release=None,
+        mock_mode=True,
+    )
+
+    with pytest.raises(UnauthorizedError):
+        client.auth_check()
+    assert requests[-1].headers["authorization"] == "Basic " + b64encode(f"pk-sr-test-{raw}:sk".encode()).decode()
+
+
 def test_sdk_client_does_not_take_over_the_process_tracer_provider():
     provider_before = otel_trace.get_tracer_provider()
     build_langfuse_client(

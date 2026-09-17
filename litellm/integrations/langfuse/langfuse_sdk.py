@@ -395,6 +395,12 @@ def _parse_sample_rate(raw: str) -> float | None:
     return rate if 0.0 <= rate <= 1.0 else None
 
 
+def _usable_sample_rate() -> float:
+    raw: Final = os.environ.get("LANGFUSE_SAMPLE_RATE")
+    parsed: Final = _parse_sample_rate(raw) if raw is not None else 1.0
+    return 1.0 if parsed is None else parsed
+
+
 def configured_sample_rate() -> float:
     """``LANGFUSE_SAMPLE_RATE`` as a fraction, exporting everything when it is unset or unusable."""
     raw: Final = os.environ.get("LANGFUSE_SAMPLE_RATE")
@@ -633,6 +639,9 @@ def build_langfuse_client(
     That same cache keeps the first secret and host it saw for a public key, so the REST client
     behind ``get_prompt`` and ``auth_check`` is rebuilt from the credentials actually supplied.
     Without both keys the SDK disables the client, which has no REST client to rebuild.
+
+    The SDK reads ``LANGFUSE_SAMPLE_RATE`` itself and raises on anything it cannot parse, so it
+    gets the rate litellm already validated; the sampler that matters is on litellm's provider.
     """
     public_key: Final = parameters.get("public_key")
     secret_key: Final = parameters.get("secret_key")
@@ -641,6 +650,7 @@ def build_langfuse_client(
     credentialed: Final = isinstance(public_key, str) and isinstance(secret_key, str)
     client: Final = Langfuse(
         **parameters,  # pyright: ignore[reportArgumentType]  # kwargs-ok: dict mirrors the typed ctor, values resolved by the callers
+        sample_rate=_usable_sample_rate(),
         tracer_provider=TracerProvider(
             resource=_resource(environment=environment, release=release), shutdown_on_exit=False
         ),
