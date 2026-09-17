@@ -38,6 +38,7 @@ from litellm.llms.azure.passthrough.transformation import foreign_azure_deployme
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.deepgram.common_utils import (
     deepgram_listen_callback_params,
+    deepgram_listen_requested_model,
     deepgram_listen_websocket_target,
 )
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
@@ -52,6 +53,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     is_no_auth_dev_mode,
     user_api_key_auth,
     user_api_key_auth_websocket,
+    user_api_key_auth_websocket_for_model,
 )
 from litellm.proxy.common_request_processing import open_sse_before_first_byte
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -2700,11 +2702,17 @@ _DEEPGRAM_WS_MISSING_KEY_REASON: Final = (
 _DEEPGRAM_WS_CALLBACK_REASON: Final = "Deepgram callback delivery is not supported through the proxy: remove {params}"
 
 
+async def deepgram_listen_user_api_key_auth(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(
+        websocket, model=deepgram_listen_requested_model(websocket.url.query)
+    )
+
+
 @router.websocket("/deepgram/v1/listen")
 @router.websocket("/deepgram/listen")
 async def deepgram_listen_websocket_route(
     websocket: WebSocket,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(deepgram_listen_user_api_key_auth)],
     relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
 ) -> None:
     deepgram_api_key: Final = passthrough_endpoint_router.get_credentials(

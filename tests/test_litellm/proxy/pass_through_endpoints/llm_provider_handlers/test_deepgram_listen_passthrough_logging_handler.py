@@ -19,6 +19,8 @@ from litellm.types.utils import StandardLoggingPayload, TranscriptionResponse
 
 NOVA_3_URL: Final = "wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000"
 
+pytestmark: Final = pytest.mark.usefixtures("local_model_cost_map")
+
 
 def _results(start: object, duration: object, transcript: str = "", is_final: object = True) -> dict[str, object]:
     return {
@@ -63,11 +65,20 @@ def _logging_obj(call_id: str = "call-dg") -> LiteLLMLoggingObj:
     )
 
 
-def _registry_cost(model: str, seconds: float) -> float:
+def _registry_cost(pricing_model: str, seconds: float) -> float:
     """Derives the expected charge from the live cost map rather than pinning a vendor price."""
-    per_second: Final = litellm.model_cost[f"deepgram/{model}"]["input_cost_per_second"]
+    per_second: Final = litellm.model_cost[f"deepgram/{pricing_model}"]["input_cost_per_second"]
     assert per_second > 0
     return per_second * seconds
+
+
+def _cost(upstream_url: str, *frames: dict[str, object]) -> float:
+    handler_result = DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
+        websocket_messages=frames, logging_obj=_logging_obj(), upstream_url=upstream_url
+    )
+    response_cost = handler_result["kwargs"]["response_cost"]
+    assert isinstance(response_cost, float)
+    return response_cost
 
 
 def test_handler_bills_metadata_duration_at_the_registry_rate_and_names_the_model():
@@ -85,15 +96,78 @@ def test_handler_bills_metadata_duration_at_the_registry_rate_and_names_the_mode
     assert isinstance(result, TranscriptionResponse)
     assert result.text == "first sentence second sentence"
     assert result._hidden_params["audio_transcription_duration"] == 12.5
-    assert result._hidden_params["response_cost"] == pytest.approx(_registry_cost("nova-3", 12.5))
-    assert handler_result["kwargs"]["response_cost"] == pytest.approx(_registry_cost("nova-3", 12.5))
+    assert result._hidden_params["response_cost"] == pytest.approx(_registry_cost("streaming/nova-3", 12.5))
+    assert handler_result["kwargs"]["response_cost"] == pytest.approx(_registry_cost("streaming/nova-3", 12.5))
     assert handler_result["kwargs"]["model"] == "nova-3"
     assert handler_result["kwargs"]["custom_llm_provider"] == "deepgram"
     assert handler_result["kwargs"]["litellm_params"] == {"metadata": {}}
     assert logging_obj.model == "nova-3"
     assert logging_obj.model_call_details["model"] == "nova-3"
     assert logging_obj.model_call_details["custom_llm_provider"] == "deepgram"
-    assert logging_obj.model_call_details["response_cost"] == pytest.approx(_registry_cost("nova-3", 12.5))
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(_registry_cost("streaming/nova-3", 12.5))
+
+
+def test_handler_bills_streaming_not_prerecorded_rates():
+    """Deepgram prices /v1/listen over a WebSocket separately from pre-recorded transcription, so the streaming entry
+    must be the one charged; the two registry rows only need to differ for this to matter, whatever their values."""
+    streaming = litellm.model_cost["deepgram/streaming/nova-3"]["input_cost_per_second"]
+    prerecorded = litellm.model_cost["deepgram/nova-3"]["input_cost_per_second"]
+    assert streaming != prerecorded
+
+    assert _cost(NOVA_3_URL, _metadata(60.0)) == pytest.approx(60.0 * streaming)
+
+
+def test_handler_bills_multilingual_streaming_when_language_is_multi():
+    monolingual = _cost(NOVA_3_URL, _metadata(60.0))
+    multilingual = _cost(f"{NOVA_3_URL}&language=multi", _metadata(60.0))
+
+    assert multilingual == pytest.approx(_registry_cost("streaming/nova-3-multilingual", 60.0))
+    assert multilingual > monolingual
+
+
+@pytest.mark.parametrize(
+    ("query", "addons"),
+    [
+        pytest.param("redact=pci", ("redact",), id="redaction"),
+        pytest.param("redact=pci&redact=numbers", ("redact",), id="redaction counted once"),
+        pytest.param("keyterm=LiteLLM&keyterm=Deepgram", ("keyterm",), id="keyterm prompting"),
+        pytest.param("detect_entities=true", ("detect_entities",), id="entity detection"),
+        pytest.param("diarize=true", ("diarize",), id="diarization"),
+        pytest.param("diarize_model=v1", ("diarize",), id="diarization via diarize_model"),
+        pytest.param("diarize=true&diarize_model=v1", ("diarize",), id="diarization counted once"),
+        pytest.param(
+            "redact=pci&keyterm=x&detect_entities=true&diarize=true",
+            ("redact", "keyterm", "detect_entities", "diarize"),
+            id="every add-on",
+        ),
+        pytest.param("detect_entities=false&diarize=False&redact=", (), id="disabled add-ons cost nothing"),
+    ],
+)
+def test_handler_adds_each_priced_add_on_once_on_top_of_the_base_rate(query: str, addons: tuple[str, ...]):
+    base = _cost(NOVA_3_URL, _metadata(60.0))
+    expected = base + sum(_registry_cost(f"streaming/{addon}", 60.0) for addon in addons)
+
+    assert _cost(f"{NOVA_3_URL}&{query}", _metadata(60.0)) == pytest.approx(expected)
+
+
+def test_handler_add_ons_scale_with_channels_like_the_base_rate():
+    stereo_plain = _cost(f"{NOVA_3_URL}&channels=2", _metadata(60.0, channels=2))
+    stereo_redacted = _cost(f"{NOVA_3_URL}&channels=2&redact=pci", _metadata(60.0, channels=2))
+
+    assert stereo_redacted - stereo_plain == pytest.approx(_registry_cost("streaming/redact", 120.0))
+
+
+def test_handler_falls_back_to_the_prerecorded_rate_for_a_model_without_a_streaming_entry():
+    assert "deepgram/streaming/nova-2" not in litellm.model_cost
+
+    handler_result = DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
+        websocket_messages=(_metadata(60.0),),
+        logging_obj=_logging_obj(),
+        upstream_url="wss://api.deepgram.com/v1/listen?model=nova-2",
+    )
+
+    assert handler_result["kwargs"]["model"] == "nova-2"
+    assert handler_result["kwargs"]["response_cost"] == pytest.approx(_registry_cost("nova-2", 60.0))
 
 
 def test_handler_falls_back_to_results_frames_when_the_stream_ends_without_metadata():
@@ -104,7 +178,7 @@ def test_handler_falls_back_to_results_frames_when_the_stream_ends_without_metad
     )
 
     assert handler_result["result"]._hidden_params["audio_transcription_duration"] == 72.5
-    assert handler_result["kwargs"]["response_cost"] == pytest.approx(_registry_cost("nova-3", 72.5))
+    assert handler_result["kwargs"]["response_cost"] == pytest.approx(_registry_cost("streaming/nova-3", 72.5))
 
 
 def test_handler_charges_more_for_more_audio_on_the_same_model():
@@ -133,7 +207,7 @@ def test_handler_bills_every_channel_of_a_multichannel_session():
 
     assert stereo["result"]._hidden_params["audio_transcription_duration"] == 60.0
     assert stereo["kwargs"]["response_cost"] == pytest.approx(2 * mono["kwargs"]["response_cost"])
-    assert stereo["kwargs"]["response_cost"] == pytest.approx(_registry_cost("nova-3", 60.0))
+    assert stereo["kwargs"]["response_cost"] == pytest.approx(_registry_cost("streaming/nova-3", 60.0))
 
 
 def test_handler_bills_the_declared_channels_when_the_stream_dies_before_any_frame_reports_them():
@@ -144,7 +218,7 @@ def test_handler_bills_the_declared_channels_when_the_stream_dies_before_any_fra
     )
 
     assert handler_result["result"]._hidden_params["audio_transcription_duration"] == 30.0
-    assert handler_result["kwargs"]["response_cost"] == pytest.approx(_registry_cost("nova-3", 30.0))
+    assert handler_result["kwargs"]["response_cost"] == pytest.approx(_registry_cost("streaming/nova-3", 30.0))
 
 
 def test_handler_keeps_the_spend_row_but_no_cost_for_an_unpriced_model():
@@ -226,6 +300,6 @@ async def test_success_handler_dispatches_deepgram_listen_and_logs_duration_base
     payload = capturing_logger.payloads[0]
     assert payload["model"] == "nova-3"
     assert payload["custom_llm_provider"] == "deepgram"
-    assert payload["response_cost"] == pytest.approx(_registry_cost("nova-3", 20.0))
+    assert payload["response_cost"] == pytest.approx(_registry_cost("streaming/nova-3", 20.0))
     assert payload["metadata"]["user_api_key_team_id"] == "team-stt"
     assert payload["id"] == "call-dg-e2e"

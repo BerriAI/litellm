@@ -11,10 +11,27 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 _WEBSOCKET_SCHEMES: Final = MappingProxyType({"https": "wss", "http": "ws", "wss": "wss", "ws": "ws"})
 DEEPGRAM_LISTEN_CALLBACK_PARAMS: Final = frozenset({"callback", "callback_method"})
+DEEPGRAM_LISTEN_STREAMING_PRICING_PREFIX: Final = "streaming/"
+DEEPGRAM_LISTEN_MULTILINGUAL_LANGUAGE: Final = "multi"
+DEEPGRAM_LISTEN_MULTILINGUAL_PRICING_SUFFIX: Final = "-multilingual"
+DEEPGRAM_LISTEN_ADDON_PRICING_PARAMS: Final = MappingProxyType(
+    {
+        "redact": "redact",
+        "keyterm": "keyterm",
+        "detect_entities": "detect_entities",
+        "diarize": "diarize",
+        "diarize_model": "diarize",
+    }
+)
+_DISABLED_PARAM_VALUES: Final = frozenset({"", "false"})
 
 
 class DeepgramException(BaseLLMException):
     pass
+
+
+def deepgram_listen_requested_model(query_string: str) -> str:
+    return httpx.QueryParams(query_string).get("model") or DEEPGRAM_LISTEN_DEFAULT_MODEL
 
 
 def deepgram_listen_websocket_target(api_base: str | None, query_string: str) -> str:
@@ -34,6 +51,38 @@ def deepgram_listen_callback_params(query_string: str) -> tuple[str, ...]:
 def deepgram_listen_model(upstream_url: str) -> str:
     models: Final = parse_qs(urlparse(upstream_url).query).get("model")
     return models[0] if models else DEEPGRAM_LISTEN_DEFAULT_MODEL
+
+
+def _param_enabled(values: Sequence[str]) -> bool:
+    return any(value.strip().lower() not in _DISABLED_PARAM_VALUES for value in values)
+
+
+def deepgram_listen_base_pricing_models(upstream_url: str) -> tuple[str, ...]:
+    """Registry keys to try, in order, for the per-second base rate of a streaming session: the streaming entry for
+    the language mode Deepgram bills (multilingual when ``language=multi``), then the plain streaming entry, then
+    the pre-recorded entry for models that have no streaming price of their own."""
+    model: Final = deepgram_listen_model(upstream_url)
+    params: Final = parse_qs(urlparse(upstream_url).query)
+    streaming: Final = f"{DEEPGRAM_LISTEN_STREAMING_PRICING_PREFIX}{model}"
+    multilingual: Final = params.get("language", ("",))[-1].strip().lower() == DEEPGRAM_LISTEN_MULTILINGUAL_LANGUAGE
+    return (
+        (f"{streaming}{DEEPGRAM_LISTEN_MULTILINGUAL_PRICING_SUFFIX}", streaming, model)
+        if multilingual
+        else (streaming, model)
+    )
+
+
+def deepgram_listen_addon_pricing_models(upstream_url: str) -> tuple[str, ...]:
+    params: Final = parse_qs(urlparse(upstream_url).query)
+    return tuple(
+        sorted(
+            frozenset(
+                f"{DEEPGRAM_LISTEN_STREAMING_PRICING_PREFIX}{addon}"
+                for param, addon in DEEPGRAM_LISTEN_ADDON_PRICING_PARAMS.items()
+                if _param_enabled(params.get(param, ()))
+            )
+        )
+    )
 
 
 def _channel_count(value: object) -> int | None:

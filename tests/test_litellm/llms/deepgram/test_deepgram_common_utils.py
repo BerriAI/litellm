@@ -6,10 +6,13 @@ import pytest
 
 import litellm
 from litellm.llms.deepgram.common_utils import (
+    deepgram_listen_addon_pricing_models,
     deepgram_listen_audio_seconds,
+    deepgram_listen_base_pricing_models,
     deepgram_listen_callback_params,
     deepgram_listen_channel_count,
     deepgram_listen_model,
+    deepgram_listen_requested_model,
     deepgram_listen_transcript,
     deepgram_listen_websocket_target,
 )
@@ -195,3 +198,68 @@ def test_deepgram_listen_transcript_joins_final_results_only():
 )
 def test_deepgram_listen_model_comes_from_the_upstream_query(upstream_url: str, expected_model: str):
     assert deepgram_listen_model(upstream_url) == expected_model
+
+
+@pytest.mark.parametrize(
+    "query_string",
+    ["model=nova-2&language=en", "language=en", "model=&language=en", "", "model=nova-3-medical"],
+)
+def test_requested_model_is_the_model_the_upstream_target_will_carry(query_string: str):
+    """Authorization runs against ``deepgram_listen_requested_model``; the upstream URL is built separately, so the
+    two must always agree or a key could be authorized for one model and reach another."""
+    target: Final = deepgram_listen_websocket_target(None, query_string)
+    assert deepgram_listen_requested_model(query_string) == deepgram_listen_model(target)
+
+
+@pytest.mark.parametrize(
+    ("upstream_url", "expected"),
+    [
+        pytest.param(NOVA_3_URL, ("streaming/nova-3", "nova-3"), id="monolingual"),
+        pytest.param(f"{NOVA_3_URL}&language=en", ("streaming/nova-3", "nova-3"), id="explicit language"),
+        pytest.param(
+            f"{NOVA_3_URL}&language=multi",
+            ("streaming/nova-3-multilingual", "streaming/nova-3", "nova-3"),
+            id="multilingual",
+        ),
+        pytest.param(
+            f"{NOVA_3_URL}&language=MULTI",
+            ("streaming/nova-3-multilingual", "streaming/nova-3", "nova-3"),
+            id="multilingual any case",
+        ),
+        pytest.param(
+            "wss://api.deepgram.com/v1/listen?model=nova-2&language=multi",
+            ("streaming/nova-2-multilingual", "streaming/nova-2", "nova-2"),
+            id="other model",
+        ),
+    ],
+)
+def test_deepgram_listen_base_pricing_models(upstream_url: str, expected: tuple[str, ...]):
+    assert deepgram_listen_base_pricing_models(upstream_url) == expected
+
+
+@pytest.mark.parametrize(
+    ("upstream_url", "expected"),
+    [
+        pytest.param(NOVA_3_URL, (), id="no add-ons"),
+        pytest.param(f"{NOVA_3_URL}&redact=pci", ("streaming/redact",), id="redact"),
+        pytest.param(f"{NOVA_3_URL}&redact=pci&redact=ssn", ("streaming/redact",), id="repeated redact once"),
+        pytest.param(f"{NOVA_3_URL}&keyterm=a&keyterm=b", ("streaming/keyterm",), id="keyterm"),
+        pytest.param(f"{NOVA_3_URL}&detect_entities=true", ("streaming/detect_entities",), id="detect_entities"),
+        pytest.param(f"{NOVA_3_URL}&diarize=true", ("streaming/diarize",), id="diarize"),
+        pytest.param(f"{NOVA_3_URL}&diarize_model=v1", ("streaming/diarize",), id="diarize_model"),
+        pytest.param(f"{NOVA_3_URL}&diarize=true&diarize_model=latest", ("streaming/diarize",), id="diarize both once"),
+        pytest.param(f"{NOVA_3_URL}&detect_entities=false&diarize=FALSE&redact=", (), id="disabled"),
+        pytest.param(
+            f"{NOVA_3_URL}&detect_entities=false&detect_entities=true",
+            ("streaming/detect_entities",),
+            id="any enabling value wins",
+        ),
+        pytest.param(
+            f"{NOVA_3_URL}&diarize=true&redact=pci&keyterm=x&detect_entities=true",
+            ("streaming/detect_entities", "streaming/diarize", "streaming/keyterm", "streaming/redact"),
+            id="all, sorted",
+        ),
+    ],
+)
+def test_deepgram_listen_addon_pricing_models(upstream_url: str, expected: tuple[str, ...]):
+    assert deepgram_listen_addon_pricing_models(upstream_url) == expected
