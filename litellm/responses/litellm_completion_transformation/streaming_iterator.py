@@ -22,7 +22,6 @@ from litellm.types.llms.openai import (
     ContentPartAddedEvent,
     ContentPartDoneEvent,
     ContentPartDonePartOutputText,
-    ContentPartDonePartReasoningText,
     FunctionCallArgumentsDeltaEvent,
     FunctionCallArgumentsDoneEvent,
     OutputItemAddedEvent,
@@ -751,28 +750,19 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._cached_item_id = f"msg_{uuid.uuid4()}"
 
         text: Final = getattr(litellm_complete_object.choices[0].message, "content", "") or ""
-        reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""
         annotations: Final = getattr(litellm_complete_object.choices[0].message, "annotations", None)
 
-        part: PART_UNION_TYPES | None = None
-        if reasoning_content:
-            part = ContentPartDonePartReasoningText(
-                type="reasoning_text",
-                reasoning=reasoning_content,
+        response_annotations: Final = (
+            LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+                annotations=annotations
             )
-
-        else:
-            response_annotations: Final = (
-                LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
-                    annotations=annotations
-                )
-            )
-            part = ContentPartDonePartOutputText(
-                type="output_text",
-                text=text,
-                annotations=response_annotations,
-                logprobs=None,
-            )
+        )
+        part: Final[PART_UNION_TYPES] = ContentPartDonePartOutputText(
+            type="output_text",
+            text=text,
+            annotations=response_annotations,
+            logprobs=None,
+        )
 
         return ContentPartDoneEvent(
             type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
