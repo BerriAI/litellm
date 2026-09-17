@@ -531,13 +531,13 @@ class MistralConfig(OpenAIGPTConfig):
         if "magistral" in model.lower() and optional_params.get("_add_reasoning_prompt", False):
             messages = self._add_reasoning_system_prompt_if_needed(messages, optional_params)
 
-        optional_params.pop("client_metadata", None)
+        upstream_params: Final = {key: value for key, value in optional_params.items() if key != "client_metadata"}
 
         # Call parent transform_request which handles _transform_messages
         return super().transform_request(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=upstream_params,
             litellm_params=litellm_params,
             headers=headers,
         )
