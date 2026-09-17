@@ -68,6 +68,10 @@ from litellm.proxy._types import (
     SpecialModelNames,
     UserAPIKeyAuth,
 )
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
+    CeilingResolver,
+    resolve_agent_access_group_ceiling,
+)
 from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
     should_throttle_budget_exceeded,
@@ -4199,15 +4203,14 @@ async def _check_agent_access_group_model_access(
     model: str | list[str] | None,  # mutable-ok: _can_object_call_model and the client message helper take list[str]
     valid_token: UserAPIKeyAuth | None,
     llm_router: Router | None,
+    resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
 ) -> Literal[True]:
     """Raises when the key's agent has access groups attached and none of them names the model.
     Attached groups that name no model deny every model; ``_can_object_call_model`` would read
     an empty allowlist as unrestricted."""
-    from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_agent_access_group_ceiling
-
     if not model or valid_token is None or not valid_token.agent_id:
         return True
-    ceiling: Final = await resolve_agent_access_group_ceiling(valid_token.agent_id)
+    ceiling: Final = await resolve_ceiling(valid_token.agent_id)
     if ceiling is None:
         return True
     if not ceiling.models:

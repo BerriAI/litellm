@@ -33,6 +33,9 @@ class AgentAccessGroupCeiling:
     agent_ids: frozenset[str]
 
 
+CeilingResolver: TypeAlias = Callable[[str], Awaitable[AgentAccessGroupCeiling | None]]  # mutable-ok: Callable params
+
+
 async def _load_agent(agent_id: str) -> AgentResponse | None:
     from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
 
