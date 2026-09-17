@@ -13,11 +13,13 @@ Enabled by default on the proxy app; requests without
 `Content-Encoding: gzip` pass through untouched.
 """
 
-import gzip
+import zlib
 
 from starlette.datastructures import MutableHeaders
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+MAX_DECOMPRESSED_SIZE: int = 512 * 1024 * 1024  # 512 MB
 
 
 class GunzipRequestMiddleware:
@@ -26,19 +28,18 @@ class GunzipRequestMiddleware:
 
     On `Content-Encoding: gzip`:
       - buffers the full request body
-      - decompresses it with `gzip.decompress`
+      - decompresses it incrementally with a hard output-size limit
       - replaces the request body and rewrites `Content-Length`
       - strips `Content-Encoding` so downstream handlers see plain JSON
 
     Invalid gzip data is rejected with a 400 before reaching any route.
+    Decompression that exceeds MAX_DECOMPRESSED_SIZE returns 413.
     """
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        # Fast path: only inspect HTTP requests; pass through
-        # websocket/lifespan immediately
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -48,8 +49,7 @@ class GunzipRequestMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Buffer the full request body from the ASGI receive channel
-        chunks: list = []
+        chunks: list[bytes] = []
         while True:
             message = await receive()
             if message["type"] == "http.request":
@@ -61,31 +61,55 @@ class GunzipRequestMiddleware:
 
         compressed = b"".join(chunks)
         if not compressed:
-            # An empty body with `Content-Encoding: gzip` is malformed
-            # (gzip.decompress(b"") silently returns b""), reject it early
             response = PlainTextResponse("Empty gzip-encoded request body", status_code=400)
             await response(scope, receive, send)
             return
 
+        decompressor = zlib.decompressobj(wbits=zlib.MAX_WBITS | 16)
+        decompressed_chunks: list[bytes] = []
+        total_decompressed = 0
+        offset = 0
+        chunk_size = 65536
         try:
-            body = gzip.decompress(compressed)
-        except OSError:
+            while offset < len(compressed):
+                end = min(offset + chunk_size, len(compressed))
+                decompressed = decompressor.decompress(compressed[offset:end])
+                total_decompressed += len(decompressed)
+                if total_decompressed > MAX_DECOMPRESSED_SIZE:
+                    response = PlainTextResponse("Decompressed request body exceeds size limit", status_code=413)
+                    await response(scope, receive, send)
+                    return
+                decompressed_chunks.append(decompressed)
+                offset = end
+            tail = decompressor.flush()
+            total_decompressed += len(tail)
+            if total_decompressed > MAX_DECOMPRESSED_SIZE:
+                response = PlainTextResponse("Decompressed request body exceeds size limit", status_code=413)
+                await response(scope, receive, send)
+                return
+            decompressed_chunks.append(tail)
+            if not decompressor.eof:
+                response = PlainTextResponse("Invalid gzip-encoded request body", status_code=400)
+                await response(scope, receive, send)
+                return
+        except (OSError, EOFError, zlib.error):
             response = PlainTextResponse("Invalid gzip-encoded request body", status_code=400)
             await response(scope, receive, send)
             return
 
-        # Rewrite headers: strip content-encoding, fix content-length
+        body = b"".join(decompressed_chunks)
+
         if "content-encoding" in headers:
             del headers["content-encoding"]
         headers["content-length"] = str(len(body))
 
-        sent = False
+        body_sent = False
 
         async def receive_replaced() -> Message:
-            nonlocal sent
-            if not sent:
-                sent = True
+            nonlocal body_sent
+            if not body_sent:
+                body_sent = True
                 return {"type": "http.request", "body": body, "more_body": False}
-            return {"type": "http.request", "body": b"", "more_body": False}
+            return await receive()
 
         await self.app(scope, receive_replaced, send)

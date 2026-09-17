@@ -631,6 +631,7 @@ from litellm.proxy.middleware.admission_control_middleware import (
     admission_control_state,
     get_admission_control_settings,
 )
+from litellm.proxy.middleware.gunzip_request_middleware import GunzipRequestMiddleware
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -638,7 +639,6 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
     PerRequestRootPathMiddleware,
     get_server_root_paths,
 )
-from litellm.proxy.middleware.gunzip_request_middleware import GunzipRequestMiddleware
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
@@ -2224,9 +2224,9 @@ app.add_middleware(
     # it sees prisma_client as of the first request rather than import time.
     sink_factory=lambda: gateway_request_accumulator if prisma_client is not None else None,
 )
+app.add_middleware(GunzipRequestMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(GunzipRequestMiddleware)
 
 
 def mount_swagger_ui():
@@ -4885,7 +4885,7 @@ class ProxyConfig:
             # _encrypt_env_variables_for_db is idempotent — a caller that
             # already encrypted the values (or re-submitted ciphertext read
             # back from the DB) will not get a stacked second layer.
-            if "environment_variables" in config_to_save and config_to_save["environment_variables"]:
+            if config_to_save.get("environment_variables"):
                 config_to_save["environment_variables"] = self._encrypt_env_variables_for_db(
                     environment_variables=config_to_save["environment_variables"]
                 )
@@ -11220,11 +11220,11 @@ async def completion(
         if _data.get("stream", None) is not None and _data["stream"] is True:
             _text_response: Final = litellm.ModelResponse()
             # Set text attribute dynamically for text completion format
-            setattr(_text_response.choices[0], "text", e.message)
+            _text_response.choices[0].text = e.message
             _text_response.model = e.model
             _usage = _blocked_response_usage(e.original_response)
             # Set usage attribute dynamically (ModelResponse accepts usage in __init__ but it's not in type definition)
-            setattr(_text_response, "usage", _usage)
+            _text_response.usage = _usage
             _iterator = litellm.utils.ModelResponseIterator(model_response=_text_response, convert_to_delta=True)
             _streaming_response = litellm.TextCompletionStreamWrapper(
                 completion_stream=_iterator,
@@ -16329,17 +16329,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
     response: Final = await generate_key_helper_fn(
         llm_router=llm_router,
         request_type="key",
-        **{
-            "user_role": user_obj.user_role,
-            "duration": LITELLM_UI_SESSION_DURATION,
-            "key_max_budget": litellm.max_ui_session_budget,
-            "models": [],
-            "aliases": {},
-            "config": {},
-            "spend": 0,
-            "user_id": user_obj.user_id,
-            "team_id": UI_TEAM_ID,
-        },
+        user_role=user_obj.user_role, duration=LITELLM_UI_SESSION_DURATION, key_max_budget=litellm.max_ui_session_budget, models=[], aliases={}, config={}, spend=0, user_id=user_obj.user_id, team_id=UI_TEAM_ID,
     )
     key: Final = response["token"]
 
