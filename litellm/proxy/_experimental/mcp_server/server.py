@@ -3838,7 +3838,7 @@ if MCP_AVAILABLE:
         sessions: Sequence[MCPGatewaySession],
         label_for: Callable[[MCPGatewaySession], str | None],
     ) -> tuple[MCPGatewaySessionGroupCount, ...]:
-        counts: Final = Counter(label_for(session) for session in sessions)
+        counts: Final = types.MappingProxyType(Counter(label_for(session) for session in sessions))
         return tuple(
             sorted(
                 (MCPGatewaySessionGroupCount(label=label, count=count) for label, count in counts.items()),
