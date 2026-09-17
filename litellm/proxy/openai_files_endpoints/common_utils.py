@@ -255,6 +255,26 @@ def extract_model_from_sources(
     return model_from_id, model_from_param
 
 
+def _require_router(llm_router: Optional["Router"]):
+    from fastapi import HTTPException
+
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Router not initialized. Cannot use model-based routing."},
+        )
+    return llm_router
+
+
+def _model_not_found_error(model_id: str):
+    from fastapi import HTTPException
+
+    return HTTPException(
+        status_code=400,
+        detail={"error": f"Model '{model_id}' not found in model_list. Please check your config.yaml."},
+    )
+
+
 def get_credentials_for_model(
     llm_router,  # Router instance
     model_id: str,
@@ -274,40 +294,27 @@ def get_credentials_for_model(
     Raises:
         HTTPException: If router not initialized or model not found
     """
-    from fastapi import HTTPException
-
-    if llm_router is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Router not initialized. Cannot use model-based routing."},
-        )
-
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    router: Final = _require_router(llm_router)
+    credentials: Final = router.get_deployment_credentials_with_provider(model_id=model_id)
 
     if credentials is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": f"Model '{model_id}' not found in model_list. Please check your config.yaml."},
-        )
+        raise _model_not_found_error(model_id)
 
     return credentials
 
 
-def get_deployment_provider_model_name(llm_router: Optional["Router"], model_id: str) -> str | None:
-    """
-    The provider model id (``litellm_params.model``) behind a public model name,
-    resolved O(1) via the model group index. ``None`` when the router is absent
-    or the name matches no deployment group.
+def get_credentials_and_deployment_model_for_model(
+    llm_router: Optional["Router"],
+    model_id: str,
+    operation_context: str = "file operation",
+):
+    router: Final = _require_router(llm_router)
+    result: Final = router.get_deployment_credentials_and_model(model_id=model_id)
 
-    Credential lookups deliberately never carry ``model`` (it is excluded from
-    ``CredentialLiteLLMParams``), but Bedrock batch creation and the JSONL body
-    rewrite need the real provider model id (used as ``modelId`` and for invoke
-    provider detection), not the public alias the request was made with.
-    """
-    deployment: Final = (
-        llm_router.get_deployment_by_model_group_name(model_group_name=model_id) if llm_router is not None else None
-    )
-    return None if deployment is None else deployment.litellm_params.model
+    if result is None:
+        raise _model_not_found_error(model_id)
+
+    return result
 
 
 def get_team_provider_credentials(

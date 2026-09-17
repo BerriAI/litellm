@@ -8653,35 +8653,7 @@ class Router:
             coerce_token_limit(model_info.get("max_output_tokens")),
         )
 
-    def get_deployment_credentials_with_provider(
-        self, model_id: str, team_id: str | None = None
-    ) -> dict[str, Any] | None:
-        """
-        Get API credentials and provider info from a model name in model_list.
-        Useful for passthrough endpoints (files, batches, etc.) that need credentials.
-
-        This method tries to find a deployment by model_id first, and if not found,
-        it tries to find by model_group_name (model_name).
-
-        Args:
-            model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
-            team_id: Optional team id of the caller. When set, team-scoped
-                deployments (indexed by team public model name, including team
-                wildcard models like "openai/*") are also considered. Name and
-                wildcard lookups never resolve a deployment owned by a
-                different team, so shared model names can't leak another
-                team's credentials.
-
-        Returns:
-            Dictionary containing api_key, api_base, custom_llm_provider, etc.
-            Returns None if model not found, or if the resolved deployment is
-            paused via `LiteLLM_ProxyModelTable.blocked` (so passthrough callers
-            cannot bypass an admin pause by resolving credentials directly).
-
-        Example:
-            credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
-            # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", ...}
-        """
+    def _resolve_deployment_for_model_id(self, model_id: str, team_id: str | None) -> Deployment | None:
         # Try to get deployment by model_id first
         deployment = self.get_deployment(model_id=model_id)
 
@@ -8718,6 +8690,45 @@ class Router:
                 elif isinstance(deployment_dict, Deployment):
                     deployment = deployment_dict
 
+        return deployment
+
+    def get_deployment_credentials_with_provider(
+        self, model_id: str, team_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """
+        Get API credentials and provider info from a model name in model_list.
+        Useful for passthrough endpoints (files, batches, etc.) that need credentials.
+
+        This method tries to find a deployment by model_id first, and if not found,
+        it tries to find by model_group_name (model_name).
+
+        Args:
+            model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
+            team_id: Optional team id of the caller. When set, team-scoped
+                deployments (indexed by team public model name, including team
+                wildcard models like "openai/*") are also considered. Name and
+                wildcard lookups never resolve a deployment owned by a
+                different team, so shared model names can't leak another
+                team's credentials.
+
+        Returns:
+            Dictionary containing api_key, api_base, custom_llm_provider, etc.
+            Returns None if model not found, or if the resolved deployment is
+            paused via `LiteLLM_ProxyModelTable.blocked` (so passthrough callers
+            cannot bypass an admin pause by resolving credentials directly).
+
+        Example:
+            credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
+            # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", ...}
+        """
+        result = self.get_deployment_credentials_and_model(model_id=model_id, team_id=team_id)
+        if result is None:
+            return None
+        credentials, _ = result
+        return credentials
+
+    def get_deployment_credentials_and_model(self, model_id: str, team_id: str | None = None):
+        deployment = self._resolve_deployment_for_model_id(model_id=model_id, team_id=team_id)
         if deployment is None or self._is_deployment_blocked(deployment):
             return None
 
@@ -8748,7 +8759,7 @@ class Router:
         else:
             credentials["custom_llm_provider"] = "openai"  # default
 
-        return credentials
+        return credentials, deployment.litellm_params.model
 
     @overload
     def get_router_model_info(

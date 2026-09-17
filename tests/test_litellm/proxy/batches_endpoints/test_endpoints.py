@@ -51,7 +51,6 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
-from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CredentialItem, LiteLLMBatch
 
 from fastapi import Response
@@ -79,12 +78,6 @@ CREDS: Dict[str, Dict[str, str]] = {
         "api_key": "sk-aws",
         "model": "bedrock/us.anthropic.claude-sonnet-5",
     },
-}
-
-# The deployment's provider model (`litellm_params.model`) behind each public
-# group name, as returned by Router.get_deployment_by_model_group_name.
-DeploymentModelByGroup: Dict[str, str] = {
-    "bedrock-batch-claude": "bedrock/us.anthropic.claude-sonnet-5",
 }
 
 # A real model-encoded file id: decodes to "azure/gpt-4o", strips to "file-original123".
@@ -143,6 +136,7 @@ class Harness:
     router: MagicMock
     logging: MagicMock
     creds_resolver: MagicMock
+    creds_and_model_resolver: MagicMock
 
     @property
     def router_acreate(self) -> AsyncMock:
@@ -163,6 +157,12 @@ def _creds_lookup(*, model_id: str) -> Dict[str, str]:
     return dict(CREDS[model_id])
 
 
+def _creds_and_model_lookup(*, model_id: str) -> tuple:
+    creds = dict(CREDS[model_id])
+    deployment_model = creds.pop("model")
+    return creds, deployment_model
+
+
 @pytest.fixture
 def harness():
     """Seam harness. Patches only true I/O boundaries; pure encode/decode/merge
@@ -177,16 +177,7 @@ def harness():
     router = MagicMock(spec=Router)
     router.acreate_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
-
-    def _deployment_model_lookup(model_group_name: str):
-        # Mirror the O(1) group-index lookup: returns a Deployment whose
-        # litellm_params.model is the provider model id, else None.
-        provider_model = DeploymentModelByGroup.get(model_group_name)
-        if provider_model is None:
-            return None
-        return Deployment(model_name=model_group_name, litellm_params=LiteLLM_Params(model=provider_model))
-
-    router.get_deployment_by_model_group_name = MagicMock(side_effect=_deployment_model_lookup)
+    router.get_deployment_credentials_and_model = MagicMock(side_effect=_creds_and_model_lookup)
 
     read_body = AsyncMock(side_effect=lambda request: body_holder["body"])
     pre_call = AsyncMock(side_effect=lambda **kw: (body_holder["body"], MagicMock()))
@@ -233,6 +224,7 @@ def harness():
             router=router,
             logging=logging,
             creds_resolver=router.get_deployment_credentials_with_provider,
+            creds_and_model_resolver=router.get_deployment_credentials_and_model,
         )
         yield h
 
@@ -281,7 +273,7 @@ async def test_create__model_encoded_file_id(harness):
     harness.router_acreate.assert_not_called()
 
     # 2. CREDENTIALS - resolved for the model decoded FROM the file id.
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_and_model_resolver.assert_called_once_with(model_id="azure/gpt-4o")
 
     # 3. SEAM PAYLOAD - exact, whole dict. A new forwarded key breaks this.
     assert harness.acreate_kwargs() == {
@@ -337,7 +329,7 @@ async def test_create__model_encoded_file_id__resolver_gets_decoded_model(harnes
 
     await call_create(harness)
 
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_and_model_resolver.assert_called_once_with(model_id="azure/gpt-4o")
 
 
 @pytest.mark.asyncio
@@ -358,7 +350,7 @@ async def test_create__bedrock_forwards_deployment_model_not_alias(harness):
 
     await call_create(harness)
 
-    harness.creds_resolver.assert_called_once_with(model_id="bedrock-batch-claude")
+    harness.creds_and_model_resolver.assert_called_once_with(model_id="bedrock-batch-claude")
     assert harness.acreate_kwargs()["model"] == "bedrock/us.anthropic.claude-sonnet-5"
     assert harness.acreate_kwargs()["custom_llm_provider"] == "bedrock"
 
@@ -384,7 +376,7 @@ async def test_create__model_from_body(harness):
 
     assert harness.litellm_acreate.call_count == 1
     harness.router_acreate.assert_not_called()
-    harness.creds_resolver.assert_called_once_with(model_id="vertex-model")
+    harness.creds_and_model_resolver.assert_called_once_with(model_id="vertex-model")
     payload = harness.acreate_kwargs()
     assert payload["custom_llm_provider"] == "vertex_ai"
     assert payload["input_file_id"] == "file-plain"
@@ -404,7 +396,7 @@ async def test_create__model_from_header(harness):
 
     await call_create(harness, headers={"x-litellm-model": "vertex-model"})
 
-    harness.creds_resolver.assert_called_once_with(model_id="vertex-model")
+    harness.creds_and_model_resolver.assert_called_once_with(model_id="vertex-model")
     harness.router_acreate.assert_not_called()
 
 
@@ -421,7 +413,7 @@ async def test_create__model_from_query(harness):
 
     await call_create(harness, query={"model": "vertex-model"})
 
-    harness.creds_resolver.assert_called_once_with(model_id="vertex-model")
+    harness.creds_and_model_resolver.assert_called_once_with(model_id="vertex-model")
     harness.router_acreate.assert_not_called()
 
 
@@ -444,7 +436,7 @@ async def test_create__body_model_beats_header_and_query(harness):
         query={"model": "vertex-model"},
     )
 
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_and_model_resolver.assert_called_once_with(model_id="azure/gpt-4o")
 
 
 # =========================================================================== #
@@ -468,7 +460,7 @@ async def test_create__fallback_default_openai(harness):
 
     assert harness.litellm_acreate.call_count == 1
     harness.router_acreate.assert_not_called()
-    harness.creds_resolver.assert_not_called()  # inverse-bug guard
+    harness.creds_and_model_resolver.assert_not_called()  # inverse-bug guard
     assert harness.acreate_kwargs()["custom_llm_provider"] == "openai"
 
 
@@ -485,7 +477,7 @@ async def test_create__fallback_provider_path_param(harness):
 
     await call_create(harness, provider="anthropic")
 
-    harness.creds_resolver.assert_not_called()
+    harness.creds_and_model_resolver.assert_not_called()
     assert harness.acreate_kwargs()["custom_llm_provider"] == "anthropic"
 
 
@@ -752,7 +744,7 @@ async def test_create__model_encoded_beats_unified(harness):
 
     assert harness.litellm_acreate.call_count == 1
     harness.router_acreate.assert_not_called()
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_and_model_resolver.assert_called_once_with(model_id="azure/gpt-4o")
 
 
 # =========================================================================== #
@@ -778,7 +770,7 @@ async def test_create__loadbalancing_routes_to_router(harness):
     harness.is_known_model.assert_called_once_with(model="lb-model", llm_router=harness.router)
     assert harness.router_acreate.call_count == 1
     harness.litellm_acreate.assert_not_called()
-    harness.creds_resolver.assert_not_called()
+    harness.creds_and_model_resolver.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -798,7 +790,7 @@ async def test_create__model_encoded_beats_loadbalancing(harness):
 
     assert harness.litellm_acreate.call_count == 1
     harness.router_acreate.assert_not_called()
-    harness.creds_resolver.assert_called_once_with(model_id="azure/gpt-4o")
+    harness.creds_and_model_resolver.assert_called_once_with(model_id="azure/gpt-4o")
 
 
 # =========================================================================== #
