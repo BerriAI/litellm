@@ -31,6 +31,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
     apply_bedrock_invoke_structured_output,
+    bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
@@ -386,9 +387,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         Check if the model supports tool search on Bedrock.
 
-        The model map's ``supports_tool_search`` flag is authoritative when
-        ``model`` resolves to an entry that sets it; the name patterns below
-        cover ids the map cannot resolve (ARNs, unlisted regional variants).
+        The model map's ``supports_tool_search`` flag is authoritative: an exact
+        entry, or the ``claude-tool-search`` fallback rule (Claude 4.5 and newer)
+        for ids the map cannot resolve (ARNs, unlisted regional variants) and for
+        mapped entries that carry no opinion.
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 
@@ -398,46 +400,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model supports tool search on Bedrock
         """
-        catalog: Final = AnthropicModelInfo._get_provider_resolved_capability(model, "supports_tool_search", "bedrock")
-        if catalog is not None:
-            return catalog
-
-        model_lower: Final = model.lower()
-
-        supported_patterns: Final = [
-            # Opus 4.5
-            "opus-4.5",
-            "opus_4.5",
-            "opus-4-5",
-            "opus_4_5",
-            # Sonnet 4.5
-            "sonnet-4.5",
-            "sonnet_4.5",
-            "sonnet-4-5",
-            "sonnet_4_5",
-            # Opus 4.6
-            "opus-4.6",
-            "opus_4.6",
-            "opus-4-6",
-            "opus_4_6",
-            # sonnet 4.6
-            "sonnet-4.6",
-            "sonnet_4.6",
-            "sonnet-4-6",
-            "sonnet_4_6",
-            # Opus 4.7
-            "opus-4.7",
-            "opus_4.7",
-            "opus-4-7",
-            "opus_4_7",
-            # Haiku 4.5
-            "haiku-4.5",
-            "haiku_4.5",
-            "haiku-4-5",
-            "haiku_4_5",
-        ]
-
-        return any(pattern in model_lower for pattern in supported_patterns)
+        return bedrock_supports_tool_search(model)
 
     def _get_tool_search_beta_header_for_bedrock(
         self,
@@ -453,7 +416,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         Bedrock requires a different beta header for tool search than the
         Anthropic API when tool search is used without programmatic tool
         calling or input examples: `tool-search-tool-2025-10-19`, and only on
-        the models listed in `_supports_tool_search_on_bedrock`.
+        the models the model map flags as `supports_tool_search`
+        (`_supports_tool_search_on_bedrock`).
 
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 
