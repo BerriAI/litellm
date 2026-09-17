@@ -544,7 +544,7 @@ def test_map_openai_params_upgrades_legacy_thinking_on_adaptive_only_claude(
     assert mapped.get("output_config") == expected_output_config
 
 
-def _map_reasoning_effort(model: str, reasoning_effort: str):
+def _map_reasoning_effort(model: str, reasoning_effort: str | dict):
     return DatabricksConfig().map_openai_params(
         non_default_params={"reasoning_effort": reasoning_effort},
         optional_params={},
@@ -571,6 +571,22 @@ def test_adaptive_claude_translates_reasoning_effort_to_output_config(_use_local
 
 def test_unmapped_claude_endpoint_still_translates(_use_local_model_cost_map):
     params = _map_reasoning_effort("my-claude-serving-endpoint", "low")
+    assert params.get("thinking") == {
+        "type": "enabled",
+        "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    }
+    assert "reasoning_effort" not in params
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["databricks-claude-3-7-sonnet", "my-claude-serving-endpoint"],
+)
+def test_reasoning_effort_dict_is_coerced(_use_local_model_cost_map, model):
+    """The Responses->Chat parser keeps `reasoning_effort` as a dict whenever
+    `summary` is set (#28196). Without coercion the dict reaches
+    `_map_reasoning_effort` and no thinking payload is produced."""
+    params = _map_reasoning_effort(model, {"effort": "low", "summary": "concise"})
     assert params.get("thinking") == {
         "type": "enabled",
         "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
