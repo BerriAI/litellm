@@ -8,6 +8,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.deepgram.common_utils import (
     deepgram_listen_audio_seconds,
+    deepgram_listen_channel_count,
     deepgram_listen_model,
     deepgram_listen_transcript,
 )
@@ -45,8 +46,10 @@ class DeepgramListenPassthroughLoggingHandler:
     ) -> PassThroughEndpointLoggingTypedDict:
         model: Final = deepgram_listen_model(upstream_url)
         audio_seconds: Final = deepgram_listen_audio_seconds(websocket_messages)
+        channels: Final = deepgram_listen_channel_count(websocket_messages, upstream_url)
+        billed_seconds: Final = audio_seconds * channels
         response: Final = TranscriptionResponse(text=deepgram_listen_transcript(websocket_messages))
-        response._hidden_params["audio_transcription_duration"] = audio_seconds  # pyright: ignore[reportPrivateUsage]  # the cost calculator reads the billed duration off the response's hidden params
+        response._hidden_params["audio_transcription_duration"] = billed_seconds  # pyright: ignore[reportPrivateUsage]  # the cost calculator reads the billed duration off the response's hidden params
         response_cost: Final = _audio_cost(response, model)
         response._hidden_params["response_cost"] = response_cost  # pyright: ignore[reportPrivateUsage]  # the logger reads a precomputed cost off the response's hidden params
 
@@ -56,9 +59,10 @@ class DeepgramListenPassthroughLoggingHandler:
         logging_obj.model_call_details["custom_llm_provider"] = provider  # rebind-ok: same shared logging object
         logging_obj.model_call_details["response_cost"] = response_cost  # rebind-ok: same shared logging object
         verbose_proxy_logger.debug(
-            "Deepgram listen passthrough cost tracking: model %s, audio seconds %s, cost %s",
+            "Deepgram listen passthrough cost tracking: model %s, audio seconds %s, channels %s, cost %s",
             model,
             audio_seconds,
+            channels,
             response_cost,
         )
         logging_result: Final[PassThroughEndpointLoggingTypedDict] = {

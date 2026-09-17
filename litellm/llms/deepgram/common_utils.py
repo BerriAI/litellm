@@ -36,6 +36,46 @@ def deepgram_listen_model(upstream_url: str) -> str:
     return models[0] if models else DEEPGRAM_LISTEN_DEFAULT_MODEL
 
 
+def _channel_count(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value >= 1 else None
+
+
+def _results_channel_count(frame: Mapping[str, object]) -> int | None:
+    channel_index: Final = frame.get("channel_index")
+    if not isinstance(channel_index, list) or len(channel_index) != 2:
+        return None
+    return _channel_count(channel_index[1])
+
+
+def _declared_channel_count(upstream_url: str) -> int | None:
+    declared: Final = parse_qs(urlparse(upstream_url).query).get("channels")
+    if not declared or not declared[0].isdigit():
+        return None
+    return _channel_count(int(declared[0]))
+
+
+def deepgram_listen_channel_count(websocket_messages: Sequence[Mapping[str, object]], upstream_url: str) -> int:
+    metadata_channels: Final = tuple(
+        channels
+        for frame in websocket_messages
+        if frame.get("type") == "Metadata"
+        if (channels := _channel_count(frame.get("channels"))) is not None
+    )
+    if metadata_channels:
+        return metadata_channels[-1]
+    results_channels: Final = tuple(
+        channels
+        for frame in websocket_messages
+        if frame.get("type") == "Results"
+        if (channels := _results_channel_count(frame)) is not None
+    )
+    if results_channels:
+        return max(results_channels)
+    return _declared_channel_count(upstream_url) or 1
+
+
 def _seconds(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None

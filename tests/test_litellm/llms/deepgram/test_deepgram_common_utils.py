@@ -8,6 +8,7 @@ import litellm
 from litellm.llms.deepgram.common_utils import (
     deepgram_listen_audio_seconds,
     deepgram_listen_callback_params,
+    deepgram_listen_channel_count,
     deepgram_listen_model,
     deepgram_listen_transcript,
     deepgram_listen_websocket_target,
@@ -16,18 +17,25 @@ from litellm.llms.deepgram.common_utils import (
 NOVA_3_URL: Final = "wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000"
 
 
-def _results(start: object, duration: object, transcript: str = "", is_final: object = True) -> dict[str, object]:
+def _results(
+    start: object,
+    duration: object,
+    transcript: str = "",
+    is_final: object = True,
+    channel_index: object = (0, 1),
+) -> dict[str, object]:
     return {
         "type": "Results",
         "start": start,
         "duration": duration,
         "is_final": is_final,
+        "channel_index": list(channel_index) if isinstance(channel_index, tuple) else channel_index,
         "channel": {"alternatives": [{"transcript": transcript, "confidence": 0.9}]},
     }
 
 
-def _metadata(duration: object) -> dict[str, object]:
-    return {"type": "Metadata", "request_id": "req-1", "duration": duration, "channels": 1}
+def _metadata(duration: object, channels: object = 1) -> dict[str, object]:
+    return {"type": "Metadata", "request_id": "req-1", "duration": duration, "channels": channels}
 
 
 @pytest.mark.parametrize(
@@ -105,6 +113,62 @@ def test_deepgram_listen_callback_params(query_string: str, expected: tuple[str,
 )
 def test_deepgram_listen_audio_seconds(frames: Sequence[Mapping[str, object]], expected_seconds: float):
     assert deepgram_listen_audio_seconds(frames) == expected_seconds
+
+
+@pytest.mark.parametrize(
+    ("frames", "upstream_url", "expected_channels"),
+    [
+        pytest.param((_results(0.0, 2.0), _metadata(6.25)), NOVA_3_URL, 1, id="mono"),
+        pytest.param((_results(0.0, 2.0, channel_index=(0, 2)), _metadata(6.25, 2)), NOVA_3_URL, 2, id="stereo"),
+        pytest.param((_metadata(1.0, 3), _metadata(1.0, 5)), NOVA_3_URL, 5, id="last metadata wins"),
+        pytest.param(
+            (_metadata(1.0, 20), _results(0.0, 1.0, channel_index=(1, 2))),
+            NOVA_3_URL,
+            20,
+            id="metadata beats channel_index",
+        ),
+        pytest.param(
+            (_results(0.0, 1.0, channel_index=(0, 2)), _results(0.0, 1.0, channel_index=(3, 4))),
+            NOVA_3_URL,
+            4,
+            id="widest channel_index without metadata",
+        ),
+        pytest.param(
+            (_results(0.0, 1.0, channel_index=(0, 2)),),
+            f"{NOVA_3_URL}&channels=7&multichannel=true",
+            2,
+            id="frames beat the declared query",
+        ),
+        pytest.param((), f"{NOVA_3_URL}&channels=7&multichannel=true", 7, id="declared query when no frames"),
+        pytest.param((), f"{NOVA_3_URL}&channels=0", 1, id="zero declared channels"),
+        pytest.param((), f"{NOVA_3_URL}&channels=-2", 1, id="negative declared channels"),
+        pytest.param((), f"{NOVA_3_URL}&channels=two", 1, id="non numeric declared channels"),
+        pytest.param((), NOVA_3_URL, 1, id="nothing declared"),
+        pytest.param((_metadata(1.0, "2"), _metadata(1.0, True), _metadata(1.0, 0)), NOVA_3_URL, 1, id="bad metadata"),
+        pytest.param((_metadata(1.0, 3), _metadata(1.0, True)), NOVA_3_URL, 3, id="boolean does not shadow a count"),
+        pytest.param((_metadata(1.0, 2.0), _metadata(1.0, -1)), NOVA_3_URL, 1, id="float and negative metadata"),
+        pytest.param(
+            (_metadata(1.0, 2), {**_results(0.0, 1.0), "channels": 9}, {"type": "UtteranceEnd", "channels": 11}),
+            NOVA_3_URL,
+            2,
+            id="channels on non metadata frames ignored",
+        ),
+        pytest.param(
+            (
+                _results(0.0, 1.0, channel_index=[0]),
+                _results(0.0, 1.0, channel_index=(0, "2")),
+                _results(0.0, 1.0, channel_index=(0, 0)),
+            ),
+            NOVA_3_URL,
+            1,
+            id="bad channel_index",
+        ),
+    ],
+)
+def test_deepgram_listen_channel_count(
+    frames: Sequence[Mapping[str, object]], upstream_url: str, expected_channels: int
+):
+    assert deepgram_listen_channel_count(frames, upstream_url) == expected_channels
 
 
 def test_deepgram_listen_transcript_joins_final_results_only():
