@@ -606,6 +606,8 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.GroqChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
+        if litellm.GroqChatConfig._is_compound_model(model):
+            model = f"groq/{model}"  # rebind-ok: Groq's own compound model ids include the "groq/" segment, it is not a routing prefix
     elif custom_llm_provider == "bedrock_mantle":
         from litellm.llms.bedrock_mantle.common_utils import split_mantle_region_prefix
 
