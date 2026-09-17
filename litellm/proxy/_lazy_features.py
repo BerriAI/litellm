@@ -196,6 +196,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/assemblyai/",
             "/azure/",
             "/azure_ai/",
+            "/azure_speech/",
             "/bedrock/",
             "/cohere/",
             "/comprehendmedical",
