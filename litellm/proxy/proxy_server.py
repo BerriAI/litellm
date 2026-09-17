@@ -16329,7 +16329,15 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
     response: Final = await generate_key_helper_fn(
         llm_router=llm_router,
         request_type="key",
-        user_role=user_obj.user_role, duration=LITELLM_UI_SESSION_DURATION, key_max_budget=litellm.max_ui_session_budget, models=[], aliases={}, config={}, spend=0, user_id=user_obj.user_id, team_id=UI_TEAM_ID,
+        user_role=user_obj.user_role,
+        duration=LITELLM_UI_SESSION_DURATION,
+        key_max_budget=litellm.max_ui_session_budget,
+        models=[],
+        aliases={},
+        config={},
+        spend=0,
+        user_id=user_obj.user_id,
+        team_id=UI_TEAM_ID,
     )
     key: Final = response["token"]
 
