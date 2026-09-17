@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -122,13 +123,8 @@ def test_nested_anyof_conversion():
 
 
 def test_anyof_conversion_with_multiple_null_branches():
-    """Adjacent null branches must all be removed.
-
-    Regression test: the removal loop mutated the list it was iterating, so the
-    element following each removed null was skipped, leaving ``{"type": "null"}``
-    in the emitted schema. Vertex's Schema has no null type.
-    """
-    schema = {
+    """Adjacent null branches must all be removed."""
+    schema: Final = {
         "type": "object",
         "properties": {
             "example": {
@@ -143,7 +139,7 @@ def test_anyof_conversion_with_multiple_null_branches():
 
     convert_anyof_null_to_nullable(schema)
 
-    expected = {
+    expected: Final = {
         "type": "object",
         "properties": {"example": {"anyOf": [{"type": "string", "nullable": True}]}},
     }
@@ -152,14 +148,14 @@ def test_anyof_conversion_with_multiple_null_branches():
 
 def test_anyof_conversion_with_null_before_empty_object():
     """An empty-object branch following a null branch still gets a type."""
-    schema = {
+    schema: Final = {
         "type": "object",
         "properties": {"example": {"anyOf": [{"type": "null"}, {}]}},
     }
 
     convert_anyof_null_to_nullable(schema)
 
-    expected = {
+    expected: Final = {
         "type": "object",
         "properties": {"example": {"anyOf": [{"type": "object", "nullable": True}]}},
     }
@@ -168,7 +164,7 @@ def test_anyof_conversion_with_null_before_empty_object():
 
 def test_anyof_conversion_with_only_null_branches_raises():
     """Several null branches and nothing else is still an invalid schema."""
-    schema = {
+    schema: Final = {
         "type": "object",
         "properties": {"example": {"anyOf": [{"type": "null"}, {"type": "null"}]}},
     }
