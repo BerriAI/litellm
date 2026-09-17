@@ -2784,7 +2784,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/claude-sonnet-5": {
         "cache_creation_input_token_cost": 1.7e-06,
@@ -2808,15 +2808,15 @@
         "supports_vision": false
     },
     "cheaperinference/glm-5.3-flash": {
-        "cache_creation_input_token_cost": 8.0568e-08,
+        "cache_creation_input_token_cost": 7.2511e-08,
         "cache_read_input_token_cost": 1.275e-08,
-        "input_cost_per_token": 8.0568e-08,
+        "input_cost_per_token": 7.2511e-08,
         "litellm_provider": "cheaperinference",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 2.68535e-07,
+        "output_cost_per_token": 2.41706e-07,
         "source": "https://cheaperinference.com/docs",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -2827,7 +2827,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": false
     },
     "cheaperinference/glm-5.3": {
         "cache_creation_input_token_cost": 7.7e-07,
@@ -2871,18 +2871,18 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/deepseek-v4.1-flash": {
-        "cache_creation_input_token_cost": 1.05e-07,
-        "cache_read_input_token_cost": 2.1e-09,
-        "input_cost_per_token": 1.05e-07,
+        "cache_creation_input_token_cost": 2.1e-07,
+        "cache_read_input_token_cost": 4.2e-09,
+        "input_cost_per_token": 2.1e-07,
         "litellm_provider": "cheaperinference",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 4.2e-07,
+        "output_cost_per_token": 8.4e-07,
         "source": "https://cheaperinference.com/docs",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -2958,7 +2958,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/gpt-oss-120b": {
         "cache_creation_input_token_cost": 4e-08,
@@ -3251,7 +3251,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": false,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/claude-opus-4.6": {
         "cache_creation_input_token_cost": 4.25e-06,
@@ -3272,7 +3272,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": false,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/claude-opus-4.7": {
         "cache_creation_input_token_cost": 4.25e-06,
@@ -3293,7 +3293,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": false,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/claude-opus-4.8": {
         "cache_creation_input_token_cost": 4.25e-06,
@@ -3314,7 +3314,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/claude-opus-5-fast": {
         "cache_creation_input_token_cost": 8.5e-06,
@@ -3356,7 +3356,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": false,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/claude-sonnet-4.6": {
         "cache_creation_input_token_cost": 2.55e-06,
@@ -3377,7 +3377,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": false,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/deepseek-v4-flash": {
         "cache_creation_input_token_cost": 7.1388e-08,
@@ -3767,7 +3767,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": false,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": false
     },
     "cheaperinference/gpt-5-nano": {
         "cache_creation_input_token_cost": 4.0284e-08,
@@ -3809,7 +3809,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/gpt-5.4-mini": {
         "cache_creation_input_token_cost": 5.25e-07,
@@ -3830,18 +3830,18 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/gpt-5.4-nano": {
-        "cache_creation_input_token_cost": 1.4e-07,
-        "cache_read_input_token_cost": 1.4e-08,
-        "input_cost_per_token": 1.4e-07,
+        "cache_creation_input_token_cost": 1.61137e-07,
+        "cache_read_input_token_cost": 1.6114e-08,
+        "input_cost_per_token": 1.61137e-07,
         "litellm_provider": "cheaperinference",
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 8.75e-07,
+        "output_cost_per_token": 1.007109e-06,
         "source": "https://cheaperinference.com/docs",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -3851,7 +3851,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": false
     },
     "cheaperinference/gpt-5.4": {
         "cache_creation_input_token_cost": 1.75e-06,
@@ -3872,7 +3872,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/gpt-5.5-pro": {
         "cache_creation_input_token_cost": 2.1e-05,
@@ -3937,15 +3937,15 @@
         "supports_vision": false
     },
     "cheaperinference/muse-spark-1.2": {
-        "cache_creation_input_token_cost": 1.0625e-06,
-        "cache_read_input_token_cost": 1.0625e-07,
-        "input_cost_per_token": 1.0625e-06,
+        "cache_creation_input_token_cost": 8.75e-07,
+        "cache_read_input_token_cost": 1.05e-07,
+        "input_cost_per_token": 8.75e-07,
         "litellm_provider": "cheaperinference",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 3.6125e-06,
+        "output_cost_per_token": 2.975e-06,
         "source": "https://cheaperinference.com/docs",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -3955,7 +3955,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": false
     },
     "cheaperinference/qwen-3-8-27b": {
         "cache_creation_input_token_cost": 1.498e-07,
@@ -3997,7 +3997,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "cheaperinference/qwen3-6-35b-a3b": {
         "cache_creation_input_token_cost": 7e-08,
@@ -4018,7 +4018,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": false
     },
     "cheaperinference/qwen3.6-27b": {
         "cache_creation_input_token_cost": 2.41706e-07,
