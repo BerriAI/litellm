@@ -13,9 +13,7 @@ use litellm_python_api::legacy::logger::LegacyCallbacks;
 use super::callbacks::{self, OcrLogger};
 use super::errors::to_pyerr as ocr_error_to_pyerr;
 use super::project::{ProjectedOcrFields, admitted_call, project_request};
-use crate::lifecycle::{
-    OperationClass, PythonCallState, PythonRoute, missing_state, now, run_call,
-};
+use crate::lifecycle::{OperationClass, PythonCallState, PythonHost, missing_state, now, run_call};
 
 struct PythonOcrHost {
     state: PythonCallState,
@@ -174,7 +172,7 @@ impl PythonOcrHost {
     }
 }
 
-impl PythonRoute for PythonOcrHost {
+impl PythonHost for PythonOcrHost {
     type Call = OcrCall;
 
     fn state(&self) -> &PythonCallState {

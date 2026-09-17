@@ -14,11 +14,11 @@ use super::hooks::{
 };
 use super::types::{OcrDocumentInput, OcrFileContent};
 use super::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
-use litellm_bridge::protocol::{
-    HostCall, HostCallFuture, HostCallStep, HostFailure, HostLifecycle, HostPhase,
-};
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
 use crate::ocr::Error;
+use litellm_bridge::protocol::{
+    HostFailure, HostLifecycle, HostPhase, NativeCall, NativeCallFuture, NativeCallStep,
+};
 
 pub type NativeResult<T> = Result<NativeOutcome<T>, Error>;
 
@@ -95,7 +95,7 @@ pub enum OcrHostResult {
     PostCall(Result<OcrPostCallRequest, Error>),
 }
 
-pub type OcrCallStep = HostCallStep<OcrHostOperation, LiteLLMOcrResponse>;
+pub type OcrCallStep = NativeCallStep<OcrHostOperation, LiteLLMOcrResponse>;
 
 pub struct OcrCall {
     lifecycle: HostLifecycle,
@@ -289,7 +289,7 @@ impl OcrCall {
     }
 }
 
-impl HostCall for OcrCall {
+impl NativeCall for OcrCall {
     type Error = crate::ocr::Error;
     type Operation = OcrHostOperation;
     type Result = OcrHostResult;
@@ -298,14 +298,14 @@ impl HostCall for OcrCall {
     fn resume(
         &mut self,
         result: Option<Self::Result>,
-    ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
+    ) -> NativeCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
         Box::pin(OcrCall::resume(self, result))
     }
 
     fn interrupt(
         &mut self,
         failure: HostFailure<Self::Error>,
-    ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
+    ) -> NativeCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
         Box::pin(OcrCall::interrupt(self, failure))
     }
 }

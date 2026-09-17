@@ -19,7 +19,6 @@ impl PythonLogger {
         visit.call(&self.0)
     }
 
-
     pub fn success_bookkeeping(
         &self,
         py: Python<'_>,
@@ -34,14 +33,12 @@ impl PythonLogger {
         Ok(())
     }
 
-
     pub fn restore_context(&self, py: Python<'_>) -> PyResult<()> {
         py.import("litellm.utils")?
             .getattr("_restore_correlation_context_if_supported")?
             .call1((self.object(py),))?;
         Ok(())
     }
-
 }
 
 pub struct SetupResult<'py>(Bound<'py, PyAny>);
@@ -83,7 +80,6 @@ pub fn finalize(
         .call1((response, logger.object(py), kwargs, start, end))?;
     Ok(())
 }
-
 
 pub struct DeploymentHooks;
 

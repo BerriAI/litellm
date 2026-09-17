@@ -46,7 +46,6 @@ pub trait LegacyCallbacks {
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
     ) -> PyResult<()>;
-
 }
 
 impl LegacyCallbacks for PythonLogger {

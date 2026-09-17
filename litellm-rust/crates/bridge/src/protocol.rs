@@ -1,15 +1,15 @@
 use std::future::Future;
 use std::pin::Pin;
 
-pub enum HostCallStep<O, C> {
+pub enum NativeCallStep<O, C> {
     Host(O),
     Complete(C),
 }
 
-pub type HostCallFuture<'a, O, C, E> =
-    Pin<Box<dyn Future<Output = Result<HostCallStep<O, C>, E>> + Send + 'a>>;
+pub type NativeCallFuture<'a, O, C, E> =
+    Pin<Box<dyn Future<Output = Result<NativeCallStep<O, C>, E>> + Send + 'a>>;
 
-pub trait HostCall: Send + Sync {
+pub trait NativeCall: Send + Sync {
     type Error: Send + Sync + 'static;
     type Operation: Send + 'static;
     type Result: Send + 'static;
@@ -18,12 +18,12 @@ pub trait HostCall: Send + Sync {
     fn resume(
         &mut self,
         result: Option<Self::Result>,
-    ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error>;
+    ) -> NativeCallFuture<'_, Self::Operation, Self::Complete, Self::Error>;
 
     fn interrupt(
         &mut self,
         failure: HostFailure<Self::Error>,
-    ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error>;
+    ) -> NativeCallFuture<'_, Self::Operation, Self::Complete, Self::Error>;
 }
 
 pub enum HostStep<V, S> {

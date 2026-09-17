@@ -2,15 +2,13 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use futures_util::future::{AbortHandle, Abortable};
+#[cfg(test)]
+use litellm_bridge::protocol::NativeCallFuture;
+use litellm_bridge::protocol::{HostFailure, HostPhase, HostStep, NativeCall, NativeCallStep};
 use litellm_python_api as python_api;
 use litellm_python_api::DeploymentHooks;
-use litellm_python_api::legacy::logger::LegacyCallbacks;
 pub(crate) use litellm_python_api::PythonLogger;
-#[cfg(test)]
-use litellm_bridge::protocol::HostCallFuture;
-use litellm_bridge::protocol::{
-    HostCall as NativeCall, HostCallStep as NativeCallStep, HostFailure, HostPhase, HostStep,
-};
+use litellm_python_api::legacy::logger::LegacyCallbacks;
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
@@ -28,7 +26,7 @@ pub(crate) enum OperationClass {
     Route,
 }
 
-pub(crate) trait PythonRoute: Send + Sync {
+pub(crate) trait PythonHost: Send + Sync {
     type Call: NativeCall + 'static;
 
     fn state(&self) -> &PythonCallState;
@@ -48,7 +46,7 @@ pub(crate) trait PythonRoute: Send + Sync {
 
 type NativeStep<C> = NativeCallStep<<C as NativeCall>::Operation, <C as NativeCall>::Complete>;
 type NativeResult<C> = Result<NativeStep<C>, <C as NativeCall>::Error>;
-type HostResumeStep<R> = HostStep<NativeStep<<R as PythonRoute>::Call>, Py<PyAny>>;
+type HostResumeStep<R> = HostStep<NativeStep<<R as PythonHost>::Call>, Py<PyAny>>;
 type NativeResume<C> =
     Option<Result<<C as NativeCall>::Result, HostFailure<<C as NativeCall>::Error>>>;
 
@@ -62,14 +60,14 @@ enum PendingOperation {
     Host(HostPhase),
 }
 
-struct PythonLifecycle<R: PythonRoute> {
+struct PythonLifecycle<R: PythonHost> {
     route: R,
     call: Option<Arc<Mutex<NativeCallState<R::Call>>>>,
     pending: Option<PendingOperation>,
     native_abort: Option<AbortHandle>,
 }
 
-pub(crate) fn run_call<R: PythonRoute + 'static>(
+pub(crate) fn run_call<R: PythonHost + 'static>(
     py: Python<'_>,
     call: R::Call,
     route: R,
@@ -101,7 +99,7 @@ pub(crate) fn missing_state() -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err("missing native call state")
 }
 
-impl<R: PythonRoute> PythonLifecycle<R> {
+impl<R: PythonHost> PythonLifecycle<R> {
     fn resume_core(
         &mut self,
         py: Python<'_>,
@@ -242,7 +240,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
     }
 }
 
-impl<R: PythonRoute> ExecutionBody for PythonLifecycle<R> {
+impl<R: PythonHost> ExecutionBody for PythonLifecycle<R> {
     fn resume(&mut self, result: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep> {
         let result = Python::attach(|py| self.drive(py, result));
         match result {
@@ -266,7 +264,7 @@ impl<R: PythonRoute> ExecutionBody for PythonLifecycle<R> {
     }
 }
 
-impl<R: PythonRoute> PythonLifecycle<R> {
+impl<R: PythonHost> PythonLifecycle<R> {
     fn clear(&mut self) {
         if let Some(abort) = self.native_abort.take() {
             abort.abort();
@@ -278,7 +276,7 @@ impl<R: PythonRoute> PythonLifecycle<R> {
     }
 }
 
-impl<R: PythonRoute> Drop for PythonLifecycle<R> {
+impl<R: PythonHost> Drop for PythonLifecycle<R> {
     fn drop(&mut self) {
         self.clear();
     }
@@ -704,7 +702,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         fn resume(
             &mut self,
             result: Option<Self::Result>,
-        ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
+        ) -> NativeCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
             Box::pin(async move {
                 match (self.0, result) {
                     (false, None) => {
@@ -722,14 +720,14 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         fn interrupt(
             &mut self,
             _: HostFailure<Self::Error>,
-        ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
+        ) -> NativeCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
             Box::pin(async { Ok(NativeCallStep::Complete(())) })
         }
     }
 
     struct SyntheticRoute(PythonCallState);
 
-    impl PythonRoute for SyntheticRoute {
+    impl PythonHost for SyntheticRoute {
         type Call = SyntheticCall;
 
         fn state(&self) -> &PythonCallState {
