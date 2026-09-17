@@ -37,6 +37,11 @@ class MCPClientForbiddenBody(TypedDict):
     details: ReadOnly[str]
 
 
+class MCPSessionNotFoundBody(TypedDict):
+    error: ReadOnly[Literal["Not Found"]]
+    details: ReadOnly[str]
+
+
 @dataclass(frozen=True, slots=True)
 class MCPClientRejection:
     client_name: str | None
@@ -63,6 +68,28 @@ def oversized_unidentified_request_body() -> MCPClientForbiddenBody:
             f"While {MCP_ALLOWED_CLIENTS_SETTING} is set, this gateway reads at most "
             f"{MCP_ALLOWLIST_PEEK_MAX_BYTES} bytes of an MCP POST to find clientInfo.name before routing it; "
             "this request was larger than that and could not be identified."
+        ),
+    }
+    return body
+
+
+def unidentified_sessionless_request_body() -> MCPClientForbiddenBody:
+    body: Final[MCPClientForbiddenBody] = {
+        "error": "Forbidden",
+        "details": (
+            f"While {MCP_ALLOWED_CLIENTS_SETTING} is set, an MCP POST without a live mcp-session-id must be an "
+            "initialize request; open a session with initialize from a listed client application first."
+        ),
+    }
+    return body
+
+
+def unknown_session_request_body(session_id: str) -> MCPSessionNotFoundBody:
+    body: Final[MCPSessionNotFoundBody] = {
+        "error": "Not Found",
+        "details": (
+            f"mcp-session-id '{session_id}' is not known to this gateway worker. While {MCP_ALLOWED_CLIENTS_SETTING} "
+            "is set the request cannot fall back to a sessionless call; start a new session with initialize."
         ),
     }
     return body

@@ -2220,7 +2220,78 @@ async def test_streamable_http_empty_or_malformed_allowlist_admits_nobody(
 
 
 @pytest.mark.asyncio
-async def test_streamable_http_allowlist_only_inspects_initialize_requests() -> None:
+async def test_streamable_http_allowlist_refuses_sessionless_posts_that_are_not_initialize() -> None:
+    from starlette.types import Scope
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": _TOOLS_LIST, "more_body": False}])
+    send: Final = AsyncMock()
+    stateful_handle: Final = AsyncMock()
+    stateless_handle: Final = AsyncMock()
+
+    with (
+        _client_allowlist_patches(["antigravity-cli"]),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful_handle),
+        ),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=stateless_handle),
+        ),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    status, body = _forbidden_client_response(send)
+    assert status == 403
+    assert body["error"] == "Forbidden"
+    assert body["details"].startswith("While mcp_allowed_clients is set, an MCP POST without a live mcp-session-id")
+    stateful_handle.assert_not_awaited()
+    stateless_handle.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_allowlist_returns_404_for_a_session_unknown_to_this_worker() -> None:
+    from starlette.types import Scope
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    scope: Final[Scope] = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [(b"mcp-session-id", b"stale-session-from-another-worker")],
+    }
+    receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": _TOOLS_LIST, "more_body": False}])
+    send: Final = AsyncMock()
+    stateful_handle: Final = AsyncMock()
+    stateless_handle: Final = AsyncMock()
+
+    with (
+        _client_allowlist_patches(["antigravity-cli"]),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful_handle, _server_instances={}),
+        ),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=stateless_handle),
+        ),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    status, body = _forbidden_client_response(send)
+    assert status == 404
+    assert body["error"] == "Not Found"
+    assert "stale-session-from-another-worker" in body["details"]
+    stateful_handle.assert_not_awaited()
+    stateless_handle.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_without_allowlist_still_serves_sessionless_posts_statelessly() -> None:
     from starlette.types import Receive, Scope, Send
 
     from litellm.proxy._experimental.mcp_server import server as mcp_module
@@ -2234,7 +2305,7 @@ async def test_streamable_http_allowlist_only_inspects_initialize_requests() -> 
         downstream_bodies.append(await _drain_body(downstream_receive))
 
     with (
-        _client_allowlist_patches(["antigravity-cli"]),
+        _client_allowlist_patches(None),
         patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
             "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
             SimpleNamespace(handle_request=AsyncMock(side_effect=handle_request)),
