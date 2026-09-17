@@ -193,9 +193,6 @@ def _agent_capped_servers(
     agent_servers: Sequence[str],
     agent_access_group_servers: frozenset[str] | None,
 ) -> tuple[str, ...] | None:
-    """Servers left once the agent's object_permission and attached access groups both cap the
-    key/team result, or None when the agent restricts nothing. An attached group set naming no
-    server is an empty ceiling, not an absent one, so it denies every server."""
     if not agent_servers and agent_access_group_servers is None:
         return None
     return tuple(

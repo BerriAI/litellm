@@ -1007,7 +1007,6 @@ async def common_checks(
                         code=status.HTTP_400_BAD_REQUEST,
                     )
 
-    # 2.4 If the agent behind the key has access groups attached, they cap the models it can call
     await _check_agent_access_group_model_access(model=_model, valid_token=valid_token, llm_router=llm_router)
 
     ## 2.1 If user can call model (if personal key)
@@ -4205,9 +4204,7 @@ async def _check_agent_access_group_model_access(
     llm_router: Router | None,
     resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
 ) -> Literal[True]:
-    """Raises when the key's agent has access groups attached and none of them names the model.
-    Attached groups that name no model deny every model; ``_can_object_call_model`` would read
-    an empty allowlist as unrestricted."""
+    """Attached groups naming no model deny every model, unlike the empty allowlist ``_can_object_call_model`` allows."""
     if not model or valid_token is None or not valid_token.agent_id:
         return True
     ceiling: Final = await resolve_ceiling(valid_token.agent_id)

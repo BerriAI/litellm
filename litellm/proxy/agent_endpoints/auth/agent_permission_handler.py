@@ -8,7 +8,7 @@ Follows the same pattern as MCP permission handling.
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Final, TypeAlias
+from typing import Final, TypeAlias, assert_never
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.ui_session_utils import build_effective_auth_contexts
@@ -67,14 +67,7 @@ class AgentRequestHandler:
         user_api_key_auth: UserAPIKeyAuth | None = None,
         resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
     ) -> AgentAccess:
-        """
-        Resolve the agents the given user/key may reach.
-
-        ``UnrestrictedAgentAccess`` is only returned when neither the key nor its team
-        carries any grant and the agent behind the key has no access groups attached.
-        Grants that intersect to nothing stay restricted, so narrowing a caller can
-        never widen what it reaches.
-        """
+        """Agents the key may reach: key and team grants intersected with the agent's access group ceiling."""
         key_team_access: Final = await AgentRequestHandler._resolve_key_team_agent_access(user_api_key_auth)
         agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(user_api_key_auth, resolve_ceiling)
         if agent_ceiling is None:
@@ -84,6 +77,8 @@ class AgentRequestHandler:
                 return RestrictedAgentAccess(agent_ceiling)
             case RestrictedAgentAccess(key_team_ids):
                 return RestrictedAgentAccess(key_team_ids & agent_ceiling)
+            case _:
+                assert_never(key_team_access)
 
     @staticmethod
     async def _resolve_key_team_agent_access(
@@ -111,7 +106,6 @@ class AgentRequestHandler:
         user_api_key_auth: UserAPIKeyAuth | None,
         resolve_ceiling: CeilingResolver,
     ) -> frozenset[str] | None:
-        """Stable IDs of the agents the calling agent's attached access groups allow; None when none attached."""
         if user_api_key_auth is None or not user_api_key_auth.agent_id:
             return None
         ceiling: Final = await resolve_ceiling(user_api_key_auth.agent_id)
