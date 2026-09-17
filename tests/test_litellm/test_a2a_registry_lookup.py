@@ -247,6 +247,73 @@ def test_registry_entra_agent_authenticates_with_the_entra_token_and_keeps_its_s
     assert optional_params == {"timeout": 30}
 
 
+_STORED_STATIC_CREDENTIALS: dict = {
+    "api_key": "stored-key",
+    "headers": {"authorization": "Bearer stored-header", "X-Agent": "static"},
+}
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "expected_authorization_lines"),
+    [
+        (
+            {**_STORED_STATIC_CREDENTIALS, "azure_ad_token": "entra-token"},
+            {"Authorization": "Bearer entra-token"},
+        ),
+        (
+            _STORED_STATIC_CREDENTIALS,
+            {"authorization": "Bearer stored-header", "Authorization": "Bearer stored-key"},
+        ),
+        (
+            {**_STORED_STATIC_CREDENTIALS, "azure_ad_token": "model-provider-token", "custom_llm_provider": "azure_ai"},
+            {"authorization": "Bearer stored-header", "Authorization": "Bearer stored-key"},
+        ),
+    ],
+    ids=[
+        "entra agent: the minted bearer is the only authorization line",
+        "agent without entra credentials: static credentials sent as before",
+        "bridge agent: its entra credentials belong to the model provider, never to the a2a hop",
+    ],
+)
+def test_entra_credentials_beat_the_static_credentials_stored_next_to_them_on_the_chat_route(
+    litellm_params: dict, expected_authorization_lines: dict
+):
+    """The relay sends the minted Entra bearer over any static Authorization stored on the agent; the chat
+    route must agree, or an api_key or authorization header left next to the Entra fields makes the same
+    agent answer on /a2a and fail with the backend's 401 on /v1/chat/completions."""
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="mixed-credentials-id",
+        agent_name="mixed-credentials-agent",
+        agent_card_params={"url": "https://foundry.example.com/a2a"},
+        litellm_params=litellm_params,
+    )
+    client = HTTPHandler()
+    agent_reply = httpx.Response(
+        200,
+        json={"jsonrpc": "2.0", "id": "1", "result": {"kind": "message", "parts": [{"kind": "text", "text": "ok"}]}},
+    )
+    original_agents = global_agent_registry.agent_list.copy()
+    global_agent_registry.register_agent(agent)
+
+    try:
+        with patch.object(client, "post", return_value=agent_reply) as post:  # test-quality-ok: injected client
+            litellm.completion(
+                model="a2a/mixed-credentials-agent", messages=[{"role": "user", "content": "hi"}], client=client
+            )
+    finally:
+        global_agent_registry.agent_list = original_agents
+
+    sent_headers = post.call_args.kwargs["headers"]
+    assert {
+        name: value for name, value in sent_headers.items() if name.lower() == "authorization"
+    } == expected_authorization_lines
+    assert sent_headers["X-Agent"] == "static"
+
+
 def test_registry_entra_agent_with_an_unresolvable_credential_fails_the_chat_call(monkeypatch):
     """The chat route mints the Foundry bearer from the registered credentials; when they resolve to
     nothing the caller must get the credential error instead of an unauthenticated backend call."""

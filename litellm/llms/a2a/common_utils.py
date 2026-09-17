@@ -148,12 +148,16 @@ def extract_text_from_a2a_response(response_dict: Mapping[str, object], max_dept
 AgentAuthHeaderResolver = Callable[[Mapping[str, object]], Awaitable[Mapping[str, str]]]
 
 
+def a2a_hop_uses_entra(litellm_params: Mapping[str, object], custom_llm_provider: object) -> bool:
+    return not custom_llm_provider and has_azure_entra_params(litellm_params)
+
+
 async def resolve_a2a_hop_auth_header(
     litellm_params: Mapping[str, object],
     custom_llm_provider: object,
     resolve_entra_header: AgentAuthHeaderResolver = resolve_azure_ai_agent_auth_header,
 ) -> Mapping[str, str] | None:
     """Entra credentials authenticate the A2A hop only; a completion-bridge agent hands them to the model provider it bridges to."""
-    if custom_llm_provider or not has_azure_entra_params(litellm_params):
+    if not a2a_hop_uses_entra(litellm_params, custom_llm_provider):
         return None
     return await resolve_entra_header(litellm_params)
