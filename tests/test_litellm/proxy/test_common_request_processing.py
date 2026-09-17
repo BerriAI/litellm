@@ -1763,20 +1763,19 @@ class TestProxyBaseLLMRequestProcessing:
 
         assert headers["x-litellm-call-id"] == "explicit-call-id"
 
-    @pytest.mark.asyncio
-    async def test_queue_time_seconds_is_set_in_metadata(self, monkeypatch):
-        """
-        Test that queue_time_seconds is correctly calculated and stored in metadata
-        after add_litellm_data_to_request populates arrival_time.
-
-        This verifies the fix for the bug where queue_time_seconds was always None
-        because arrival_time was read BEFORE add_litellm_data_to_request set it.
-        """
+    @staticmethod
+    async def _run_pre_call_logic_with_arrival(
+        monkeypatch: pytest.MonkeyPatch,
+        auth_completed_at: datetime.datetime | None,
+    ) -> tuple[dict, LiteLLMLoggingObj]:
         processing_obj = ProxyBaseLLMRequestProcessing(data={})
         mock_request = MagicMock(spec=Request)
         mock_request.headers = {}
         mock_request.url = MagicMock()
         mock_request.url.path = "/v1/chat/completions"
+        mock_request.state = SimpleNamespace(
+            **({} if auth_completed_at is None else {"litellm_auth_completed_at": auth_completed_at})
+        )
 
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             data = kwargs.get("data", args[0] if args else {})
@@ -1806,39 +1805,51 @@ class TestProxyBaseLLMRequestProcessing:
         mock_general_settings = {}
         mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
         mock_proxy_config = MagicMock(spec=ProxyConfig)
-        route_type = "acompletion"
-
-        (
-            returned_data,
-            logging_obj,
-        ) = await processing_obj.common_processing_pre_call_logic(
+        return await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings=mock_general_settings,
             user_api_key_dict=mock_user_api_key_dict,
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=mock_proxy_config,
-            route_type=route_type,
+            route_type="acompletion",
         )
 
-        # Verify queue_time_seconds is set and non-negative. Ends at start_time
-        # (captured before this mock runs, so it can precede the mock's own
-        # time.time() by a handful of microseconds) rather than a freshly
-        # captured time.time(), so a tiny tolerance below 0.5 is expected and
-        # correct -- see LIT-6012.
-        metadata = returned_data.get("metadata", {})
-        assert "queue_time_seconds" in metadata, "queue_time_seconds should be set in metadata"
-        assert metadata["queue_time_seconds"] >= 0.49, (
-            f"queue_time_seconds should be at least ~0.5, got {metadata['queue_time_seconds']}"
+    @pytest.mark.asyncio
+    async def test_queue_time_seconds_excludes_auth_and_pre_processing_covers_arrival(self, monkeypatch):
+        """
+        Request arrived 0.5s ago and auth completed 0.2s ago (so auth took ~0.3s).
+        queue_time_seconds must span only [auth completed, start_time] so slow auth
+        (already measured by litellm_auth_latency) never lands in
+        litellm_request_queue_time_seconds, while pre_processing_seconds keeps the full
+        [arrival_time, start_time] window so total latency stays end to end (LIT-8007).
+        """
+        auth_completed_at = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=0.2)
+        returned_data, logging_obj = await self._run_pre_call_logic_with_arrival(
+            monkeypatch, auth_completed_at=auth_completed_at
         )
 
-        # queue_time_seconds must end exactly where logging_obj.start_time begins
-        # (the same start_time litellm_request_total_latency_metric's window
-        # starts from) so the two windows share a boundary, not an overlap.
-        # A mutant that reintroduces a separately-captured processing_start_time
-        # would make this assertion fail.
+        metadata = returned_data["metadata"]
         arrival_time = returned_data["proxy_server_request"]["arrival_time"]
-        assert arrival_time + metadata["queue_time_seconds"] == pytest.approx(
-            logging_obj.start_time.timestamp(), abs=1e-6
+        processing_start = logging_obj.start_time.timestamp()
+
+        assert metadata["pre_processing_seconds"] >= 0.49
+        assert arrival_time + metadata["pre_processing_seconds"] == pytest.approx(processing_start, abs=1e-6)
+
+        assert 0.19 <= metadata["queue_time_seconds"] < 0.45
+        assert auth_completed_at.timestamp() + metadata["queue_time_seconds"] == pytest.approx(
+            processing_start, abs=1e-6
+        )
+
+    @pytest.mark.asyncio
+    async def test_queue_time_seconds_omitted_without_auth_completion_stamp(self, monkeypatch):
+        """Without an auth completion stamp the queue window is unknown, so no queue_time_seconds
+        is fabricated from arrival_time, but pre_processing_seconds is still recorded."""
+        returned_data, logging_obj = await self._run_pre_call_logic_with_arrival(monkeypatch, auth_completed_at=None)
+
+        metadata = returned_data["metadata"]
+        assert "queue_time_seconds" not in metadata
+        assert returned_data["proxy_server_request"]["arrival_time"] + metadata["pre_processing_seconds"] == (
+            pytest.approx(logging_obj.start_time.timestamp(), abs=1e-6)
         )
 
 

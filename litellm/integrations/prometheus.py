@@ -600,8 +600,9 @@ class PrometheusLogger(CustomLogger):
             # Request queue time metric
             self.litellm_request_queue_time_metric = self._histogram_factory(
                 "litellm_request_queue_time_seconds",
-                "Time (seconds) from request arrival at the proxy to the start of pre-call "
-                "processing -- includes authentication and any ASGI-level queueing",
+                "Time (seconds) the request waited between authentication completing and the "
+                "start of pre-call processing; excludes litellm_auth_latency and "
+                "litellm_proxy_pre_call_latency",
                 labelnames=self.get_labels_for_metric("litellm_request_queue_time_seconds"),
                 buckets=self.latency_buckets,
             )
@@ -2370,23 +2371,19 @@ class PrometheusLogger(CustomLogger):
                 _labels,
             )
 
-        # request queue time (time from arrival to processing start) -- read first so
-        # it can be folded into the total-latency metric below. start_time/end_time
-        # only span from after auth completes, so without this the "total" latency
-        # metric silently excludes auth and pre-call hook time.
         _litellm_params: Final = kwargs.get("litellm_params", {}) or {}
-        queue_time_seconds: Final = (_litellm_params.get("metadata") or {}).get("queue_time_seconds")
+        _request_metadata: Final = _litellm_params.get("metadata") or {}
+        pre_processing_seconds: Final = _request_metadata.get("pre_processing_seconds")
+        queue_time_seconds: Final = _request_metadata.get("queue_time_seconds")
 
-        # total request latency: true end-to-end, from request arrival (queue_time_seconds,
-        # when available) through the end of processing.
         total_time_seconds: Final = self._safe_duration_seconds(
             start_time=start_time,
             end_time=end_time,
         )
         if total_time_seconds is not None:
             _observed_total_time_seconds: Final = (
-                total_time_seconds + queue_time_seconds
-                if queue_time_seconds is not None and queue_time_seconds >= 0
+                total_time_seconds + pre_processing_seconds
+                if pre_processing_seconds is not None and pre_processing_seconds >= 0
                 else total_time_seconds
             )
             _labels = prometheus_label_factory(

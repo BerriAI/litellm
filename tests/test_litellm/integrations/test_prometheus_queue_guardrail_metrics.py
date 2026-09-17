@@ -231,8 +231,9 @@ class TestPrometheusQueueTimeMetric:
 
 class TestPrometheusTotalLatencyMetric:
     """litellm_request_total_latency_metric must be true end-to-end latency: start_time
-    (set after auth already completed, see LIT-6012) plus queue_time_seconds (the
-    auth + pre-call setup window queue_time_seconds itself covers), not start_time alone."""
+    (set after auth already completed, see LIT-6012) plus pre_processing_seconds (the
+    arrival-to-start window that includes auth), not start_time alone and not the
+    narrower post-auth queue_time_seconds (LIT-8007)."""
 
     @staticmethod
     def _enum_values() -> UserAPIKeyLabelValues:
@@ -259,9 +260,10 @@ class TestPrometheusTotalLatencyMetric:
             route=None,
         )
 
-    def test_total_latency_includes_queue_time_when_present(self):
-        """The observed total-latency value must be (end_time - start_time) + queue_time_seconds,
-        so auth/pre-call time (queue_time_seconds) is not silently excluded from "total" latency."""
+    def test_total_latency_includes_pre_processing_time_not_queue_time(self):
+        """The observed total-latency value must be (end_time - start_time) + pre_processing_seconds,
+        so auth time is not silently excluded from "total" latency once queue_time_seconds no
+        longer covers it."""
         prometheus_logger = PrometheusLogger()
 
         mock_metric = MagicMock()
@@ -271,10 +273,16 @@ class TestPrometheusTotalLatencyMetric:
 
         start_time = datetime(2024, 1, 1, 0, 0, 0)
         end_time = datetime(2024, 1, 1, 0, 0, 2)  # 2.0s of LLM-call/post-call time
-        queue_time_seconds = 0.5  # auth + pre-call setup time
+        pre_processing_seconds = 0.5  # arrival -> start_time, auth included
+        queue_time_seconds = 0.1  # auth completed -> start_time
 
         kwargs = {
-            "litellm_params": {"metadata": {"queue_time_seconds": queue_time_seconds}},
+            "litellm_params": {
+                "metadata": {
+                    "pre_processing_seconds": pre_processing_seconds,
+                    "queue_time_seconds": queue_time_seconds,
+                }
+            },
             "model": "gpt-3.5-turbo",
             "start_time": start_time,
             "end_time": end_time,
@@ -293,8 +301,8 @@ class TestPrometheusTotalLatencyMetric:
         observed_value = mock_labeled_metric.observe.call_args_list[0][0][0]
         assert observed_value == pytest.approx(2.5)
 
-    def test_total_latency_falls_back_to_start_end_delta_without_queue_time(self):
-        """Without queue_time_seconds (e.g. a non-proxy caller), the metric must still
+    def test_total_latency_falls_back_to_start_end_delta_without_pre_processing_time(self):
+        """Without pre_processing_seconds (e.g. a non-proxy caller), the metric must still
         observe the plain end_time - start_time delta rather than erroring or dropping it."""
         prometheus_logger = PrometheusLogger()
 
@@ -326,8 +334,8 @@ class TestPrometheusTotalLatencyMetric:
         observed_value = mock_labeled_metric.observe.call_args_list[0][0][0]
         assert observed_value == pytest.approx(2.0)
 
-    def test_total_latency_ignores_negative_queue_time(self):
-        """A negative queue_time_seconds (clock skew / bad data) must not be added in --
+    def test_total_latency_ignores_negative_pre_processing_time(self):
+        """A negative pre_processing_seconds (clock skew / bad data) must not be added in --
         matches the existing >= 0 guard on the standalone queue-time metric."""
         prometheus_logger = PrometheusLogger()
 
@@ -340,7 +348,7 @@ class TestPrometheusTotalLatencyMetric:
         end_time = datetime(2024, 1, 1, 0, 0, 2)
 
         kwargs = {
-            "litellm_params": {"metadata": {"queue_time_seconds": -0.1}},
+            "litellm_params": {"metadata": {"pre_processing_seconds": -0.1}},
             "model": "gpt-3.5-turbo",
             "start_time": start_time,
             "end_time": end_time,

@@ -7710,6 +7710,44 @@ class TestLitellmReceivedAtStamping:
         assert request.state.litellm_received_at == earlier
 
 
+@pytest.mark.asyncio
+async def test_user_api_key_auth_stamps_litellm_auth_completed_at_after_auth_work():
+    """request.state.litellm_auth_completed_at is taken after auth finished, not at auth
+    entry, so a slow custom_auth handler cannot land in the queue-time window (LIT-8007)."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    async def slow_custom_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
+        await asyncio.sleep(0.05)
+        return UserAPIKeyAuth(api_key="sk-test", user_id="u1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+        }
+    )
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"model": "gpt-4o"}).encode()
+
+    attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=slow_custom_auth)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        await user_api_key_auth(request=request, api_key="Bearer sk-test")
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    auth_completed_at = request.state.litellm_auth_completed_at
+    assert isinstance(auth_completed_at, datetime)
+    assert (auth_completed_at - request.state.litellm_received_at).total_seconds() >= 0.05
+
+
 _RECORDING_DDTRACE = dedent(
     '''
     import functools

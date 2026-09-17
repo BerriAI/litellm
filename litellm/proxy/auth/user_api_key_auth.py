@@ -3222,6 +3222,7 @@ async def user_api_key_auth(
                 api_key=api_key,
             )
             if recovered_auth_obj is not None:
+                request.state.litellm_auth_completed_at = datetime.now(timezone.utc)
                 return recovered_auth_obj
 
     # Identity is now resolved. Seed it AFTER the auth span closes so the Baggage
@@ -3253,6 +3254,7 @@ async def user_api_key_auth(
     except Exception as e:
         verbose_proxy_logger.warning("Principal projection at auth seam failed (non-fatal): %s", e)
 
+    request.state.litellm_auth_completed_at = datetime.now(timezone.utc)
     return user_api_key_auth_obj
 
 

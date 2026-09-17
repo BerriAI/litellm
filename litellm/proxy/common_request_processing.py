@@ -1952,21 +1952,15 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
             )
-        # Calculate request queue time after add_litellm_data_to_request
-        # which sets arrival_time in proxy_server_request. Ends at start_time
-        # (not a freshly captured time.time() here) so this window is exactly
-        # [arrival_time, start_time], with zero overlap with the
-        # litellm_request_total_latency_metric window of [start_time, end_time] --
-        # otherwise the few lines of add_litellm_data_to_request's own work would
-        # be double-counted across both metrics.
         proxy_server_request: Final = self.data.get("proxy_server_request", {})
         arrival_time: Final = proxy_server_request.get("arrival_time")
-        queue_time_seconds = None
-        if arrival_time is not None:
-            queue_time_seconds = start_time.timestamp() - arrival_time
+        pre_processing_seconds: Final = start_time.timestamp() - arrival_time if arrival_time is not None else None
+        auth_completed_at: Final = getattr(request.state, "litellm_auth_completed_at", None)
+        queue_time_seconds: Final = (
+            start_time.timestamp() - auth_completed_at.timestamp() if isinstance(auth_completed_at, datetime) else None
+        )
 
-        # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
-        if queue_time_seconds is not None:
+        if pre_processing_seconds is not None or queue_time_seconds is not None:
             from litellm.proxy.litellm_pre_call_utils import _get_metadata_variable_name
 
             _metadata_variable_name: Final = _get_metadata_variable_name(request)
@@ -1974,7 +1968,10 @@ class ProxyBaseLLMRequestProcessing:
                 self.data[_metadata_variable_name] = {}
             if not isinstance(self.data[_metadata_variable_name], dict):
                 self.data[_metadata_variable_name] = {}
-            self.data[_metadata_variable_name]["queue_time_seconds"] = queue_time_seconds
+            if pre_processing_seconds is not None:
+                self.data[_metadata_variable_name]["pre_processing_seconds"] = pre_processing_seconds
+            if queue_time_seconds is not None:
+                self.data[_metadata_variable_name]["queue_time_seconds"] = queue_time_seconds
 
         if isinstance(model, str):
             reject_url_valued_destination("model", model)
