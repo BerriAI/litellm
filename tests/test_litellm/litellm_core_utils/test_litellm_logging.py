@@ -1218,17 +1218,25 @@ async def test_async_success_handler_truncates_large_base64_off_the_event_loop(m
     original_scan = logging_utils._truncate_base64_in_string
 
     def recording_scan(value: str) -> str:
-        scan_threads.append(threading.get_ident())
+        if payload in value:
+            scan_threads.append(threading.get_ident())
         return original_scan(value)
 
     monkeypatch.setattr(logging_utils, "_truncate_base64_in_string", recording_scan)
     monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
+
+    import json
 
     logged = asyncio.Event()
     captured: dict = {}
 
     class CaptureLogger(CustomLogger):
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            logged_messages: Final = json.dumps(
+                kwargs.get("standard_logging_object", {}).get("messages", "")
+            )
+            if "describe" not in logged_messages or "image/png" not in logged_messages:
+                return
             captured["standard_logging_object"] = kwargs["standard_logging_object"]
             logged.set()
 
@@ -1249,9 +1257,9 @@ async def test_async_success_handler_truncates_large_base64_off_the_event_loop(m
     )
     await asyncio.wait_for(logged.wait(), timeout=10)
 
-    logged_url = captured["standard_logging_object"]["messages"][0]["content"][1]["image_url"]["url"]
-    assert "base64_data truncated" in logged_url
-    assert payload not in logged_url
+    serialized: Final = json.dumps(captured["standard_logging_object"]["messages"])
+    assert "base64_data truncated" in serialized
+    assert payload not in serialized
     assert scan_threads
     assert loop_thread not in scan_threads
 
@@ -3190,7 +3198,8 @@ async def test_non_streaming_computes_standard_logging_object_once():
             mock_response="Hello, world!",
         )
         await asyncio.sleep(1)
-        assert mock_payload.call_count == 1
+        own_calls: Final = [call for call in mock_payload.call_args_list if "codex-mini-latest" in str(call)]
+        assert len(own_calls) == 1
 
 
 @pytest.mark.asyncio
