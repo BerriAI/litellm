@@ -12,12 +12,14 @@ calculations for DB-sourced models with prompt caching pricing.
 import contextlib
 import copy
 import os
+import queue
 
 import pytest
 
 
 import litellm
 from litellm.main import _build_custom_pricing_entry
+from litellm.types.utils import ModelResponse
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
@@ -1011,7 +1013,7 @@ _41605_EXPECTED_COST = (
 )
 
 
-def _41605_mock_model_response():
+def _41605_mock_model_response() -> ModelResponse:
     from litellm.types.utils import (
         CompletionTokensDetailsWrapper,
         Message,
@@ -1036,13 +1038,17 @@ def _41605_mock_model_response():
             prompt_tokens=_41605_PROMPT_TOKENS,
             completion_tokens=_41605_COMPLETION_TOKENS,
             total_tokens=_41605_PROMPT_TOKENS + _41605_COMPLETION_TOKENS,
-            prompt_tokens_details=PromptTokensDetails(cached_tokens=_41605_CACHED_TOKENS),
-            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=1536),
+            prompt_tokens_details=PromptTokensDetails(
+                cached_tokens=_41605_CACHED_TOKENS
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=1536
+            ),
         ),
     )
 
 
-def _41605_fake_http_completion(*args, **kwargs):
+def _41605_fake_http_completion(*args: object, **kwargs: object) -> object:
     response = _41605_mock_model_response()
     if kwargs.get("acompletion") is True:
 
@@ -1053,7 +1059,7 @@ def _41605_fake_http_completion(*args, **kwargs):
     return response
 
 
-def _41605_azure_router():
+def _41605_azure_router() -> "litellm.Router":
     from litellm import Router
 
     return Router(
@@ -1076,18 +1082,16 @@ def _41605_azure_router():
     )
 
 
-# The model-cost key the Router actually mutates for this deployment.
-# Router._backend_cost_map_keys() yields "azure_ai/gpt-5.6-luna", but
-# register_model() normalizes that against the builtin catalog and merges the
-# deployment's shared backend info into the existing "gpt-5.6-luna" entry
-# instead (verified: creating the router rewrites supported_openai_params/key
-# on "gpt-5.6-luna" and touches no "azure_ai/..." key). Snapshotted alongside
-# the deployment id so the test stays hermetic.
+# The model-cost key the Router actually mutates for this deployment
+# (register_model() merges the deployment's shared backend info into the
+# existing "gpt-5.6-luna" catalog entry instead of an "azure_ai/..." key).
 _41605_SHARED_KEYS = ["gpt-5.6-luna"]
 
 
 @contextlib.contextmanager
-def _41605_recording_hidden_params_at_submit(submit_target):
+def _41605_recording_hidden_params_at_submit(
+    submit_target: str,
+) -> "contextlib.AbstractContextManager[queue.SimpleQueue[dict[str, object]]]":
     """Mirror of the upstream `_recording_hidden_params_at_submit` helper in
     tests/test_litellm/test_utils.py: snapshot what the logging thread sees.
 
@@ -1096,7 +1100,6 @@ def _41605_recording_hidden_params_at_submit(submit_target):
     returned response, which is always stamped correctly on the main thread
     even when the logging handoff races ahead of the stamp.
     """
-    import queue
     from unittest.mock import MagicMock, patch
 
     seen = queue.SimpleQueue()
@@ -1110,7 +1113,9 @@ def _41605_recording_hidden_params_at_submit(submit_target):
         yield seen
 
 
-def _41605_assert_logging_thread_saw_deployment_cost(snapshot) -> None:
+def _41605_assert_logging_thread_saw_deployment_cost(
+    snapshot: dict[str, object],
+) -> None:
     """Assert the logging thread's view carried the deployment id and cost.
 
     Regression for BerriAI/litellm#41605: synchronous completion once recorded
@@ -1140,15 +1145,19 @@ def test_41605_sync_router_completion_records_deployment_cost_on_logging_thread(
     """
     from unittest.mock import patch
 
-    original_entries = _snapshot_model_cost_entries(_41605_SHARED_KEYS + [_41605_DEPLOYMENT_ID])
+    original_entries = _snapshot_model_cost_entries(
+        _41605_SHARED_KEYS + [_41605_DEPLOYMENT_ID]
+    )
     router = _41605_azure_router()
     try:
         with (
-            patch(
+            patch(  # test-quality-ok: fakes the HTTP transport at this file's established handler seam, same as the sibling ordering test
                 "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.completion",
                 side_effect=_41605_fake_http_completion,
             ),
-            _41605_recording_hidden_params_at_submit("litellm.utils.executor.submit") as seen,
+            _41605_recording_hidden_params_at_submit(
+                "litellm.utils.executor.submit"
+            ) as seen,
         ):
             router.completion(
                 model=_41605_MODEL,
@@ -1160,18 +1169,26 @@ def test_41605_sync_router_completion_records_deployment_cost_on_logging_thread(
         del router
 
 
-async def test_41605_async_router_acompletion_records_deployment_cost_on_logging_thread(monkeypatch):
+async def test_41605_async_router_acompletion_records_deployment_cost_on_logging_thread(
+    monkeypatch,
+):
     """The async success-handler thread must see the same stamped view."""
     from unittest.mock import patch
 
     # A sync success callback forces handle_sync_success_callbacks_for_async_calls
     # to hand the response to the executor, like the upstream ordering test does.
-    monkeypatch.setattr(litellm, "success_callback", [lambda kwargs, response, start_time, end_time: None])
-    original_entries = _snapshot_model_cost_entries(_41605_SHARED_KEYS + [_41605_DEPLOYMENT_ID])
+    monkeypatch.setattr(
+        litellm,
+        "success_callback",
+        [lambda kwargs, response, start_time, end_time: None],
+    )
+    original_entries = _snapshot_model_cost_entries(
+        _41605_SHARED_KEYS + [_41605_DEPLOYMENT_ID]
+    )
     router = _41605_azure_router()
     try:
         with (
-            patch(
+            patch(  # test-quality-ok: fakes the HTTP transport at this file's established handler seam, same as the sibling ordering test
                 "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.completion",
                 side_effect=_41605_fake_http_completion,
             ),
