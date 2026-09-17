@@ -102,7 +102,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
             tags: [
               { tag: "tag-1", usage: 50 },
@@ -127,7 +127,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Key without user",
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
@@ -143,7 +143,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "",
-            user_email: "alice@example.com",
+            user: "alice@example.com",
             spend: 100,
           },
         ]}
@@ -152,6 +152,25 @@ describe("TopKeyView", () => {
 
     expect(screen.getByText("User")).toBeInTheDocument();
     expect(screen.getByText("alice@example.com")).toBeInTheDocument();
+  });
+
+  it("should render a user ID in the User column", () => {
+    render(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[
+          {
+            api_key: "key-123",
+            key_alias: "Key with user ID",
+            user: "user-123",
+            spend: 100,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("User")).toBeInTheDocument();
+    expect(screen.getByText("user-123")).toBeInTheDocument();
   });
 
   it("should switch to chart view when chart view button is clicked", async () => {
@@ -178,7 +197,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "A Very Long Key Alias",
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
@@ -234,7 +253,7 @@ describe("TopKeyView", () => {
           {
             api_key: "sk-1234567890abcdef",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
@@ -253,7 +272,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "",
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
@@ -270,7 +289,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 123.456,
           },
         ]}
@@ -287,7 +306,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 0.004,
           },
         ]}
@@ -304,7 +323,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 0,
           },
         ]}
@@ -322,7 +341,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
             tags: [],
           },
@@ -341,7 +360,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
@@ -359,7 +378,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
             tags: [
               { tag: "tag-1", usage: 50 },
@@ -385,7 +404,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
             tags: [
               { tag: "tag-1", usage: 50 },
@@ -413,7 +432,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
             tags: [
               { tag: "tag-1", usage: 50 },
@@ -451,7 +470,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
@@ -486,7 +505,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
@@ -524,7 +543,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
@@ -561,7 +580,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
@@ -601,7 +620,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
@@ -632,7 +651,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
@@ -663,7 +682,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
-            user_email: null,
+            user: null,
             spend: 100,
             tags: [
               { tag: "tag-low", usage: 10 },
@@ -697,7 +716,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "This is a very long key alias",
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
@@ -714,7 +733,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: null,
-            user_email: null,
+            user: null,
             spend: 100,
           },
         ]}
