@@ -1211,7 +1211,7 @@ async def test_held_attempts_from_one_blocked_key_are_capped(monkeypatch):
         with pytest.raises(ProxyException) as over_cap:
             await _guess(throttle)
         assert over_cap.value.code == "429"
-        assert over_cap.value.headers.get("Retry-After") == "30"
+        assert over_cap.value.headers.get("Retry-After") == "300", "refused at once, for the whole block"
         assert await _fail(throttle, username="someone-else@corp.com") == "401", "other keys are not affected"
     finally:
         release.set()
@@ -1220,6 +1220,46 @@ async def test_held_attempts_from_one_blocked_key_are_capped(monkeypatch):
                 await task
 
     assert lt._HELD_ATTEMPTS.get(slot) is None, "the slots are released once the held attempts answer"
+
+
+@pytest.mark.asyncio
+async def test_a_full_hold_pool_still_lets_the_right_password_in(monkeypatch):
+    """Five parked wrong guesses from the office must not turn the soft block into a lockout for the real user."""
+    import asyncio
+
+    from litellm.proxy.auth import login_throttle as lt
+    from litellm.proxy.auth.login_throttle import MAX_HELD_ATTEMPTS_PER_KEY
+
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    release = asyncio.Event()
+
+    async def _park(_seconds: float) -> None:
+        await release.wait()
+
+    monkeypatch.setattr(lt, "_sleep", _park)
+    throttle = _throttle(user_limit=1, source_limit=3, client_ip="203.0.113.46")
+    assert [await _fail(throttle, username=f"spray-{i}@corp.com") for i in range(4)] == ["401"] * 4
+    source_slot = throttle._keys("known@example.com").source_block
+    assert throttle._local_block_ttl(source_slot) > 0, "the source is blocked"
+
+    held = [
+        asyncio.create_task(_guess(throttle, username="known@example.com")) for _ in range(MAX_HELD_ATTEMPTS_PER_KEY)
+    ]
+    for _ in range(1000):
+        if lt._HELD_ATTEMPTS.get(source_slot) == MAX_HELD_ATTEMPTS_PER_KEY:
+            break
+        await asyncio.sleep(0)
+    assert lt._HELD_ATTEMPTS == {source_slot: MAX_HELD_ATTEMPTS_PER_KEY}
+
+    try:
+        signed_in = await _db_login(throttle, "known@example.com", "right", correct=True)
+        assert signed_in.user_id == "u-1"
+    finally:
+        release.set()
+        for task in held:
+            with pytest.raises(ProxyException):
+                await task
 
 
 @pytest.mark.asyncio
@@ -1258,7 +1298,7 @@ async def test_a_blocked_source_shares_one_held_slot_pool_across_its_blocked_use
             with pytest.raises(ProxyException) as over_cap:
                 await _guess(throttle, username=name)
             assert over_cap.value.code == "429"
-            assert over_cap.value.headers.get("Retry-After") == "30"
+            assert over_cap.value.headers.get("Retry-After") == "300"
     finally:
         release.set()
         for task in held:
