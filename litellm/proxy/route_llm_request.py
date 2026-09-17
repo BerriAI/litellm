@@ -617,9 +617,7 @@ def _router_can_route(
     router_model_names: Final = cast(set[str], llm_router.model_names)
     is_proxy_admin_without_team: Final = team_id is None and _is_proxy_admin_request(dict(data))
     if (
-        is_proxy_admin_without_team
-        and model not in router_model_names
-        and model in llm_router.team_public_model_names
+        is_proxy_admin_without_team and model not in router_model_names and model in llm_router.team_public_model_names
     ) or llm_router.is_recognized_model(model):
         return True
 
@@ -627,7 +625,10 @@ def _router_can_route(
         return False
     if llm_router.router_general_settings.pass_through_all_models:
         return True
-    if llm_router.default_deployment is not None or len(cast(dict[str, object], llm_router.pattern_router.patterns)) > 0:
+    if (
+        llm_router.default_deployment is not None
+        or len(cast(dict[str, object], llm_router.pattern_router.patterns)) > 0
+    ):
         return True
     if model in cast(list[str], llm_router.deployment_names):
         return True
@@ -780,9 +781,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         # Managed Agents API: these don't need model routing
         if route_type in _MANAGED_AGENT_ROUTE_TYPES:
             return getattr(llm_router, f"{route_type}")(**data)
-        if route_type in _MODEL_OPTIONAL_ROUTE_TYPES and (
-            data.get("model") is None or data.get("model") == ""
-        ):
+        if route_type in _MODEL_OPTIONAL_ROUTE_TYPES and (data.get("model") is None or data.get("model") == ""):
             # These endpoints don't need a model, use custom_llm_provider directly
             return getattr(litellm, f"{route_type}")(**data)
 
