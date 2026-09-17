@@ -1,17 +1,11 @@
+// @vitest-environment jsdom
+
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { copyToClipboard, formatNumberWithCommas, getSpendString, updateExistingKeys } from "./dataUtils";
 
-// Mock NotificationsManager
-vi.mock("../../src/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 // Import the mocked module
-import NotificationsManager from "../components/molecules/notifications_manager";
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+import { toast } from "@/lib/toast";
+const mockToast = vi.mocked(toast);
 
 describe("dataUtils", () => {
   beforeEach(() => {
@@ -136,14 +130,14 @@ describe("dataUtils", () => {
         const result = await copyToClipboard("test text");
 
         expect(navigator.clipboard.writeText).toHaveBeenCalledWith("test text");
-        expect(mockNotificationsManager.success).toHaveBeenCalledWith("Copied to clipboard");
+        expect(mockToast.success).toHaveBeenCalledWith("Copied to clipboard");
         expect(result).toBe(true);
       });
 
       it("should use custom message when provided", async () => {
         await copyToClipboard("test text", "Custom message");
 
-        expect(mockNotificationsManager.success).toHaveBeenCalledWith("Custom message");
+        expect(mockToast.success).toHaveBeenCalledWith("Custom message");
       });
 
       it("should return false for null/undefined text", async () => {
@@ -175,7 +169,7 @@ describe("dataUtils", () => {
 
         expect(navigator.clipboard.writeText).toHaveBeenCalledWith("test text");
         expect(document.execCommand).toHaveBeenCalledWith("copy");
-        expect(mockNotificationsManager.success).toHaveBeenCalledWith("Copied to clipboard");
+        expect(mockToast.success).toHaveBeenCalledWith("Copied to clipboard");
         expect(result).toBe(true);
       });
     });
@@ -208,7 +202,7 @@ describe("dataUtils", () => {
 
         expect(document.createElement).toHaveBeenCalledWith("textarea");
         expect(document.execCommand).toHaveBeenCalledWith("copy");
-        expect(mockNotificationsManager.success).toHaveBeenCalledWith("Copied to clipboard");
+        expect(mockToast.success).toHaveBeenCalledWith("Copied to clipboard");
         expect(result).toBe(true);
       });
 
@@ -225,9 +219,11 @@ describe("dataUtils", () => {
         await copyToClipboard("test text");
 
         expect(mockTextArea.value).toBe("test text");
+        /* eslint-disable jest-dom/prefer-to-have-style -- the subject is a plain mock object, not a DOM node, so toHaveStyle cannot read it */
         expect(mockTextArea.style.position).toBe("fixed");
         expect(mockTextArea.style.left).toBe("-999999px");
         expect(mockTextArea.style.top).toBe("-999999px");
+        /* eslint-enable jest-dom/prefer-to-have-style */
         expect(mockTextArea.setAttribute).toHaveBeenCalledWith("readonly", "");
         expect(mockTextArea.focus).toHaveBeenCalled();
         expect(mockTextArea.select).toHaveBeenCalled();
@@ -239,7 +235,7 @@ describe("dataUtils", () => {
         const result = await copyToClipboard("test text");
 
         expect(document.execCommand).toHaveBeenCalledWith("copy");
-        expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to copy to clipboard");
+        expect(mockToast.fromError).toHaveBeenCalledWith("Failed to copy to clipboard");
         expect(result).toBe(false);
       });
 
@@ -250,7 +246,7 @@ describe("dataUtils", () => {
 
         const result = await copyToClipboard("test text");
 
-        expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to copy to clipboard");
+        expect(mockToast.fromError).toHaveBeenCalledWith("Failed to copy to clipboard");
         expect(result).toBe(false);
       });
 

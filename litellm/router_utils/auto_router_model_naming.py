@@ -10,12 +10,30 @@ the router silently dropping the deployment at load time under
 ``ignore_invalid_deployments``.
 """
 
-from collections.abc import Mapping
-from typing import Final, Literal
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, Literal, TypeAlias
+
+from litellm.router_strategy.complexity_router.config import (
+    COMPLEXITY_ROUTER_CONFIG_KEYS,
+    LLM_CLASSIFIER_TYPES,
+)
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
 StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
+
+StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding"]
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyRouterDependency:
+    """A model name a strategy router must be able to reach to do its job."""
+
+    model_name: str
+    role: StrategyRouterDependencyRole
+
 
 STRATEGY_ROUTER_PARAM_FIELDS: Final[frozenset[str]] = frozenset(
     {
@@ -63,6 +81,226 @@ def classify_strategy_router_model(model: str) -> StrategyRouterKind | None:
     return "semantic"
 
 
+def is_complexity_router_model(model: str | None) -> bool:
+    """Whether ``model`` selects the complexity-router implementation."""
+    return classify_strategy_router_model(model or "") == "complexity"
+
+
+def _named(value: object, role: StrategyRouterDependencyRole) -> tuple[StrategyRouterDependency, ...]:
+    """One dependency from a scalar field, or none when it is absent or not a name."""
+    return (StrategyRouterDependency(value, role),) if isinstance(value, str) and value else ()
+
+
+def _pool(value: object, role: StrategyRouterDependencyRole) -> tuple[StrategyRouterDependency, ...]:
+    """Dependencies from a field holding either a single name or a pool of them."""
+    if isinstance(value, str):
+        return _named(value, role)
+    if isinstance(value, Sequence):
+        return tuple(dep for entry in value for dep in _named(entry, role))
+    return ()
+
+
+_NO_CONFIG: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else _NO_CONFIG
+
+
+def strategy_router_dependencies(
+    litellm_params: Mapping[str, object],
+) -> tuple[StrategyRouterDependency, ...]:
+    """The model names a strategy-router deployment must reach, in no particular order.
+
+    A field is a dependency only under the condition the runtime itself reads it: the
+    classifier model needs `classifier_type: llm`, and the complexity embedding model needs
+    `semantic_keyword_matching`. Listing one the router never calls reds a working deployment.
+
+    The two default-model spellings are not symmetric. A quality router falls back to its
+    config's `default_model`, so both are read. A complexity router ignores that field and
+    derives its default from the tiers instead (`fallback_tier`, then MEDIUM, then SIMPLE),
+    overwriting the config value at init, so only the `litellm_params` spelling is a
+    dependency here; the derived one is already covered as a tier.
+
+    Returns empty for a regular deployment, and for any name this module cannot reach from
+    the deployment dict alone: a semantic router's routes live in an `auto_router_config`
+    JSON string or an `auto_router_config_path` file, so only its default and embedding
+    models are enumerable here. Every field is read defensively, since a caller may hold a
+    config the router itself would refuse, and a health check must not raise on one.
+    """
+    kind: Final = classify_strategy_router_model(str(litellm_params.get("model", "")))
+    if kind is None:
+        return ()
+    if kind == "semantic":
+        return _named(litellm_params.get("auto_router_default_model"), "default") + _named(
+            litellm_params.get("auto_router_embedding_model"), "embedding"
+        )
+    if kind == "adaptive":
+        return _pool(_mapping(litellm_params.get("adaptive_router_config")).get("available_models"), "tier")
+    if kind == "quality":
+        quality: Final = _mapping(litellm_params.get("quality_router_config"))
+        return tuple(
+            dict.fromkeys(
+                _pool(quality.get("available_models"), "tier")
+                + _named(
+                    litellm_params.get("quality_router_default_model") or quality.get("default_model"),
+                    "default",
+                )
+            )
+        )
+    complexity: Final = _mapping(litellm_params.get("complexity_router_config"))
+    classifier: Final = _mapping(complexity.get("classifier_llm_config"))
+    return tuple(
+        dict.fromkeys(
+            tuple(dep for tier in _mapping(complexity.get("tiers")).values() for dep in _pool(tier, "tier"))
+            + _named(litellm_params.get("complexity_router_default_model"), "default")
+            + (
+                _named(classifier.get("model"), "classifier")
+                if complexity.get("classifier_type") in LLM_CLASSIFIER_TYPES
+                else ()
+            )
+            + (
+                _named(complexity.get("embedding_model"), "embedding")
+                if complexity.get("semantic_keyword_matching")
+                else ()
+            )
+        )
+    )
+
+
+def uses_heuristic_v2_classifier(complexity_router_config: object) -> bool:
+    """Whether this complexity config classifies with the bundled heuristic_v2 model."""
+    return _mapping(complexity_router_config).get("classifier_type") == "heuristic_v2"
+
+
+def defines_custom_tiers(complexity_router_config: object) -> bool:
+    """Whether this complexity config replaces the built-in tier ladder with operator-defined tier_definitions.
+
+    Mirrors the SQL spelling on the capability record: only an actual array claims the capability,
+    so an explicit JSON null or a malformed value does not.
+    """
+    return isinstance(_mapping(complexity_router_config).get("tier_definitions"), (list, tuple))
+
+
+OPERATOR_CLASSIFIER_PROMPT_FIELDS: Final = ("classification_prompt", "classification_examples")
+
+
+def defines_custom_classifier_prompt(complexity_router_config: object) -> bool:
+    """Whether an operator wrote any part of this router's classifier prompt themselves.
+
+    Three spellings, all metered: a whole replacement prompt (``classifier_llm_config.system_prompt``),
+    replacement opening instructions (``classification_prompt``), and replacement calibration examples
+    (``classification_examples``). Choosing a shipped ``classification_rubric`` preset is not authoring.
+    Scoped to the classifier types that actually call an LLM, which is also where the config validator
+    accepts these fields: the heuristic scorers never read them.
+    """
+    config: Final = _mapping(complexity_router_config)
+    if config.get("classifier_type") not in LLM_CLASSIFIER_TYPES:
+        return False
+    return _mapping(config.get("classifier_llm_config")).get("system_prompt") is not None or any(
+        config.get(field) is not None for field in OPERATOR_CLASSIFIER_PROMPT_FIELDS
+    )
+
+
+def uses_custom_tier_or_classifier_prompt(complexity_router_config: object) -> bool:
+    """Whether this router replaces shipped tiers or its shipped classifier prompt."""
+    return defines_custom_tiers(complexity_router_config) or defines_custom_classifier_prompt(complexity_router_config)
+
+
+_LLM_CLASSIFIER_TYPES_SQL: Final = ", ".join(f"'{name}'" for name in sorted(LLM_CLASSIFIER_TYPES))
+
+
+@dataclass(frozen=True, slots=True)
+class GatedAutoRouterCapability:
+    """A complexity-router capability the license meters, in every spelling an enforcement point needs.
+
+    ``uses`` and ``sql_config_predicate`` answer the same question, in process and in a DB count over
+    stored ``litellm_params`` (``{config}`` is the caller's expression for the normalized
+    ``complexity_router_config`` jsonb, substituted as many times as the predicate needs); they live
+    on one record so they cannot drift apart. ``subject`` and ``remedy`` build the shared refusal
+    message. A validated config claims at most one capability, and the validator is what makes that
+    true: tier_definitions rejects every heuristic classifier_type, and it also rejects the
+    classifier system_prompt, which in turn only applies to the classifier types heuristic_v2 is not.
+    """
+
+    key: str
+    subject: str
+    remedy: str
+    uses: Callable[[object], bool]
+    sql_config_predicate: str
+
+
+HEURISTIC_V2_CAPABILITY: Final = GatedAutoRouterCapability(
+    key="heuristic_v2",
+    subject="with classifier_type 'heuristic_v2'",
+    remedy="Use classifier_type 'heuristic' for this router or remove an existing heuristic_v2 router.",
+    uses=uses_heuristic_v2_classifier,
+    sql_config_predicate="{config} ->> 'classifier_type' = 'heuristic_v2'",
+)
+
+_OPERATOR_PROMPT_FIELDS_SQL: Final = " OR ".join(
+    f"{{config}} ->> '{field}' IS NOT NULL" for field in OPERATOR_CLASSIFIER_PROMPT_FIELDS
+)
+
+CUSTOMIZATION_CAPABILITY: Final = GatedAutoRouterCapability(
+    key="tier_or_classifier_prompt",
+    subject="with operator-defined tier_definitions or an operator-written classifier prompt",
+    remedy=(
+        "Use the shipped tiers and classifier prompt for this router or remove an existing router "
+        "with tier_definitions or its own classifier prompt."
+    ),
+    uses=uses_custom_tier_or_classifier_prompt,
+    sql_config_predicate=(
+        "jsonb_typeof({config} -> 'tier_definitions') = 'array' OR "
+        f"({{config}} ->> 'classifier_type' IN ({_LLM_CLASSIFIER_TYPES_SQL}) AND ("
+        "{config} -> 'classifier_llm_config' ->> 'system_prompt' IS NOT NULL OR "
+        f"{_OPERATOR_PROMPT_FIELDS_SQL}))"
+    ),
+)
+
+GATED_AUTO_ROUTER_CAPABILITIES: Final = (HEURISTIC_V2_CAPABILITY, CUSTOMIZATION_CAPABILITY)
+
+
+def claimed_capability(complexity_router_config: object) -> GatedAutoRouterCapability | None:
+    """The licensed capability this complexity config claims, or None."""
+    return next(
+        (capability for capability in GATED_AUTO_ROUTER_CAPABILITIES if capability.uses(complexity_router_config)),
+        None,
+    )
+
+
+def gated_capability_of(litellm_params: Mapping[str, object]) -> GatedAutoRouterCapability | None:
+    """The licensed capability this deployment claims, or None unless it is a complexity router."""
+    model: Final = litellm_params.get("model")
+    if not is_complexity_router_model(model if isinstance(model, str) else None):
+        return None
+    return claimed_capability(litellm_params.get("complexity_router_config"))
+
+
+def count_capability_routers(
+    deployments: Iterable[Mapping[str, object]], *, capability: GatedAutoRouterCapability
+) -> int:
+    """How many of ``deployments`` (router model_list entries or config.yaml rows) claim ``capability``."""
+    return sum(
+        1 for deployment in deployments if gated_capability_of(_mapping(deployment.get("litellm_params"))) is capability
+    )
+
+
+def capability_limit_violation(*, capability: GatedAutoRouterCapability, held: int, limit: int | None) -> str | None:
+    """Why holding ``held`` routers claiming ``capability`` exceeds ``limit``, or None when it fits.
+
+    ``limit`` None means unlimited. The message is shared by every enforcement point (config
+    load, model writes, router registration) and stays SDK-neutral: it names the cap and what
+    the caller can change; the proxy appends how its license lifts the cap.
+    """
+    if limit is None or held <= limit:
+        return None
+    return (
+        f"At most {limit} auto-router(s) {capability.subject} can be registered but this would make "
+        f"{held}. {capability.remedy}"
+    )
+
+
 def validate_complexity_router_config_write(complexity_router_config: Mapping[str, object] | None) -> str | None:
     """Reject a complexity config the router would refuse to build a deployment from.
 
@@ -89,6 +327,45 @@ def validate_complexity_router_config_write(complexity_router_config: Mapping[st
             "The router would drop this deployment at load time, so the write is rejected instead."
         )
     return None
+
+
+_COMPLEXITY_ROUTER_FIELDS: Final[frozenset[str]] = frozenset(
+    field for group in _REQUIRED_FIELD_GROUPS["complexity"] for field in group
+)
+
+
+def carries_complexity_router_settings(model: str | None, present_fields: frozenset[str]) -> bool:
+    """Whether this deployment configures a complexity router, so is judged on its key set.
+
+    Scoped rather than applied to every deployment because the setting names are only
+    unambiguous in this context: ``embedding_model``, for one, is a legitimate flat param
+    on an s3_vectors vector store. ``present_fields`` carries the same merged view
+    ``validate_strategy_router_model_write`` is judged on, so a router named only by its
+    default model is in scope, and a field added to the table above is covered here for free.
+    """
+    return is_complexity_router_model(model) or bool(present_fields & _COMPLEXITY_ROUTER_FIELDS)
+
+
+def validate_complexity_router_config_placement(litellm_params: Mapping[str, object] | None) -> str | None:
+    """Reject a complexity-router setting written beside ``complexity_router_config``.
+
+    The router reads its settings only from ``litellm_params.complexity_router_config``, so a
+    key one level too high configures nothing. It does not stay inert: the alias-marker
+    forwarding carries every unrecognized ``litellm_params`` key onto the outbound request,
+    where the provider rejects it as an unknown body field, and the deployment then fails
+    every call with an error naming an internal config key. Caller scopes; this judges.
+    """
+    if litellm_params is None:
+        return None
+    misplaced: Final = tuple(sorted(frozenset(litellm_params) & COMPLEXITY_ROUTER_CONFIG_KEYS))
+    if not misplaced:
+        return None
+    return (
+        f"litellm_params sets complexity_router_config settings directly: {', '.join(misplaced)}. "
+        "The router reads these only from complexity_router_config, so there they configure nothing "
+        "and are forwarded to the provider as unknown request params, which rejects the call. "
+        "Move them under complexity_router_config."
+    )
 
 
 def validate_strategy_router_model_write(model: str, present_fields: frozenset[str]) -> str | None:
