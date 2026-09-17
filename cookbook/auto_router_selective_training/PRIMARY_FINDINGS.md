@@ -1,6 +1,6 @@
 # Primary findings: quality retained versus money saved
 
-Training improved some comparisons, but it did not approach the ideal Luna-first policy across all 125 held-out tasks. The profiles selected on validation do not combine preservation of every Sol success with lower total cost across all four benchmarks
+Training improved some comparisons, but it did not approach the ideal Luna-first policy across all 125 held-out tasks. The main profiles selected on validation do not combine preservation of every Sol success with lower total cost across all four benchmarks
 
 Sol solved 87/125 at $20.8964. Luna solved 84/125 at at least $2.6531. There were 11 Sol-only successes, eight Luna-only successes, 76 successes shared by both, and 30 tasks both attempts failed. A perfect Luna-first decision would therefore reach 95/125 at at least $5.2653. That is an unattainable hindsight reference, with at most 74.8% savings using the recorded bills
 
