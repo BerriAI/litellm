@@ -23788,7 +23788,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": false
     },
     "fireworks_ai/accounts/fireworks/models/mixtral-8x22b-instruct-hf": {
         "input_cost_per_token": 1.2e-06,
@@ -24114,7 +24114,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": false
     },
     "fireworks_ai/qwen3p7-plus": {
         "cache_read_input_token_cost": 8e-08,
@@ -50559,7 +50559,7 @@
     "wandb/openai/gpt-oss-120b": {
         "supports_reasoning": true,
         "max_tokens": 131072,
-        "max_input_tokens": 131072,
+        "max_input_tokens": 131000,
         "max_output_tokens": 131072,
         "input_cost_per_token": 3e-08,
         "output_cost_per_token": 1.7e-07,
@@ -50570,7 +50570,7 @@
     "wandb/openai/gpt-oss-20b": {
         "supports_reasoning": true,
         "max_tokens": 131072,
-        "max_input_tokens": 131072,
+        "max_input_tokens": 131000,
         "max_output_tokens": 131072,
         "input_cost_per_token": 3e-08,
         "output_cost_per_token": 1.3e-07,
@@ -50662,7 +50662,7 @@
     },
     "wandb/meta-llama/Llama-3.1-8B-Instruct": {
         "max_tokens": 128000,
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 2.2e-07,
         "output_cost_per_token": 2.2e-07,
@@ -60968,7 +60968,7 @@
     "wandb/deepseek-ai/DeepSeek-V4-Flash": {
         "supports_reasoning": true,
         "max_tokens": 1048576,
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 1049000,
         "input_cost_per_token": 1.4e-07,
         "output_cost_per_token": 2.8e-07,
         "cache_read_input_token_cost": 7e-08,
@@ -60982,7 +60982,7 @@
     "wandb/deepseek-ai/DeepSeek-V4-Flash-0731": {
         "supports_reasoning": true,
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 262000,
         "input_cost_per_token": 1.3e-07,
         "output_cost_per_token": 2.8e-07,
         "cache_read_input_token_cost": 7e-08,
@@ -60995,7 +60995,7 @@
     "wandb/deepseek-ai/DeepSeek-V4-Pro": {
         "supports_reasoning": true,
         "max_tokens": 1048576,
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 1049000,
         "input_cost_per_token": 1.15e-06,
         "output_cost_per_token": 2.55e-06,
         "cache_read_input_token_cost": 2e-07,
@@ -61009,7 +61009,7 @@
     "wandb/google/gemma-4-31B-it": {
         "supports_reasoning": true,
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 262000,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 3.4e-07,
         "litellm_provider": "wandb",
@@ -61020,7 +61020,7 @@
     "wandb/ibm-granite/granite-4.1-8b": {
         "deprecation_date": "2026-10-05",
         "max_tokens": 131072,
-        "max_input_tokens": 131072,
+        "max_input_tokens": 131000,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 1e-07,
         "litellm_provider": "wandb",
@@ -61031,7 +61031,7 @@
     "wandb/JetBrains/Mellum2-12B-A2.5B-Instruct": {
         "deprecation_date": "2026-10-05",
         "max_tokens": 131072,
-        "max_input_tokens": 131072,
+        "max_input_tokens": 131000,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 1e-07,
         "litellm_provider": "wandb",
@@ -61042,7 +61042,7 @@
     "wandb/meta-llama/Llama-3.1-70B-Instruct": {
         "deprecation_date": "2026-10-05",
         "max_tokens": 128000,
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131000,
         "input_cost_per_token": 8e-07,
         "output_cost_per_token": 8e-07,
         "litellm_provider": "wandb",
@@ -61053,7 +61053,7 @@
     "wandb/MiniMaxAI/MiniMax-M3": {
         "supports_reasoning": true,
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 262000,
         "input_cost_per_token": 2.3e-07,
         "output_cost_per_token": 9.6e-07,
         "cache_read_input_token_cost": 5e-08,
@@ -61066,7 +61066,7 @@
     "wandb/moonshotai/Kimi-K2.7-Code": {
         "supports_reasoning": true,
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 262000,
         "input_cost_per_token": 7.1e-07,
         "output_cost_per_token": 3.5e-06,
         "cache_read_input_token_cost": 1.5e-07,
@@ -61079,7 +61079,7 @@
     "wandb/moonshotai/Kimi-K2.6": {
         "supports_reasoning": true,
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 262000,
         "input_cost_per_token": 6.5e-07,
         "output_cost_per_token": 3.41e-06,
         "cache_read_input_token_cost": 1.5e-07,
@@ -61092,7 +61092,7 @@
     "wandb/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B": {
         "supports_reasoning": true,
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 262000,
         "input_cost_per_token": 7e-08,
         "output_cost_per_token": 2e-07,
         "cache_read_input_token_cost": 4e-08,
@@ -61105,7 +61105,7 @@
     "wandb/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B": {
         "supports_reasoning": true,
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 262000,
         "input_cost_per_token": 5e-07,
         "output_cost_per_token": 2.15e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -61118,7 +61118,7 @@
     "wandb/OpenPipe/Qwen3-14B-Instruct": {
         "deprecation_date": "2026-10-05",
         "max_tokens": 32768,
-        "max_input_tokens": 32768,
+        "max_input_tokens": 32800,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 2.2e-07,
         "litellm_provider": "wandb",
@@ -61129,7 +61129,7 @@
     "wandb/Qwen/Qwen3.8-27B": {
         "supports_reasoning": true,
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 262000,
         "input_cost_per_token": 4e-07,
         "output_cost_per_token": 3e-06,
         "cache_read_input_token_cost": 1.5e-07,
@@ -61142,7 +61142,7 @@
     "wandb/Qwen/Qwen3.6-35B-A3B": {
         "supports_reasoning": true,
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 262000,
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 1.25e-06,
         "litellm_provider": "wandb",
@@ -61153,7 +61153,7 @@
     "wandb/Qwen/Qwen3.6-27B": {
         "supports_reasoning": true,
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 262000,
         "input_cost_per_token": 6e-07,
         "output_cost_per_token": 3.6e-06,
         "cache_read_input_token_cost": 1.2e-07,
@@ -61168,7 +61168,7 @@
         "deprecation_date": "2026-10-05",
         "supports_reasoning": true,
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 262000,
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 1.25e-06,
         "litellm_provider": "wandb",
@@ -61179,7 +61179,7 @@
     "wandb/Qwen/Qwen3-30B-A3B-Instruct-2507": {
         "deprecation_date": "2026-10-05",
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 262000,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "wandb",
@@ -61194,6 +61194,7 @@
         "input_cost_per_token": 1.31e-06,
         "output_cost_per_token": 3.96e-06,
         "cache_read_input_token_cost": 4.4e-08,
+        "max_input_tokens": 1049000,
         "supports_prompt_caching": true,
         "source": "https://wandb.ai/site/pricing/tokens/"
     },
@@ -61204,13 +61205,14 @@
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 1.5e-07,
         "cache_read_input_token_cost": 5e-08,
+        "max_input_tokens": 131000,
         "supports_prompt_caching": true,
         "source": "https://wandb.ai/site/pricing/tokens/"
     },
     "wandb/zai-org/GLM-5.2": {
         "supports_reasoning": true,
         "max_tokens": 262144,
-        "max_input_tokens": 262144,
+        "max_input_tokens": 1049000,
         "input_cost_per_token": 7.6e-07,
         "output_cost_per_token": 2.42e-06,
         "cache_read_input_token_cost": 1.4e-07,
@@ -69170,6 +69172,7 @@
         "cache_read_input_token_cost": 5e-08,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "wandb",
+        "max_input_tokens": 1049000,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
         "source": "https://wandb.ai/site/pricing/tokens/",
