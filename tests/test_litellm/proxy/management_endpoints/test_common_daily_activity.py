@@ -643,6 +643,24 @@ def test_key_metadata_includes_recovered_user_email():
     assert meta.user_email == "alice@example.com"
 
 
+def test_key_metadata_includes_user_id_without_user_email():
+    from litellm.proxy.management_endpoints.common_daily_activity import _key_metadata
+
+    meta = _key_metadata(
+        {
+            "dirty-key": {
+                "key_alias": "batch-worker",
+                "team_id": "team-1",
+                "user_id": "user-123",
+            }
+        },
+        "dirty-key",
+    )
+
+    assert meta.user_id == "user-123"
+    assert meta.user_email is None
+
+
 def test_update_breakdown_metrics_includes_user_email():
     from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
     from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
