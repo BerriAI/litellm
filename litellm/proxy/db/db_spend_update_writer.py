@@ -18,6 +18,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
 from urllib.parse import quote, unquote
 
+from typing_extensions import ReadOnly, TypedDict
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -107,6 +109,10 @@ def _batch_cost_row_to_write(payload: SpendLogsPayload, disable_spend_logs: bool
     if disable_spend_logs is False:
         return payload
     return MappingProxyType({field: value for field, value in payload.items() if field in _BATCH_COST_CLAIM_FIELDS})
+
+
+class _SpendIncrement(TypedDict):
+    increment: ReadOnly[float]
 
 
 class _SpendBatch(Protocol):
@@ -251,8 +257,8 @@ class DBSpendUpdateWriter:
         # Completion object fields
         kwargs: dict | None,
         completion_response: object,
-        start_time: datetime | None,
-        end_time: datetime | None,
+        start_time: datetime,
+        end_time: datetime,
         response_cost: float | None,
     ) -> bool:
         """Record the request's spend, answering whether its cost still needs charging.
@@ -293,6 +299,7 @@ class DBSpendUpdateWriter:
                 response_obj=completion_response,
                 start_time=start_time,
                 end_time=end_time,
+                llm_router=get_llm_router(),
             )
             payload["spend"] = response_cost or 0.0
             if isinstance(payload["startTime"], datetime):
@@ -1615,10 +1622,12 @@ class DBSpendUpdateWriter:
                         async with transaction.batch_() as batcher:
                             # Sort by token for consistent lock ordering across pods to prevent deadlocks.
                             for token, response_cost in sorted(key_list_transactions.items()):
+                                spend_increment: _SpendIncrement = {"increment": response_cost}
                                 batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"token": token},
                                     data={
-                                        "spend": {"increment": response_cost},
+                                        "spend": spend_increment,
+                                        "total_spend": spend_increment,
                                         "last_active": datetime.now(timezone.utc),
                                     },
                                 )

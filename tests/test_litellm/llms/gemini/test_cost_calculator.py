@@ -1,8 +1,7 @@
-import os
-
 import pytest
 
 import litellm
+from litellm.cost_calculator import completion_cost
 from litellm.llms.gemini.cost_calculator import (
     cost_per_google_maps_grounding_request,
     cost_per_web_search_request,
@@ -18,6 +17,7 @@ from litellm.types.utils import (
     ImageResponse,
     ImageUsage,
     ImageUsageInputTokensDetails,
+    ModelResponse,
     PromptTokensDetailsWrapper,
     Usage,
 )
@@ -450,6 +450,42 @@ def test_map_traffic_type_to_service_tier(
     assert (
         _map_traffic_type_to_service_tier(traffic_type) == expected_service_tier
     )
+
+
+# Alias targets are the `modelVersion` returned by
+# POST https://generativelanguage.googleapis.com/v1beta/models/<alias>:generateContent on 2026-09-15
+@pytest.mark.parametrize(
+    "alias,target",
+    [
+        ("gemini/gemini-flash-latest", "gemini/gemini-3.8-flash"),
+        ("gemini/gemini-flash-lite-latest", "gemini/gemini-3.5-flash-lite"),
+        ("gemini/gemini-pro-latest", "gemini/gemini-3.1-pro-preview"),
+    ],
+)
+def test_latest_aliases_cost_the_same_as_their_current_target(
+    monkeypatch, alias, target
+):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    usage = Usage(
+        prompt_tokens=1_000,
+        completion_tokens=500,
+        total_tokens=1_500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=400),
+    )
+
+    def cost_of(model: str) -> float:
+        return completion_cost(
+            completion_response=ModelResponse(model=model, usage=usage),
+            model=model,
+            custom_llm_provider="gemini",
+        )
+
+    alias_cost = cost_of(alias)
+    target_cost = cost_of(target)
+    assert alias_cost == pytest.approx(target_cost)
+    assert alias_cost > 0
 
 
 @pytest.mark.parametrize(

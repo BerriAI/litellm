@@ -19,7 +19,6 @@ from ..shared.reporting.models import (
 )
 from ..shared.reporting.strategy import NotImplementedCaseSpec, SkippedCaseSpec, StrategyDefinition
 from ..shared.reporting.ui import PlainDashboard, final_report, make_dashboard
-from ..strategies.unit_tests_mapping.mappings import UNIT_TEST_CONTRACTS
 from ..strategies.unit_tests_parity import UNIT_PARITY_SUITES
 from ..strategies.unit_tests_rust import RUST_SUITES
 from . import main
@@ -91,7 +90,6 @@ def test_should_load_surface_aware_and_function_only_strategies() -> None:
     assert [strategy.id for strategy in strategies] == [
         "e2e_parity",
         "trace_parity",
-        "unit_tests_mapping",
         "unit_tests_parity",
         "unit_tests_rust",
     ]
@@ -104,29 +102,23 @@ def test_should_load_surface_aware_and_function_only_strategies() -> None:
 
 def test_unit_strategies_use_function_only_cases() -> None:
     strategies: Final = {
-        strategy.id: strategy
-        for strategy in load_catalog()
-        if strategy.id in {"unit_tests_mapping", "unit_tests_parity", "unit_tests_rust"}
+        strategy.id: strategy for strategy in load_catalog() if strategy.id in {"unit_tests_parity", "unit_tests_rust"}
     }
 
     for sdk_function in SDK_FUNCTIONS:
         cases: Final = tuple(
             case for strategy in strategies.values() for case in strategy.cases if case.sdk_function == sdk_function
         )
-        assert len(cases) == 3
+        assert len(cases) == 2
         assert all(case.surface is None for case in cases)
-        expected_mapping: Final = (
-            CaseDisposition.RUNNABLE if sdk_function in UNIT_TEST_CONTRACTS else CaseDisposition.NOT_IMPLEMENTED
-        )
-        assert cases[0].spec.disposition is expected_mapping
         expected_parity: Final = (
             CaseDisposition.RUNNABLE if sdk_function in UNIT_PARITY_SUITES else CaseDisposition.NOT_IMPLEMENTED
         )
         expected_rust: Final = (
             CaseDisposition.RUNNABLE if sdk_function in RUST_SUITES else CaseDisposition.NOT_IMPLEMENTED
         )
-        assert cases[1].spec.disposition is expected_parity
-        assert cases[2].spec.disposition is expected_rust
+        assert cases[0].spec.disposition is expected_parity
+        assert cases[1].spec.disposition is expected_rust
 
 
 def test_raw_dashboard_is_always_the_default() -> None:
@@ -243,7 +235,6 @@ def test_every_unavailable_case_finishes_and_explains_itself() -> None:
     section_titles: Final = {
         "e2e_parity": "End-to-end parity outcomes",
         "trace_parity": "traces",
-        "unit_tests_mapping": "Python/Rust unit-test mappings",
         "unit_tests_parity": "Python backend parity outcomes",
         "unit_tests_rust": "Native Rust unit-test outcomes",
     }
@@ -264,7 +255,6 @@ def test_every_unavailable_case_finishes_and_explains_itself() -> None:
         ("e2e_parity", "--surface", "--pytest-arg"),
         ("trace_parity", "--surface", "--pytest-arg"),
         ("unit_tests_parity", "--pytest-arg", "--surface"),
-        ("unit_tests_mapping", "--detail", "--surface"),
         ("unit_tests_rust", "--function", "--surface"),
     ),
 )
@@ -291,7 +281,6 @@ def test_run_help_lists_all_and_every_strategy(capsys: pytest.CaptureFixture[str
         "all",
         "e2e_parity",
         "trace_parity",
-        "unit_tests_mapping",
         "unit_tests_parity",
         "unit_tests_rust",
     ):
@@ -359,7 +348,7 @@ def test_strategy_command_forwards_repeated_filters_and_runner_arguments(
     ]
 
 
-def test_trace_command_forwards_engine_and_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_trace_command_forwards_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
     cli: Final = importlib.import_module("tests.rust-python-harness.cli")
     captured: list[tuple[str, ...]] = []
 
@@ -374,8 +363,8 @@ def test_trace_command_forwards_engine_and_scenario(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(cli, "run_command", capture_run)
 
-    assert main(["run", "trace_parity", "--scenario", "async-mistral", "--engine", "python"]) == 0
-    assert captured == [("async-mistral", "--engine=python")]
+    assert main(["run", "trace_parity", "--scenario", "async-mistral"]) == 0
+    assert captured == [("async-mistral",)]
 
 
 def test_omitted_surface_selects_every_strategy_surface(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -413,8 +402,8 @@ def test_run_all_selects_every_declared_case_once(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(cli, "run_command", capture_run)
 
     assert main(["run", "all", "--function", "ocr"]) == 0
-    assert len(selected) == 7
-    assert sum(case.surface is None for case in selected) == 3
+    assert len(selected) == 6
+    assert sum(case.surface is None for case in selected) == 2
     assert sum(case.surface is not None for case in selected) == 4
 
 

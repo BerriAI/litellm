@@ -47,6 +47,19 @@ def test_team_and_user_state_round_trips_through_metadata():
     )
 
 
+def test_team_model_max_budget_rides_on_the_token():
+    """The team's per-model caps must reach the token, or the auth check and the spend hook never see them."""
+    token = UserAPIKeyAuth(token="hashed", team_id="t1")
+    team_model_max_budget = {"gpt-4o": {"max_budget": 5.0, "budget_duration": "1d"}}
+    carry_team_and_user_budget_state(
+        valid_token=token,
+        team_object=LiteLLM_TeamTable(team_id="t1", model_max_budget=team_model_max_budget),
+        user_object=None,
+    )
+
+    assert token.team_model_max_budget == team_model_max_budget
+
+
 def test_missing_objects_leave_no_metadata_and_no_snapshot():
     token = UserAPIKeyAuth(token="hashed", team_id="t1", user_id="u1")
     carry_team_and_user_budget_state(valid_token=token, team_object=None, user_object=None)

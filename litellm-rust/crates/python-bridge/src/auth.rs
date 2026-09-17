@@ -1,4 +1,4 @@
-use litellm_core::auth::{ResolvedCredential, SecretValue};
+use litellm_auth::{ResolvedCredential, SecretValue};
 use pyo3::exceptions::{PyException, PyRuntimeError, PyTypeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;

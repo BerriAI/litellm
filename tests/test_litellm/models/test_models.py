@@ -362,6 +362,14 @@ class TestVerificationToken:
         assert deleted.deleted_at is not None
         assert deleted.token == "t1"
 
+    def test_total_spend_is_carried_separately_from_resettable_spend(self):
+        token = LiteLLM_VerificationToken(token="t1", spend=0.0, total_spend=12.5)
+        assert token.model_dump()["total_spend"] == 12.5
+        assert token.model_dump()["spend"] == 0.0
+
+        deleted = LiteLLM_DeletedVerificationToken.model_validate({**token.model_dump(), "deleted_by": "admin"})
+        assert deleted.total_spend == 12.5
+
 
 class TestConfigTable:
     def test_config_creation(self):
