@@ -2658,6 +2658,28 @@ def test_extract_initialize_client_info_returns_none_without_client_info(body):
     assert mcp_server._extract_initialize_client_info(body) is None
 
 
+def test_oversized_initialize_peek_neither_routes_stateful_nor_attributes_client():
+    """The routing sniff and the clientInfo parse read the same capped peek, so
+    an initialize larger than the peek can never become a tracked session that
+    then reports an unknown client."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    padding = "x" * (mcp_server._MCP_ROUTING_PEEK_MAX_BYTES + 512)
+    full_body = (
+        b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18",'
+        b'"capabilities":{"experimental":{"pad":{"value":"' + padding.encode() + b'"}}},'
+        b'"clientInfo":{"name":"claude-code","version":"1.0.0"}}}'
+    )
+    peeked = full_body[: mcp_server._MCP_ROUTING_PEEK_MAX_BYTES]
+
+    assert mcp_server._extract_initialize_client_info(full_body) is not None
+    assert mcp_server._is_initialize_request(peeked) is False
+    assert mcp_server._extract_initialize_client_info(peeked) is None
+
+
 @pytest.mark.asyncio
 async def test_initialize_request_records_client_name_in_gateway_sessions_report():
     """The real initialize body's clientInfo is attributed to the session the
