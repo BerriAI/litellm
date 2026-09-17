@@ -8467,13 +8467,16 @@ class TestPreemptive401ModeAware:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("prefix", ("", "/tenant"))
     @pytest.mark.parametrize("authorized", (True, False))
-    async def test_keyed_aggregate_challenge_preserves_selected_server(self, monkeypatch, prefix, authorized):
+    @pytest.mark.parametrize("keyless", (False, True))
+    async def test_aggregate_challenge_preserves_admission_mode(self, monkeypatch, prefix, authorized, keyless):
         from litellm.proxy._experimental.mcp_server import server as server_module
 
         monkeypatch.delenv("PROXY_BASE_URL", raising=False)
         monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
         server: Final = _make_oauth2_server("interactive", oauth2_flow="authorization_code")
         server_module.global_mcp_server_manager.registry[server.server_id] = server
+        caller: Final = UserAPIKeyAuth(api_key=None if keyless else "sk-test")
+        caller.mcp_admitted_user_subject = keyless
         scope: Final = {
             "type": "http",
             "method": "POST",
@@ -8484,7 +8487,7 @@ class TestPreemptive401ModeAware:
         }
         if not authorized:
             await server_module._raise_preemptive_401_for_unauthenticated_servers(
-                scope, [server.alias], None, None, UserAPIKeyAuth(api_key="sk-test"), None, allowed_server_ids=set()
+                scope, [server.alias], None, None, caller, None, allowed_server_ids=set()
             )
             return
         with pytest.raises(HTTPException) as exc:
@@ -8493,14 +8496,15 @@ class TestPreemptive401ModeAware:
                 [server.alias],
                 None,
                 None,
-                UserAPIKeyAuth(api_key="sk-test"),
+                caller,
                 None,
                 allowed_server_ids={server.server_id},
             )
         assert exc.value.status_code == 401
+        metadata_suffix: Final = "mcp/interactive" if keyless else "mcp?mcp_server_name=interactive"
         assert exc.value.headers["www-authenticate"] == (
             f'Bearer resource_metadata="http://testserver{prefix}/.well-known/'
-            'oauth-protected-resource/mcp?mcp_server_name=interactive"'
+            f'oauth-protected-resource/{metadata_suffix}"'
         )
 
     def _scope(self, alias: str):
