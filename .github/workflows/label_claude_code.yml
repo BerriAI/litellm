@@ -7,7 +7,7 @@ on:
 permissions: {}
 
 jobs:
-  label:
+  label-claude-code:
     if: github.repository == 'BerriAI/litellm' && contains(github.event.issue.body, 'claude code')
     runs-on: ubuntu-latest
     timeout-minutes: 2

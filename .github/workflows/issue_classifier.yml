@@ -51,7 +51,7 @@ jobs:
       - name: Test the gate, the validation and the label step
         run: bun test scripts/classify-issue.test.ts scripts/label-issue.test.ts
 
-  classify:
+  classify-issue:
     # An edit to a labelled issue is dropped here; the script decides the rest against the live labels
     if: >-
       github.event_name != 'pull_request'
@@ -129,9 +129,9 @@ jobs:
           path: classification.json
           retention-days: 90
 
-  label:
-    needs: classify
-    if: needs.classify.outputs.verdict != ''
+  label-issue:
+    needs: classify-issue
+    if: needs.classify-issue.outputs.verdict != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -156,6 +156,6 @@ jobs:
         run: bun run scripts/label-issue.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERDICT: ${{ needs.classify.outputs.verdict }}
+          VERDICT: ${{ needs.classify-issue.outputs.verdict }}
           ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
           DRY_RUN: ${{ vars.ISSUE_CLASSIFIER_ENABLED != 'true' }}
