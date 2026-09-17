@@ -290,13 +290,16 @@ def transcribe_job_lookup(aws_region_name: str) -> JobLookup:
 def s3_media_url(media_uri: str, aws_region_name: str) -> str | None:
     """
     Transcribe accepts media as s3://bucket/key or as an https S3 URL; the bucket is required to
-    live in the job's region, so the s3 form maps onto that region's virtual-hosted endpoint.
-    The proxy's AWS signature is only ever sent to that partition's own hosts.
+    live in the job's region, so the s3 form maps onto that region's endpoint. Buckets with dots in
+    their name use the path-style form because they cannot match the virtual-hosted wildcard
+    certificate. The proxy's AWS signature is only ever sent to that partition's own hosts.
     """
     dns_suffix: Final = get_aws_dns_suffix(aws_region_name)
     if not media_uri.startswith("s3://"):
         return media_uri if httpx.URL(media_uri).host.endswith(f".{dns_suffix}") else None
     bucket, _, key = media_uri.removeprefix("s3://").partition("/")
+    if "." in bucket:
+        return f"https://s3.{aws_region_name}.{dns_suffix}/{bucket}/{quote(key)}"
     return f"https://{bucket}.s3.{aws_region_name}.{dns_suffix}/{quote(key)}"
 
 

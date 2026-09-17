@@ -197,6 +197,12 @@ class TestS3MediaUrl:
             == "https://my-bucket.s3.us-west-2.amazonaws.com/dir/a%20b.wav"
         )
 
+    def test_dotted_bucket_maps_to_the_regional_path_style_endpoint(self):
+        assert (
+            s3_media_url("s3://media.example.com/dir/a b.wav", "us-west-2")
+            == "https://s3.us-west-2.amazonaws.com/media.example.com/dir/a%20b.wav"
+        )
+
     @pytest.mark.parametrize(
         "media_uri",
         [
