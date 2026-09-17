@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
@@ -220,6 +221,24 @@ class UserApiKeyCache(DualCache):
             await self.key_object_cache.async_delete_cache(key)
             return
         await super().async_delete_cache(key)
+
+    async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
+        """Batch twin of ``async_delete_cache``, partitioned like
+        ``async_set_cache_pipeline``.
+
+        Both partitions are cleared even when one raises, because a caller
+        batching these has already committed the rows they cache.
+        """
+        key_object_keys: Final = tuple(key for key in keys if is_user_key_cache_key(key))
+        other_keys: Final = tuple(key for key in keys if not is_user_key_cache_key(key))
+        outcomes: Final = await asyncio.gather(
+            self.key_object_cache.async_delete_cache_keys(key_object_keys),
+            super().async_delete_cache_keys(other_keys),
+            return_exceptions=True,
+        )
+        failed: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, BaseException))
+        if failed:
+            raise failed[0]
 
     def flush_cache(self) -> None:
         super().flush_cache()

@@ -76,6 +76,49 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
         assert call_args["payload"]["custom_llm_provider"] == "openai"
 
 
+@pytest.mark.asyncio
+async def test_update_database_attributes_router_rejected_failure_to_model_group_provider():
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
+    llm_router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "openai-outage", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-a"}},
+            {"model_name": "openai-outage", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-b"}},
+        ]
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", True),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch("litellm.proxy.proxy_server.llm_router", llm_router),  # test-quality-ok: get_llm_router reads this proxy_server module global at call time; no injection seam
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={
+                "model": "openai-outage",
+                "litellm_params": {
+                    "metadata": {"user_api_key": "test-token", "model_group": "openai-outage", "status": "failure"}
+                },
+            },
+            completion_response={},
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.0,
+        )
+        await asyncio.sleep(0)
+
+    payload: Final = db_writer.add_spend_log_transaction_to_daily_user_transaction.call_args[1]["payload"]
+    assert payload["model_group"] == "openai-outage"
+    assert payload["custom_llm_provider"] == "openai"
+
+
 def _tool_call_response(*names: str) -> object:
     from types import SimpleNamespace
 
@@ -1731,6 +1774,57 @@ async def test_commit_key_spend_updates_includes_last_active():
 
 
 @pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_increments_key_total_spend_alongside_spend():
+    """
+    The key table write must increment the lifetime total_spend by the same amount as the
+    resettable spend, in the same update so the two cannot drift.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    mock_batcher = MagicMock()
+    mock_batcher.litellm_verificationtoken = MagicMock()
+    mock_batcher.litellm_verificationtoken.update_many = MagicMock()
+
+    mock_transaction = AsyncMock()
+    mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+    mock_transaction.__aexit__ = AsyncMock(return_value=False)
+    mock_transaction.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_transaction)
+
+    db_spend_update_transactions = {
+        "user_list_transactions": {},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {"hashed_token_abc": 0.05, "hashed_token_def": 1.25},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+        db_spend_update_transactions=db_spend_update_transactions,
+    )
+
+    calls = mock_batcher.litellm_verificationtoken.update_many.call_args_list
+    assert [c.kwargs["where"] for c in calls] == [{"token": "hashed_token_abc"}, {"token": "hashed_token_def"}]
+    for call, expected_cost in zip(calls, (0.05, 1.25)):
+        assert call.kwargs["data"]["spend"] == {"increment": expected_cost}
+        assert call.kwargs["data"]["total_spend"] == call.kwargs["data"]["spend"]
+
+
+@pytest.mark.asyncio
 async def test_update_database_creates_single_task():
     """
     Test that update_database() fires exactly 1 asyncio.create_task() call
@@ -2885,7 +2979,7 @@ async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at
     mock_batcher.litellm_verificationtoken.update_many.assert_called_once()
     call_kwargs = mock_batcher.litellm_verificationtoken.update_many.call_args[1]
     assert call_kwargs["where"] == {"token": token}
-    assert set(call_kwargs["data"]) == {"spend", "last_active"}
+    assert set(call_kwargs["data"]) == {"spend", "total_spend", "last_active"}
     assert call_kwargs["data"]["spend"] == {"increment": response_cost}
 
 
