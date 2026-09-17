@@ -787,31 +787,26 @@ mod tests {
         let mut result = None;
         let mut reads = 0;
         let mut pre_calls = 0;
-        loop {
-            match call.resume(result.take()).await.unwrap() {
-                OcrCallStep::Host(operation) => {
-                    result = Some(match operation {
-                        OcrHostOperation::ProjectRequest => {
-                            assert_eq!(reads, 0);
-                            OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false)))
-                        }
-                        OcrHostOperation::ReadDocument => {
-                            reads += 1;
-                            OcrHostResult::Document(Ok(crate::ocr::OcrFileContent {
-                                bytes: bytes::Bytes::from_static(b"image"), file_name: Some("scan.png".into()),
-                            }))
-                        }
-                        OcrHostOperation::PreCall(request) => {
-                            assert_eq!(reads, 1);
-                            pre_calls += 1;
-                            assert!(matches!(&request.document, OcrDocument::ImageUrl { image_url, .. } if image_url == "data:image/png;base64,aW1hZ2U="));
-                            OcrHostResult::PreCall(Ok(request))
-                        }
-                        operation => NoopOcrHost.invoke(operation).await,
-                    });
+        while let OcrCallStep::Host(operation) = call.resume(result.take()).await.unwrap() {
+            result = Some(match operation {
+                OcrHostOperation::ProjectRequest => {
+                    assert_eq!(reads, 0);
+                    OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false)))
                 }
-                OcrCallStep::Complete(_) => break,
-            }
+                OcrHostOperation::ReadDocument => {
+                    reads += 1;
+                    OcrHostResult::Document(Ok(crate::ocr::OcrFileContent {
+                        bytes: bytes::Bytes::from_static(b"image"), file_name: Some("scan.png".into()),
+                    }))
+                }
+                OcrHostOperation::PreCall(request) => {
+                    assert_eq!(reads, 1);
+                    pre_calls += 1;
+                    assert!(matches!(&request.document, OcrDocument::ImageUrl { image_url, .. } if image_url == "data:image/png;base64,aW1hZ2U="));
+                    OcrHostResult::PreCall(Ok(request))
+                }
+                operation => NoopOcrHost.invoke(operation).await,
+            });
         }
         server.await.unwrap();
         assert_eq!((reads, pre_calls, seen.lock().unwrap().len()), (1, 1, 1));
