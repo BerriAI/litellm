@@ -1579,7 +1579,7 @@ class Logging(LiteLLMLoggingBaseClass):
             global_callbacks=litellm.success_callback,
         )
         post_mcp_tool_call_response_obj: Final[MCPPostCallResponseObject] = MCPPostCallResponseObject(
-            mcp_tool_call_response=list(response_obj.content), hidden_params=HiddenParams()
+            mcp_tool_call_response=response_obj.content.copy(), hidden_params=HiddenParams()
         )
         for callback in callbacks:
             try:

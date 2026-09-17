@@ -2951,7 +2951,7 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
         mcp_info={"server_name": "test_server"},
     )
 
-    expected_response = [TextContent(type="text", text="ok")]
+    expected_response = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
 
     with (
         patch.object(
@@ -3027,7 +3027,7 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
         mcp_info={"server_name": "test_server"},
     )
 
-    expected_response = [TextContent(type="text", text="ok")]
+    expected_response = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
 
     with (
         patch.object(

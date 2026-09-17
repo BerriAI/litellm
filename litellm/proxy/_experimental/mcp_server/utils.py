@@ -10,6 +10,7 @@ import re
 import typing
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence, Sequence
 from collections.abc import Set as AbstractSet
+from types import MappingProxyType
 from typing import Any, Final, Protocol
 from urllib.parse import quote
 
@@ -154,11 +155,11 @@ def apply_post_call_hook_content(
     result: "CallToolResult",
     hook_content: "Sequence[TextContent | ImageContent | EmbeddedResource]",
 ) -> "CallToolResult":
-    original_content: Final = list(result.content)
-    updated_content: Final = list(hook_content)
+    original_content: Final = result.content.copy()
+    updated_content: Final = list(hook_content)  # mutable-ok: CallToolResult content requires a concrete list
     if updated_content == original_content:
         return result
-    return result.model_copy(update={"content": updated_content, "structuredContent": None})
+    return result.model_copy(update=MappingProxyType({"content": updated_content, "structuredContent": None}))
 
 
 def normalize_server_name(server_name: str) -> str:
