@@ -30,8 +30,8 @@ def _results(start: object, duration: object, transcript: str = "", is_final: ob
     }
 
 
-def _metadata(duration: object) -> dict[str, object]:
-    return {"type": "Metadata", "request_id": "req-1", "duration": duration, "channels": 1}
+def _metadata(duration: object, channels: int = 1) -> dict[str, object]:
+    return {"type": "Metadata", "request_id": "req-1", "duration": duration, "channels": channels}
 
 
 @pytest.mark.parametrize(
@@ -117,6 +117,34 @@ def test_handler_charges_more_for_more_audio_on_the_same_model():
 
     assert long["kwargs"]["response_cost"] == pytest.approx(3 * short["kwargs"]["response_cost"])
     assert short["kwargs"]["response_cost"] > 0
+
+
+def test_handler_bills_every_channel_of_a_multichannel_session():
+    """Deepgram bills processed audio per channel (deepgram.com/pricing FAQ, 2026-09-17), so a stereo session must be
+    charged for twice its wall-clock duration or budgets can be bypassed by requesting more channels."""
+    mono = DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
+        websocket_messages=(_metadata(30.0),), logging_obj=_logging_obj(), upstream_url=NOVA_3_URL
+    )
+    stereo = DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
+        websocket_messages=(_metadata(30.0, channels=2),),
+        logging_obj=_logging_obj(),
+        upstream_url=f"{NOVA_3_URL}&multichannel=true&channels=2",
+    )
+
+    assert stereo["result"]._hidden_params["audio_transcription_duration"] == 60.0
+    assert stereo["kwargs"]["response_cost"] == pytest.approx(2 * mono["kwargs"]["response_cost"])
+    assert stereo["kwargs"]["response_cost"] == pytest.approx(_registry_cost("nova-3", 60.0))
+
+
+def test_handler_bills_the_declared_channels_when_the_stream_dies_before_any_frame_reports_them():
+    handler_result = DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
+        websocket_messages=(_results(0.0, 10.0, "a"),),
+        logging_obj=_logging_obj(),
+        upstream_url=f"{NOVA_3_URL}&multichannel=true&channels=3",
+    )
+
+    assert handler_result["result"]._hidden_params["audio_transcription_duration"] == 30.0
+    assert handler_result["kwargs"]["response_cost"] == pytest.approx(_registry_cost("nova-3", 30.0))
 
 
 def test_handler_keeps_the_spend_row_but_no_cost_for_an_unpriced_model():
