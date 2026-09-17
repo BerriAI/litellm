@@ -11,6 +11,7 @@ calculations for DB-sourced models with prompt caching pricing.
 
 import copy
 import os
+from typing import Final, NoReturn
 
 import pytest
 
@@ -809,11 +810,11 @@ def test_register_model_prices_a_geo_alias_from_its_builtin_when_the_lookup_fail
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     _invalidate_model_cost_lowercase_map()
-    canonical_key = "au.anthropic.claude-sonnet-5"
-    alias = f"bedrock/{canonical_key}"
-    canonical = litellm.model_cost[canonical_key]
+    canonical_key: Final = "au.anthropic.claude-sonnet-5"
+    alias: Final = f"bedrock/{canonical_key}"
+    canonical: Final = litellm.model_cost[canonical_key]
 
-    def lookup_tripped_by_a_concurrent_registration(*args, **kwargs):
+    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
         raise RuntimeError("dictionary changed size during iteration")
 
     with pytest.MonkeyPatch.context() as lookup_patch:
@@ -823,11 +824,11 @@ def test_register_model_prices_a_geo_alias_from_its_builtin_when_the_lookup_fail
             persist_across_reloads=False,
         )
 
-    usage = Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100)
-    alias_cost = litellm.completion_cost(
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100)
+    alias_cost: Final = litellm.completion_cost(
         completion_response=ModelResponse(model=alias, usage=usage), model=alias, custom_llm_provider="bedrock"
     )
-    canonical_cost = litellm.completion_cost(
+    canonical_cost: Final = litellm.completion_cost(
         completion_response=ModelResponse(model=canonical_key, usage=usage),
         model=canonical_key,
         custom_llm_provider="bedrock",
@@ -847,15 +848,15 @@ def test_register_model_inherits_builtin_token_pricing_for_unmapped_key(monkeypa
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     _invalidate_model_cost_lowercase_map()
-    builtin_key = "us.anthropic.claude-sonnet-4-6"
-    registered_key = f"bedrock/bedrock/bedrock/{builtin_key}"
-    builtin = litellm.model_cost[builtin_key]
+    builtin_key: Final = "us.anthropic.claude-sonnet-4-6"
+    registered_key: Final = f"bedrock/bedrock/bedrock/{builtin_key}"
+    builtin: Final = litellm.model_cost[builtin_key]
 
     try:
         litellm.register_model(
             {registered_key: {"litellm_provider": "bedrock", "mode": "chat"}}, persist_across_reloads=False
         )
-        info = litellm.get_model_info(registered_key)
+        info: Final = litellm.get_model_info(registered_key)
         assert info["input_cost_per_token"] == builtin["input_cost_per_token"] > 0
         assert info["output_cost_per_token"] == builtin["output_cost_per_token"] > 0
         assert info["cache_read_input_token_cost"] == builtin["cache_read_input_token_cost"]
@@ -871,7 +872,7 @@ def test_register_model_never_inherits_pricing_across_providers(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     _invalidate_model_cost_lowercase_map()
-    registered_key = "bedrock/gpt-4o"
+    registered_key: Final = "bedrock/gpt-4o"
     assert litellm.model_cost["gpt-4o"]["litellm_provider"] == "openai"
     assert litellm.model_cost["gpt-4o"]["cache_read_input_token_cost"] > 0
 
@@ -879,7 +880,7 @@ def test_register_model_never_inherits_pricing_across_providers(monkeypatch):
         litellm.register_model(
             {registered_key: {"litellm_provider": "bedrock", "mode": "chat"}}, persist_across_reloads=False
         )
-        registered = litellm.model_cost[registered_key]
+        registered: Final = litellm.model_cost[registered_key]
         assert "cache_read_input_token_cost" not in registered
         assert "input_cost_per_token" not in registered
         assert "output_cost_per_token" not in registered

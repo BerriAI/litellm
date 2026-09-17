@@ -11,9 +11,12 @@ import copy
 import itertools
 import logging
 import os
+import queue
 import re
 import sys
 import threading
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -2406,18 +2409,18 @@ def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_
     key with metadata only and priced every request at $0 until the next reload.
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    catalog = litellm.get_model_cost_map(url="")
+    catalog: Final = litellm.get_model_cost_map(url="")
     monkeypatch.setattr(litellm, "model_cost", dict(catalog))
     _invalidate_model_cost_lowercase_map()
-    backends = tuple(
+    backends: Final = tuple(
         f"bedrock/au.anthropic.{model}"
         for model in ("claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5-20251001-v1:0", "claude-sonnet-4-6")
     )
-    canonical_prices = {
-        backend: catalog[backend.removeprefix("bedrock/")]["input_cost_per_token"] for backend in backends
-    }
+    canonical_prices: Final = MappingProxyType(
+        {backend: catalog[backend.removeprefix("bedrock/")]["input_cost_per_token"] for backend in backends}
+    )
     assert all(price > 0 for price in canonical_prices.values())
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": backend.rsplit(".", 1)[-1],
@@ -2427,27 +2430,32 @@ def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_
             for index, backend in enumerate(backends)
         ]
     )
-    stop = threading.Event()
+    stop: Final = threading.Event()
+    writer_outcome: Final[queue.SimpleQueue[int | Exception]] = queue.SimpleQueue()
 
-    def register_until_stopped():
-        for i in itertools.count():
-            if stop.is_set():
-                return
-            litellm.register_model(
-                {
-                    f"lit-5853-writer-{i}": {
-                        "litellm_provider": "lit-5853-writer",
-                        "mode": "chat",
-                        "input_cost_per_token": 1e-07,
-                        "output_cost_per_token": 4e-07,
-                        "cache_read_input_token_cost": 1e-08,
-                    }
-                },
-                persist_across_reloads=False,
-            )
+    def register_until_stopped() -> None:
+        try:
+            for i in itertools.count():
+                if stop.is_set():
+                    writer_outcome.put(i)
+                    return
+                litellm.register_model(
+                    {
+                        f"lit-5853-writer-{i}": {
+                            "litellm_provider": "lit-5853-writer",
+                            "mode": "chat",
+                            "input_cost_per_token": 1e-07,
+                            "output_cost_per_token": 4e-07,
+                            "cache_read_input_token_cost": 1e-08,
+                        }
+                    },
+                    persist_across_reloads=False,
+                )
+        except Exception as failure:
+            writer_outcome.put(failure)
 
-    writer = threading.Thread(target=register_until_stopped, daemon=True)
-    saved_switch_interval = sys.getswitchinterval()
+    writer: Final = threading.Thread(target=register_until_stopped, daemon=True)
+    saved_switch_interval: Final = sys.getswitchinterval()
     sys.setswitchinterval(1e-4)
     writer.start()
     try:
@@ -2458,10 +2466,12 @@ def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_
         writer.join()
         sys.setswitchinterval(saved_switch_interval)
 
+    registrations_landed: Final = writer_outcome.get(timeout=5)
     try:
-        assert [backend for backend in backends if backend in litellm.model_cost] == []
+        assert isinstance(registrations_landed, int) and registrations_landed > 0, registrations_landed
+        assert tuple(backend for backend in backends if backend in litellm.model_cost) == ()
         for backend in backends:
             assert litellm.get_model_info(backend)["input_cost_per_token"] == canonical_prices[backend]
-        assert router.get_model_names() == [backend.rsplit(".", 1)[-1] for backend in backends]
+        assert tuple(router.get_model_names()) == tuple(backend.rsplit(".", 1)[-1] for backend in backends)
     finally:
         _invalidate_model_cost_lowercase_map()

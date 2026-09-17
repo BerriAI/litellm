@@ -3032,16 +3032,18 @@ _TOKEN_COST_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token")
 
 def _without_synthesized_costs(
     model_info: Mapping[str, object], key: str, value: Mapping[str, object]
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     """``_get_model_info_helper`` synthesizes ``input_cost_per_token`` / ``output_cost_per_token`` = 0 when the raw
     entry has neither (#30198). Persisting those zeros would turn a name-priced entry into a free one and make
     ``_is_cost_explicitly_configured`` disable budget enforcement on the next re-registration."""
     raw_fields: Final = frozenset(litellm.model_cost.get(model_info["key"], litellm.model_cost.get(key, ())))
-    return {
-        name: field_value
-        for name, field_value in model_info.items()
-        if name not in _TOKEN_COST_FIELDS or name in raw_fields or name in value
-    }
+    return MappingProxyType(
+        {
+            name: field_value
+            for name, field_value in model_info.items()
+            if name not in _TOKEN_COST_FIELDS or name in raw_fields or name in value
+        }
+    )
 
 
 def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, object] | None:
@@ -3212,7 +3214,9 @@ def register_model(
         else:
             builtin_model_info = _get_builtin_model_info_for_registration(model=_key_str)
             if builtin_model_info is not None:
-                existing_model = _without_synthesized_costs(builtin_model_info, key=_key_str, value=value)
+                existing_model = dict(  # mutable-ok: merge target
+                    _without_synthesized_costs(builtin_model_info, key=_key_str, value=value)
+                )
                 model_cost_key = builtin_model_info["key"]
             else:
                 # An exact entry ends the lookup ladder before the capability rules are
@@ -5428,9 +5432,10 @@ def _handle_new_key_with_scan(
     Returns:
         The matched key if found, None otherwise.
     """
-    for key in tuple(litellm.model_cost):
+    global _model_cost_lowercase_map
+    for key in litellm.model_cost:
         if key.lower() == potential_key_lower:
-            _rebuild_model_cost_lowercase_map()
+            _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
             return key
     return None
 
