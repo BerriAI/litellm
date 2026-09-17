@@ -629,36 +629,6 @@ def _apply_budget_limits_to_end_user_params(
     verbose_proxy_logger.debug("Applied budget limits to end user %s", end_user_id)
 
 
-def _get_websocket_api_key(websocket: WebSocket) -> str | None:
-    """Read the API key a WebSocket client presented, or None when it presented none.
-
-    Whether a key is required is decided by ``user_api_key_auth``, which allows a
-    keyless request when no master key is configured.
-    """
-    authorization: Final = websocket.headers.get("authorization")
-    if authorization:
-        if not authorization.startswith("Bearer "):
-            raise WebSocketException(
-                code=status.WS_1008_POLICY_VIOLATION,
-                reason="Invalid Authorization header format",
-            )
-        return authorization[len("Bearer ") :].strip()
-
-    header_key: Final = websocket.headers.get("api-key")
-    if header_key:
-        return header_key
-
-    subprotocol_prefix: Final = "openai-insecure-api-key."
-    return next(
-        (
-            protocol.strip()[len(subprotocol_prefix) :]
-            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(",")
-            if protocol.strip().startswith(subprotocol_prefix)
-        ),
-        None,
-    )
-
-
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
 
@@ -690,7 +660,20 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
 
     request.body = return_body
 
-    api_key: Final = _get_websocket_api_key(websocket)
+    authorization: Final = websocket.headers.get("authorization")
+    if not authorization:
+        api_key = websocket.headers.get("api-key")
+        if not api_key:
+            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
+                protocol = protocol.strip()
+                if protocol.startswith("openai-insecure-api-key."):
+                    api_key = protocol[len("openai-insecure-api-key.") :]
+                    break
+    else:
+        if not authorization.startswith("Bearer "):
+            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Authorization header format")
+
+        api_key = authorization[len("Bearer ") :].strip()
 
     try:
         return await user_api_key_auth(
