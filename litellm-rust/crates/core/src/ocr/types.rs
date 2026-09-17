@@ -22,13 +22,13 @@ pub enum OcrDocument {
     DocumentUrl {
         document_url: String,
         #[serde(flatten)]
-        extra_fields: BTreeMap<String, String>,
+        extra_fields: BTreeMap<String, Option<String>>,
     },
     #[serde(rename = "image_url")]
     ImageUrl {
         image_url: String,
         #[serde(flatten)]
-        extra_fields: BTreeMap<String, String>,
+        extra_fields: BTreeMap<String, Option<String>>,
     },
 }
 
@@ -720,45 +720,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn document_variants_preserve_provider_fields_when_rewriting_sources() {
-        for (value, original, replacement, expected) in [
-            (
-                json!({
-                    "type":"document_url",
-                    "document_url":"https://example.com/input.pdf",
-                    "document_name":"input.pdf"
-                }),
-                "https://example.com/input.pdf",
-                "data:application/pdf;base64,AA==",
-                json!({
-                    "type":"document_url",
-                    "document_url":"data:application/pdf;base64,AA==",
-                    "document_name":"input.pdf"
-                }),
-            ),
-            (
-                json!({
-                    "type":"image_url",
-                    "image_url":"https://example.com/input.png",
-                    "detail":"high"
-                }),
-                "https://example.com/input.png",
-                "data:image/png;base64,AA==",
-                json!({
-                    "type":"image_url",
-                    "image_url":"data:image/png;base64,AA==",
-                    "detail":"high"
-                }),
-            ),
-        ] {
-            let document: OcrDocument = serde_json::from_value(value).unwrap();
-            assert_eq!(document.source(), original);
-            assert_eq!(
-                serde_json::to_value(document.with_source(replacement.into())).unwrap(),
-                expected
-            );
-        }
+    #[rstest::rstest]
+    #[case::document_url("document_url", "document_name", "application/pdf")]
+    #[case::image_url("image_url", "detail", "image/png")]
+    fn document_variants_preserve_provider_fields_when_rewriting_sources(
+        #[case] kind: &str,
+        #[case] field: &str,
+        #[case] mime_type: &str,
+        #[values(json!("kept"), Value::Null)] extra: Value,
+    ) {
+        let original = "https://example.com/input";
+        let replacement = format!("data:{mime_type};base64,AA==");
+        let document: OcrDocument =
+            serde_json::from_value(json!({"type": kind, kind: original, field: extra})).unwrap();
+        assert_eq!(document.source(), original);
+        assert_eq!(
+            serde_json::to_value(document.with_source(replacement.clone())).unwrap(),
+            json!({"type": kind, kind: replacement, field: extra})
+        );
     }
 
     #[test]

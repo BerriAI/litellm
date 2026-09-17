@@ -429,7 +429,7 @@ mod tests {
             client.document_fetcher(),
             OcrDocument::ImageUrl {
                 image_url: format!("http://{address}/image"),
-                extra_fields: Map::from_iter([("detail".into(), "high".into())]),
+                extra_fields: Map::from_iter([("detail".into(), Some("high".into()))]),
             },
             &OcrConnection::default(),
         )
@@ -441,7 +441,7 @@ mod tests {
             converted,
             OcrDocument::ImageUrl {
                 image_url: "data:image/png;base64,YWJj".into(),
-                extra_fields: Map::from_iter([("detail".into(), "high".into())]),
+                extra_fields: Map::from_iter([("detail".into(), Some("high".into()))]),
             }
         );
         assert!(!request.to_ascii_lowercase().contains("authorization"));

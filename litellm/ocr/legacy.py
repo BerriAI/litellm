@@ -70,16 +70,27 @@ def _prepare_ocr_request(
     )
 
     if not isinstance(document, dict):
-        raise ValueError(f"document must be a dict with 'type' and URL/file field, got {type(document)}")
+        raise litellm.BadRequestError(
+            message="document must be a dict with 'type' and URL/file field",
+            model=model,
+            llm_provider=custom_llm_provider or "",
+        )
 
-    doc_type = document.get("type")
+    normalized_document: Final = (
+        convert_file_document_to_url_document(document) if document.get("type") == "file" else document
+    )
+    doc_type: Final = normalized_document.get("type")
 
-    if doc_type == "file":
-        document = convert_file_document_to_url_document(document)
-        doc_type = document.get("type")
-
-    if doc_type not in ["document_url", "image_url"]:
-        raise ValueError(f"Invalid document type: {doc_type}. Must be 'document_url', 'image_url', or 'file'")
+    if doc_type not in ("document_url", "image_url"):
+        raise litellm.BadRequestError(
+            message=f"Invalid document type: {doc_type}. Must be 'document_url', 'image_url', or 'file'",
+            model=model,
+            llm_provider=custom_llm_provider or "",
+        )
+    if not normalized_document.get(doc_type):
+        raise litellm.BadRequestError(
+            message="Document URL is required", model=model, llm_provider=custom_llm_provider or ""
+        )
 
     (
         model,
@@ -116,31 +127,26 @@ def _prepare_ocr_request(
     requested_format: Final = kwargs.get(OCR_REQUEST_FORMAT_PARAM)
     if requested_format is not None:
         try:
-            parsed_format: Final = parse_ocr_request_format(requested_format)
+            parse_ocr_request_format(requested_format)
         except ValueError as e:
             raise litellm.exceptions.UnsupportedParamsError(
                 message=f"{e}", model=model, llm_provider=custom_llm_provider
             ) from e
-        if OCR_REQUEST_FORMAT_PARAM not in supported_params and parsed_format == "native":
-            raise litellm.exceptions.UnsupportedParamsError(
-                message=(
-                    f"`{OCR_REQUEST_FORMAT_PARAM}='native'` is not supported for provider: {custom_llm_provider}, "
-                    f"model: {model}"
-                ),
-                model=model,
-                llm_provider=custom_llm_provider,
-            )
 
-    non_default_params: Final = {}
-    for param in supported_params:
-        if param in kwargs:
-            non_default_params[param] = kwargs.pop(param)
+    non_default_params: Final = {param: kwargs.pop(param) for param in supported_params if param in kwargs}
 
-    optional_params: Final = ocr_provider_config.map_ocr_params(
-        non_default_params=non_default_params,
-        optional_params={},
-        model=model,
-    )
+    try:
+        mapped_params: Final = ocr_provider_config.map_ocr_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+        )
+    except ValueError as error:
+        raise litellm.BadRequestError(message=str(error), model=model, llm_provider=custom_llm_provider) from error
+    optional_params: Final = {
+        **mapped_params,
+        **({OCR_REQUEST_FORMAT_PARAM: requested_format} if requested_format is not None else {}),
+    }
 
     verbose_logger.debug("OCR optional_params after mapping: %s", optional_params)
 
@@ -160,7 +166,7 @@ def _prepare_ocr_request(
 
     return _PreparedOCRRequest(
         model=model,
-        document=document,
+        document=normalized_document,
         api_key=resolved_api_key,
         api_base=resolved_api_base,
         custom_llm_provider=custom_llm_provider,

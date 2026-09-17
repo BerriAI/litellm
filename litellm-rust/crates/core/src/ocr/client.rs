@@ -133,14 +133,9 @@ pub async fn read_json_response<T: DeserializeOwned>(
 
 pub(crate) async fn read_response_bytes(
     mut response: reqwest::Response,
-    max_response_bytes: usize,
+    limit: usize,
 ) -> Result<Bytes, crate::ocr::Error> {
     let status = response.status();
-    let limit = if status.is_success() {
-        max_response_bytes
-    } else {
-        max_response_bytes.min(4 * (crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS + 1))
-    };
     if status.is_success()
         && response
             .content_length()
@@ -162,7 +157,7 @@ pub(crate) async fn read_response_bytes(
     if !status.is_success() {
         return Err(crate::transport::Error::Http {
             status: status.as_u16(),
-            body: crate::http_utils::truncate_error_body(&String::from_utf8_lossy(&bytes)),
+            body: String::from_utf8_lossy(&bytes).into_owned(),
         }
         .into());
     }
