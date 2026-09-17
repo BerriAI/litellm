@@ -1,11 +1,14 @@
 import asyncio
 import json
 import math
+import tempfile
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from functools import lru_cache, partial
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -17,7 +20,10 @@ from litellm.constants import (
     TRANSCRIBE_JOB_MAX_POLLING_ATTEMPTS,
     TRANSCRIBE_JOB_POLLING_INTERVAL_SECONDS,
     TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS,
+    TRANSCRIBE_MEASURABLE_MEDIA_FORMATS,
+    TRANSCRIBE_MEDIA_FETCH_ATTEMPTS,
 )
+from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
@@ -39,7 +45,7 @@ TRANSCRIBE_SURCHARGE_MEMBERS: Final = ("ContentRedaction", "ToxicityDetection")
 TRANSCRIBE_TERMINAL_JOB_STATUSES: Final = frozenset({"COMPLETED", "FAILED"})
 
 JobLookup: TypeAlias = Callable[[str], Awaitable[Mapping[str, object]]]  # mutable-ok: Callable parameter syntax
-TranscriptFetch: TypeAlias = Callable[[str], Awaitable[Mapping[str, object]]]  # mutable-ok: Callable parameter syntax
+MediaDurationProbe: TypeAlias = Callable[[str], Awaitable[float | None]]  # mutable-ok: Callable parameter syntax
 JobPricer: TypeAlias = Callable[[str, str, float], Awaitable[float]]  # mutable-ok: Callable parameter syntax
 
 
@@ -47,36 +53,20 @@ class GetTranscriptionJobRequest(TypedDict):
     TranscriptionJobName: ReadOnly[str]
 
 
-class _TranscriptRef(BaseModel):
+class _MediaRef(BaseModel):
     model_config = ConfigDict(frozen=True)
-    TranscriptFileUri: str | None = None
+    MediaFileUri: str | None = None
 
 
 class _TranscriptionJob(BaseModel):
     model_config = ConfigDict(frozen=True)
     TranscriptionJobStatus: str | None = None
-    Transcript: _TranscriptRef | None = None
+    Media: _MediaRef | None = None
 
 
 class _GetTranscriptionJobResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
     TranscriptionJob: _TranscriptionJob | None = None
-
-
-class _TranscriptItem(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    end_time: float | None = None
-
-
-class _TranscriptResults(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    audio_segments: tuple[_TranscriptItem, ...] = ()
-    items: tuple[_TranscriptItem, ...] = ()
-
-
-class _Transcript(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    results: _TranscriptResults | None = None
 
 
 class _PricedCostMapEntry(BaseModel):
@@ -136,19 +126,54 @@ def transcribe_unpriceable_request_reason(
             f"{TRANSCRIBE_PRICED_MODEL} has no input_cost_per_second in the LiteLLM model cost map, so billable"
             " transcription jobs cannot be submitted through this route"
         )
+    surcharges: Final = tuple(m for m in TRANSCRIBE_SURCHARGE_MEMBERS if m in request_body) + tuple(
+        _custom_language_model_members(request_body)
+    )
+    if surcharges:
+        return (
+            f"{TRANSCRIBE_PRICED_OPERATION} with {', '.join(surcharges)} adds a per-second surcharge LiteLLM does not"
+            " price yet; remove it to submit the job through this route"
+        )
+    if requested_media_format(request_body) not in TRANSCRIBE_MEASURABLE_MEDIA_FORMATS:
+        return (
+            "LiteLLM bills a transcription job by reading the length of the media file, which it can only do for"
+            f" {', '.join(sorted(TRANSCRIBE_MEASURABLE_MEDIA_FORMATS))}; set MediaFormat to one of those or point"
+            " Media.MediaFileUri at a file with that extension"
+        )
+    return None
+
+
+def _custom_language_model_members(request_body: Mapping[str, object]) -> tuple[str, ...]:
     model_settings: Final = request_body.get("ModelSettings")
-    custom_language_model: Final = (
+    language_id_settings: Final = request_body.get("LanguageIdSettings")
+    from_model_settings: Final = (
         ("ModelSettings.LanguageModelName",)
         if isinstance(model_settings, Mapping) and "LanguageModelName" in model_settings
         else ()
     )
-    surcharges: Final = tuple(m for m in TRANSCRIBE_SURCHARGE_MEMBERS if m in request_body) + custom_language_model
-    if not surcharges:
-        return None
-    return (
-        f"{TRANSCRIBE_PRICED_OPERATION} with {', '.join(surcharges)} adds a per-second surcharge LiteLLM does not"
-        " price yet; remove it to submit the job through this route"
+    from_language_id: Final = (
+        tuple(
+            f"LanguageIdSettings.{language}.LanguageModelName"
+            for language, settings in _JSON_OBJECT.validate_python(language_id_settings).items()
+            if isinstance(settings, Mapping) and "LanguageModelName" in settings
+        )
+        if isinstance(language_id_settings, Mapping)
+        else ()
     )
+    return from_model_settings + from_language_id
+
+
+def requested_media_format(request_body: Mapping[str, object]) -> str | None:
+    media_format: Final = request_body.get("MediaFormat")
+    if isinstance(media_format, str):
+        return media_format.lower()
+    media: Final = request_body.get("Media")
+    media_uri: Final = _JSON_OBJECT.validate_python(media).get("MediaFileUri") if isinstance(media, Mapping) else None
+    if not isinstance(media_uri, str):
+        return None
+    path: Final = httpx.URL(media_uri).path if "://" in media_uri else media_uri
+    _, dot, suffix = path.rpartition(".")
+    return suffix.lower() if dot else None
 
 
 def transcription_job_cost(audio_seconds: float, cost_per_second: float) -> float:
@@ -159,14 +184,13 @@ def transcribe_max_job_cost(cost_per_second: float) -> float:
     return transcription_job_cost(TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS, cost_per_second)
 
 
-def transcript_audio_seconds(transcript: Mapping[str, object]) -> float | None:
-    results: Final = _Transcript.model_validate(transcript).results
-    if results is None:
+async def _poll_transcription_job(job_name: str, get_job: JobLookup) -> _TranscriptionJob | None:
+    try:
+        job: Final = _GetTranscriptionJobResponse.model_validate(await get_job(job_name)).TranscriptionJob
+    except Exception as e:  # noqa: BLE001  # a failed poll is retried on the next tick instead of ending pricing
+        verbose_proxy_logger.warning("Polling Transcribe job %s failed, retrying: %s", job_name, e)
         return None
-    end_times: Final = tuple(
-        item.end_time for item in results.audio_segments + results.items if item.end_time is not None
-    )
-    return max(end_times, default=None)
+    return job if job is not None and job.TranscriptionJobStatus in TRANSCRIBE_TERMINAL_JOB_STATUSES else None
 
 
 async def await_transcription_job(
@@ -176,10 +200,26 @@ async def await_transcription_job(
     max_attempts: int = TRANSCRIBE_JOB_MAX_POLLING_ATTEMPTS,
 ) -> _TranscriptionJob | None:
     for _ in range(max_attempts):
-        job = _GetTranscriptionJobResponse.model_validate(await get_job(job_name)).TranscriptionJob
-        if job is not None and job.TranscriptionJobStatus in TRANSCRIBE_TERMINAL_JOB_STATUSES:
+        job = await _poll_transcription_job(job_name, get_job)
+        if job is not None:
             return job
         await sleep(TRANSCRIBE_JOB_POLLING_INTERVAL_SECONDS)
+    return None
+
+
+async def measure_media_seconds(
+    media_uri: str,
+    media_seconds: MediaDurationProbe,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    attempts: int = TRANSCRIBE_MEDIA_FETCH_ATTEMPTS,
+) -> float | None:
+    for attempt in range(1, attempts + 1):
+        try:
+            return await media_seconds(media_uri)
+        except Exception as e:  # noqa: BLE001  # the media is retried, then charged at the maximum if still unreadable
+            verbose_proxy_logger.warning("Measuring Transcribe media %s failed (attempt %d): %s", media_uri, attempt, e)
+            if attempt < attempts:
+                await sleep(TRANSCRIBE_JOB_POLLING_INTERVAL_SECONDS)
     return None
 
 
@@ -187,13 +227,13 @@ async def price_transcription_job(
     job_name: str,
     cost_per_second: float,
     get_job: JobLookup,
-    fetch_transcript: TranscriptFetch,
+    media_seconds: MediaDurationProbe,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     max_attempts: int = TRANSCRIBE_JOB_MAX_POLLING_ATTEMPTS,
 ) -> float:
     """
-    Amazon Transcribe bills per second of audio and reports the duration only inside the
-    transcript artifact, so the job is polled to completion and priced from the last end_time.
+    Amazon Transcribe bills every second of the media file, silence included, and reports no
+    duration itself, so the job is polled to completion and the media it transcribed is measured.
     Anything that stops the duration from being read is charged as the longest media AWS accepts.
     """
     job: Final = await await_transcription_job(job_name, get_job, sleep=sleep, max_attempts=max_attempts)
@@ -202,10 +242,10 @@ async def price_transcription_job(
         return transcribe_max_job_cost(cost_per_second)
     if job.TranscriptionJobStatus == "FAILED":
         return 0.0
-    transcript_uri: Final = job.Transcript.TranscriptFileUri if job.Transcript is not None else None
-    if transcript_uri is None:
+    media_uri: Final = job.Media.MediaFileUri if job.Media is not None else None
+    if media_uri is None:
         return transcribe_max_job_cost(cost_per_second)
-    audio_seconds: Final = transcript_audio_seconds(await fetch_transcript(transcript_uri))
+    audio_seconds: Final = await measure_media_seconds(media_uri, media_seconds, sleep=sleep)
     if audio_seconds is None:
         return transcribe_max_job_cost(cost_per_second)
     return transcription_job_cost(audio_seconds, cost_per_second)
@@ -245,25 +285,46 @@ def transcribe_job_lookup(aws_region_name: str) -> JobLookup:
     return get_job
 
 
-def transcribe_transcript_fetch(aws_region_name: str) -> TranscriptFetch:
+def s3_media_url(media_uri: str, aws_region_name: str) -> str | None:
+    """
+    Transcribe accepts media as s3://bucket/key or as an https S3 URL; the bucket is required to
+    live in the job's region, so the s3 form maps onto that region's virtual-hosted endpoint.
+    The proxy's AWS signature is only ever sent to that partition's own hosts.
+    """
+    dns_suffix: Final = get_aws_dns_suffix(aws_region_name)
+    if not media_uri.startswith("s3://"):
+        return media_uri if httpx.URL(media_uri).host.endswith(f".{dns_suffix}") else None
+    bucket, _, key = media_uri.removeprefix("s3://").partition("/")
+    return f"https://{bucket}.s3.{aws_region_name}.{dns_suffix}/{quote(key)}"
+
+
+def transcribe_media_duration_probe(aws_region_name: str) -> MediaDurationProbe:
     from botocore.auth import S3SigV4Auth
     from botocore.awsrequest import AWSRequest
 
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 
-    def sign_s3_get(transcript_uri: str) -> dict[str, str]:  # mutable-ok: AsyncHTTPHandler.get takes a dict
-        aws_request: Final = AWSRequest(method="GET", url=transcript_uri)
+    def sign_s3_get(url: str) -> dict[str, str]:  # mutable-ok: httpx request headers take a dict
+        aws_request: Final = AWSRequest(method="GET", url=url)
         credentials: Final = BaseAWSLLM().get_credentials(aws_region_name=aws_region_name)
         S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
-        return dict(aws_request.prepare().headers.items())  # mutable-ok: AsyncHTTPHandler.get takes a dict
+        return dict(aws_request.prepare().headers.items())  # mutable-ok: httpx request headers take a dict
 
-    async def fetch_transcript(transcript_uri: str) -> Mapping[str, object]:
-        presigned: Final = "X-Amz-Signature" in httpx.URL(transcript_uri).params
-        headers: Final = None if presigned else await run_aws_signing(sign_s3_get, transcript_uri)
-        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint)
-        return _as_json_object(await client.get(transcript_uri, headers=headers))
+    async def media_seconds(media_uri: str) -> float | None:
+        url: Final = s3_media_url(media_uri, aws_region_name)
+        if url is None:
+            return None
+        headers: Final = await run_aws_signing(sign_s3_get, url)
+        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint).client
+        with tempfile.NamedTemporaryFile() as media_file:
+            async with client.stream("GET", url, headers=headers) as response:
+                _ = response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    _ = media_file.write(chunk)
+            media_file.flush()
+            return await asyncio.to_thread(calculate_request_duration, Path(media_file.name))
 
-    return fetch_transcript
+    return media_seconds
 
 
 async def price_transcription_job_live(job_name: str, aws_region_name: str, cost_per_second: float) -> float:
@@ -272,7 +333,7 @@ async def price_transcription_job_live(job_name: str, aws_region_name: str, cost
             job_name,
             cost_per_second,
             get_job=transcribe_job_lookup(aws_region_name),
-            fetch_transcript=transcribe_transcript_fetch(aws_region_name),
+            media_seconds=transcribe_media_duration_probe(aws_region_name),
         )
     except Exception as e:  # noqa: BLE001  # an unreadable job must still be charged, so fail closed at the maximum
         verbose_proxy_logger.exception("Pricing Transcribe job %s failed, charging maximum: %s", job_name, e)

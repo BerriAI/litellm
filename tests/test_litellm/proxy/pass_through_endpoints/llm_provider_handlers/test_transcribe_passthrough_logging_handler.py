@@ -10,10 +10,11 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.transcribe_passt
     TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS,
     TranscribePassthroughLoggingHandler,
     price_transcription_job,
+    requested_media_format,
+    s3_media_url,
     transcribe_cost_per_second,
     transcribe_supported_operations,
     transcribe_unpriceable_request_reason,
-    transcript_audio_seconds,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
@@ -42,9 +43,30 @@ async def _no_sleep(_: float) -> None:
     return None
 
 
-def _job(status: str, transcript_uri: str | None = "https://s3.us-west-2.amazonaws.com/b/t.json") -> dict[str, object]:
-    transcript = {"Transcript": {"TranscriptFileUri": transcript_uri}} if transcript_uri else {}
-    return {"TranscriptionJob": {"TranscriptionJobStatus": status, **transcript}}
+MEDIA_URI = "s3://b/a.wav"
+
+
+def _job(status: str, media_uri: str | None = MEDIA_URI) -> dict[str, object]:
+    media = {"Media": {"MediaFileUri": media_uri}} if media_uri else {}
+    return {"TranscriptionJob": {"TranscriptionJobStatus": status, **media}}
+
+
+async def _no_media(uri: str) -> float | None:
+    raise AssertionError("the media must not be measured on this path")
+
+
+def _media_probe(*durations: float | None | Exception):
+    remaining = list(durations)
+    measured: list[str] = []
+
+    async def media_seconds(uri: str) -> float | None:
+        measured.append(uri)
+        outcome = remaining.pop(0) if len(remaining) > 1 else remaining[0]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    return media_seconds, measured
 
 
 def _sequence(*jobs: dict[str, object]):
@@ -84,7 +106,31 @@ class TestTranscribeCostMap:
 
 class TestTranscribeUnpriceableRequestReason:
     def test_plain_start_transcription_job_is_allowed(self):
-        body = {"TranscriptionJobName": "j", "Media": {"MediaFileUri": "s3://b/a.wav"}}
+        body = {"TranscriptionJobName": "j", "Media": {"MediaFileUri": MEDIA_URI}}
+        assert transcribe_unpriceable_request_reason("StartTranscriptionJob", body, COST_PER_SECOND) is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"Media": {"MediaFileUri": "s3://b/a.mp4"}},
+            {"Media": {"MediaFileUri": "s3://b/a.wav"}, "MediaFormat": "webm"},
+            {"Media": {"MediaFileUri": "s3://b/recording"}},
+            {"TranscriptionJobName": "j"},
+        ],
+    )
+    def test_media_whose_length_cannot_be_read_is_rejected(self, body: dict[str, object]):
+        reason = transcribe_unpriceable_request_reason("StartTranscriptionJob", body, COST_PER_SECOND)
+        assert reason is not None and "MediaFormat" in reason
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"Media": {"MediaFileUri": "s3://b/a.mp4"}, "MediaFormat": "mp3"},
+            {"Media": {"MediaFileUri": "https://s3.us-west-2.amazonaws.com/b/a.FLAC?x=1"}},
+            {"Media": {"MediaFileUri": "s3://b/dir.v2/a.ogg"}},
+        ],
+    )
+    def test_measurable_media_is_allowed(self, body: dict[str, object]):
         assert transcribe_unpriceable_request_reason("StartTranscriptionJob", body, COST_PER_SECOND) is None
 
     def test_read_only_operations_are_allowed_without_a_rate(self):
@@ -108,95 +154,146 @@ class TestTranscribeUnpriceableRequestReason:
             ({"ContentRedaction": {"RedactionType": "PII", "RedactionOutput": "redacted"}}, "ContentRedaction"),
             ({"ToxicityDetection": [{"ToxicityCategories": ["ALL"]}]}, "ToxicityDetection"),
             ({"ModelSettings": {"LanguageModelName": "clm"}}, "ModelSettings.LanguageModelName"),
+            (
+                {
+                    "IdentifyLanguage": True,
+                    "LanguageIdSettings": {"en-US": {"VocabularyName": "v"}, "fr-FR": {"LanguageModelName": "clm"}},
+                },
+                "LanguageIdSettings.fr-FR.LanguageModelName",
+            ),
         ],
     )
     def test_surcharged_features_are_rejected(self, body: dict[str, object], member: str):
-        reason = transcribe_unpriceable_request_reason("StartTranscriptionJob", body, COST_PER_SECOND)
+        reason = transcribe_unpriceable_request_reason(
+            "StartTranscriptionJob", {**body, "Media": {"MediaFileUri": MEDIA_URI}}, COST_PER_SECOND
+        )
         assert reason is not None and member in reason
 
-    def test_model_settings_without_a_custom_model_is_allowed(self):
-        body = {"ModelSettings": {}}
+    def test_settings_without_a_custom_model_are_allowed(self):
+        body = {
+            "ModelSettings": {},
+            "LanguageIdSettings": {"en-US": {"VocabularyName": "v"}},
+            "Media": {"MediaFileUri": MEDIA_URI},
+        }
         assert transcribe_unpriceable_request_reason("StartTranscriptionJob", body, COST_PER_SECOND) is None
 
 
-class TestTranscriptAudioSeconds:
-    def test_reads_the_last_segment_end_time(self):
-        transcript = {
-            "results": {
-                "audio_segments": [{"end_time": "9.5"}, {"end_time": "17.36"}],
-                "items": [{"end_time": "17.23"}, {"type": "punctuation"}],
-            }
-        }
-        assert transcript_audio_seconds(transcript) == 17.36
+class TestRequestedMediaFormat:
+    def test_explicit_media_format_wins_over_the_extension(self):
+        assert requested_media_format({"MediaFormat": "MP3", "Media": {"MediaFileUri": "s3://b/a.wav"}}) == "mp3"
 
-    def test_falls_back_to_items_when_segments_are_absent(self):
-        assert transcript_audio_seconds({"results": {"items": [{"end_time": "3.1"}]}}) == 3.1
+    def test_extension_is_read_from_the_uri_path_only(self):
+        assert requested_media_format({"Media": {"MediaFileUri": "https://h/b/a.wav?sig=x.y"}}) == "wav"
+        assert requested_media_format({"Media": {"MediaFileUri": "s3://b.name/a"}}) is None
+        assert requested_media_format({"Media": {"MediaFileUri": 7}}) is None
 
-    def test_without_timings_is_unknown(self):
-        assert transcript_audio_seconds({"results": {"items": []}}) is None
-        assert transcript_audio_seconds({"jobName": "j"}) is None
+
+class TestS3MediaUrl:
+    def test_s3_uri_maps_to_the_regional_virtual_hosted_endpoint(self):
+        assert (
+            s3_media_url("s3://my-bucket/dir/a b.wav", "us-west-2")
+            == "https://my-bucket.s3.us-west-2.amazonaws.com/dir/a%20b.wav"
+        )
+
+    @pytest.mark.parametrize(
+        "media_uri",
+        [
+            "https://evil.example.com/a.wav",
+            "https://my-bucket.s3.us-west-2.amazonaws.com@evil.example.com/a.wav",
+            "https://amazonaws.com/a.wav",
+        ],
+    )
+    def test_hosts_outside_the_aws_partition_are_never_signed_for(self, media_uri: str):
+        assert s3_media_url(media_uri, "us-west-2") is None
+
+    def test_https_uri_is_used_as_given(self):
+        assert (
+            s3_media_url("https://my-bucket.s3.eu-west-1.amazonaws.com/a.wav", "us-west-2")
+            == "https://my-bucket.s3.eu-west-1.amazonaws.com/a.wav"
+        )
 
 
 class TestPriceTranscriptionJob:
     @pytest.mark.asyncio
-    async def test_polls_until_completed_then_charges_rounded_up_audio_seconds(self):
+    async def test_polls_until_completed_then_charges_the_media_length_rounded_up(self):
         get_job, seen = _sequence(_job("IN_PROGRESS"), _job("IN_PROGRESS"), _job("COMPLETED"))
-        fetched: list[str] = []
+        media_seconds, measured = _media_probe(17.577)
 
-        async def fetch_transcript(uri: str) -> dict[str, object]:
-            fetched.append(uri)
-            return {"results": {"audio_segments": [{"end_time": "17.36"}]}}
-
-        cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, fetch_transcript, sleep=_no_sleep)
+        cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, media_seconds, sleep=_no_sleep)
 
         assert cost == pytest.approx(18 * COST_PER_SECOND)
         assert seen == ["job-1", "job-1", "job-1"]
-        assert fetched == ["https://s3.us-west-2.amazonaws.com/b/t.json"]
+        assert measured == [MEDIA_URI]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_poll_is_retried_instead_of_ending_pricing(self):
+        remaining = [httpx.ConnectError("aws blip"), None]
+
+        async def get_job(job_name: str) -> dict[str, object]:
+            outcome = remaining.pop(0)
+            if outcome is not None:
+                raise outcome
+            return _job("COMPLETED")
+
+        media_seconds, _ = _media_probe(3.0)
+
+        cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, media_seconds, sleep=_no_sleep)
+
+        assert cost == pytest.approx(3 * COST_PER_SECOND)
+        assert remaining == []
 
     @pytest.mark.asyncio
     async def test_failed_job_costs_nothing(self):
-        get_job, _ = _sequence(_job("FAILED", transcript_uri=None))
+        get_job, _ = _sequence(_job("FAILED"))
 
-        async def fetch_transcript(uri: str) -> dict[str, object]:
-            raise AssertionError("failed jobs have no transcript to fetch")
-
-        assert (
-            await price_transcription_job("job-1", COST_PER_SECOND, get_job, fetch_transcript, sleep=_no_sleep) == 0.0
-        )
+        assert await price_transcription_job("job-1", COST_PER_SECOND, get_job, _no_media, sleep=_no_sleep) == 0.0
 
     @pytest.mark.asyncio
     async def test_job_that_never_finishes_is_charged_the_maximum(self):
         get_job, seen = _sequence(_job("IN_PROGRESS"))
 
-        async def fetch_transcript(uri: str) -> dict[str, object]:
-            raise AssertionError("unfinished jobs have no transcript to fetch")
-
         cost = await price_transcription_job(
-            "job-1", COST_PER_SECOND, get_job, fetch_transcript, sleep=_no_sleep, max_attempts=3
+            "job-1", COST_PER_SECOND, get_job, _no_media, sleep=_no_sleep, max_attempts=3
         )
 
         assert cost == pytest.approx(TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS * COST_PER_SECOND)
         assert len(seen) == 3
 
     @pytest.mark.asyncio
-    async def test_unreadable_transcript_is_charged_the_maximum(self):
+    async def test_media_that_cannot_be_read_is_charged_the_maximum(self):
         get_job, _ = _sequence(_job("COMPLETED"))
+        media_seconds, measured = _media_probe(None)
 
-        async def fetch_transcript(uri: str) -> dict[str, object]:
-            return {"results": {}}
-
-        cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, fetch_transcript, sleep=_no_sleep)
+        cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, media_seconds, sleep=_no_sleep)
 
         assert cost == pytest.approx(TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS * COST_PER_SECOND)
+        assert measured == [MEDIA_URI]
 
     @pytest.mark.asyncio
-    async def test_completed_job_without_transcript_uri_is_charged_the_maximum(self):
-        get_job, _ = _sequence(_job("COMPLETED", transcript_uri=None))
+    async def test_media_fetch_is_retried_then_charged_the_maximum(self):
+        get_job, _ = _sequence(_job("COMPLETED"))
+        media_seconds, measured = _media_probe(httpx.ReadTimeout("s3 slow"))
 
-        async def fetch_transcript(uri: str) -> dict[str, object]:
-            raise AssertionError("no URI to fetch")
+        cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, media_seconds, sleep=_no_sleep)
 
-        cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, fetch_transcript, sleep=_no_sleep)
+        assert cost == pytest.approx(TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS * COST_PER_SECOND)
+        assert len(measured) == 3
+
+    @pytest.mark.asyncio
+    async def test_media_fetch_recovers_after_a_transient_failure(self):
+        get_job, _ = _sequence(_job("COMPLETED"))
+        media_seconds, measured = _media_probe(httpx.ReadTimeout("s3 slow"), 60.0)
+
+        cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, media_seconds, sleep=_no_sleep)
+
+        assert cost == pytest.approx(60 * COST_PER_SECOND)
+        assert len(measured) == 2
+
+    @pytest.mark.asyncio
+    async def test_completed_job_without_media_uri_is_charged_the_maximum(self):
+        get_job, _ = _sequence(_job("COMPLETED", media_uri=None))
+
+        cost = await price_transcription_job("job-1", COST_PER_SECOND, get_job, _no_media, sleep=_no_sleep)
 
         assert cost == pytest.approx(TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS * COST_PER_SECOND)
 
