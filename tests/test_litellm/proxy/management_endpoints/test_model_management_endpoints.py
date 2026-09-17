@@ -6064,13 +6064,21 @@ class TestAccessGroupModelSync:
     _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
     _INVALIDATE = "litellm.proxy.management_helpers.access_group_model_sync.invalidate_access_group_caches"
     _EVICT = "litellm.proxy.management_helpers.model_allowlist_rename_sync.evict_and_broadcast"
-    _ALLOWLIST_ROWS = {
-        "LiteLLM_TeamTable": [{"object_id": "team-1", "team_alias": "alias-1"}, {"object_id": "team-2", "team_alias": None}],
-        "LiteLLM_VerificationToken": [{"object_id": "hashed-token-1"}],
-        "LiteLLM_OrganizationTable": [{"object_id": "org-1"}],
-        "LiteLLM_ProjectTable": [{"object_id": "proj-1"}],
-        "LiteLLM_UserTable": [{"object_id": "user-1"}],
-    }
+    _ALLOWLIST_TABLES = (
+        "LiteLLM_TeamTable",
+        "LiteLLM_VerificationToken",
+        "LiteLLM_OrganizationTable",
+        "LiteLLM_ProjectTable",
+        "LiteLLM_UserTable",
+    )
+    _ALLOWLIST_ROWS = [
+        {"kind": "team", "object_id": "team-1", "team_alias": "alias-1"},
+        {"kind": "team", "object_id": "team-2", "team_alias": None},
+        {"kind": "key", "object_id": "hashed-token-1", "team_alias": None},
+        {"kind": "org", "object_id": "org-1", "team_alias": None},
+        {"kind": "project", "object_id": "proj-1", "team_alias": None},
+        {"kind": "user", "object_id": "user-1", "team_alias": None},
+    ]
 
     @staticmethod
     def _admin():
@@ -6092,7 +6100,8 @@ class TestAccessGroupModelSync:
                 return [{"deployment_count": deployment_count}]
             if sql.startswith('UPDATE "LiteLLM_AccessGroupTable"'):
                 return [{"access_group_id": "ag-1"}]
-            return TestAccessGroupModelSync._ALLOWLIST_ROWS[sql.split('"')[1]]
+            assert sql.startswith("WITH ")
+            return TestAccessGroupModelSync._ALLOWLIST_ROWS
 
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
@@ -6113,11 +6122,11 @@ class TestAccessGroupModelSync:
 
     @staticmethod
     def _allowlist_updates(mock_prisma):
-        return {
-            call.args[0].split('"')[1]: call
+        return [
+            call
             for call in mock_prisma.db.query_raw.await_args_list
-            if call.args[0].startswith('UPDATE "') and 'SET "models"' in call.args[0]
-        }
+            if call.args[0].startswith("WITH ") and 'SET "models"' in call.args[0]
+        ]
 
     @contextlib.contextmanager
     def _endpoint_env(self, mock_prisma, router, evict=None):
@@ -6130,7 +6139,9 @@ class TestAccessGroupModelSync:
                 patch(f"{self._PS}.proxy_logging_obj", MagicMock()),
                 patch(f"{self._PS}.user_api_key_cache", MagicMock()),
                 patch(self._EVICT, new=evict or AsyncMock()),
-                patch(f"{self._MOD}.ModelManagementAuthChecks.can_user_make_model_call", new=AsyncMock(return_value=None)),
+                patch(
+                    f"{self._MOD}.ModelManagementAuthChecks.can_user_make_model_call", new=AsyncMock(return_value=None)
+                ),
                 patch(
                     f"{self._MOD}.clear_cache",
                     new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
@@ -6190,7 +6201,9 @@ class TestAccessGroupModelSync:
         router.get_model_ids.return_value = ["m-same"]
 
         with self._endpoint_env(mock_prisma, router) as invalidate:
-            await patch_model(model_id="m-same", patch_data=updateDeployment(blocked=True), user_api_key_dict=self._admin())
+            await patch_model(
+                model_id="m-same", patch_data=updateDeployment(blocked=True), user_api_key_dict=self._admin()
+            )
 
         mock_prisma.db.query_raw.assert_not_awaited()
         invalidate.assert_not_awaited()
@@ -6278,20 +6291,24 @@ class TestAccessGroupModelSync:
                     user_api_key_dict=self._admin(),
                 )
 
-        updates = self._allowlist_updates(mock_prisma)
-        assert set(updates) == set(self._ALLOWLIST_ROWS)
-        for update_call in updates.values():
-            assert 'SET "models" = array_replace(array_remove("models", $2), $1, $2)' in update_call.args[0]
-            assert 'WHERE $1 = ANY("models")' in update_call.args[0]
-            assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
-        evicted = [call.args[0] for call in evict.await_args_list]
-        assert evicted == [
-            ("team_id:team-1", "team_alias:alias-1", "team_id:team-2"),
-            ("hashed-token-1",),
-            ("org_id:org-1", "org_id:org-1:with_budget"),
-            ("project_id:proj-1",),
-            ("user-1",),
-        ]
+        (update_call,) = self._allowlist_updates(mock_prisma)
+        for table in self._ALLOWLIST_TABLES:
+            assert (
+                f'UPDATE "{table}" SET "models" = array_replace(array_remove("models", $2), $1, $2) '
+                'WHERE $1 = ANY("models") RETURNING'
+            ) in update_call.args[0]
+        assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
+        evict.assert_awaited_once()
+        assert evict.await_args.args[0] == (
+            "team_id:team-1",
+            "team_alias:alias-1",
+            "team_id:team-2",
+            "hashed-token-1",
+            "org_id:org-1",
+            "org_id:org-1:with_budget",
+            "project_id:proj-1",
+            "user-1",
+        )
 
     @pytest.mark.asyncio
     async def test_rename_appends_to_allowlists_when_a_sibling_deployment_keeps_the_old_name(self):
@@ -6308,12 +6325,13 @@ class TestAccessGroupModelSync:
                 user_api_key_dict=self._admin(),
             )
 
-        updates = self._allowlist_updates(mock_prisma)
-        assert set(updates) == set(self._ALLOWLIST_ROWS)
-        for update_call in updates.values():
-            assert 'SET "models" = array_append("models", $2)' in update_call.args[0]
-            assert 'WHERE $1 = ANY("models") AND NOT ($2 = ANY("models"))' in update_call.args[0]
-            assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
+        (update_call,) = self._allowlist_updates(mock_prisma)
+        for table in self._ALLOWLIST_TABLES:
+            assert (
+                f'UPDATE "{table}" SET "models" = array_append("models", $2) '
+                'WHERE $1 = ANY("models") AND NOT ($2 = ANY("models")) RETURNING'
+            ) in update_call.args[0]
+        assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
 
     @pytest.mark.asyncio
     async def test_unchanged_name_never_touches_allowlists(self):
@@ -6334,7 +6352,7 @@ class TestAccessGroupModelSync:
                 user_api_key_cache=MagicMock(),
             )
 
-        assert self._allowlist_updates(mock_prisma) == {}
+        assert self._allowlist_updates(mock_prisma) == []
         evict.assert_not_awaited()
 
 
