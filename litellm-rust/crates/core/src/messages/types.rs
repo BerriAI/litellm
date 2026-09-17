@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::transformation::AnthropicMessagesProviderConfig;
+use crate::llms::base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig;
 
 pub struct MessagesRequest<'a> {
     pub model: &'a str,
@@ -18,7 +18,7 @@ pub struct MessagesRequest<'a> {
 pub(super) struct ProviderMessagesRequest {
     pub(super) provider: String,
     pub(super) model: String,
-    pub(super) config: &'static dyn AnthropicMessagesProviderConfig,
+    pub(super) config: &'static dyn BaseAnthropicMessagesConfig,
     pub(super) url: String,
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,
