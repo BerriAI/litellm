@@ -34488,6 +34488,11 @@ export interface components {
              */
             policy_name: string;
             /**
+             * Priority
+             * @description Explicit execution order, lower runs first. Prioritised attachments run before those without one.
+             */
+            priority?: number | null;
+            /**
              * Scope
              * @description Use '*' for global scope (applies to all requests).
              */
@@ -34545,6 +34550,11 @@ export interface components {
              * @description Name of the attached policy.
              */
             policy_name: string;
+            /**
+             * Priority
+             * @description Explicit execution order, lower runs first. Prioritised attachments run before those without one.
+             */
+            priority?: number | null;
             /**
              * Scope
              * @description Scope of the attachment.
