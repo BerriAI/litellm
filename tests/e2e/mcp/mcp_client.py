@@ -218,26 +218,15 @@ class McpClient:
         )
 
     def await_registered(self, server_id: str) -> McpServerRow:
-        """Poll /v1/mcp/server and return the matching row. Fails at poll_timeout.
-
-        The DB row exists the moment registration returns, but a data-plane pod
-        answers the listing from a registry it refreshes on a periodic DB sync, so a
-        pod that joined the load balancer after the write reports the server as
-        absent until its first sync.
-        """
-        deadline = time.monotonic() + self.proxy.poll_timeout
-        while True:
-            registered = self.registered_servers()
-            server = next((row for row in registered if row.server_id == server_id), None)
-            if server is not None:
-                return server
-            if time.monotonic() >= deadline:
-                raise AssertionError(
-                    f"registered server {server_id} still absent from /v1/mcp/server "
-                    f"{self.proxy.poll_timeout}s after registration (the data plane never synced "
-                    f"the row): {frozenset(row.server_id for row in registered)}"
-                )
-            time.sleep(self.proxy.poll_interval)
+        """Wait for every configured replica to list the server and return its row."""
+        registered = self.proxy.read_body_back_everywhere(
+            "/v1/mcp/server",
+            McpServerListResponse,
+            settled=lambda response: any(row.server_id == server_id for row in response.root),
+        )
+        return next(
+            row for response in registered.values() for row in response.root if row.server_id == server_id
+        )
 
     def generate_key(
         self,
