@@ -16513,9 +16513,12 @@ export interface paths {
          * Transcribe Proxy Route
          * @description Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.
          *
-         *     The request body is forwarded as-is to the AWS JSON 1.1 API and signed with SigV4
-         *     using the proxy's AWS credentials. Streaming transcription (`transcribestreaming`)
-         *     uses a separate HTTP/2 event-stream protocol and is not served by this route.
+         *     The request body is forwarded to the AWS JSON 1.1 API and signed with SigV4 using the
+         *     proxy's AWS credentials. Standard jobs are tagged with the calling key's owner so that
+         *     only that owner (or a proxy admin) can read or delete them; account-wide operations
+         *     such as ListTranscriptionJobs are limited to proxy admins. Streaming transcription
+         *     (`transcribestreaming`) uses a separate HTTP/2 event-stream protocol and is not served
+         *     by this route.
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
          */
