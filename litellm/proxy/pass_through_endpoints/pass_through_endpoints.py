@@ -2121,9 +2121,6 @@ def _resolved_vertex_live_setup(
 
 
 def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
-    """
-    The frame as a JSON object when it is one, for cost tracking; audio and non-object frames yield None
-    """
     try:
         decoded: Final = json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -2431,10 +2428,6 @@ async def websocket_passthrough_request(
             json_frame_ordinal: Final = count()
 
             async def relay_upstream_frame(upstream_message: str | bytes) -> None:
-                """
-                Send the frame to the client exactly as received, then keep it for cost tracking when it is a JSON
-                object; the Vertex AI Live setup acknowledgement only names the model, so it is read instead of kept
-                """
                 if isinstance(upstream_message, bytes):
                     await websocket.send_bytes(upstream_message)
                 else:
@@ -2448,7 +2441,6 @@ async def websocket_passthrough_request(
                 websocket_messages.append(message_data)
 
             async def forward_upstream_to_client() -> Close | None:
-                """Relay upstream frames to the client until the upstream closes, returning its close frame"""
                 try:
                     while True:
                         await relay_upstream_frame(await upstream_ws.recv())

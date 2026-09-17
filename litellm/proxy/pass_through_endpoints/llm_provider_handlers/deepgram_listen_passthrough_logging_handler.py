@@ -1,79 +1,20 @@
-"""
-Cost tracking for Deepgram's streaming ``/v1/listen`` WebSocket. Deepgram bills the audio it processed, which it
-reports as ``duration`` on the closing ``Metadata`` frame; a stream that ends without one is billed on the furthest
-``start + duration`` across its ``Results`` frames
-"""
-
-import math
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DEEPGRAM_LISTEN_DEFAULT_MODEL
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.deepgram.common_utils import (
+    deepgram_listen_audio_seconds,
+    deepgram_listen_model,
+    deepgram_listen_transcript,
+)
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.utils import TranscriptionResponse
 
 DEEPGRAM_LISTEN_ROUTE_SUFFIX: Final = "/listen"
-
-
-def _seconds(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return float(value) if math.isfinite(value) and value >= 0 else None
-
-
-def _results_frame_end(frame: Mapping[str, object]) -> float | None:
-    start: Final = _seconds(frame.get("start"))
-    duration: Final = _seconds(frame.get("duration"))
-    return None if start is None or duration is None else start + duration
-
-
-def _final_transcript(frame: Mapping[str, object]) -> str | None:
-    if frame.get("is_final") is not True:
-        return None
-    channel: Final = frame.get("channel")
-    alternatives: Final = channel.get("alternatives") if isinstance(channel, Mapping) else None
-    first: Final = alternatives[0] if isinstance(alternatives, list) and alternatives else None
-    transcript: Final = first.get("transcript") if isinstance(first, Mapping) else None
-    return transcript if isinstance(transcript, str) and transcript else None
-
-
-def deepgram_listen_audio_seconds(websocket_messages: Sequence[Mapping[str, object]]) -> float:
-    metadata_durations: Final = tuple(
-        duration
-        for frame in websocket_messages
-        if frame.get("type") == "Metadata"
-        if (duration := _seconds(frame.get("duration"))) is not None
-    )
-    if metadata_durations:
-        return metadata_durations[-1]
-    return max(
-        (
-            end
-            for frame in websocket_messages
-            if frame.get("type") == "Results"
-            if (end := _results_frame_end(frame)) is not None
-        ),
-        default=0.0,
-    )
-
-
-def deepgram_listen_transcript(websocket_messages: Sequence[Mapping[str, object]]) -> str:
-    return " ".join(
-        transcript
-        for frame in websocket_messages
-        if frame.get("type") == "Results"
-        if (transcript := _final_transcript(frame)) is not None
-    )
-
-
-def deepgram_listen_model(upstream_url: str) -> str:
-    models: Final = parse_qs(urlparse(upstream_url).query).get("model")
-    return models[0] if models else DEEPGRAM_LISTEN_DEFAULT_MODEL
 
 
 def _audio_cost(response: TranscriptionResponse, model: str) -> float | None:

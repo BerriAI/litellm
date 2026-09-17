@@ -2613,10 +2613,6 @@ def _proxy_model_allowlists() -> _OpenAIWebsocketModelAllowlists:
 
 
 def _negotiated_websocket_subprotocol(websocket: WebSocket) -> str | None:
-    """
-    The first subprotocol the client offered, echoed back so browsers that carry the LiteLLM key in
-    ``Sec-WebSocket-Protocol`` complete the handshake
-    """
     requested_subprotocols: Final = tuple(
         protocol.strip()
         for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
@@ -2707,10 +2703,6 @@ async def deepgram_listen_websocket_route(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
     relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
 ) -> None:
-    """
-    Streaming speech to text through Deepgram's ``/v1/listen`` socket. Audio frames and transcript frames are
-    relayed unchanged; the call is billed on the audio duration Deepgram reports when the socket closes
-    """
     deepgram_api_key: Final = passthrough_endpoint_router.get_credentials(
         custom_llm_provider=litellm.LlmProviders.DEEPGRAM.value,
         region_name=None,
