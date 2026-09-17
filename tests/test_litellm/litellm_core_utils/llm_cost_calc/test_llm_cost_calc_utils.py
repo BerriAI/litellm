@@ -3426,7 +3426,7 @@ GEMINI_36_FLASH_SERVICE_TIER_PRICING = [
 GEMINI_35_FLASH_LITE_TIER_RATES_BY_SURFACE = [
     ("gemini", None, 3e-07, 2.5e-06, 3e-08),
     ("gemini", "flex", 1.5e-07, 1.25e-06, 2e-08),
-    ("gemini", "priority", 5.4e-07, 4.5e-06, 5e-08),
+    ("gemini", "priority", 5.4e-07, 4.5e-06, 5.4e-08),
     ("vertex_ai", None, 3e-07, 2.5e-06, 3e-08),
     ("vertex_ai", "flex", 1.5e-07, 1.25e-06, 1.5e-08),
     ("vertex_ai", "priority", 5.4e-07, 4.5e-06, 5.4e-08),
