@@ -1407,7 +1407,10 @@ async def get_default_end_user_budget(
         )
 
         if budget_record is None:
-            verbose_proxy_logger.warning("Default end user budget not found in database: %s", default_budget_id)
+            verbose_proxy_logger.warning(
+                "Default end user budget not found in database: %s",
+                default_budget_id.replace("\r", "").replace("\n", ""),
+            )
             return None
 
         _budget_obj: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
