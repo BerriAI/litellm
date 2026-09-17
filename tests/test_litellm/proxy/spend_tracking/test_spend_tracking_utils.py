@@ -4829,3 +4829,19 @@ def test_spend_log_request_id_is_the_response_id_a_bridged_messages_caller_recei
         )
         == "resp_01Lit6806Bridged"
     )
+
+
+def test_failed_agent_request_keeps_registered_display_name():
+    agent_model: Final = "a2a_agent/Research Agent"
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": agent_model,
+            "call_type": "asend_message",
+            "litellm_params": {"metadata": {"model_group": agent_model, "status": "failure"}},
+        },
+        response_obj=ValueError("Agent action denied"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model"] == agent_model
+    assert payload["status"] == "failure"

@@ -742,6 +742,7 @@ async def invoke_agent_a2a(
         if "metadata" not in body:
             body["metadata"] = {}
         body["metadata"]["agent_id"] = agent.agent_id
+        body["metadata"]["model_group"] = f"a2a_agent/{agent_name}"
         body["agent_id"] = agent.agent_id
 
         body.update(

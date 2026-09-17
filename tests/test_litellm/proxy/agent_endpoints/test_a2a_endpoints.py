@@ -192,6 +192,7 @@ async def test_invoke_agent_a2a_adds_litellm_data():
 
         # Verify model and custom_llm_provider were set
         assert mock_send_message.await_args.kwargs["model"] == "a2a_agent/Test Agent"
+        assert captured_data["metadata"]["model_group"] == "a2a_agent/Test Agent"
         assert captured_data.get("model") == "a2a_agent/Test Agent"
         assert captured_data.get("custom_llm_provider") == "a2a_agent"
 
