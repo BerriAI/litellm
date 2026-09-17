@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import logging
 import re
 
 
@@ -15,6 +16,7 @@ import pytest
 from redis.exceptions import DataError
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
@@ -1177,7 +1179,9 @@ async def test_batch_database_updates_without_project_id_touches_no_project_row(
 
 
 @pytest.mark.asyncio
-async def test_failed_project_enqueue_does_not_drop_the_rest_of_the_batch():
+async def test_failed_project_enqueue_is_reported_and_does_not_drop_the_rest_of_the_batch(
+    caplog: pytest.LogCaptureFixture,
+):
     class _ProjectRejectingQueue(SpendUpdateQueue):
         async def add_update(self, update: SpendUpdateQueueItem):
             if update.get("entity_type") is Litellm_EntityType.PROJECT:
@@ -1187,18 +1191,21 @@ async def test_failed_project_enqueue_does_not_drop_the_rest_of_the_batch():
     db_writer: Final = DBSpendUpdateWriter()
     db_writer.spend_update_queue = _ProjectRejectingQueue()
 
-    await db_writer._batch_database_updates(
-        response_cost=0.25,
-        user_id="u1",
-        hashed_token="t1",
-        team_id="team-1",
-        org_id="org-1",
-        end_user_id=None,
-        prisma_client=MagicMock(),
-        litellm_proxy_budget_name=None,
-        payload={"request_id": "req-1", "model": "gpt-4o-mini", "spend": 0.25, "request_tags": ["tag-1"]},
-        project_id="proj-1",
-    )
+    with caplog.at_level(logging.ERROR, logger=verbose_proxy_logger.name):
+        await db_writer._batch_database_updates(
+            response_cost=0.25,
+            user_id="u1",
+            hashed_token="t1",
+            team_id="team-1",
+            org_id="org-1",
+            end_user_id=None,
+            prisma_client=MagicMock(),
+            litellm_proxy_budget_name=None,
+            payload={"request_id": "req-1", "model": "gpt-4o-mini", "spend": 0.25, "request_tags": ["tag-1"]},
+            project_id="proj-1",
+        )
+
+    assert any("proj-1" in record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR)
 
     transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
     assert transactions["project_list_transactions"] == {}

@@ -988,13 +988,23 @@ class DBSpendUpdateWriter:
     ) -> None:
         if project_id is None or prisma_client is None:
             return
-        await self.spend_update_queue.add_update(
-            update=SpendUpdateQueueItem(
-                entity_type=Litellm_EntityType.PROJECT,
-                entity_id=project_id,
-                response_cost=response_cost,
+        try:
+            await self.spend_update_queue.add_update(
+                update=SpendUpdateQueueItem(
+                    entity_type=Litellm_EntityType.PROJECT,
+                    entity_id=project_id,
+                    response_cost=response_cost,
+                )
             )
-        )
+        except Exception as e:
+            spend_log_error(
+                "Spend tracking - failed to enqueue project spend update. project_id=%s, response_cost=%s - %s",
+                project_id,
+                response_cost,
+                str(e),
+                exc=e,
+            )
+            raise e
 
     async def _update_agent_db(
         self,
