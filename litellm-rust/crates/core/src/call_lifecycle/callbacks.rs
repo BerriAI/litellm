@@ -90,6 +90,18 @@ pub enum CallbackFamily {
 }
 
 impl CallbackFamily {
+    pub const fn delivery(self) -> Delivery {
+        match self {
+            Self::RequestPreCall | Self::RequestPostCall | Self::SyncFailure => Delivery::Inline,
+            Self::DeploymentPreCall
+            | Self::DeploymentPostCall
+            | Self::DeploymentFailure
+            | Self::AsyncFailure => Delivery::Await,
+            Self::SyncSuccess => Delivery::Worker,
+            Self::AsyncSuccess => Delivery::Background,
+        }
+    }
+
     pub const fn dispatch_method(self) -> CallbackMethod {
         match self {
             Self::RequestPreCall => CallbackMethod::LogPreApiCall,
@@ -166,20 +178,10 @@ pub enum ReleaseGate {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Dispatch {
+pub struct SuccessDispatch {
     pub family: CallbackFamily,
     pub delivery: Delivery,
     pub gate: ReleaseGate,
-}
-
-impl Dispatch {
-    pub const fn immediate(family: CallbackFamily, delivery: Delivery) -> Self {
-        Self {
-            family,
-            delivery,
-            gate: ReleaseGate::Immediate,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,15 +193,15 @@ pub struct SuccessFacts {
     pub sync_target_kinds: Vec<CallbackKind>,
 }
 
-pub fn plan_success(facts: &SuccessFacts) -> Vec<Dispatch> {
+pub fn plan_success(facts: &SuccessFacts) -> Vec<SuccessDispatch> {
     if !facts.asynchronous {
-        return vec![Dispatch {
+        return vec![SuccessDispatch {
             family: CallbackFamily::SyncSuccess,
             delivery: Delivery::Worker,
             gate: ReleaseGate::Immediate,
         }];
     }
-    let background = (!facts.internal && !facts.fallbacks).then_some(Dispatch {
+    let background = (!facts.internal && !facts.fallbacks).then_some(SuccessDispatch {
         family: CallbackFamily::AsyncSuccess,
         delivery: Delivery::Background,
         gate: if facts.deferred {
@@ -212,7 +214,7 @@ pub fn plan_success(facts: &SuccessFacts) -> Vec<Dispatch> {
         .sync_target_kinds
         .iter()
         .any(|kind| kind.runs_sync_handler_for_async_call())
-        .then_some(Dispatch {
+        .then_some(SuccessDispatch {
             family: CallbackFamily::SyncSuccess,
             delivery: Delivery::Worker,
             gate: ReleaseGate::Immediate,
@@ -220,42 +222,18 @@ pub fn plan_success(facts: &SuccessFacts) -> Vec<Dispatch> {
     background.into_iter().chain(worker).collect()
 }
 
-pub fn plan_failure(phase: HostPhase, asynchronous: bool, internal: bool) -> Option<Dispatch> {
+pub fn plan_failure(
+    phase: HostPhase,
+    asynchronous: bool,
+    internal: bool,
+) -> Option<CallbackFamily> {
     if asynchronous && internal {
         return None;
     }
     match phase {
-        HostPhase::Failure => Some(Dispatch::immediate(
-            CallbackFamily::SyncFailure,
-            Delivery::Inline,
-        )),
-        HostPhase::AsyncFailure => Some(Dispatch::immediate(
-            CallbackFamily::AsyncFailure,
-            Delivery::Await,
-        )),
+        HostPhase::Failure => Some(CallbackFamily::SyncFailure),
+        HostPhase::AsyncFailure => Some(CallbackFamily::AsyncFailure),
         _ => None,
-    }
-}
-
-pub fn plan_request(family: CallbackFamily) -> Dispatch {
-    let delivery = match family {
-        CallbackFamily::RequestPreCall | CallbackFamily::RequestPostCall => Delivery::Inline,
-        _ => Delivery::Await,
-    };
-    Dispatch::immediate(family, delivery)
-}
-
-pub fn object_target_eligible(
-    sync_request: bool,
-    method: CallbackMethod,
-    kind: CallbackKind,
-) -> bool {
-    match (method, kind) {
-        (
-            CallbackMethod::LogSuccessEvent | CallbackMethod::LogFailureEvent,
-            CallbackKind::CustomLogger | CallbackKind::Callable { .. },
-        ) => sync_request,
-        _ => true,
     }
 }
 
@@ -286,24 +264,21 @@ enum Position {
     Complete { aborted: bool },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CursorFacts {
-    pub already_logged: bool,
-    pub stream: bool,
-    pub sync_request: bool,
-}
-
 pub struct DispatchCursor {
-    dispatch: Dispatch,
+    family: CallbackFamily,
     targets: Vec<CallbackId>,
-    facts: CursorFacts,
+    stream: bool,
     position: Position,
 }
 
 impl DispatchCursor {
-    pub fn start(dispatch: Dispatch, targets: Vec<CallbackId>, facts: CursorFacts) -> Self {
-        let family = dispatch.family;
-        let position = if family.marker().is_some() && facts.already_logged {
+    pub fn start(
+        family: CallbackFamily,
+        targets: Vec<CallbackId>,
+        already_logged: bool,
+        stream: bool,
+    ) -> Self {
+        let position = if family.marker().is_some() && already_logged {
             Position::Complete { aborted: false }
         } else if family.prepares_logging() {
             Position::Prepare
@@ -311,23 +286,15 @@ impl DispatchCursor {
             Position::Dispatch(0)
         };
         Self {
-            dispatch,
+            family,
             targets,
-            facts,
+            stream,
             position,
         }
     }
 
-    pub fn object_target_eligible(&self, method: CallbackMethod, kind: CallbackKind) -> bool {
-        object_target_eligible(self.facts.sync_request, method, kind)
-    }
-
     pub const fn family(&self) -> CallbackFamily {
-        self.dispatch.family
-    }
-
-    pub const fn delivery(&self) -> Delivery {
-        self.dispatch.delivery
+        self.family
     }
 
     pub fn targets(&self) -> &[CallbackId] {
@@ -336,7 +303,7 @@ impl DispatchCursor {
 
     pub fn accept(&mut self, outcome: InvocationOutcome) {
         if outcome == InvocationOutcome::Failed
-            && self.dispatch.family.error_policy() == TargetErrorPolicy::Propagate
+            && self.family.error_policy() == TargetErrorPolicy::Propagate
         {
             self.position = Position::Complete { aborted: true };
         }
@@ -350,7 +317,7 @@ impl DispatchCursor {
                     return DispatchStep::PrepareLogging;
                 }
                 Position::Hook(index) => {
-                    let Some(method) = self.dispatch.family.hook_method() else {
+                    let Some(method) = self.family.hook_method() else {
                         self.position = Position::Mark;
                         continue;
                     };
@@ -365,10 +332,8 @@ impl DispatchCursor {
                 }
                 Position::Mark => {
                     self.position = Position::Dispatch(0);
-                    match self.dispatch.family.marker() {
-                        Some(marker) if !self.facts.stream => {
-                            return DispatchStep::MarkLogged(marker);
-                        }
+                    match self.family.marker() {
+                        Some(marker) if !self.stream => return DispatchStep::MarkLogged(marker),
                         _ => continue,
                     }
                 }
@@ -378,7 +343,7 @@ impl DispatchCursor {
                         continue;
                     };
                     self.position = Position::Dispatch(index + 1);
-                    let method = self.dispatch.family.dispatch_method();
+                    let method = self.family.dispatch_method();
                     if facts.eligible(target, method) {
                         return DispatchStep::Invoke(self.invocation(target, method));
                     }
@@ -389,7 +354,7 @@ impl DispatchCursor {
     }
 
     fn after_prepare(&self) -> Position {
-        if self.dispatch.family.hook_method().is_some() {
+        if self.family.hook_method().is_some() {
             Position::Hook(0)
         } else {
             Position::Mark
@@ -400,7 +365,7 @@ impl DispatchCursor {
         CallbackInvocation {
             target,
             method,
-            delivery: self.dispatch.delivery,
+            delivery: self.family.delivery(),
         }
     }
 }
@@ -442,34 +407,6 @@ mod tests {
         values.iter().copied().map(CallbackId).collect()
     }
 
-    fn delivery_for(family: CallbackFamily) -> Delivery {
-        match family {
-            CallbackFamily::SyncSuccess => Delivery::Worker,
-            CallbackFamily::AsyncSuccess => Delivery::Background,
-            CallbackFamily::SyncFailure
-            | CallbackFamily::RequestPreCall
-            | CallbackFamily::RequestPostCall => Delivery::Inline,
-            _ => Delivery::Await,
-        }
-    }
-
-    fn start(
-        family: CallbackFamily,
-        targets: Vec<CallbackId>,
-        already_logged: bool,
-        stream: bool,
-    ) -> DispatchCursor {
-        DispatchCursor::start(
-            Dispatch::immediate(family, delivery_for(family)),
-            targets,
-            CursorFacts {
-                already_logged,
-                stream,
-                sync_request: true,
-            },
-        )
-    }
-
     #[test]
     fn terminal_families_order_dynamic_before_global_and_keep_first_duplicate() {
         let combined = CallbackFamily::SyncSuccess.targets(&ids(&[3, 1, 4]), Some(&ids(&[1, 2])));
@@ -490,7 +427,8 @@ mod tests {
 
     #[test]
     fn success_runs_every_hook_before_any_dispatch_and_marks_between_passes() {
-        let mut cursor = start(CallbackFamily::SyncSuccess, ids(&[1, 2]), false, false);
+        let mut cursor =
+            DispatchCursor::start(CallbackFamily::SyncSuccess, ids(&[1, 2]), false, false);
         let steps = drain(&mut cursor, &mut AllEligible);
         let invocation = |target, method| {
             DispatchStep::Invoke(CallbackInvocation {
@@ -515,7 +453,8 @@ mod tests {
 
     #[test]
     fn async_success_uses_async_leaf_methods_and_background_delivery() {
-        let mut cursor = start(CallbackFamily::AsyncSuccess, ids(&[7]), false, false);
+        let mut cursor =
+            DispatchCursor::start(CallbackFamily::AsyncSuccess, ids(&[7]), false, false);
         let steps = drain(&mut cursor, &mut AllEligible);
         let methods: Vec<_> = steps
             .iter()
@@ -550,7 +489,7 @@ mod tests {
                 CallbackMethod::AsyncLogFailureEvent,
             ),
         ] {
-            let mut cursor = start(family, ids(&[1, 2]), false, false);
+            let mut cursor = DispatchCursor::start(family, ids(&[1, 2]), false, false);
             let steps = drain(&mut cursor, &mut AllEligible);
             assert_eq!(steps[0], DispatchStep::PrepareLogging);
             assert!(matches!(steps[1], DispatchStep::MarkLogged(_)));
@@ -571,7 +510,8 @@ mod tests {
                 ]
             );
         }
-        let mut cursor = start(CallbackFamily::RequestPreCall, ids(&[1]), false, false);
+        let mut cursor =
+            DispatchCursor::start(CallbackFamily::RequestPreCall, ids(&[1]), false, false);
         let steps = drain(&mut cursor, &mut AllEligible);
         assert_eq!(
             steps,
@@ -588,12 +528,14 @@ mod tests {
 
     #[test]
     fn already_logged_marker_skips_the_whole_terminal_family_but_not_request_families() {
-        let mut cursor = start(CallbackFamily::AsyncSuccess, ids(&[1]), true, false);
+        let mut cursor =
+            DispatchCursor::start(CallbackFamily::AsyncSuccess, ids(&[1]), true, false);
         assert_eq!(
             cursor.next(&mut AllEligible),
             DispatchStep::Complete { aborted: false }
         );
-        let mut cursor = start(CallbackFamily::RequestPostCall, ids(&[1]), true, false);
+        let mut cursor =
+            DispatchCursor::start(CallbackFamily::RequestPostCall, ids(&[1]), true, false);
         assert!(matches!(
             cursor.next(&mut AllEligible),
             DispatchStep::Invoke(_)
@@ -602,7 +544,7 @@ mod tests {
 
     #[test]
     fn streaming_skips_the_marker_write_but_still_dispatches() {
-        let mut cursor = start(CallbackFamily::SyncSuccess, ids(&[1]), false, true);
+        let mut cursor = DispatchCursor::start(CallbackFamily::SyncSuccess, ids(&[1]), false, true);
         let steps = drain(&mut cursor, &mut AllEligible);
         assert!(
             !steps
@@ -620,7 +562,8 @@ mod tests {
 
     #[test]
     fn ineligible_targets_are_skipped_per_method_without_affecting_others() {
-        let mut cursor = start(CallbackFamily::SyncSuccess, ids(&[1, 2]), false, false);
+        let mut cursor =
+            DispatchCursor::start(CallbackFamily::SyncSuccess, ids(&[1, 2]), false, false);
         let mut facts = Gate(|target, method| {
             !(target == CallbackId(1) && method == CallbackMethod::LoggingHook)
                 && !(target == CallbackId(2) && method == CallbackMethod::LogSuccessEvent)
@@ -643,7 +586,8 @@ mod tests {
 
     #[test]
     fn contained_failures_continue_and_propagating_failures_abort() {
-        let mut cursor = start(CallbackFamily::SyncFailure, ids(&[1, 2]), false, false);
+        let mut cursor =
+            DispatchCursor::start(CallbackFamily::SyncFailure, ids(&[1, 2]), false, false);
         assert_eq!(cursor.next(&mut AllEligible), DispatchStep::PrepareLogging);
         assert!(matches!(
             cursor.next(&mut AllEligible),
@@ -662,7 +606,7 @@ mod tests {
             })
         ));
 
-        let mut cursor = start(
+        let mut cursor = DispatchCursor::start(
             CallbackFamily::DeploymentPreCall,
             ids(&[1, 2]),
             false,
@@ -690,7 +634,7 @@ mod tests {
         });
         assert_eq!(
             plan,
-            [Dispatch {
+            [SuccessDispatch {
                 family: CallbackFamily::SyncSuccess,
                 delivery: Delivery::Worker,
                 gate: ReleaseGate::Immediate,
@@ -712,7 +656,7 @@ mod tests {
         };
         assert_eq!(
             plan_success(&base),
-            [Dispatch {
+            [SuccessDispatch {
                 family: CallbackFamily::AsyncSuccess,
                 delivery: Delivery::Background,
                 gate: ReleaseGate::Immediate,
@@ -729,12 +673,12 @@ mod tests {
         assert_eq!(
             plan_success(&with_external),
             [
-                Dispatch {
+                SuccessDispatch {
                     family: CallbackFamily::AsyncSuccess,
                     delivery: Delivery::Background,
                     gate: ReleaseGate::Deferred,
                 },
-                Dispatch {
+                SuccessDispatch {
                     family: CallbackFamily::SyncSuccess,
                     delivery: Delivery::Worker,
                     gate: ReleaseGate::Immediate,
@@ -748,7 +692,7 @@ mod tests {
         };
         assert_eq!(
             plan_success(&internal_or_fallback),
-            [Dispatch {
+            [SuccessDispatch {
                 family: CallbackFamily::SyncSuccess,
                 delivery: Delivery::Worker,
                 gate: ReleaseGate::Immediate,
@@ -775,83 +719,29 @@ mod tests {
     fn failure_families_follow_the_phase_and_skip_internal_async_calls() {
         assert_eq!(
             plan_failure(HostPhase::Failure, false, true),
-            Some(Dispatch::immediate(
-                CallbackFamily::SyncFailure,
-                Delivery::Inline
-            ))
+            Some(CallbackFamily::SyncFailure)
         );
         assert_eq!(
             plan_failure(HostPhase::AsyncFailure, true, false),
-            Some(Dispatch::immediate(
-                CallbackFamily::AsyncFailure,
-                Delivery::Await
-            ))
+            Some(CallbackFamily::AsyncFailure)
         );
         assert_eq!(plan_failure(HostPhase::Failure, true, true), None);
         assert_eq!(plan_failure(HostPhase::Success, false, false), None);
     }
 
     #[test]
-    fn delivery_is_selected_by_the_plan_and_carried_on_every_invocation() {
-        let mut cursor = DispatchCursor::start(
-            Dispatch::immediate(CallbackFamily::SyncFailure, Delivery::Worker),
-            ids(&[1]),
-            CursorFacts {
-                already_logged: false,
-                stream: false,
-                sync_request: true,
-            },
-        );
-        let deliveries: Vec<_> = drain(&mut cursor, &mut AllEligible)
-            .into_iter()
-            .filter_map(|step| match step {
-                DispatchStep::Invoke(invocation) => Some(invocation.delivery),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(deliveries, [Delivery::Worker]);
+    fn delivery_is_a_property_of_the_family_not_of_the_callable() {
+        assert_eq!(CallbackFamily::RequestPreCall.delivery(), Delivery::Inline);
         assert_eq!(
-            plan_request(CallbackFamily::RequestPreCall).delivery,
-            Delivery::Inline
-        );
-        assert_eq!(
-            plan_request(CallbackFamily::DeploymentPreCall).delivery,
+            CallbackFamily::DeploymentPreCall.delivery(),
             Delivery::Await
         );
-    }
-
-    #[test]
-    fn sync_leaf_methods_skip_object_targets_on_async_requests() {
-        let asynchronous = DispatchCursor::start(
-            Dispatch::immediate(CallbackFamily::SyncSuccess, Delivery::Worker),
-            ids(&[1]),
-            CursorFacts {
-                already_logged: false,
-                stream: false,
-                sync_request: false,
-            },
+        assert_eq!(CallbackFamily::SyncSuccess.delivery(), Delivery::Worker);
+        assert_eq!(
+            CallbackFamily::AsyncSuccess.delivery(),
+            Delivery::Background
         );
-        for kind in [
-            CallbackKind::CustomLogger,
-            CallbackKind::Callable { internal: false },
-        ] {
-            assert!(!asynchronous.object_target_eligible(CallbackMethod::LogSuccessEvent, kind));
-            assert!(!asynchronous.object_target_eligible(CallbackMethod::LogFailureEvent, kind));
-            assert!(asynchronous.object_target_eligible(CallbackMethod::LoggingHook, kind));
-            assert!(
-                asynchronous.object_target_eligible(CallbackMethod::AsyncLogSuccessEvent, kind)
-            );
-        }
-        assert!(asynchronous.object_target_eligible(
-            CallbackMethod::LogSuccessEvent,
-            CallbackKind::Named { known: false }
-        ));
-        let synchronous = start(CallbackFamily::SyncSuccess, ids(&[1]), false, false);
-        assert!(
-            synchronous.object_target_eligible(
-                CallbackMethod::LogSuccessEvent,
-                CallbackKind::CustomLogger
-            )
-        );
+        assert_eq!(CallbackFamily::SyncFailure.delivery(), Delivery::Inline);
+        assert_eq!(CallbackFamily::AsyncFailure.delivery(), Delivery::Await);
     }
 }

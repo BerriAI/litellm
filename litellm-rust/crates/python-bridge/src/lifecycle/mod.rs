@@ -13,7 +13,7 @@ use litellm_core::call_lifecycle::host::{
     HostCall as NativeCall, HostCallStep as NativeCallStep, HostFailure, HostPhase, HostStep,
 };
 use litellm_core::call_lifecycle::{
-    CallbackFamily, Delivery, Dispatch, ReleaseGate, SuccessFacts, plan_failure, plan_success,
+    CallbackFamily, Delivery, ReleaseGate, SuccessFacts, plan_failure, plan_success,
 };
 
 mod arguments;
@@ -26,6 +26,7 @@ mod setup;
 
 use crate::execution::{poll_async_value, run_async_value, run_sync_value};
 pub(crate) use arguments::{BoundArguments, Signature};
+use bindings::DeploymentHooks;
 pub(crate) use bindings::PythonLogger;
 use handle::{Execution, ExecutionBody, ExecutionStep};
 
@@ -323,34 +324,30 @@ impl PythonCallState {
         match phase {
             HostPhase::Setup => self.setup(py)?,
             HostPhase::DeploymentPreCall => {
-                let copied = self.kwargs.bind(py).copy()?.into_any().unbind();
-                return Ok(HostStep::Suspend(self.deployment(
+                return Ok(HostStep::Suspend(DeploymentHooks::before_call(
                     py,
-                    CallbackFamily::DeploymentPreCall,
-                    copied,
+                    &self.kwargs,
+                    self.call_type,
                 )?));
             }
             HostPhase::Prepare => self.prepare(py)?,
             HostPhase::DeploymentPostCall => {
-                let response = self
-                    .response
-                    .as_ref()
-                    .map(|value| value.clone_ref(py))
-                    .unwrap_or_else(|| py.None());
-                return Ok(HostStep::Suspend(self.deployment(
+                return Ok(HostStep::Suspend(DeploymentHooks::after_success(
                     py,
-                    CallbackFamily::DeploymentPostCall,
-                    response,
+                    &self.kwargs,
+                    &self.response,
+                    self.call_type,
                 )?));
             }
             HostPhase::Finalize => self.finalize(py)?,
             HostPhase::Success => self.dispatch_success(py)?,
             HostPhase::DeploymentFailure => {
-                if self.error.is_some() {
-                    return Ok(HostStep::Suspend(self.deployment(
+                if let Some(error) = &self.error {
+                    return Ok(HostStep::Suspend(DeploymentHooks::after_failure(
                         py,
-                        CallbackFamily::DeploymentFailure,
-                        py.None(),
+                        &self.kwargs,
+                        error,
+                        self.call_type,
                     )?));
                 }
             }
@@ -367,24 +364,6 @@ impl PythonCallState {
             | HostPhase::Complete => return Err(missing_state()),
         }
         Ok(HostStep::Ready(py.None()))
-    }
-
-    fn deployment(
-        &self,
-        py: Python<'_>,
-        family: CallbackFamily,
-        current: Py<PyAny>,
-    ) -> PyResult<Py<PyAny>> {
-        let body = dispatch::DeploymentBody::start(
-            py,
-            self.logger()?,
-            family,
-            self.call_type,
-            &self.kwargs,
-            current,
-            self.error.as_ref(),
-        )?;
-        dispatch::deployment_coroutine(py, body)
     }
 
     fn accept(&mut self, py: Python<'_>, phase: HostPhase, value: Py<PyAny>) -> PyResult<()> {
@@ -479,19 +458,14 @@ impl PythonCallState {
         }
     }
 
-    fn job(&self, py: Python<'_>, selected: Dispatch) -> PyResult<dispatch::Job> {
+    fn job(&self, py: Python<'_>, family: CallbackFamily) -> PyResult<dispatch::Job> {
         let logger = self.logger()?;
-        let (targets, ids) = dispatch::family_targets(py, logger, selected.family)?;
-        let sync_request = dispatch::leaves(py)?
-            .getattr("is_sync_request")?
-            .call1((logger.object(py),))?
-            .extract()?;
+        let (targets, ids) = dispatch::family_targets(py, logger, family)?;
         Ok(dispatch::Job {
             logger: logger.clone_ref(py),
             targets,
             ids,
-            dispatch: selected,
-            sync_request,
+            family,
             response: self.response.as_ref().map(|value| value.clone_ref(py)),
             error: self.error.as_ref().map(|value| value.clone_ref(py)),
             start: self.start.clone_ref(py),
@@ -523,7 +497,7 @@ impl PythonCallState {
             sync_target_kinds: sync_targets.kinds(&sync_ids),
         };
         for selected in plan_success(&facts) {
-            let runner = dispatch::Runner::start(py, self.job(py, selected)?)?;
+            let runner = dispatch::Runner::start(py, self.job(py, selected.family)?)?;
             match (selected.delivery, selected.gate) {
                 (Delivery::Worker, _) => {
                     let job = Py::new(py, dispatch::WorkerJob::new(runner))?;
@@ -564,14 +538,14 @@ impl PythonCallState {
         } else {
             HostPhase::Failure
         };
-        let Some(selected) = plan_failure(phase, self.asynchronous, self.internal) else {
+        let Some(family) = plan_failure(phase, self.asynchronous, self.internal) else {
             return Ok(None);
         };
         if self.supplied {
-            return compat::dispatch_failure(py, self, selected.family);
+            return compat::dispatch_failure(py, self, family);
         }
-        let mut runner = dispatch::Runner::start(py, self.job(py, selected)?)?;
-        match selected.delivery {
+        let mut runner = dispatch::Runner::start(py, self.job(py, family)?)?;
+        match family.delivery() {
             Delivery::Inline => match runner.resume(py, None)? {
                 dispatch::Step::Done => Ok(None),
                 dispatch::Step::Await(_) => Err(missing_state()),
