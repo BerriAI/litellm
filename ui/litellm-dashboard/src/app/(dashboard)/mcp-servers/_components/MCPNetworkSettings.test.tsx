@@ -217,4 +217,35 @@ describe("MCPNetworkSettings", () => {
     await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith(rangeFailure));
     expect(toast.success).not.toHaveBeenCalled();
   });
+
+  it("writes the private ranges and the allowed clients one after the other, never concurrently", async () => {
+    vi.mocked(fetchMCPClientIp).mockResolvedValue("203.0.113.45");
+    let finishRangeWrite: (() => void) | undefined;
+    vi.mocked(updateConfigFieldSetting).mockImplementation(
+      (_token, fieldName) =>
+        new Promise<void>((resolve) => {
+          if (fieldName === "mcp_internal_ip_ranges") {
+            finishRangeWrite = resolve;
+          } else {
+            resolve();
+          }
+        }),
+    );
+
+    renderSettings();
+    await userEvent.click(await screen.findByText("203.0.113.0/24"));
+    await userEvent.type(screen.getByRole("textbox", { name: "Allowed client names" }), "codex-mcp-client{Enter}");
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() =>
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges", ["203.0.113.0/24"]),
+    );
+    expect(updateConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_allowed_clients", expect.anything());
+
+    finishRangeWrite?.();
+    await waitFor(() =>
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", ["codex-mcp-client"]),
+    );
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("MCP network settings saved"));
+  });
 });

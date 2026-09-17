@@ -3833,7 +3833,6 @@ if MCP_AVAILABLE:
         body: bytes,
         client_ip: str | None,
     ) -> bool:
-        """Send a 403 and return True when the initialize body names a client the gateway does not admit."""
         rejection: Final = check_mcp_client_allowed(body, _load_allowed_mcp_clients())
         if rejection is None:
             return False
