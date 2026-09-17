@@ -950,6 +950,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
+    "https://api.y-api.bestvirtualgoods.com/v1",
 ]
 
 
@@ -1023,6 +1024,7 @@ openai_compatible_providers: Final[list] = [
     "cognition",
     "scx-ai",
     "sail",
+    "y-api",  # Y-API - JSON-configured provider
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -1051,6 +1053,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "lambda_ai",
     "hyperbolic",
     "wandb",
+    "y-api",
 ]
 _openai_like_providers: Final[list] = [
     "predibase",

@@ -206,5 +206,18 @@
     "api_key_env": "SAIL_API_KEY",
     "api_base_env": "SAIL_API_BASE",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
+  "y-api": {
+    "base_url": "https://api.y-api.bestvirtualgoods.com/v1",
+    "api_key_env": "YAPI_API_KEY",
+    "api_base_env": "YAPI_API_BASE",
+    "param_mappings": {
+      "max_tokens": "max_completion_tokens"
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses",
+      "/v1/messages"
+    ]
   }
 }
