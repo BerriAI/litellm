@@ -107,7 +107,7 @@ def test_default_prices_survive_nullable_sibling_and_reload(gateway: Gateway) ->
 def test_loaded_router_preserves_cached_defaults_during_real_requests(gateway: Gateway, tmp_path: Path) -> None:
     from litellm import Router
 
-    aliases: Final = (f"pricing-{uuid.uuid4().hex}", f"pricing-{uuid.uuid4().hex}")
+    aliases: Final = tuple(f"pricing-{uuid.uuid4().hex}" for _ in range(3))
     path: Final = tmp_path / "models.yaml"
     path.write_text(
         yaml.safe_dump(
@@ -123,7 +123,13 @@ def test_loaded_router_preserves_cached_defaults_during_real_requests(gateway: G
                         "model_info": {"id": alias, **pricing},
                     }
                     for alias, pricing in zip(
-                        aliases, ({}, {"input_cost_per_token": None, "output_cost_per_token": None}), strict=True
+                        aliases,
+                        (
+                            {},
+                            {"input_cost_per_token": None, "output_cost_per_token": None},
+                            {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+                        ),
+                        strict=True,
                     )
                 ]
             }
@@ -139,10 +145,12 @@ def test_loaded_router_preserves_cached_defaults_during_real_requests(gateway: G
                 )
                 assert result.usage.prompt_tokens == 20
                 assert result.usage.completion_tokens == 20
+                expected_cost: Final = 0.0 if alias == aliases[2] else 20 * 0.00000015 + 20 * 0.0000006
+                assert result._hidden_params["response_cost"] == pytest.approx(expected_cost, rel=1e-6)
                 deployment: Final = router.get_deployment(model_id=alias)
                 assert deployment is not None
                 info: Final = router.get_router_model_info(deployment=deployment, received_model_name=alias)
-                assert info["input_cost_per_token"] == 0.00000015
-                assert info["output_cost_per_token"] == 0.0000006
+                assert info["input_cost_per_token"] == (0.0 if alias == aliases[2] else 0.00000015)
+                assert info["output_cost_per_token"] == (0.0 if alias == aliases[2] else 0.0000006)
         finally:
             router.reset()

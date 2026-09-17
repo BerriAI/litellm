@@ -42,6 +42,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
+    unappliable_request_rewrite,
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -196,6 +197,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             else:
                 # Step 3: Map guardrail responses back to original message structure
                 if guardrailed_texts and texts_to_check:
+                    if len(guardrailed_texts) != len(text_task_mappings):
+                        raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
                     await self._apply_guardrail_responses_to_input_texts(
                         messages=messages,
                         responses=guardrailed_texts,
@@ -210,12 +213,45 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         task_mappings=tool_call_task_mappings,
                     )
 
+        elif (
+            not images_to_check
+            and not guardrail_to_apply.records_own_guardrail_information
+            and (not_run_reason := self._not_run_reason(messages)) is not None
+        ):
+            guardrail_to_apply.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=not_run_reason,
+                request_data=data,
+                guardrail_status="not_run",
+            )
+
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processed input messages: %s",
             data.get("messages"),
         )
 
         return data
+
+    def _not_run_reason(
+        self,
+        messages: Sequence[dict[str, Any]],  # mutable-ok: raw request messages consumed by _extract_inputs
+    ) -> str | None:
+        """Why nothing was scanned, or None when the only unscoped content is images, which this handler never scans."""
+        texts: Final[list[str]] = []  # mutable-ok: filled by _extract_inputs
+        images: Final[list[str]] = []  # mutable-ok: filled by _extract_inputs
+        tool_calls: Final[list[ChatCompletionToolParam]] = []  # mutable-ok: filled by _extract_inputs
+        for msg_idx, message in enumerate(messages):
+            self._extract_inputs(
+                message=message,
+                msg_idx=msg_idx,
+                texts_to_check=texts,
+                images_to_check=images,
+                tool_calls_to_check=tool_calls,
+                text_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
+                tool_call_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
+            )
+        if texts or tool_calls:
+            return "no scannable content after message scoping"
+        return None if images else "no scannable content"
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name)."""
@@ -756,10 +792,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, ModelResponseStream))
         stream_ended: Final = self._first_choice_has_finished(responses_so_far)
+        tool_call_fingerprints: Final = self._streamed_tool_call_fingerprints(responses_so_far)
         return StreamingScanKey(
             texts=tuple(self._combine_streaming_texts(chunks).values()),
-            tool_calls=self._streamed_tool_call_fingerprints(responses_so_far) if stream_ended else (),
+            tool_calls=tool_call_fingerprints if stream_ended else (),
             stream_ended=stream_ended,
+            tool_calls_in_flight=bool(tool_call_fingerprints) and not stream_ended,
         )
 
     @staticmethod
@@ -768,7 +806,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             stream_item_fingerprint(tool_call)
             for chunk in responses_so_far
             for choice in _stream_chunk_choices(chunk)
-            for tool_call in stream_item_items(stream_item_field(choice, "delta"), "tool_calls")
+            for tool_call in _streamed_delta_tool_calls(stream_item_field(choice, "delta"))
         )
 
     @staticmethod
@@ -1304,6 +1342,12 @@ def _stream_chunk_choices(item: object) -> Sequence[object]:
     if isinstance(choices, Sequence) and not isinstance(choices, (str, bytes)):
         return choices
     return ()
+
+
+def _streamed_delta_tool_calls(delta: object) -> tuple[object, ...]:
+    function_call: Final = stream_item_field(delta, "function_call")
+    legacy: Final = () if function_call is None else (function_call,)
+    return stream_item_items(delta, "tool_calls") + legacy
 
 
 def _blocked_stream_identity(

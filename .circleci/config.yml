@@ -9,7 +9,7 @@ commands:
     parameters:
       category:
         type: enum
-        enum: ["backend", "client"]
+        enum: ["backend", "client", "provider-harness"]
         default: "backend"
     steps:
       - run:
@@ -257,7 +257,7 @@ commands:
       - install_rust
       - restore_cache:
           keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
+            - v3-integration-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
@@ -266,7 +266,7 @@ commands:
       - save_cache:
           paths:
             - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
+          key: v3-integration-uv-cache-{{ checksum "uv.lock" }}
 
 jobs:
   # Add Windows testing job
@@ -2915,6 +2915,36 @@ jobs:
               exit 1
             fi
 
+  provider_replay_harness:
+    docker:
+      - *python312_image
+      - image: redis@sha256:e2debfb7956fa12c7ddc79d7e645c8cf26b30c99a6e9161ea9bf4171e1668a5f
+    working_directory: ~/project
+    resource_class: medium
+    environment:
+      E2E_CACHE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      E2E_PROVIDER_CACHE: "0"
+      E2E_FIXTURE_MODE: live
+    steps:
+      - checkout
+      - skip_if_unrelated_changes:
+          category: provider-harness
+      - setup_litellm_test_deps
+      - wait_for_service:
+          url: tcp://localhost:6379
+      - run:
+          name: Test provider capture and replay harness
+          command: |
+            mkdir -p test-results/provider-replay-harness
+            uv run --no-sync pytest -q --noconftest -o addopts= -o pythonpath=tests/e2e -p no:rerunfailures \
+              --junitxml=test-results/provider-replay-harness/junit.xml \
+              tests/e2e/test_provider_edge.py tests/e2e/test_fixture_bundle.py \
+              tests/e2e/test_fixture_canonical.py tests/e2e/test_fixture_mode.py \
+              tests/code_coverage_tests/test_provider_replay_harness.py \
+              tests/code_coverage_tests/test_provider_cache.py
+      - store_test_results:
+          path: test-results/provider-replay-harness
+
   integration_contracts:
     parameters:
       suite:
@@ -2925,6 +2955,32 @@ jobs:
     working_directory: ~/project
     steps:
       - setup_litellm_test_deps
+      - when:
+          condition:
+            equal: [browser, << parameters.suite >>]
+          steps:
+            - install_node
+            - restore_cache:
+                keys:
+                  - integration-ui-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+            - run:
+                name: Install locked browser dependencies
+                command: |
+                  cd ui/litellm-dashboard
+                  npm ci
+                  cd ../../tests/e2e/ui
+                  npm ci
+                  sudo env PATH="$PATH" DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l \
+                    timeout --signal=TERM --kill-after=20s 6m node node_modules/@playwright/test/cli.js install-deps chromium
+                  timeout --signal=TERM --kill-after=20s 3m node node_modules/@playwright/test/cli.js install chromium
+            - save_cache:
+                key: integration-ui-v3-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+                paths:
+                  - ~/.npm
+                  - ~/.cache/ms-playwright
+            - run:
+                name: Build the candidate dashboard
+                command: cd ui/litellm-dashboard && NEXT_TELEMETRY_DISABLED=1 npm run build
       - start_postgres:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
       - start_redis
@@ -2953,7 +3009,7 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, providers]
+              suite: [management, accounting, database, providers, extensions, browser]
           filters:
             branches:
               only:
@@ -2967,6 +3023,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - provider_replay_harness
       - base_sdk_install:
           filters: *main_branches
       - local_testing_part1:

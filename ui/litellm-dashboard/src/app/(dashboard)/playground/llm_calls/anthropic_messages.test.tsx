@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import Anthropic from "@anthropic-ai/sdk";
 import { makeAnthropicMessagesRequest } from "./anthropic_messages";
 import type { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 
@@ -121,5 +122,27 @@ describe("anthropic_messages non-streaming", () => {
 
     expect(mockMessagesCreate).not.toHaveBeenCalled();
     expect(mockMessagesStream.mock.calls[0][0]).toMatchObject({ stream: true });
+  });
+
+  it("sends custom headers alongside the tags header on the Anthropic client", async () => {
+    mockMessagesCreate.mockResolvedValue({ content: [{ type: "text", text: "OK" }], usage: {} });
+
+    await makeAnthropicMessagesRequest(
+      [{ role: "user", content: "Hello" }],
+      vi.fn(),
+      "claude-haiku-4-5",
+      "test-token",
+      ["team-a"],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ...NON_STREAMING_ARGS,
+      { "anthropic-beta": "context-1m-2025-08-07" },
+    );
+
+    expect(vi.mocked(Anthropic).mock.calls[0][0]).toMatchObject({
+      defaultHeaders: { "x-litellm-tags": "team-a", "anthropic-beta": "context-1m-2025-08-07" },
+    });
   });
 });

@@ -956,6 +956,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         buffer_until_moderated: bool = _streaming_flag(
             "streaming_buffer_until_moderated", buffer_until_moderated_default
         )
+        release_on_scan: Final[bool] = _streaming_flag("streaming_buffer_release_on_scan", False)
 
         if (
             buffer_until_moderated
@@ -970,9 +971,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             buffer_until_moderated = False
 
-        # Buffering can only moderate the assembled response, so it always
-        # defers to end-of-stream.
-        if buffer_until_moderated:
+        if buffer_until_moderated and not release_on_scan:
             end_of_stream_only = True
 
         if guardrail_to_apply is None:
@@ -1026,12 +1025,14 @@ class UnifiedLLMGuardrails(CustomLogger):
         chunk_counter = 0
         responses_so_far: Final[list[object]] = []
         responses_yielded: Final[list[object]] = []
+        withheld_items: Final[list[object]] = []  # mutable-ok: streaming window must be released incrementally
         pending_end_of_stream_items: Final[list[object]] = []
         # Whether any real response chunk has been forwarded to the client.
         # Drives how a block terminates the stream: continue the in-progress
         # message (True) vs emit a standalone block message (False, buffered).
         chunks_yielded = False
         last_scan_key: StreamingScanKey | None = None  # rebind-ok: replaced after every scan round
+        tool_calls_in_flight = False  # rebind-ok: tracks the latest scan key's unscanned tool calls
 
         async for item in response:
             chunk_counter += 1
@@ -1069,21 +1070,37 @@ class UnifiedLLMGuardrails(CustomLogger):
                         chunks_yielded = True
                         responses_yielded.append(item)
                         yield item
+                else:
+                    withheld_items.append(item)
                 continue
 
             # Process chunk based on sampling rate
+            if buffer_until_moderated:
+                withheld_items.append(item)
             if chunk_counter % sampling_rate == 0:
                 endpoint_translation = mappings[CallTypes(call_type)]()
                 scan_key = endpoint_translation.get_streaming_scan_key(responses_so_far)
+                if scan_key is not None:
+                    tool_calls_in_flight = scan_key.tool_calls_in_flight
+                hold_window = buffer_until_moderated and (scan_key is None or tool_calls_in_flight)
                 if _is_redundant_scan(scan_key, last_scan_key):
                     verbose_proxy_logger.debug(
                         "Skipping streaming chunk %s for guardrail %s: nothing new to scan since the last round",
                         chunk_counter,
                         guardrail_to_apply.guardrail_name,
                     )
-                    chunks_yielded = True
-                    responses_yielded.append(item)
-                    yield item
+                    if buffer_until_moderated:
+                        if hold_window:
+                            continue
+                        for withheld_item in withheld_items:
+                            chunks_yielded = True
+                            responses_yielded.append(withheld_item)
+                            yield withheld_item
+                        withheld_items.clear()
+                    else:
+                        chunks_yielded = True
+                        responses_yielded.append(item)
+                        yield item
                     continue
 
                 verbose_proxy_logger.debug(
@@ -1093,13 +1110,9 @@ class UnifiedLLMGuardrails(CustomLogger):
                     guardrail_to_apply.guardrail_name,
                 )
 
-                # Deep-copy the current chunk before guardrail processing.
-                # process_output_streaming_response modifies responses_so_far
-                # in-place: it puts the combined guardrailed text in the first
-                # chunk and clears all subsequent chunks to "". Without this
-                # copy, yielding processed_items[-1] would yield an empty
-                # string, permanently losing this chunk's content.
-                original_item = copy.deepcopy(item)
+                original_items = (
+                    tuple(copy.deepcopy(withheld_items)) if buffer_until_moderated else (copy.deepcopy(item),)
+                )
 
                 try:
                     await endpoint_translation.process_output_streaming_response(
@@ -1144,13 +1157,24 @@ class UnifiedLLMGuardrails(CustomLogger):
                     return
                 if scan_key is not None:
                     last_scan_key = scan_key
-                chunks_yielded = True
-                responses_yielded.append(original_item)
-                yield original_item
+                if hold_window:
+                    verbose_proxy_logger.debug(
+                        "Holding %s buffered chunks for guardrail %s: this round could not scan the whole window",
+                        len(withheld_items),
+                        guardrail_to_apply.guardrail_name,
+                    )
+                    withheld_items[:] = original_items
+                    continue
+                for original_item in original_items:
+                    chunks_yielded = True
+                    responses_yielded.append(original_item)
+                    yield original_item
+                withheld_items.clear()
             else:
-                chunks_yielded = True
-                responses_yielded.append(item)
-                yield item
+                if not buffer_until_moderated:
+                    chunks_yielded = True
+                    responses_yielded.append(item)
+                    yield item
 
         # Stream has ended - do final processing with all collected chunks
         if call_type is not None and CallTypes(call_type) in mappings:
@@ -1162,14 +1186,13 @@ class UnifiedLLMGuardrails(CustomLogger):
 
             endpoint_translation = mappings[CallTypes(call_type)]()
 
-            # When buffering, snapshot the original chunks before moderation.
-            # A shallow copy suffices: end-of-stream
-            # process_output_streaming_response builds a separate assembled
-            # response (it does not mutate the individual chunks in place), and
-            # the chunks themselves are replayed verbatim -- so we only need to
-            # preserve the list, not clone every chunk (deepcopy would double
-            # peak memory for large responses).
-            buffered_items: Final = list(responses_so_far) if buffer_until_moderated else None
+            buffered_items: Final = (
+                tuple(copy.deepcopy(withheld_items))
+                if buffer_until_moderated and release_on_scan and not end_of_stream_only
+                else tuple(withheld_items)
+                if buffer_until_moderated
+                else None
+            )
             end_scan_key: Final = endpoint_translation.get_streaming_scan_key(responses_so_far)
             if _is_redundant_scan(end_scan_key, last_scan_key):
                 verbose_proxy_logger.debug(

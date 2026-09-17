@@ -39,6 +39,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
@@ -59,6 +60,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     NewTeamRequest,
     ProxyErrorTypes,
     ProxyException,
@@ -70,6 +72,7 @@ from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
     should_throttle_budget_exceeded,
 )
+from litellm.proxy.auth.model_access_denied import model_access_denied_client_message
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
@@ -109,7 +112,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.prisma_protocols import RowT_co
+from litellm.repositories.prisma_protocols import DatabaseClient, RowT_co
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
@@ -147,6 +150,7 @@ class _PrismaDictableRow(Protocol):
 
 class _PrismaJWTKeyMappingRow(Protocol):
     token: str
+    jwt_issuer: str
     jwt_claim_name: str
     jwt_claim_value: str
 
@@ -847,8 +851,19 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
         "/health",
         "/health/services",
         "/health/test_connection",
+        "/auto_router/test_routing",
     }
 )
+
+
+def route_skips_budget_checks(route: str) -> bool:
+    return route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES and (
+        route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route)
+    )
+
+
+def request_skips_budget_checks(route: str, model: str | list[str] | None, llm_router: Router | None) -> bool:
+    return route_skips_budget_checks(route=route) or _is_model_cost_zero(model=model, llm_router=llm_router)
 
 
 async def common_checks(
@@ -898,10 +913,7 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = skip_budget_checks or (
-        route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES
-        and (route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route))
-    )
+    skip_all_budget_checks: Final = skip_budget_checks or route_skips_budget_checks(route=route)
 
     membership_user_id: Final = (
         valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
@@ -2099,7 +2111,7 @@ async def _fetch_uncached_tags(
 
 @log_db_metrics
 async def get_tag_objects_batch(
-    tag_names: list[str],
+    tag_names: Sequence[str],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
@@ -3172,7 +3184,7 @@ async def _delete_cache_access_object(
 @log_db_metrics
 async def get_access_object(
     access_group_id: str,
-    prisma_client: PrismaClient | None,
+    prisma_client: DatabaseClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> LiteLLM_AccessGroupTable:
@@ -3599,9 +3611,18 @@ async def _fetch_key_object_from_db_with_reconnect(
             raise
 
 
-def jwt_key_mapping_cache_key(jwt_claim_name: str, jwt_claim_value: str) -> str:
-    """Cache key under which ``_resolve_jwt_to_virtual_key`` stores a JWT-claim-to-key mapping."""
-    return f"jwt_key_mapping:{jwt_claim_name}:{jwt_claim_value}"
+def jwt_key_mapping_cache_key(jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: str | None = None) -> str:
+    """Cache key under which a JWT-claim-to-key mapping is stored, scoped to one
+    issuer (or the issuer-agnostic/global scope when ``jwt_issuer`` is falsy).
+
+    Scoped by issuer (when one is configured) so a cached hit or ``__NO_MAPPING__`` miss
+    for one issuer's claim value can never be served to a different issuer whose claim
+    value happens to collide. Unchanged for the global scope, keeping the single-issuer
+    (no ``litellm_jwtauth.issuers`` configured) cache key format stable across this fix.
+    """
+    if not jwt_issuer:
+        return f"jwt_key_mapping:{jwt_claim_name}:{jwt_claim_value}"
+    return f"jwt_key_mapping:{jwt_issuer}:{jwt_claim_name}:{jwt_claim_value}"
 
 
 @log_db_metrics
@@ -3613,7 +3634,7 @@ async def get_jwt_key_mapping_cache_keys_for_token(
     mappings: Final = await _jwt_key_mapping_table(JWTKeyMappingRepository(prisma_client)).find_many(
         where={"token": hashed_token}
     )
-    return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value) for m in mappings)
+    return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer) for m in mappings)
 
 
 @log_db_metrics
@@ -3621,9 +3642,14 @@ async def get_jwt_key_mapping_object(
     jwt_claim_name: str,
     jwt_claim_value: str,
     prisma_client: PrismaClient,
+    jwt_issuer: str | None = None,
 ) -> str | None:
     """
-    Lookup a JWT-to-virtual-key mapping from the database.
+    Lookup a JWT-to-virtual-key mapping from the database for one exact scope:
+    ``jwt_issuer`` (or the global/issuer-agnostic scope when falsy). Does not fall
+    back to the global scope itself -- a caller that wants "issuer-scoped mapping,
+    else the global one" queries both scopes itself, so each result can be cached
+    under its own scope's key (see ``_resolve_jwt_to_virtual_key``).
 
     Returns the hashed token (str) if a matching active mapping is found, else None.
     """
@@ -3631,6 +3657,7 @@ async def get_jwt_key_mapping_object(
         where={
             "jwt_claim_name": jwt_claim_name,
             "jwt_claim_value": jwt_claim_value,
+            "jwt_issuer": jwt_issuer or "",
             "is_active": True,
         }
     )
@@ -3918,7 +3945,7 @@ async def get_org_object(
 async def _get_resources_from_access_groups(
     access_group_ids: Sequence[str],
     resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
-    prisma_client: PrismaClient | None = None,
+    prisma_client: DatabaseClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> list[str]:
@@ -3976,7 +4003,7 @@ async def _get_resources_from_access_groups(
 
 async def _get_models_from_access_groups(
     access_group_ids: Sequence[str],
-    prisma_client: PrismaClient | None = None,
+    prisma_client: DatabaseClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> list[str]:
@@ -4152,8 +4179,13 @@ def _can_object_call_model(
         ):
             return True
 
-    raise ProxyException(
-        message=f"{object_type} not allowed to access model. This {object_type} can only access models={models}. Tried to access {model}",
+    internal_message: Final = (
+        f"{object_type} not allowed to access model. This {object_type} can only access models={models}. "
+        f"Tried to access {model}"
+    )
+    raise ModelAccessDeniedProxyException(
+        message=model_access_denied_client_message(model=model),
+        internal_message=internal_message,
         type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
         param="model",
         code=status.HTTP_403_FORBIDDEN,
@@ -4475,6 +4507,7 @@ async def can_key_call_model(
     llm_model_list: Sequence[object] | None,
     valid_token: UserAPIKeyAuth,
     llm_router: litellm.Router | None,
+    prisma_client: DatabaseClient | None = None,
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -4504,6 +4537,7 @@ async def can_key_call_model(
         if key_access_group_ids:
             models_from_groups: Final = await _get_models_from_access_groups(
                 access_group_ids=key_access_group_ids,
+                prisma_client=prisma_client,
             )
             if models_from_groups:
                 return _can_object_call_model(
@@ -4632,6 +4666,7 @@ async def can_team_access_model(
     team_object: LiteLLM_TeamTable | None,
     llm_router: Router | None,
     team_model_aliases: dict[str, str] | None = None,
+    prisma_client: DatabaseClient | None = None,
 ) -> Literal[True]:
     """
     Returns True if the team can access a specific model.
@@ -4654,12 +4689,13 @@ async def can_team_access_model(
         if team_access_group_ids:
             models_from_groups: Final = await _get_models_from_access_groups(
                 access_group_ids=team_access_group_ids,
+                prisma_client=prisma_client,
             )
             if models_from_groups:
                 return _can_object_call_model(
                     model=model,
                     llm_router=llm_router,
-                    models=models_from_groups,
+                    models=list(dict.fromkeys([*(team_object.models if team_object else []), *models_from_groups])),
                     team_model_aliases=team_model_aliases,
                     team_id=team_object.team_id if team_object else None,
                     object_type="team",
@@ -4749,7 +4785,7 @@ async def _key_access_group_grants_model(
 
 def can_project_access_model(
     model: str | list[str],
-    project_object: LiteLLM_ProjectTableCachedObj,
+    project_object: LiteLLM_ProjectTable,
     llm_router: Router | None,
 ) -> Literal[True]:
     """
@@ -4774,8 +4810,13 @@ async def can_user_call_model(
         return True
 
     if SpecialModelNames.no_default_models.value in user_object.models:
-        raise ProxyException(
-            message=f"User not allowed to access model. No default model access, only team models allowed. Tried to access {model}",
+        internal_message: Final = (
+            f"User not allowed to access model. No default model access, only team models allowed. "
+            f"Tried to access {model}"
+        )
+        raise ModelAccessDeniedProxyException(
+            message=model_access_denied_client_message(model=model),
+            internal_message=internal_message,
             type=ProxyErrorTypes.key_model_access_denied,
             param="model",
             code=status.HTTP_403_FORBIDDEN,
@@ -5376,8 +5417,13 @@ async def _check_team_member_model_access(
             team_id=team_object.team_id,
         )
     except ProxyException:
-        raise ProxyException(
-            message=f"Team member not allowed to access model. User={valid_token.user_id}, Team={team_object.team_id}, Model={model}. Allowed member models = {member_allowed_models}",
+        internal_message: Final = (
+            f"Team member not allowed to access model. User={valid_token.user_id}, Team={team_object.team_id}, "
+            f"Model={model}. Allowed member models = {member_allowed_models}"
+        )
+        raise ModelAccessDeniedProxyException(
+            message=model_access_denied_client_message(model=model),
+            internal_message=internal_message,
             type=ProxyErrorTypes.team_model_access_denied,
             param="model",
             code=status.HTTP_403_FORBIDDEN,
@@ -5767,8 +5813,7 @@ async def _organization_max_budget_check(
     if org_table.litellm_budget_table is not None:
         org_max_budget = org_table.litellm_budget_table.max_budget
 
-    # Only check if organization has a valid max_budget set
-    if org_max_budget is None or org_max_budget <= 0:
+    if org_max_budget is None:
         return
 
     # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
@@ -5825,15 +5870,25 @@ async def _tag_max_budget_check(
     """
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
-    if prisma_client is None:
+    await tag_max_budget_check_for_tags(
+        tags=get_tags_from_request_body(request_body=request_body),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        valid_token=valid_token,
+    )
+
+
+async def tag_max_budget_check_for_tags(
+    tags: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    valid_token: UserAPIKeyAuth | None,
+) -> None:
+    if prisma_client is None or not tags:
         return
 
-    # Get tags from request metadata
-    tags: Final = get_tags_from_request_body(request_body=request_body)
-    if not tags:
-        return
-
-    # Batch fetch all tags in one go
     tag_objects: Final = await get_tag_objects_batch(
         tag_names=tags,
         prisma_client=prisma_client,
