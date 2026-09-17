@@ -3422,6 +3422,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Y_API",
+    "provider_display_name": "Y-API",
+    "litellm_provider": "y-api",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.y-api.bestvirtualgoods.com/v1",
+        "tooltip": "Y-API base URL (defaults to https://api.y-api.bestvirtualgoods.com/v1)",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "y-api/deepseek/deepseek-v4-flash"
+  },
+  {
     "provider": "CURSOR",
     "provider_display_name": "Cursor",
     "litellm_provider": "cursor",

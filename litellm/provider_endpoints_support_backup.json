@@ -2606,6 +2606,15 @@
         "messages": true,
         "responses": true
       }
+    },
+    "y-api": {
+      "display_name": "Y-API (`y-api`)",
+      "url": "https://docs.litellm.ai/docs/providers/y-api",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true
+      }
     }
   },
   "endpoints": {
