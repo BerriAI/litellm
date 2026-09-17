@@ -853,14 +853,8 @@ def convert_anyof_null_to_nullable(schema, depth=0):
     """ Converts null objects within anyOf by removing them and adding nullable to all remaining objects """
     anyof: Final = schema.get("anyOf", None)
     if anyof is not None:
-        contains_null: Final = any(
-            isinstance(atype, dict) and atype.get("type") == "null" for atype in anyof
-        )
-        remaining: Final = [
-            atype
-            for atype in anyof
-            if not (isinstance(atype, dict) and atype.get("type") == "null")
-        ]
+        contains_null: Final = any(isinstance(atype, dict) and atype.get("type") == "null" for atype in anyof)
+        remaining: Final = [atype for atype in anyof if not (isinstance(atype, dict) and atype.get("type") == "null")]
 
         if len(remaining) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
