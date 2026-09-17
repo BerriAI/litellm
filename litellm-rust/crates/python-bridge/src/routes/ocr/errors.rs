@@ -1,7 +1,6 @@
 use litellm_core::ocr::Error;
 use pyo3::exceptions::{PyFileNotFoundError, PyOSError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 
 use crate::errors::{RustUpstreamError, core_error_to_pyerr};
 
@@ -42,15 +41,8 @@ fn upstream_error(
     body: String,
     headers: Vec<(String, String)>,
 ) -> PyResult<PyErr> {
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("content", &body)?;
-    kwargs.set_item("headers", headers)?;
-    let response = py
-        .import("httpx")?
-        .getattr("Response")?
-        .call((status,), Some(&kwargs))?;
     let error = RustUpstreamError::new_err((status, body));
-    error.value(py).setattr("response", response)?;
+    error.value(py).setattr("headers", headers)?;
     Ok(error)
 }
 
@@ -89,9 +81,15 @@ mod tests {
             let mapped = to_pyerr(Error::Provider {
                 status: 429,
                 body: r#"{"message":"rate limited"}"#.to_string(),
-                headers: Vec::new(),
+                headers: vec![("Retry-After".to_string(), "17".to_string())],
             });
             assert!(mapped.is_instance_of::<RustUpstreamError>(py));
+            let headers: Vec<(String, String)> = mapped
+                .value(py)
+                .getattr("headers")
+                .and_then(|headers| headers.extract())
+                .expect("OCR failures retain provider headers");
+            assert_eq!(headers, vec![("Retry-After".to_string(), "17".to_string())]);
             let args: (u16, String) = mapped
                 .value(py)
                 .getattr("args")
