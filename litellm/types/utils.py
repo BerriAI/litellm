@@ -3075,6 +3075,12 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     team_id: str | None
 
 
+class AzureSpillover(TypedDict):
+    """Spillover Azure reports in its response headers for a request it served from pay-as-you-go capacity."""
+
+    from_deployment: ReadOnly[str | None]
+
+
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
     x_ratelimit_limit_requests: int
     x_ratelimit_limit_tokens: int

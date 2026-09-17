@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.ptu_pricing import (
     PTU_ZEROED_PRICING_FIELDS,
     PTU_ZEROED_TABLE_FIELDS,
     SEARCH_CONTEXT_SIZES,
+    azure_spillover,
     is_spilled_over_ptu_request,
     ptu_config_error,
     ptu_identity_error,
@@ -327,3 +328,31 @@ def test_no_spillover_marker_keeps_the_zeroed_ptu_rates():
             )
             is False
         )
+
+
+def test_azure_spillover_carries_the_source_deployment_from_raw_headers():
+    assert azure_spillover(
+        response_headers={
+            "x-ms-is-spilled-over": "true",
+            "x-ms-spillover-from-deployment": "my-ptu",
+        },
+        additional_headers=None,
+    ) == {"from_deployment": "my-ptu"}
+
+
+def test_azure_spillover_from_processed_headers_has_no_source_when_absent():
+    assert azure_spillover(
+        response_headers=None,
+        additional_headers={"llm_provider-x-ms-is-spilled-over": "true"},
+    ) == {"from_deployment": None}
+
+
+def test_no_spillover_marker_returns_none():
+    assert (
+        azure_spillover(
+            response_headers={"x-ms-is-spilled-over": "false"},
+            additional_headers=None,
+        )
+        is None
+    )
+    assert azure_spillover(response_headers=None, additional_headers=None) is None
