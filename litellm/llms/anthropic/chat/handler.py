@@ -632,6 +632,7 @@ class ModelResponseIterator:
         self.tool_name_reverse_map: dict[str, str] = tool_name_reverse_map or {}
         # Generate response ID once per stream to match OpenAI-compatible behavior
         self.response_id = _generate_id()
+        self.served_model: str | None = None
 
         # Track if we're currently streaming a response_format tool
         self.is_response_format_tool: bool = False
@@ -1067,6 +1068,9 @@ class ModelResponseIterator:
                 }
                 """
                 message_start_block: Final = MessageStartBlock(**chunk)
+                start_message: Final = message_start_block["message"]
+                if "model" in start_message:
+                    self.served_model = start_message["model"]
                 if "usage" in message_start_block["message"]:
                     usage = self._handle_usage(anthropic_usage_chunk=message_start_block["message"]["usage"])
             elif type_chunk == "error":
@@ -1098,6 +1102,7 @@ class ModelResponseIterator:
                 ],
                 usage=usage,
                 id=self.response_id,
+                model=self.served_model,
             )
 
             return returned_chunk
@@ -1167,7 +1172,9 @@ class ModelResponseIterator:
         # (matches OpenAI behavior and non-streaming Anthropic implementation)
         if self.converted_response_format_tool:
             finish_reason = "stop"
-        usage: Final = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
+        usage: Final = (
+            self._handle_usage(anthropic_usage_chunk=message_delta["usage"]) if "usage" in message_delta else None
+        )
         container: Final = message_delta["delta"].get("container")
         return finish_reason, usage, container
 

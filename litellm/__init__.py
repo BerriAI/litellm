@@ -244,6 +244,7 @@ telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = drop_params_env_flag(os.environ, verbose_logger)
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
+bedrock_neutralize_orphaned_tool_blocks: bool = True
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
@@ -349,6 +350,7 @@ _anthropic_prompt_caching_ttl_env: Optional[str] = os.getenv("LITELLM_ANTHROPIC_
 anthropic_prompt_caching_ttl: Optional[Literal["5m", "1h"]] = (
     "1h" if _anthropic_prompt_caching_ttl_env == "1h" else "5m" if _anthropic_prompt_caching_ttl_env == "5m" else None
 )
+openai_system_messages_first: bool = False
 disable_vertex_batch_output_transformation: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
@@ -530,6 +532,7 @@ aiohttp_trust_env: bool = False  # set to true to use HTTP_ Proxy settings
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
 disable_aiohttp_trust_env: bool = False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
+http2: bool = False
 network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
@@ -544,7 +547,7 @@ context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
 allowed_fails: int = 3
 allow_dynamic_callback_disabling: bool = True
-num_retries_per_request: Optional[int] = None  # cap on Router retries of one model group; resets per fallback hop
+num_retries_per_request: Optional[int] = None  # for the request overall (incl. fallbacks + model retries)
 ####### SECRET MANAGERS #####################
 secret_manager_client: Optional[Any] = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
@@ -1836,6 +1839,9 @@ if TYPE_CHECKING:
     )
     from .llms.azure.responses.o_series_transformation import (
         AzureOpenAIOSeriesResponsesAPIConfig as AzureOpenAIOSeriesResponsesAPIConfig,
+    )
+    from .llms.azure_ai.responses.transformation import (
+        AzureAIResponsesAPIConfig as AzureAIResponsesAPIConfig,
     )
     from .llms.xai.responses.transformation import (
         XAIResponsesAPIConfig as XAIResponsesAPIConfig,

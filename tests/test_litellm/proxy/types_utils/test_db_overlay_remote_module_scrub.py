@@ -43,6 +43,7 @@ def test_litellm_settings_callback_list_strips_remote_urls(field):
         "custom_auth",
         "custom_key_generate",
         "custom_key_update",
+        "custom_key_policy",
         "custom_sso",
         "custom_ui_sso_sign_in_handler",
     ],

@@ -67,7 +67,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
@@ -105,7 +105,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 )
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
@@ -1072,10 +1072,6 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
-        if web_search_options is not None and custom_llm_provider == "xai":
-            model_info["mode"] = "responses"
-            model = model.replace("responses/", "")
-
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
 
@@ -1083,6 +1079,10 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
+
+    if web_search_options is not None and custom_llm_provider == "xai":
+        model_info["mode"] = "responses"
+        model = model.replace("responses/", "")
 
     # OpenCode's entries only reach the published cost map once released, so an
     # install whose map predates this provider resolves neither pricing nor the
@@ -2357,6 +2357,10 @@ def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
 def _complete_aiohttp_openai(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
+    if http2_enabled():
+        verbose_logger.warning(
+            "litellm.http2 is enabled but aiohttp_openai/ always uses aiohttp, which has no HTTP/2 client; this request stays on HTTP/1.1"
+        )
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -9173,7 +9177,7 @@ async def acount_tokens(
     fallback_messages = messages or []
     if system and fallback_messages:
         fallback_messages = [{"role": "system", "content": system}] + fallback_messages
-    local_count: Final = litellm.token_counter(
+    local_count: Final = await asyncify(litellm.token_counter)(
         model=model,
         messages=fallback_messages,
         tools=tools,

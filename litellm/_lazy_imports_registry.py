@@ -237,6 +237,7 @@ LLM_CONFIG_NAMES: Final = (
     "OpenAIResponsesAPIConfig",
     "AzureOpenAIResponsesAPIConfig",
     "AzureOpenAIOSeriesResponsesAPIConfig",
+    "AzureAIResponsesAPIConfig",
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
     "HostedVLLMResponsesAPIConfig",
@@ -959,6 +960,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "AzureOpenAIOSeriesResponsesAPIConfig": (
         ".llms.azure.responses.o_series_transformation",
         "AzureOpenAIOSeriesResponsesAPIConfig",
+    ),
+    "AzureAIResponsesAPIConfig": (
+        ".llms.azure_ai.responses.transformation",
+        "AzureAIResponsesAPIConfig",
     ),
     "XAIResponsesAPIConfig": (
         ".llms.xai.responses.transformation",
