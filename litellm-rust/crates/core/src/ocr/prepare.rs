@@ -44,6 +44,7 @@ where
                 url: url.into(),
                 headers: headers.to_vec(),
                 body: composed,
+                optional_params: Value::Object(request.optional_params.clone().into()),
                 retained_fields,
             })
             .await?;
@@ -99,6 +100,7 @@ pub(crate) async fn guardrail_document(
                     path: "document".into(),
                 }
             })?,
+            optional_params: Value::Object(request.optional_params.clone().into()),
             retained_fields: Vec::new(),
         })
         .await?;

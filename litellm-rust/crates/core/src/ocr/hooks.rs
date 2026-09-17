@@ -27,6 +27,7 @@ pub struct OcrDuringCallRequest {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Value,
+    pub optional_params: Value,
     #[serde(skip)]
     pub retained_fields: Vec<String>,
 }

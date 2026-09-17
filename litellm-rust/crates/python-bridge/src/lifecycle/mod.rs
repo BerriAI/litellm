@@ -4,8 +4,8 @@ use std::task::Poll;
 use futures_util::future::{AbortHandle, Abortable};
 #[cfg(test)]
 use litellm_callbacks::protocol::NativeCallFuture;
-use litellm_callbacks::protocol::{HostFailure, HostPhase, HostStep, NativeCall, NativeCallStep};
-pub(crate) use litellm_callbacks_legacy::{PythonCallState, missing_state};
+use litellm_callbacks::protocol::{HostFailure, HostStep, NativeCall, NativeCallStep};
+pub(crate) use litellm_callbacks_legacy::missing_state;
 use pyo3::exceptions::{PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
@@ -17,34 +17,39 @@ mod handle;
 
 use handle::{Execution, ExecutionBody, ExecutionStep};
 
-pub(crate) enum OperationClass {
-    Phase(HostPhase),
-    Route,
-}
+type Operation<C> = <C as NativeCall>::Operation;
+type OperationResult<C> = <C as NativeCall>::Result;
+type CallError<C> = <C as NativeCall>::Error;
 
+/// One route's side of the suspension protocol: it answers the native call's host
+/// operations, either immediately or after the Python awaitable it hands back resolves.
 pub(crate) trait PythonHost: Send + Sync {
     type Call: NativeCall + 'static;
 
-    fn state(&self) -> &PythonCallState;
-    fn state_mut(&mut self) -> &mut PythonCallState;
-    fn classify(operation: &<Self::Call as NativeCall>::Operation) -> OperationClass;
-    fn lifecycle_result() -> <Self::Call as NativeCall>::Result;
-    fn map_error(error: <Self::Call as NativeCall>::Error) -> PyErr;
-    fn host_error(message: String) -> <Self::Call as NativeCall>::Error;
+    fn asynchronous(&self) -> bool;
     fn invoke(
         &mut self,
         py: Python<'_>,
-        operation: <Self::Call as NativeCall>::Operation,
-    ) -> PyResult<<Self::Call as NativeCall>::Result>;
-    fn cleanup(&mut self);
+        operation: Operation<Self::Call>,
+    ) -> PyResult<HostStep<OperationResult<Self::Call>, Py<PyAny>>>;
+    fn resume(&mut self, py: Python<'_>, value: Py<PyAny>)
+    -> PyResult<OperationResult<Self::Call>>;
+    fn fail(&mut self, py: Python<'_>, error: PyErr, cancelled: bool) -> CallError<Self::Call>;
+    fn complete(
+        &mut self,
+        py: Python<'_>,
+        complete: <Self::Call as NativeCall>::Complete,
+    ) -> PyResult<Py<PyAny>>;
+    fn map_error(error: CallError<Self::Call>) -> PyErr;
+    fn take_error(&mut self, py: Python<'_>) -> Option<PyErr>;
+    fn cleanup(&mut self, py: Python<'_>);
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError>;
 }
 
-type NativeStep<C> = NativeCallStep<<C as NativeCall>::Operation, <C as NativeCall>::Complete>;
-type NativeResult<C> = Result<NativeStep<C>, <C as NativeCall>::Error>;
+type NativeStep<C> = NativeCallStep<Operation<C>, <C as NativeCall>::Complete>;
+type NativeResult<C> = Result<NativeStep<C>, CallError<C>>;
 type HostResumeStep<R> = HostStep<NativeStep<<R as PythonHost>::Call>, Py<PyAny>>;
-type NativeResume<C> =
-    Option<Result<<C as NativeCall>::Result, HostFailure<<C as NativeCall>::Error>>>;
+type NativeResume<C> = Option<Result<OperationResult<C>, HostFailure<CallError<C>>>>;
 
 struct NativeCallState<C: NativeCall> {
     call: C,
@@ -53,7 +58,7 @@ struct NativeCallState<C: NativeCall> {
 
 enum PendingOperation {
     Native,
-    Host(HostPhase),
+    Host,
 }
 
 struct PythonLifecycle<R: PythonHost> {
@@ -68,7 +73,7 @@ pub(crate) fn run_call<R: PythonHost + 'static>(
     call: R::Call,
     route: R,
 ) -> PyResult<Py<PyAny>> {
-    let asynchronous = route.state().asynchronous();
+    let asynchronous = route.asynchronous();
     let mut lifecycle = PythonLifecycle {
         route,
         call: Some(Arc::new(Mutex::new(NativeCallState { call, result: None }))),
@@ -108,7 +113,7 @@ impl<R: PythonHost> PythonLifecycle<R> {
             call.result = Some(result);
             Ok(())
         };
-        if self.route.state().asynchronous() {
+        if self.route.asynchronous() {
             let mut future = Box::pin(future);
             if let Poll::Ready(()) = poll_async_value(py, future.as_mut())? {
                 return Ok(HostStep::Ready(self.take_native_result()?));
@@ -142,23 +147,14 @@ impl<R: PythonHost> PythonLifecycle<R> {
             .map_err(R::map_error)
     }
 
-    fn host_failure(
-        &mut self,
-        py: Python<'_>,
-        error: PyErr,
-        phase: Option<HostPhase>,
-    ) -> HostFailure<<R::Call as NativeCall>::Error> {
-        let native = R::host_error(error.to_string());
+    fn host_failure(&mut self, py: Python<'_>, error: PyErr) -> HostFailure<CallError<R::Call>> {
         let cancelled = !error.is_instance_of::<PyException>(py);
-        let failure = if !cancelled {
-            HostFailure::Error(native)
-        } else {
+        let native = self.route.fail(py, error, cancelled);
+        if cancelled {
             HostFailure::Cancelled(native)
-        };
-        self.route
-            .state_mut()
-            .record_failure(py, error, cancelled, phase);
-        failure
+        } else {
+            HostFailure::Error(native)
+        }
     }
 
     fn drive(
@@ -171,16 +167,14 @@ impl<R: PythonHost> PythonLifecycle<R> {
             (Some(PendingOperation::Native), Some(result)) => match result {
                 Ok(_) => HostStep::Ready(self.take_native_result()?),
                 Err(error) => {
-                    let failure = self.host_failure(py, error, None);
+                    let failure = self.host_failure(py, error);
                     self.resume_core(py, Some(Err(failure)))?
                 }
             },
-            (Some(PendingOperation::Host(phase)), Some(result)) => {
-                let result =
-                    result.and_then(|value| self.route.state_mut().accept(py, phase, value));
-                let result = match result {
-                    Ok(()) => Ok(R::lifecycle_result()),
-                    Err(error) => Err(self.host_failure(py, error, Some(phase))),
+            (Some(PendingOperation::Host), Some(result)) => {
+                let result = match result.and_then(|value| self.route.resume(py, value)) {
+                    Ok(result) => Ok(result),
+                    Err(error) => Err(self.host_failure(py, error)),
                 };
                 self.resume_core(py, Some(result))?
             }
@@ -189,38 +183,18 @@ impl<R: PythonHost> PythonLifecycle<R> {
         loop {
             let operation = match step {
                 HostStep::Suspend(awaitable) => return Ok(ExecutionStep::Await(awaitable)),
-                HostStep::Ready(NativeCallStep::Complete(_)) => {
-                    return self
-                        .route
-                        .state_mut()
-                        .take_response()
-                        .map(ExecutionStep::Return)
-                        .ok_or_else(missing_state);
+                HostStep::Ready(NativeCallStep::Complete(complete)) => {
+                    return self.route.complete(py, complete).map(ExecutionStep::Return);
                 }
                 HostStep::Ready(NativeCallStep::Host(operation)) => operation,
             };
-            let phase = match R::classify(&operation) {
-                OperationClass::Phase(phase) => Some(phase),
-                OperationClass::Route => None,
-            };
-            let result = match phase {
-                Some(phase) => match self.route.state_mut().invoke(py, phase) {
-                    Ok(HostStep::Suspend(awaitable)) => {
-                        self.pending = Some(PendingOperation::Host(phase));
-                        return Ok(ExecutionStep::Await(awaitable));
-                    }
-                    Ok(HostStep::Ready(value)) => self
-                        .route
-                        .state_mut()
-                        .accept(py, phase, value)
-                        .map(|()| R::lifecycle_result()),
-                    Err(error) => Err(error),
-                },
-                None => self.route.invoke(py, operation),
-            };
-            let result = match result {
-                Ok(result) => Ok(result),
-                Err(error) => Err(self.host_failure(py, error, phase)),
+            let result = match self.route.invoke(py, operation) {
+                Ok(HostStep::Suspend(awaitable)) => {
+                    self.pending = Some(PendingOperation::Host);
+                    return Ok(ExecutionStep::Await(awaitable));
+                }
+                Ok(HostStep::Ready(result)) => Ok(result),
+                Err(error) => Err(self.host_failure(py, error)),
             };
             step = self.resume_core(py, Some(result))?;
         }
@@ -232,14 +206,12 @@ impl<R: PythonHost> ExecutionBody for PythonLifecycle<R> {
         let result = Python::attach(|py| self.drive(py, result));
         match result {
             Ok(ExecutionStep::Await(value)) => Ok(ExecutionStep::Await(value)),
-            result => result.map_err(|error| {
-                Python::attach(|py| self.route.state_mut().take_error(py).unwrap_or(error))
-            }),
+            result => result
+                .map_err(|error| Python::attach(|py| self.route.take_error(py).unwrap_or(error))),
         }
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        self.route.state().traverse(visit)?;
         self.route.traverse(visit)
     }
 }
@@ -250,8 +222,7 @@ impl<R: PythonHost> PythonLifecycle<R> {
             abort.abort();
         }
         if self.call.take().is_some() {
-            Python::attach(|py| self.route.state_mut().cleanup(py));
-            self.route.cleanup();
+            Python::attach(|py| self.route.cleanup(py));
         }
     }
 }
@@ -266,7 +237,7 @@ impl<R: PythonHost> Drop for PythonLifecycle<R> {
 mod tests {
     use super::*;
     use pyo3::exceptions::PyBaseException;
-    use pyo3::types::{PyDict, PyTuple};
+    use pyo3::types::PyDict;
     use std::sync::Mutex;
 
     static PYTHON_GLOBALS: Mutex<()> = Mutex::new(());
@@ -396,46 +367,51 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         }
     }
 
-    struct SyntheticRoute(PythonCallState);
+    struct SyntheticRoute {
+        asynchronous: bool,
+        response: Option<Py<PyAny>>,
+    }
 
     impl PythonHost for SyntheticRoute {
         type Call = SyntheticCall;
 
-        fn state(&self) -> &PythonCallState {
-            &self.0
+        fn asynchronous(&self) -> bool {
+            self.asynchronous
         }
 
-        fn state_mut(&mut self) -> &mut PythonCallState {
-            &mut self.0
+        fn invoke(&mut self, py: Python<'_>, _: ()) -> PyResult<HostStep<(), Py<PyAny>>> {
+            self.response = Some(
+                pyo3::types::PyString::new(py, "shared lifecycle")
+                    .into_any()
+                    .unbind(),
+            );
+            Ok(HostStep::Ready(()))
         }
 
-        fn classify(_: &()) -> OperationClass {
-            OperationClass::Route
+        fn resume(&mut self, _: Python<'_>, _: Py<PyAny>) -> PyResult<()> {
+            Err(missing_state())
         }
 
-        fn lifecycle_result() {}
+        fn fail(&mut self, _: Python<'_>, error: PyErr, _: bool) -> litellm_core::messages::Error {
+            litellm_core::messages::Error::InvalidRequest(error.to_string())
+        }
+
+        fn complete(&mut self, _: Python<'_>, (): ()) -> PyResult<Py<PyAny>> {
+            self.response.take().ok_or_else(missing_state)
+        }
 
         fn map_error(error: litellm_core::messages::Error) -> PyErr {
             crate::errors::messages_error_to_pyerr(error)
         }
 
-        fn host_error(message: String) -> litellm_core::messages::Error {
-            litellm_core::messages::Error::InvalidRequest(message)
+        fn take_error(&mut self, _: Python<'_>) -> Option<PyErr> {
+            None
         }
 
-        fn invoke(&mut self, py: Python<'_>, _: ()) -> PyResult<()> {
-            self.0.record_response(
-                py,
-                pyo3::types::PyString::new(py, "shared lifecycle")
-                    .into_any()
-                    .unbind(),
-            )
-        }
+        fn cleanup(&mut self, _: Python<'_>) {}
 
-        fn cleanup(&mut self) {}
-
-        fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-            Ok(())
+        fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+            visit.call(&self.response)
         }
     }
 
@@ -443,16 +419,10 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
     fn shared_runner_executes_a_non_ocr_adapter() {
         Python::initialize();
         Python::attach(|py| {
-            let route = SyntheticRoute(
-                PythonCallState::new(
-                    py,
-                    PyTuple::empty(py).unbind(),
-                    PyDict::new(py).unbind(),
-                    false,
-                    "synthetic",
-                )
-                .unwrap(),
-            );
+            let route = SyntheticRoute {
+                asynchronous: false,
+                response: None,
+            };
             let value: String = run_call(py, SyntheticCall(false), route)
                 .unwrap()
                 .extract(py)
@@ -469,16 +439,10 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         Python::initialize();
         Python::attach(|py| {
             install_lifecycle_module(py);
-            let route = SyntheticRoute(
-                PythonCallState::new(
-                    py,
-                    PyTuple::empty(py).unbind(),
-                    PyDict::new(py).unbind(),
-                    true,
-                    "synthetic",
-                )
-                .unwrap(),
-            );
+            let route = SyntheticRoute {
+                asynchronous: true,
+                response: None,
+            };
             let coroutine = run_call(py, SyntheticCall(false), route).unwrap();
             let completed = coroutine
                 .call_method1(py, "send", (py.None(),))
@@ -526,34 +490,29 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         });
     }
 
-    struct ErrorBody(PythonCallState);
+    struct ErrorBody(Option<Py<PyBaseException>>);
 
     impl ExecutionBody for ErrorBody {
         fn resume(&mut self, _: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep> {
-            Python::attach(|py| Err(self.0.take_error(py).unwrap()))
+            Python::attach(|py| {
+                Err(PyErr::from_value(
+                    self.0.take().unwrap().into_bound(py).into_any(),
+                ))
+            })
         }
 
         fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-            self.0.traverse(visit)
+            visit.call(&self.0)
         }
     }
 
     #[pyfunction]
-    fn error_execution(py: Python<'_>, error: Bound<'_, PyBaseException>) -> Execution {
-        let mut state = PythonCallState::new(
-            py,
-            PyTuple::empty(py).unbind(),
-            PyDict::new(py).unbind(),
-            true,
-            "test",
-        )
-        .unwrap();
-        state.retain_error(py, PyErr::from_value(error.into_any()));
-        Execution::new(ErrorBody(state))
+    fn error_execution(error: Bound<'_, PyBaseException>) -> Execution {
+        Execution::new(ErrorBody(Some(error.unbind())))
     }
 
     #[test]
-    fn retained_exception_frames_and_duplicate_argument_edges_are_collectable() {
+    fn retained_exception_frames_are_collectable() {
         Python::initialize();
         Python::attach(|py| {
             let locals = PyDict::new(py);

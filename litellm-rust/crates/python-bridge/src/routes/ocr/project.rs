@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use litellm_callbacks_legacy::OcrCallbackRetention;
 use litellm_core::ocr::wire::{
     OcrWireRequest, consumed_optional_params, decode_document, decode_request_input,
 };
@@ -15,20 +16,14 @@ use super::lifecycle::BridgeOcrHooks;
 use crate::auth::{AZURE_AD_TOKEN_PROVIDER, PythonTokenProvider};
 use crate::errors::RustBridgeDeclined;
 use crate::marshal::{project_optional_fields, python_timeout_seconds, request_input_sources};
+use crate::projection::Projection;
 
-pub(super) struct ProjectedOcrFields {
+pub(super) struct OcrRetained {
     pub boundary_request: Py<PyAny>,
-    pub document: Option<Py<PyAny>>,
     pub reader: Option<PythonFileReader>,
-    pub api_key: Py<PyAny>,
     pub azure_ad_token_provider: Option<PythonTokenProvider>,
     pub provider: &'static str,
-    pub secret_fields: Vec<&'static str>,
-}
-
-pub(super) struct ProjectedOcrCall {
-    pub request: LiteLLMOcrRequest<OcrDocumentInput>,
-    pub fields: ProjectedOcrFields,
+    pub callbacks: OcrCallbackRetention,
 }
 
 struct OcrArguments<'a, 'py> {
@@ -133,7 +128,7 @@ impl ProjectedDocument {
 pub(super) fn project_request(
     request: &Bound<'_, PyAny>,
     kwargs: &Bound<'_, PyDict>,
-) -> PyResult<ProjectedOcrCall> {
+) -> PyResult<Projection<LiteLLMOcrRequest<OcrDocumentInput>, OcrRetained>> {
     let boundary_request = request.clone().unbind();
     let arguments = OcrArguments { request, kwargs };
     let model = arguments.model()?;
@@ -168,20 +163,22 @@ pub(super) fn project_request(
     };
     let request = decode_request_input(wire).map_err(ocr_error_to_pyerr)?;
     let provider = request.provider_name();
-    Ok(ProjectedOcrCall {
-        request: request.with_host_hooks(Arc::new(BridgeOcrHooks), None),
-        fields: ProjectedOcrFields {
+    Ok(Projection {
+        native: request.with_host_hooks(Arc::new(BridgeOcrHooks), None),
+        retained: OcrRetained {
             boundary_request,
-            document: retained_document,
             reader,
-            api_key: api_key.unbind(),
             azure_ad_token_provider,
             provider,
-            secret_fields: specs
-                .into_iter()
-                .filter(|spec| spec.secret)
-                .map(|spec| spec.name)
-                .collect(),
+            callbacks: OcrCallbackRetention::new(
+                retained_document,
+                api_key.unbind(),
+                specs
+                    .into_iter()
+                    .filter(|spec| spec.secret)
+                    .map(|spec| spec.name)
+                    .collect(),
+            ),
         },
     })
 }

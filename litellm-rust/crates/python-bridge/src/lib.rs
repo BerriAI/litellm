@@ -5,6 +5,7 @@ mod errors;
 mod execution;
 mod lifecycle;
 mod marshal;
+mod projection;
 mod routes;
 mod token_counter;
 
