@@ -44,8 +44,8 @@ class TestMcpKeyGrantByAlias:
         grants access on every region. The same key must still see the server's
         tools, proving the alias grant is honored at request time."""
         server_id = register_datadog_mcp(client, resources)
-        client.await_registered(server_id)
-        alias = next(row.alias for row in client.registered_servers() if row.server_id == server_id)
+        registered = client.await_registered(server_id)
+        alias = registered.alias
         assert alias, f"registered server {server_id} has no alias to grant by"
 
         key = _key(client, resources, mcp_servers=[alias])
