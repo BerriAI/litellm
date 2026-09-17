@@ -3839,16 +3839,17 @@ if MCP_AVAILABLE:
         )
         forbidden: Final = JSONResponse(
             status_code=403,
-            content={"error": "Forbidden", "details": rejection.details},
+            content=rejection.response_body,
         )
         await forbidden(scope, receive, send)
         return True
 
-    def _replay_consumed_messages(consumed_messages: list[Message], receive: Receive) -> Receive:
+    def _replay_consumed_messages(consumed_messages: Sequence[Message], receive: Receive) -> Receive:
+        pending: Final = iter(consumed_messages)
+
         async def wrapped_receive() -> Message:
-            if consumed_messages:
-                return consumed_messages.pop(0)
-            return await receive()
+            replayed: Final = next(pending, None)
+            return replayed if replayed is not None else await receive()
 
         return wrapped_receive
 
@@ -4825,7 +4826,7 @@ if MCP_AVAILABLE:
                 await asyncio.sleep(0.1)
 
             sse_consumed_messages, sse_body = (
-                await _read_request_body_for_routing(receive) if scope.get("method") == "POST" else ([], b"")
+                await _read_request_body_for_routing(receive) if scope.get("method") == "POST" else ((), b"")
             )
             if _is_initialize_request(sse_body) and await _reject_initialize_from_disallowed_client(
                 scope, receive, send, sse_body, _sse_client_ip

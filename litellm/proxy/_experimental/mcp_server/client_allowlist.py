@@ -6,15 +6,21 @@ name is client-supplied, so this is a policy control and not a security boundary
 
 import json
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 
 MCP_ALLOWED_CLIENTS_SETTING: Final = "mcp_allowed_clients"
 
 _ALLOWED_CLIENTS_ADAPTER: Final = TypeAdapter(list[str])
+
+
+class MCPClientForbiddenBody(TypedDict):
+    error: ReadOnly[Literal["Forbidden"]]
+    details: ReadOnly[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +35,11 @@ class MCPClientRejection:
                 f"This gateway only admits clients listed in {MCP_ALLOWED_CLIENTS_SETTING}."
             )
         return f"MCP client '{self.client_name}' is not listed in this gateway's {MCP_ALLOWED_CLIENTS_SETTING}."
+
+    @property
+    def response_body(self) -> MCPClientForbiddenBody:
+        body: Final[MCPClientForbiddenBody] = {"error": "Forbidden", "details": self.details}
+        return body
 
 
 def parse_allowed_mcp_clients(raw_setting: object) -> frozenset[str] | None:
