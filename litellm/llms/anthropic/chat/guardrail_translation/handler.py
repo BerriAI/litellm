@@ -528,26 +528,23 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         return result if result else None
 
-    def chat_shaped_request_conversation(
-        self, data: dict
-    ) -> tuple[tuple[AllMessageValues, ...], tuple[ChatCompletionToolParam, ...]]:
-        if data.get("messages") is None:
-            return (), ()
-        translated: Final = self._translate_to_openai(
-            {key: value for key, value in data.items() if key != "system"}  # mutable-ok: API message payload
-        )
-        hoisted_system_message: Final = self._hoisted_top_level_system_message(data)
-        messages: Final = (
-            *(() if hoisted_system_message is None else (hoisted_system_message,)),
-            *translated["messages"],
-        )
-        tools: Final = tuple(tool for tool in translated.get("tools") or () if not is_provider_native_tool_dict(tool))
-        return messages, tools
-
     def request_scan_context(self, data: dict, guardrail_to_apply: "CustomGuardrail") -> RequestScanContext:
         if data.get("messages") is None:
             return RequestScanContext()
-        return RequestScanContext.scoped(*self.chat_shaped_request_conversation(data), guardrail_to_apply)
+        translated: Final = self._translate_to_openai(
+            {key: value for key, value in data.items() if key != "system"}  # mutable-ok: API message payload
+        )
+        hoisted_system_message: Final = (
+            None
+            if effective_skip_system_message_for_guardrail(guardrail_to_apply)
+            else self._hoisted_top_level_system_message(data)
+        )
+        return RequestScanContext.scoped(
+            (*(() if hoisted_system_message is None else (hoisted_system_message,)), *translated["messages"]),
+            tuple(tool for tool in translated.get("tools") or () if not is_provider_native_tool_dict(tool)),
+            guardrail_to_apply,
+            skip_system=False,
+        )
 
     async def process_input_messages(
         self,

@@ -906,10 +906,11 @@ class CustomGuardrail(CustomLogger):
         response: Final = (
             kwargs.get("async_complete_streaming_response") or kwargs.get("complete_streaming_response") or result
         )
+        from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
         from litellm.types.utils import ModelResponse
 
         output_translation: Final = (
-            get_guardrail_translation_mapping(CallTypes.acompletion)()
+            OpenAIChatCompletionsHandler(request_scoping=translation)
             if isinstance(response, ModelResponse)
             else translation
         )
@@ -949,25 +950,9 @@ class CustomGuardrail(CustomLogger):
         await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
         if response is None:
             return
-        output_request: Final = (
-            scratch_request
-            if type(output_translation) is type(translation)
-            else self._chat_shaped_request(scratch_request, translation)
-        )
         await output_translation.process_output_response(
-            response=copy.deepcopy(response), guardrail_to_apply=self, request_data=output_request
+            response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
         )
-
-    def _chat_shaped_request(
-        self,
-        scratch_request: Mapping[str, object],
-        translation: "BaseTranslation",
-    ) -> dict[str, object]:  # mutable-ok: BaseTranslation.process_output_response contract
-        """The logged request in OpenAI chat shape, for an output scan whose translation differs from the input's."""
-        messages, tools = translation.chat_shaped_request_conversation(
-            dict(scratch_request)  # mutable-ok: BaseTranslation.chat_shaped_request_conversation requires a dict
-        )
-        return {**scratch_request, "messages": list(messages), "tools": list(tools)}
 
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.

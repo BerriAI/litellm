@@ -2724,6 +2724,23 @@ class TestAnthropicResponseScanCarriesRequestConversation:
         [(_, inputs)] = guardrail.seen
         assert [m["role"] for m in inputs["structured_messages"]] == ["user", "assistant", "tool", "assistant"]
 
+    @pytest.mark.asyncio
+    async def test_skip_system_keeps_in_sequence_system_turns_in_the_response_scan(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = TypedInputsRecordingGuardrail()
+        guardrail.skip_system_message_in_guardrail = True
+        request = {
+            **self._request(),
+            "messages": [{"role": "system", "content": "Mid-turn operator note"}, *self._request()["messages"]],
+        }
+
+        await handler.process_input_messages(data=request, guardrail_to_apply=guardrail)
+        await handler.process_output_response(self._tool_use_response(), guardrail, request_data=request)
+
+        (_, request_inputs), (_, response_inputs) = guardrail.seen
+        assert [m["role"] for m in request_inputs["structured_messages"]] == ["system", "user", "assistant", "tool"]
+        assert response_inputs["structured_messages"][:-1] == request_inputs["structured_messages"]
+
     @staticmethod
     def _sse_chunks(ended: bool) -> list:
         events = [
