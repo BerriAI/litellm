@@ -38680,8 +38680,7 @@
               "required": false,
               "schema": {
                 "default": 10,
-                "maximum": 100,
-                "minimum": 1,
+                "minimum": 0,
                 "title": "Count",
                 "type": "integer"
               }
@@ -39385,8 +39384,7 @@
               "required": false,
               "schema": {
                 "default": 10,
-                "maximum": 100,
-                "minimum": 1,
+                "minimum": 0,
                 "title": "Count",
                 "type": "integer"
               }
