@@ -889,6 +889,8 @@ def test_verbose_loggers_route_records_by_level():
     ],
 )
 def test_plain_log_format_colorizes_only_for_a_terminal(monkeypatch, stdout_tty, stderr_tty, no_color, want_color):
+    # FORCE_COLOR would override the tty check, so keep it out of these cases.
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
     if no_color is None:
         monkeypatch.delenv("NO_COLOR", raising=False)
     else:
@@ -898,6 +900,30 @@ def test_plain_log_format_colorizes_only_for_a_terminal(monkeypatch, stdout_tty,
 
     assert fmt == (_COLOR_LOG_FORMAT if want_color else _PLAIN_LOG_FORMAT)
     assert ("\033[" in fmt) is want_color
+
+
+@pytest.mark.parametrize(
+    "force_color,no_color,want_color",
+    [
+        ("1", None, True),
+        ("", None, False),
+        ("1", "1", False),
+    ],
+)
+def test_plain_log_format_honors_force_color_without_a_terminal(
+    monkeypatch, force_color, no_color, want_color
+):
+    """CI runners set FORCE_COLOR because their log stream is a pipe, so the tty
+    check alone strips color there. NO_COLOR still wins when both are set."""
+    monkeypatch.setenv("FORCE_COLOR", force_color)
+    if no_color is None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+    else:
+        monkeypatch.setenv("NO_COLOR", no_color)
+
+    fmt = _plain_log_format(_FakeStream(False), _FakeStream(False))
+
+    assert fmt == (_COLOR_LOG_FORMAT if want_color else _PLAIN_LOG_FORMAT)
 
 
 def test_plain_format_carries_no_ansi_codes():
