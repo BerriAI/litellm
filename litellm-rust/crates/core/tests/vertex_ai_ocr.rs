@@ -26,7 +26,7 @@ async fn facade_executes_vertex_mistral_with_resolved_project_and_location() {
 
     let response = perform_ocr(request).await.unwrap();
     server.await.unwrap();
-    assert_eq!(response.pages[0]["markdown"], "hello");
+    assert_eq!(response.pages[0].markdown, "hello");
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].starts_with(
@@ -55,8 +55,8 @@ async fn supplied_authorization_is_forwarded_without_a_static_token() {
         &base,
         json!({"vertex_project":"project-1"}),
     );
-    request.connection.api_key = None;
-    request.connection.extra_headers = vec![("authorization".into(), "Bearer supplied".into())];
+    request.credentials.api_key = None;
+    request.transport.extra_headers = vec![("authorization".into(), "Bearer supplied".into())];
 
     perform_ocr(request).await.unwrap();
     server.await.unwrap();
@@ -85,7 +85,10 @@ async fn request_controlled_api_base_is_rejected_before_vertex_auth() {
         "https://caller.example",
         json!({"vertex_project":"project-1"}),
     );
-    request.connection.api_base_source = InputSource::Request;
+    request.credentials.api_base = Some(litellm_auth::Sourced::new(
+        "https://caller.example".into(),
+        InputSource::Request,
+    ));
 
     let error = perform_ocr(request).await.unwrap_err();
     assert!(
@@ -99,7 +102,9 @@ async fn request_controlled_api_base_is_rejected_before_vertex_auth() {
 async fn adapters_build_complete_requests_and_share_mistral_normalization() {
     use std::time::Duration;
 
-    use crate::ocr::adapters::{MistralAdapter, OcrAdapter, VertexMistralAdapter};
+    use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
+    use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
+    use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
     use crate::ocr::test_support::ocr_client;
 
     let client = ocr_client();
@@ -116,11 +121,15 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
         options.clone(),
     );
     let vertex = wire_request("vertex_ai/mistral-ocr-maas", "https://vertex.test", options);
-    let direct_http = MistralAdapter
+    let direct =
+        crate::ocr::prepare::prepare_request(super::test_support::resolved_request(direct));
+    let vertex =
+        crate::ocr::prepare::prepare_request(super::test_support::resolved_request(vertex));
+    let direct_http = MistralOCRConfig
         .prepare_request(&direct, &client)
         .await
         .unwrap();
-    let vertex_http = VertexMistralAdapter
+    let vertex_http = VertexAIOCRConfig
         .prepare_request(&vertex, &client)
         .await
         .unwrap();
@@ -141,17 +150,27 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
                 "model": "mistral-ocr-maas",
                 "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
                 "pages": [0, 2],
-                "include_image_base64": true
+                "include_image_base64": true,
+                "unknown": "ignored"
             })
         );
     }
     let payload = json!({"pages": [{"index": 0, "markdown": "hello"}], "extra": "preserved"});
-    let direct_response = MistralAdapter
-        .transform_ocr_response(&direct, serde_json::from_value(payload.clone()).unwrap())
+    let raw = serde_json::to_vec(&payload).unwrap();
+    let direct_response = MistralOCRConfig
+        .transform_ocr_response(
+            &direct.model,
+            &raw,
+            crate::ocr::types::OcrResponseFormat::Litellm,
+        )
         .unwrap()
         .into_json();
-    let vertex_response = VertexMistralAdapter
-        .transform_ocr_response(&vertex, serde_json::from_value(payload).unwrap())
+    let vertex_response = VertexAIOCRConfig
+        .transform_ocr_response(
+            &vertex.model,
+            &raw,
+            crate::ocr::types::OcrResponseFormat::Litellm,
+        )
         .unwrap()
         .into_json();
     assert_eq!(direct_response, vertex_response);

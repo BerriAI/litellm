@@ -7,13 +7,14 @@ use crate::errors::{RustUpstreamError, core_error_to_pyerr};
 pub(super) fn to_pyerr(error: Error) -> PyErr {
     let status = error.http_status_code();
     let mapped = match error {
-        Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
-        Error::FileRead {
-            path,
-            kind: std::io::ErrorKind::NotFound,
-            ..
-        } => PyFileNotFoundError::new_err(format!("File not found: {}", path.display())),
-        Error::FileRead { message, .. } => PyOSError::new_err(message),
+        Error::Provider { status, body, .. }
+        | Error::Transport(litellm_core::transport::Error::Http { status, body }) => {
+            RustUpstreamError::new_err((status, body))
+        }
+        Error::FileRead { path, source } if source.kind() == std::io::ErrorKind::NotFound => {
+            PyFileNotFoundError::new_err(format!("File not found: {}", path.display()))
+        }
+        Error::FileRead { source, .. } => PyOSError::new_err(source.to_string()),
         other => core_error_to_pyerr(other.into()),
     };
     attach_status(mapped, status)
@@ -51,9 +52,10 @@ mod tests {
                     .unwrap(),
                 500
             );
-            let mapped = to_pyerr(Error::Http {
+            let mapped = to_pyerr(Error::Provider {
                 status: 429,
                 body: r#"{"message":"rate limited"}"#.to_string(),
+                headers: Vec::new(),
             });
             assert!(mapped.is_instance_of::<RustUpstreamError>(py));
             let args: (u16, String) = mapped

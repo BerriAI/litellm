@@ -380,7 +380,7 @@ impl OcrExecution {
                 self.execution = None;
                 self.completed = true;
                 result
-                    .map_err(|error| Error::Network(format!("OCR execution task failed: {error}")))?
+                    .map_err(|error| Error::Transport(crate::transport::Error::Network(format!("OCR execution task failed: {error}"))))?
                     .map(OcrCallStep::Complete)
             }
         }
@@ -431,7 +431,7 @@ impl OcrExecution {
 async fn prepare_request_document(
     request: LiteLLMOcrRequest<OcrDocumentInput>,
     hooks: &ProtocolHooks,
-) -> Result<LiteLLMOcrRequest, Error> {
+) -> Result<super::types::ResolvedOcrRequest, Error> {
     let request = match &request.document {
         OcrDocumentInput::HostReader { mime_type } => {
             let mime_type = mime_type.clone();

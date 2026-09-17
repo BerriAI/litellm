@@ -63,8 +63,8 @@ async fn facade_executes_direct_mistral_once() {
     .await
     .unwrap();
     server.await.unwrap();
-    assert_eq!(result.pages[0]["markdown"], "hello");
-    assert_eq!(result.pages[0]["custom"], "preserved");
+    assert_eq!(result.pages[0].markdown, "hello");
+    assert_eq!(result.pages[0].extra_fields["custom"], "preserved");
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].starts_with("POST /v1/ocr "));
@@ -80,7 +80,8 @@ async fn facade_executes_direct_mistral_once() {
             "model":"model",
             "document":{"type":"document_url","document_url":"data:application/pdf;base64,YWJj"},
             "pages":"0,2-4",
-            "extract_header":true
+            "extract_header":true,
+            "unknown":"ignored"
         })
     );
 }
@@ -102,7 +103,10 @@ async fn facade_retains_native_response_when_requested() {
     .unwrap();
 
     server.await.unwrap();
-    assert_eq!(response.provider_native_response, Some(provider_response));
+    assert_eq!(
+        response.provider_native_response.map(Value::Object),
+        Some(provider_response)
+    );
 }
 
 #[tokio::test]
@@ -348,7 +352,7 @@ async fn fallible_host_phases_do_not_replay_or_reach_transport() {
                     }
                     OcrHostOperation::ProjectRequest => {
                         result = Some(OcrHostResult::Request(Ok((
-                            Box::new(request.take().unwrap().into()),
+                            Box::new(request.take().unwrap()),
                             false,
                         ))))
                     }
@@ -406,7 +410,7 @@ async fn invalid_provider_response_runs_post_call_before_normalization_failure()
         match call.resume(result.take()).await {
             Ok(OcrCallStep::Host(OcrHostOperation::ProjectRequest)) => {
                 result = Some(OcrHostResult::Request(Ok((
-                    Box::new(request.take().unwrap().into()),
+                    Box::new(request.take().unwrap()),
                     false,
                 ))));
             }
@@ -421,7 +425,7 @@ async fn invalid_provider_response_runs_post_call_before_normalization_failure()
         }
     };
     server.await.unwrap();
-    assert!(matches!(error, crate::ocr::Error::InvalidResponse(_)));
+    assert!(matches!(error, crate::ocr::Error::ResponseField { .. }));
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert_eq!(post_calls, [json!(r#"{"pages":"invalid"}"#)]);
 }
@@ -462,16 +466,15 @@ async fn direct_native_host_drives_the_same_state_machine() {
                     OcrHostOperation::PostCall(_) => "PostCall".into(),
                     OcrHostOperation::ConstructResponse(_) => "ConstructResponse".into(),
                     OcrHostOperation::Success { response, .. } => {
-                        assert_eq!(response.pages[0]["markdown"], "native");
+                        assert_eq!(response.pages[0].markdown, "native");
                         "Success".into()
                     }
                     _ => panic!("unexpected OCR operation"),
                 });
                 result = Some(match operation {
-                    OcrHostOperation::ProjectRequest => OcrHostResult::Request(Ok((
-                        Box::new(request.take().unwrap().into()),
-                        false,
-                    ))),
+                    OcrHostOperation::ProjectRequest => {
+                        OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false)))
+                    }
                     operation => host.invoke(operation).await,
                 });
             }
@@ -479,7 +482,7 @@ async fn direct_native_host_drives_the_same_state_machine() {
         }
     };
     server.await.unwrap();
-    assert_eq!(response.pages[0]["markdown"], "native");
+    assert_eq!(response.pages[0].markdown, "native");
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert_eq!(
         operations,
@@ -556,7 +559,7 @@ async fn host_reader_documents_are_read_once_at_the_core_selected_point_and_enco
     )
     .await;
     server.await.unwrap();
-    assert_eq!(response.unwrap().pages[0]["markdown"], "file");
+    assert_eq!(response.unwrap().pages[0].markdown, "file");
     assert_eq!(reads, 1);
     assert!(seen.lock().unwrap()[0].contains("data:application/pdf;base64,YWJj"));
 }
@@ -571,7 +574,9 @@ async fn host_reader_failures_and_empty_files_fail_before_the_provider_is_called
         Err(failure.clone()),
     )
     .await;
-    assert_eq!(response.unwrap_err(), failure);
+    assert!(
+        matches!(response.unwrap_err(), crate::ocr::Error::InvalidRequest(message) if message == "reader exploded")
+    );
     assert_eq!(reads, 1);
 
     let request = wire_request("mistral/model", &base, json!({}));
@@ -585,7 +590,7 @@ async fn host_reader_failures_and_empty_files_fail_before_the_provider_is_called
     .await;
     assert!(matches!(
         response.unwrap_err(),
-        crate::ocr::Error::InvalidRequest(_)
+        crate::ocr::Error::EmptyFile
     ));
     assert!(seen.lock().unwrap().is_empty());
 }
@@ -613,7 +618,7 @@ async fn path_documents_are_read_by_core_without_a_host_operation() {
     .await;
     server.await.unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
-    assert_eq!(response.unwrap().pages[0]["markdown"], "path");
+    assert_eq!(response.unwrap().pages[0].markdown, "path");
     assert_eq!(reads, 0);
     assert!(seen.lock().unwrap()[0].contains("data:image/png;base64,YWJj"));
 
@@ -629,7 +634,7 @@ async fn path_documents_are_read_by_core_without_a_host_operation() {
     .await;
     assert!(matches!(
         response.unwrap_err(),
-        crate::ocr::Error::FileRead { path: failed, kind: std::io::ErrorKind::NotFound, .. } if failed == path
+        crate::ocr::Error::FileRead { path: failed, source } if failed == path && source.kind() == std::io::ErrorKind::NotFound
     ));
     assert!(seen.lock().unwrap().is_empty());
 }
@@ -661,7 +666,9 @@ async fn public_finalization_failure_never_dispatches_success_or_replays_provide
                         OcrHostResult::Lifecycle(Err(HostFailure::Error(selected.clone())))
                     }
                     OcrHostOperation::Failure { error, .. } => {
-                        assert_eq!(error, selected);
+                        assert!(
+                            matches!(error, crate::ocr::Error::InvalidRequest(message) if message == "public metadata failed")
+                        );
                         failures.push("sync");
                         OcrHostResult::Lifecycle(Err(HostFailure::Error(
                             crate::ocr::Error::InvalidRequest("failure callback failed".into()),
@@ -676,10 +683,9 @@ async fn public_finalization_failure_never_dispatches_success_or_replays_provide
                     | OcrHostOperation::Lifecycle(HostPhase::DeploymentFailure) => {
                         panic!("finalization failure used provider/success dispatch")
                     }
-                    OcrHostOperation::ProjectRequest => OcrHostResult::Request(Ok((
-                        Box::new(request.take().unwrap().into()),
-                        false,
-                    ))),
+                    OcrHostOperation::ProjectRequest => {
+                        OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false)))
+                    }
                     operation => host.invoke(operation).await,
                 });
             }
@@ -688,7 +694,9 @@ async fn public_finalization_failure_never_dispatches_success_or_replays_provide
         }
     };
     server.await.unwrap();
-    assert_eq!(error, selected);
+    assert!(
+        matches!(error, crate::ocr::Error::InvalidRequest(message) if message == "public metadata failed")
+    );
     assert_eq!(failures, ["sync", "async"]);
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
@@ -716,7 +724,7 @@ async fn cancellation_at_provider_hook_prevents_execution_and_further_resumption
             OcrCallStep::Host(OcrHostOperation::PreCall(_)) => break,
             OcrCallStep::Host(OcrHostOperation::ProjectRequest) => {
                 result = Some(OcrHostResult::Request(Ok((
-                    Box::new(request.take().unwrap().into()),
+                    Box::new(request.take().unwrap()),
                     false,
                 ))))
             }
@@ -727,7 +735,7 @@ async fn cancellation_at_provider_hook_prevents_execution_and_further_resumption
     let selected = crate::ocr::Error::InvalidRequest("cancelled".into());
     assert!(matches!(
         call.interrupt(HostFailure::Cancelled(selected.clone())).await,
-        Err(error) if error == selected
+        Err(crate::ocr::Error::InvalidRequest(message)) if message == "cancelled"
     ));
     assert!(
         call.resume(Some(OcrHostResult::Lifecycle(Ok(()))))
@@ -761,7 +769,7 @@ async fn missing_host_result_preserves_pending_operation() {
 async fn read_bounded_response(
     response: Vec<u8>,
     limit: usize,
-) -> Result<bytes::Bytes, super::error::OcrError> {
+) -> Result<bytes::Bytes, super::Error> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -790,7 +798,7 @@ async fn read_bounded_response(
 
 #[tokio::test]
 async fn response_limit_accepts_exact_size_and_rejects_declared_and_chunked_overflow() {
-    use super::error::{OcrError, OcrResponseError};
+    use super::Error;
 
     for response in [
         "HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nabcdefgh",
@@ -809,7 +817,7 @@ async fn response_limit_accepts_exact_size_and_rejects_declared_and_chunked_over
     ] {
         assert!(matches!(
             read_bounded_response(response.as_bytes().to_vec(), 8).await,
-            Err(OcrError::Response(OcrResponseError::TooLarge { limit: 8 }))
+            Err(Error::TooLarge { limit: 8 })
         ));
     }
 }
@@ -828,7 +836,7 @@ async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_dra
             .await
             .unwrap_err();
         match error {
-            super::error::OcrError::Transport(crate::transport::Error::Http { status, body }) => {
+            super::Error::Transport(crate::transport::Error::Http { status, body }) => {
                 assert_eq!(status, 429);
                 assert_eq!(
                     body,
@@ -850,7 +858,7 @@ fn response_limit_is_validated_and_not_forwarded_to_the_provider() {
         "http://localhost",
         json!({"max_response_bytes": 123}),
     );
-    assert_eq!(request.connection.max_response_bytes, 123);
+    assert_eq!(request.transport.max_response_bytes, 123);
     assert!(!request.optional_params.contains_key("max_response_bytes"));
     for value in [
         json!(0),
@@ -908,9 +916,9 @@ async fn cancellation_waits_for_provider_capture_drop_even_when_acknowledgement_
         let dropped = Arc::new(AtomicBool::new(false));
         let request = wire_request("azure_ai/mistral-ocr", "https://example.invalid", json!({}));
         let request = super::LiteLLMOcrRequest {
-            connection: super::OcrConnection {
+            transport: super::OcrTransportConfig {
                 extra_headers: vec![("authorization".into(), "Bearer test-key".into())],
-                ..request.connection
+                ..request.transport
             },
             azure_ad_token_provider: Some(litellm_auth::TokenProviderHandle::new(Arc::new(
                 PendingToken {
@@ -933,7 +941,7 @@ async fn cancellation_waits_for_provider_capture_drop_even_when_acknowledgement_
                     _ = entered.notified() => break,
                     step = call.resume(result.take()) => {
                         result = Some(match step.unwrap() {
-                            OcrCallStep::Host(OcrHostOperation::ProjectRequest) => OcrHostResult::Request(Ok((Box::new(request.take().unwrap().into()), false))),
+                            OcrCallStep::Host(OcrHostOperation::ProjectRequest) => OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false))),
                             OcrCallStep::Host(operation) => NoopOcrHost.invoke(operation).await,
                             OcrCallStep::Complete(_) => panic!("pending provider completed"),
                         });
@@ -960,7 +968,9 @@ async fn cancellation_waits_for_provider_capture_drop_even_when_acknowledgement_
         )
         .await
         .unwrap();
-        assert!(matches!(result, Err(error) if error == selected));
+        assert!(
+            matches!(result, Err(crate::ocr::Error::InvalidRequest(message)) if message == "cancelled")
+        );
         assert!(
             dropped.load(Ordering::SeqCst),
             "cancellation returned while provider captures were still alive"

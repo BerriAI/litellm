@@ -56,8 +56,7 @@ async fn request_mapping_matches_python(
         "result":{"chunks":[]}
     }))])
     .await;
-    let mut request = wire_request(model, &base, options);
-    request.document = request.document.with_source(source.into());
+    let request = super::test_support::with_source(wire_request(model, &base, options), source);
 
     perform_ocr(request).await.unwrap();
     server.await.unwrap();
@@ -78,14 +77,14 @@ async fn data_uri_upload_preserves_multipart_headers(#[case] model: &str) {
     ])
     .await;
     let mut request = wire_request(&format!("reducto/{model}"), &base, json!({}));
-    request.connection.extra_headers = vec![
+    request.transport.extra_headers = vec![
         ("Content-Type".into(), "application/json".into()),
         ("X-Trace".into(), "upload-test".into()),
     ];
 
     let response = perform_ocr(request).await.unwrap();
     server.await.unwrap();
-    assert_eq!(response.pages[0]["markdown"], "hello");
+    assert_eq!(response.pages[0].markdown, "hello");
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert!(requests[0].starts_with("POST /upload "));
@@ -175,14 +174,18 @@ async fn upload_failure_stops_before_parse() {
 #[case("data:application/pdf;base64,INVALID!")]
 #[tokio::test]
 async fn rejects_invalid_document_sources_before_network(#[case] source: &str) {
-    let mut request = wire_request("reducto/parse-v3", "http://127.0.0.1:1", json!({}));
-    request.document = request.document.with_source(source.into());
+    let request = super::test_support::with_source(
+        wire_request("reducto/parse-v3", "http://127.0.0.1:1", json!({})),
+        source,
+    );
     assert!(perform_ocr(request).await.is_err());
 }
 
 #[test]
 fn response_normalization_groups_blocks_and_distinguishes_null_result() {
-    use crate::ocr::codecs::reducto::{ReductoResponse, transform_ocr_response};
+    use crate::llms::reducto::ocr::transformation::{
+        ReductoResponse, normalize_response as transform_ocr_response,
+    };
 
     let raw = json!({"usage":{"num_pages":"2","credits":"3"},"result":{"type":"full","chunks":[
         {"blocks":[{
@@ -218,7 +221,7 @@ fn response_normalization_groups_blocks_and_distinguishes_null_result() {
     let missing: ReductoResponse =
         serde_json::from_value(json!({"chunks":[{"content":"text"}]})).unwrap();
     let missing = transform_ocr_response("parse-v3", missing).unwrap();
-    assert_eq!(missing.pages[0]["markdown"], "text");
+    assert_eq!(missing.pages[0].markdown, "text");
     let null: ReductoResponse = serde_json::from_value(
         json!({"result":null,"chunks":[{"content":"ignored"}],"usage":null}),
     )
@@ -231,9 +234,11 @@ fn response_normalization_groups_blocks_and_distinguishes_null_result() {
 async fn facade_omits_native_response_by_default_and_preserves_auth_priority() {
     let raw = json!({"job_id":"job-1","result":{"chunks":[]}});
     let (base, seen, server) = mock_server(vec![MockResponse::json(raw)]).await;
-    let mut request = wire_request("reducto/parse-v3", &base, json!({}));
-    request.document = request.document.with_source("reducto://ready.pdf".into());
-    request.connection.extra_headers = vec![("authorization".into(), "Bearer existing".into())];
+    let mut request = super::test_support::with_source(
+        wire_request("reducto/parse-v3", &base, json!({})),
+        "reducto://ready.pdf",
+    );
+    request.transport.extra_headers = vec![("authorization".into(), "Bearer existing".into())];
 
     let response = perform_ocr(request).await.unwrap();
     server.await.unwrap();
