@@ -174,6 +174,7 @@ describe("KeyEditView", () => {
     key_name: "sk-...TUuw",
     key_alias: "asdasdas",
     spend: 0,
+    total_spend: 0,
     max_budget: 0,
     expires: "null",
     models: [],
@@ -188,6 +189,7 @@ describe("KeyEditView", () => {
     },
     tpm_limit: 10,
     rpm_limit: 10,
+    tpd_limit: 250000,
     duration: "30d",
     budget_duration: "30d",
     budget_reset_at: "never",
@@ -1986,6 +1988,7 @@ describe("KeyEditView", () => {
     tpm_limit_type: null,
     rpm_limit: 10,
     rpm_limit_type: null,
+    tpd_limit: 250000,
     throttle_on_budget_exceeded: false,
     enable_prompt_caching: false,
     max_parallel_requests: 10,
@@ -2178,6 +2181,32 @@ describe("KeyEditView", () => {
         expect(onSubmitMock).toHaveBeenCalled();
       });
       expect(onSubmitMock.mock.calls[0][0].tags).toEqual(["test-tag", "typed-tag"]);
+    });
+
+    it("moves a tags array typed into the metadata JSON into the Tags control on blur", async () => {
+      renderForPayload(vi.fn().mockResolvedValue(undefined));
+      await screen.findByRole("button", { name: /save changes/i });
+
+      const metadata = screen.getByLabelText("Metadata");
+      fireEvent.change(metadata, { target: { value: '{"tags": ["pilot-tag"], "env": "non-prod"}' } });
+      fireEvent.blur(metadata);
+
+      expect(await screen.findByText("pilot-tag")).toBeInTheDocument();
+      expect(metadata).toHaveValue('{\n  "env": "non-prod"\n}');
+    });
+
+    it("carries a tags array typed into the metadata JSON into the payload even without a blur", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      fireEvent.change(screen.getByLabelText("Metadata"), { target: { value: '{"tags": ["pilot-tag"]}' } });
+      fireEvent.submit(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toMatchObject({ tags: ["test-tag", "pilot-tag"], metadata: "{}" });
     });
 
     const pickFromCombobox = async (inputLabel: RegExp | string, optionName: RegExp | string) => {

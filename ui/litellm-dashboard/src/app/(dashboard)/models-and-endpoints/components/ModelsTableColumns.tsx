@@ -24,6 +24,19 @@ export const TEAM_ID_COLUMN_ID = "model_info_team_id";
 export const ACCESS_GROUPS_COLUMN_ID = "model_info_access_groups";
 export const STATUS_COLUMN_ID = "model_info_db_model";
 
+export const MODEL_TABLE_SORT_COLUMN_IDS = [
+  MODEL_NAME_COLUMN_ID,
+  CREATED_BY_COLUMN_ID,
+  UPDATED_AT_COLUMN_ID,
+  COSTS_COLUMN_ID,
+  STATUS_COLUMN_ID,
+] as const;
+
+export type ModelTableSortColumnId = (typeof MODEL_TABLE_SORT_COLUMN_IDS)[number];
+
+export const isModelTableSortColumnId = (columnId: string): columnId is ModelTableSortColumnId =>
+  (MODEL_TABLE_SORT_COLUMN_IDS as readonly string[]).includes(columnId);
+
 const COLUMN_ID_TO_SERVER_SORT_FIELD: Record<string, string> = {
   [COSTS_COLUMN_ID]: "costs",
   [STATUS_COLUMN_ID]: "status",

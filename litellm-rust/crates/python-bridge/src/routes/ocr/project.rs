@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
-use litellm_core::ocr::wire::{OcrWireRequest, consumed_optional_params, decode_request};
-use litellm_core::ocr::{LiteLLMOcrRequest, NativeOutcome, OcrCall};
-use litellm_python_interop::{
-    from_py_preserving_errors as from_py, to_py_preserving_errors as to_py,
+use litellm_core::ocr::wire::{
+    OcrWireRequest, consumed_optional_params, decode_document, decode_request_input,
 };
+use litellm_core::ocr::{LiteLLMOcrRequest, NativeOutcome, OcrCall, OcrDocumentInput};
+use litellm_python_interop::from_py_preserving_errors as from_py;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
+use super::document::{FileDocumentInput, PythonFileReader};
 use super::errors::to_pyerr as ocr_error_to_pyerr;
 use super::lifecycle::BridgeOcrHooks;
 use crate::auth::{AZURE_AD_TOKEN_PROVIDER, PythonTokenProvider};
@@ -17,7 +18,8 @@ use crate::marshal::{project_optional_fields, python_timeout_seconds, request_in
 
 pub(super) struct ProjectedOcrFields {
     pub boundary_request: Py<PyAny>,
-    pub document: Py<PyAny>,
+    pub document: Option<Py<PyAny>>,
+    pub reader: Option<PythonFileReader>,
     pub api_key: Py<PyAny>,
     pub azure_ad_token_provider: Option<PythonTokenProvider>,
     pub provider: &'static str,
@@ -25,7 +27,7 @@ pub(super) struct ProjectedOcrFields {
 }
 
 pub(super) struct ProjectedOcrCall {
-    pub request: LiteLLMOcrRequest,
+    pub request: LiteLLMOcrRequest<OcrDocumentInput>,
     pub fields: ProjectedOcrFields,
 }
 
@@ -80,12 +82,12 @@ impl<'py> OcrArguments<'_, 'py> {
 }
 
 enum ProjectedDocument {
-    File { wire: Value, retained: Py<PyAny> },
+    File(FileDocumentInput),
     Other { wire: Value, retained: Py<PyAny> },
 }
 
 impl ProjectedDocument {
-    fn project(py: Python<'_>, document: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn project(document: &Bound<'_, PyAny>) -> PyResult<Self> {
         let kind: String = document.get_item("type")?.extract()?;
         if kind != "file" {
             return Ok(Self::Other {
@@ -93,25 +95,28 @@ impl ProjectedDocument {
                 retained: document.clone().unbind(),
             });
         }
-        let input = document.extract()?;
-        let encoded = super::document::file_document(py, input)?;
-        let wire = serde_json::to_value(encoded)
-            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        Ok(Self::File {
-            retained: to_py(py, &wire)?,
-            wire,
-        })
+        Ok(Self::File(document.extract()?))
     }
 
-    fn into_parts(self) -> (Value, Py<PyAny>) {
+    fn into_parts(
+        self,
+    ) -> PyResult<(
+        OcrDocumentInput,
+        Option<Py<PyAny>>,
+        Option<PythonFileReader>,
+    )> {
         match self {
-            Self::File { wire, retained } | Self::Other { wire, retained } => (wire, retained),
+            Self::File(FileDocumentInput { input, reader }) => Ok((input, None, reader)),
+            Self::Other { wire, retained } => Ok((
+                decode_document(wire).map_err(ocr_error_to_pyerr)?.into(),
+                Some(retained),
+                None,
+            )),
         }
     }
 }
 
 pub(super) fn project_request(
-    py: Python<'_>,
     request: &Bound<'_, PyAny>,
     kwargs: &Bound<'_, PyDict>,
 ) -> PyResult<ProjectedOcrCall> {
@@ -119,8 +124,7 @@ pub(super) fn project_request(
     let arguments = OcrArguments { request, kwargs };
     let model = arguments.model()?;
     let custom_llm_provider = arguments.custom_llm_provider()?;
-    let (wire_document, retained_document) =
-        ProjectedDocument::project(py, &arguments.document()?)?.into_parts();
+    let document = ProjectedDocument::project(&arguments.document()?)?;
     let api_key = arguments.api_key()?;
     let specs = consumed_optional_params(&model, custom_llm_provider.as_deref())
         .map_err(ocr_error_to_pyerr)?;
@@ -136,9 +140,10 @@ pub(super) fn project_request(
     let azure_ad_token_provider = kwargs
         .get_item("azure_ad_token_provider")?
         .and_then(|provider| PythonTokenProvider::select(provider, AZURE_AD_TOKEN_PROVIDER));
+    let (document, retained_document, reader) = document.into_parts()?;
     let wire = OcrWireRequest {
         model,
-        document: wire_document,
+        document,
         api_key: api_key.extract()?,
         api_base: arguments.api_base()?,
         custom_llm_provider,
@@ -147,13 +152,14 @@ pub(super) fn project_request(
         input_sources,
         timeout_seconds: arguments.timeout_seconds()?,
     };
-    let request = decode_request(wire).map_err(ocr_error_to_pyerr)?;
+    let request = decode_request_input(wire).map_err(ocr_error_to_pyerr)?;
     let provider = request.provider_name();
     Ok(ProjectedOcrCall {
         request: request.with_host_hooks(Arc::new(BridgeOcrHooks), None),
         fields: ProjectedOcrFields {
             boundary_request,
             document: retained_document,
+            reader,
             api_key: api_key.unbind(),
             azure_ad_token_provider,
             provider,
@@ -177,7 +183,7 @@ pub(super) fn admitted_call(outcome: NativeOutcome<OcrCall>) -> PyResult<OcrCall
 
 #[cfg(test)]
 mod tests {
-    use litellm_core::Error;
+    use litellm_core::ocr::Error;
     use litellm_core::ocr::OcrDecline;
     use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 
@@ -197,10 +203,21 @@ mod tests {
     }
 
     fn project_document(
-        py: Python<'_>,
         document: &Bound<'_, PyAny>,
-    ) -> PyResult<(Value, Py<PyAny>)> {
-        ProjectedDocument::project(py, document).map(ProjectedDocument::into_parts)
+    ) -> PyResult<(
+        OcrDocumentInput,
+        Option<Py<PyAny>>,
+        Option<PythonFileReader>,
+    )> {
+        ProjectedDocument::project(document)?.into_parts()
+    }
+
+    fn url_document(url: &str) -> OcrDocumentInput {
+        litellm_core::ocr::OcrDocument::DocumentUrl {
+            document_url: url.into(),
+            extra_fields: Map::new(),
+        }
+        .into()
     }
 
     fn stub_timeout_conversion(py: Python<'_>) {
@@ -374,7 +391,7 @@ kwargs = {}
     }
 
     #[test]
-    fn document_reader_mutations_are_visible_to_later_field_reads() {
+    fn document_readers_are_not_consumed_during_projection() {
         Python::initialize();
         Python::attach(|py| {
             stub_timeout_conversion(py);
@@ -406,7 +423,12 @@ kwargs = {}
                 .unwrap();
             let arguments = arguments(&request, &kwargs);
             let document = arguments.document().unwrap();
-            project_document(py, &document).unwrap();
+            let (input, retained, reader) = project_document(&document).unwrap();
+            assert_eq!(input, OcrDocumentInput::HostReader { mime_type: None });
+            assert!(retained.is_none());
+            assert_eq!(arguments.api_base().unwrap().as_deref(), Some("original"));
+            assert_eq!(arguments.timeout_seconds().unwrap(), Some(1.0));
+            reader.unwrap().read(py).unwrap();
             assert_eq!(arguments.api_base().unwrap().as_deref(), Some("mutated"));
             assert_eq!(arguments.timeout_seconds().unwrap(), Some(9.0));
         });
@@ -444,7 +466,7 @@ kwargs = {'api_key': key}
     }
 
     #[test]
-    fn file_documents_are_encoded_and_other_documents_keep_the_python_object() {
+    fn file_documents_become_typed_inputs_and_other_documents_keep_the_python_object() {
         Python::initialize();
         Python::attach(|py| {
             let file = py
@@ -454,13 +476,17 @@ kwargs = {'api_key': key}
                     None,
                 )
                 .unwrap();
+            let (input, retained, reader) = project_document(&file).unwrap();
             assert_eq!(
-                project_document(py, &file).unwrap().0,
-                serde_json::json!({
-                    "type": "document_url",
-                    "document_url": "data:application/pdf;base64,JVBERi0xLjQ=",
-                })
+                input,
+                OcrDocumentInput::Bytes {
+                    bytes: b"%PDF-1.4".as_slice().into(),
+                    file_name: None,
+                    mime_type: Some("application/pdf".into()),
+                }
             );
+            assert!(retained.is_none());
+            assert!(reader.is_none());
 
             let original = py
                 .eval(
@@ -469,44 +495,21 @@ kwargs = {'api_key': key}
                     None,
                 )
                 .unwrap();
-            let (wire, retained) = project_document(py, &original).unwrap();
-            assert_eq!(
-                wire,
-                serde_json::json!({
-                    "type": "document_url",
-                    "document_url": "https://example.com/a.pdf",
-                })
-            );
-            assert!(retained.bind(py).is(&original));
+            let (input, retained, _) = project_document(&original).unwrap();
+            assert_eq!(input, url_document("https://example.com/a.pdf"));
+            assert!(retained.unwrap().bind(py).is(&original));
         });
     }
 
     #[test]
-    fn unknown_document_types_reach_existing_downstream_validation() {
+    fn unknown_document_types_reach_existing_core_validation() {
         Python::initialize();
         Python::attach(|py| {
             let document = py
                 .eval(c"{'type': 'mystery', 'mystery': 'x'}", None, None)
                 .unwrap();
-            let wire_document = project_document(py, &document).unwrap().0;
-            assert_eq!(
-                wire_document,
-                serde_json::json!({"type": "mystery", "mystery": "x"})
-            );
-            let error = match decode_request(OcrWireRequest {
-                model: "mistral/mistral-ocr-latest".into(),
-                document: wire_document,
-                api_key: None,
-                api_base: None,
-                custom_llm_provider: None,
-                extra_headers: None,
-                optional_params: Map::new(),
-                input_sources: Default::default(),
-                timeout_seconds: None,
-            }) {
-                Ok(_) => panic!("unknown discriminators belong to core validation"),
-                Err(error) => error,
-            };
+            let error = project_document(&document).unwrap_err();
+            assert!(error.is_instance_of::<PyValueError>(py));
             assert!(error.to_string().contains("document"));
         });
     }
@@ -517,14 +520,14 @@ kwargs = {'api_key': key}
         Python::attach(|py| {
             let missing = py.eval(c"{}", None, None).unwrap();
             assert!(
-                project_document(py, &missing)
+                project_document(&missing)
                     .unwrap_err()
                     .is_instance_of::<PyKeyError>(py)
             );
 
             let non_string = py.eval(c"{'type': 1}", None, None).unwrap();
             assert!(
-                project_document(py, &non_string)
+                project_document(&non_string)
                     .unwrap_err()
                     .is_instance_of::<PyTypeError>(py)
             );
@@ -540,7 +543,7 @@ document = Document()
 ",
             );
             let error =
-                project_document(py, &locals.get_item("document").unwrap().unwrap()).unwrap_err();
+                project_document(&locals.get_item("document").unwrap().unwrap()).unwrap_err();
             assert!(
                 error
                     .value(py)
@@ -569,9 +572,9 @@ document = Document()
 ",
             );
             let document = locals.get_item("document").unwrap().unwrap();
-            let (wire, retained) = project_document(py, &document).unwrap();
-            assert_eq!(wire["type"], "document_url");
-            assert!(!retained.bind(py).is(&document));
+            let (input, retained, _) = project_document(&document).unwrap();
+            assert!(matches!(input, OcrDocumentInput::Bytes { .. }));
+            assert!(retained.is_none());
             let reads: Vec<String> = document.getattr("reads").unwrap().extract().unwrap();
             assert_eq!(reads, ["type", "mime_type", "file"]);
         });

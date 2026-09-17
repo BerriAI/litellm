@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -400,6 +400,37 @@ def test_has_pre_call_guardrails_counts_a_content_enforcer(proxy_logging, monkey
     assert proxy_logging.has_pre_call_guardrails({}) is True
 
 
+@pytest.mark.asyncio
+async def test_registered_hooks_do_not_enforce_user_budget(proxy_logging, monkeypatch):
+    """
+    Personal budget is auth's job (`_user_max_budget_check`), which exempts
+    zero-cost models. A hook re-checking the same counter without that
+    exemption is what 429'd free models once a user was over budget.
+    """
+    monkeypatch.setattr(litellm, "callbacks", [])
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        proxy_logging._add_proxy_hooks(llm_router=None)
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    over_budget_user = UserAPIKeyAuth(
+        api_key="sk-personal",
+        user_id="user-over-budget",
+        user_max_budget=1.0,
+        user_spend=5.0,
+        team_id=None,
+    )
+    data = {"model": "free-model", "messages": [{"role": "user", "content": "hi"}]}
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", new=AsyncMock(return_value=5.0)):
+        out = await proxy_logging.pre_call_hook(
+            user_api_key_dict=over_budget_user,
+            data=data,
+            call_type="completion",
+        )
+
+    assert out == data
+
+
 def test_every_pre_call_customlogger_is_deliberately_classified():
     """
     A ledger, so a new hook cannot land unclassified.
@@ -415,7 +446,6 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
         "_ENTERPRISE_BlockedUserList",
     }
     counts_or_shapes_the_request = {
-        "_PROXY_MaxBudgetLimiter",
         "_PROXY_MaxParallelRequestsHandler_v3",
         "_PROXY_MaxIterationsHandler",
         "_PROXY_MaxBudgetPerSessionHandler",
