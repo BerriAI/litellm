@@ -6191,7 +6191,7 @@ def get_standard_logging_object_payload(
             else raw_usage_dict
         )
 
-        id = response_obj.get("id", kwargs.get("litellm_call_id"))
+        id = response_obj.get("id") or kwargs.get("litellm_call_id")
 
         _model_id: Final = metadata.get("model_info", {}).get("id", "")
         _model_group: Final = metadata.get("model_group", "")
