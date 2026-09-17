@@ -68371,6 +68371,7 @@
         "source": "https://wandb.ai/site/pricing/tokens/"
     },
     "apac.amazon.nova-canvas-v1:0": {
+        "deprecation_date": "2026-09-30",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 2600,
         "mode": "chat",
@@ -68379,11 +68380,13 @@
         "supports_tool_choice": false
     },
     "apac.twelvelabs.marengo-embed-2-7-v1:0": {
+        "deprecation_date": "2026-11-30",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 77,
         "mode": "chat"
     },
     "au.anthropic.claude-3-haiku-20240307-v1:0": {
+        "deprecation_date": "2026-09-10",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -68395,6 +68398,7 @@
         "supports_vision": true
     },
     "au.anthropic.claude-sonnet-4-20250514-v1:0": {
+        "deprecation_date": "2026-10-14",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
@@ -68408,6 +68412,7 @@
         "supports_vision": true
     },
     "eu.amazon.nova-canvas-v1:0": {
+        "deprecation_date": "2026-09-30",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 2600,
         "mode": "chat",
@@ -68416,6 +68421,7 @@
         "supports_tool_choice": false
     },
     "global.ai21.jamba-1-5-large-v1:0": {
+        "deprecation_date": "2026-11-26",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
@@ -68425,6 +68431,7 @@
         "supports_vision": false
     },
     "global.ai21.jamba-1-5-mini-v1:0": {
+        "deprecation_date": "2026-11-26",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
@@ -68434,6 +68441,7 @@
         "supports_vision": false
     },
     "global.amazon.nova-canvas-v1:0": {
+        "deprecation_date": "2026-09-30",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 2600,
         "mode": "chat",
@@ -68444,6 +68452,7 @@
         "supports_tool_choice": false
     },
     "global.anthropic.claude-3-haiku-20240307-v1:0": {
+        "deprecation_date": "2026-09-10",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -68455,6 +68464,7 @@
         "supports_vision": true
     },
     "global.anthropic.claude-opus-4-1-20250805-v1:0": {
+        "deprecation_date": "2027-01-08",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 32000,
@@ -68468,6 +68478,7 @@
         "supports_vision": true
     },
     "global.cohere.command-r-plus-v1:0": {
+        "deprecation_date": "2026-08-19",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
@@ -68478,6 +68489,7 @@
         "supports_vision": false
     },
     "global.cohere.command-r-v1:0": {
+        "deprecation_date": "2026-08-19",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
@@ -68487,11 +68499,13 @@
         "supports_vision": false
     },
     "global.twelvelabs.marengo-embed-2-7-v1:0": {
+        "deprecation_date": "2026-11-30",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 77,
         "mode": "chat"
     },
     "jp.amazon.nova-canvas-v1:0": {
+        "deprecation_date": "2026-09-30",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 2600,
         "mode": "chat",
@@ -68500,6 +68514,7 @@
         "supports_tool_choice": false
     },
     "jp.anthropic.claude-3-haiku-20240307-v1:0": {
+        "deprecation_date": "2026-09-10",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
@@ -68511,6 +68526,7 @@
         "supports_vision": true
     },
     "jp.anthropic.claude-sonnet-4-20250514-v1:0": {
+        "deprecation_date": "2026-10-14",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
@@ -68524,6 +68540,7 @@
         "supports_vision": true
     },
     "us.ai21.jamba-1-5-large-v1:0": {
+        "deprecation_date": "2026-11-26",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
@@ -68533,6 +68550,7 @@
         "supports_vision": false
     },
     "us.ai21.jamba-1-5-mini-v1:0": {
+        "deprecation_date": "2026-11-26",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
@@ -68542,6 +68560,7 @@
         "supports_vision": false
     },
     "us.cohere.command-r-plus-v1:0": {
+        "deprecation_date": "2026-08-19",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
@@ -68553,6 +68572,7 @@
         "supports_vision": false
     },
     "us.cohere.command-r-v1:0": {
+        "deprecation_date": "2026-08-19",
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
