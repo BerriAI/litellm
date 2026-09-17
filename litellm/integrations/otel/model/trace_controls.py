@@ -32,7 +32,7 @@ def caller_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
     if request is None:
         return TraceControls()
     proxy_request: Final = as_str_mapping(request.get("proxy_server_request"))
-    headers: Final = (as_str_mapping(proxy_request.get("headers")) if proxy_request is not None else None) or {}
+    headers: Final = as_str_mapping(proxy_request.get("headers")) if proxy_request is not None else None
     bodies: Final = tuple(
         metadata
         for key in ("metadata", "litellm_metadata")
@@ -40,7 +40,7 @@ def caller_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
     )
 
     def scalar(control: str) -> str | None:
-        from_header: Final = as_str(headers.get(f"{LANGFUSE_HEADER_PREFIX}{control}"))
+        from_header: Final = as_str(headers.get(f"{LANGFUSE_HEADER_PREFIX}{control}")) if headers is not None else None
         if from_header:
             return from_header
         return next((value for body in bodies if (value := as_str(body.get(control)))), None)

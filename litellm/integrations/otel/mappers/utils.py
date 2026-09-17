@@ -6,7 +6,7 @@ they live in one place.
 """
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue
@@ -47,7 +47,12 @@ def tool_attr_budget(vocabularies: int) -> int:
 
 def drop_none(values: Mapping[str, AttrValue | None]) -> AttributeMap:
     """Return ``values`` with ``None``-valued entries removed."""
-    return {k: v for k, v in values.items() if v is not None}
+    return drop_none_pairs(values.items())
+
+
+def drop_none_pairs(pairs: Iterable[tuple[str, AttrValue | None]]) -> AttributeMap:
+    """Return ``pairs`` as a map with ``None``-valued entries removed."""
+    return {k: v for k, v in pairs if v is not None}
 
 
 def tool_definition_attrs(
