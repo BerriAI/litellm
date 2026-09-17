@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from itertools import groupby
 from typing import Final
 
 CONVERTED_SYSTEM_NOTE: Final = (
@@ -39,39 +40,31 @@ def opens_with_tool_results(message: object) -> bool:
     )
 
 
-def system_run_before(messages: Sequence[Mapping[str, object]], index: int) -> Sequence[Mapping[str, object]]:
-    start: Final = next(
-        (j + 1 for j in range(index - 1, -1, -1) if not is_system_role_message(messages[j])),
-        0,
-    )
-    return messages[start:index]
-
-
-def system_run_end(messages: Sequence[Mapping[str, object]], index: int) -> int:
-    return next(
-        (j for j in range(index, len(messages)) if not is_system_role_message(messages[j])),
-        len(messages),
-    )
-
-
-def reordered_around_tool_results(
-    messages: Sequence[Mapping[str, object]], index: int
+def system_run_placed_after_tool_results(
+    system_run: Sequence[Mapping[str, object]], follower_run: Sequence[Mapping[str, object]]
 ) -> tuple[Mapping[str, object], ...]:
-    message: Final = messages[index]
-    if opens_with_tool_results(message):
-        return (message, *system_run_before(messages, index))
-    if not is_system_role_message(message):
-        return (message,)
-    run_end: Final = system_run_end(messages, index)
-    follower: Final = messages[run_end] if run_end < len(messages) else None
-    return () if opens_with_tool_results(follower) else (message,)
+    if follower_run and opens_with_tool_results(follower_run[0]):
+        return (follower_run[0], *system_run, *follower_run[1:])
+    return (*system_run, *follower_run)
 
 
 def system_turns_after_tool_results(
     messages: Sequence[Mapping[str, object]],
 ) -> tuple[Mapping[str, object], ...]:
-    return tuple(
-        message for index in range(len(messages)) for message in reordered_around_tool_results(messages, index)
+    runs: Final = tuple(tuple(run) for _, run in groupby(messages, key=is_system_role_message))
+    if not runs:
+        return ()
+    first_system_run: Final = 0 if is_system_role_message(runs[0][0]) else 1
+    paired_runs: Final = tuple(
+        (runs[i], runs[i + 1] if i + 1 < len(runs) else ()) for i in range(first_system_run, len(runs), 2)
+    )
+    return (
+        *(runs[0] if first_system_run else ()),
+        *(
+            m
+            for system_run, follower_run in paired_runs
+            for m in system_run_placed_after_tool_results(system_run, follower_run)
+        ),
     )
 
 
