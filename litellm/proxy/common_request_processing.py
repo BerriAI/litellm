@@ -54,7 +54,14 @@ from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
-from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
+from litellm.litellm_core_utils.internal_call_metadata import (
+    InternalCompletionExecutor,
+    bind_internal_completion_executor,
+    internal_completion_call_origin,
+    internal_completion_turn_off_message_logging,
+    is_unbilled_non_inference_call_from_params,
+    reset_internal_completion_executor,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -104,6 +111,23 @@ from litellm.types.router_weights import validate_router_weights
 
 _LateResponseT = TypeVar("_LateResponseT", bound=Response)
 _LlmCallT = TypeVar("_LlmCallT")
+_INTERNAL_COMPLETION_BODY_EXCLUSIONS: Final = frozenset(
+    {"litellm_metadata", "metadata", "stream", "litellm_call_id", "turn_off_message_logging"}
+)
+_INTERNAL_COMPLETION_HEADER_EXCLUSIONS: Final = frozenset(
+    {
+        "host",
+        "content-length",
+        "content-type",
+        "accept",
+        "accept-encoding",
+        "connection",
+        "idempotency-key",
+        "x-request-id",
+        "x-litellm-call-id",
+    }
+)
+
 
 ProxyRouteType: TypeAlias = Literal[
     "acompletion",
@@ -218,6 +242,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.utils import (
+    AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingPayloadErrorInformation,
@@ -2352,6 +2377,97 @@ class ProxyBaseLLMRequestProcessing:
                 _payload_str,
             )
 
+    def _internal_completion_executor(
+        self,
+        *,
+        request: Request,
+    ) -> InternalCompletionExecutor:
+        async def execute(request_data: Mapping[str, object]) -> object:
+            from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+                isolated_internal_completion_request,
+                release_internal_completion_request_on_cancel,
+            )
+            from litellm.proxy.proxy_server import app
+
+            raw_turn_off_message_logging: Final = request_data.get("turn_off_message_logging")
+            turn_off_message_logging: Final = (
+                raw_turn_off_message_logging if isinstance(raw_turn_off_message_logging, (bool, str)) else None
+            )
+            body: Final = {  # mutable-ok: HTTPX JSON payload requires a built-in mapping
+                **MappingProxyType(
+                    {
+                        key: value
+                        for key, value in request_data.items()
+                        if key not in _INTERNAL_COMPLETION_BODY_EXCLUSIONS
+                    }
+                ),
+                "stream": False,
+            }
+            headers: Final = MappingProxyType(
+                {
+                    **MappingProxyType(
+                        {
+                            key: value
+                            for key, value in request.headers.items()
+                            if key.lower() not in _INTERNAL_COMPLETION_HEADER_EXCLUSIONS
+                        }
+                    ),
+                    "x-litellm-call-id": str(uuid.uuid4()),
+                }
+            )
+            path: Final = "/v1/chat/completions" if "/v1/" in request.url.path else "/chat/completions"
+            child_url: Final = str(request.url.replace(path=path))
+            params: Final = dict(request.query_params)  # mutable-ok: AsyncHTTPHandler requires a built-in dict
+
+            async def dispatch() -> httpx.Response:
+                from litellm.llms.custom_httpx.http_handler import (
+                    MaskedHTTPStatusError,
+                    temporary_async_http_handler,
+                )
+
+                transport: Final = httpx.ASGITransport(
+                    app=app,
+                    client=request.client or ("127.0.0.1", 0),
+                    root_path=request.scope.get("root_path", ""),
+                )
+                async with temporary_async_http_handler(transport) as handler:
+                    try:
+                        return await handler.post(
+                            child_url,
+                            json=body,
+                            headers=headers,
+                            params=params,
+                        )
+                    except MaskedHTTPStatusError as exc:
+                        return exc.response
+
+            async def run_child() -> httpx.Response:
+                with (
+                    isolated_internal_completion_request(),
+                    internal_completion_call_origin(AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN),
+                    internal_completion_turn_off_message_logging(turn_off_message_logging),
+                ):
+                    try:
+                        return await dispatch()
+                    except asyncio.CancelledError:
+                        await release_internal_completion_request_on_cancel(tuple(litellm.callbacks))
+                        raise
+
+            child_task: Final = asyncio.create_task(run_child())
+            try:
+                response: Final = await child_task
+            except asyncio.CancelledError:
+                child_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await child_task
+                raise
+            if response.is_error:
+                raise HTTPException(status_code=response.status_code, detail=response.text)
+            payload: Final = orjson.loads(response.content)
+            return litellm.ModelResponse(**payload) if isinstance(payload, dict) else payload
+
+        return execute
+
     async def base_process_llm_request(
         self,
         request: Request,
@@ -2510,14 +2626,20 @@ class ProxyBaseLLMRequestProcessing:
 
         ### ROUTE THE REQUEST ###
         # Do not change this - it should be a constant time fetch - ALWAYS
-        llm_call: Final = await route_request(
-            data=self.data,
-            route_type=route_type,
-            llm_router=llm_router,
-            user_model=user_model,
-            user_api_key_dict=user_api_key_dict,
+        internal_executor_token: Final = bind_internal_completion_executor(
+            self._internal_completion_executor(request=request)
         )
-        llm_call_task: Final = asyncio.create_task(llm_call)
+        try:
+            llm_call: Final = await route_request(
+                data=self.data,
+                route_type=route_type,
+                llm_router=llm_router,
+                user_model=user_model,
+                user_api_key_dict=user_api_key_dict,
+            )
+            llm_call_task: Final = asyncio.create_task(llm_call)
+        finally:
+            reset_internal_completion_executor(internal_executor_token)
         tasks.append(llm_call_task)
 
         llm_responses: Final = asyncio.gather(*tasks)  # run the moderation check in parallel to the actual llm api call

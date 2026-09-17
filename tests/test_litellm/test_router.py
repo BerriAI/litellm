@@ -4559,8 +4559,8 @@ def test_deployment_max_input_tokens_survives_an_unmappable_deployment(monkeypat
     unmapped = {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "unmapped"}}
     mapped = {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "mapped"}}
 
-    assert router._deployment_max_input_tokens("m", unmapped) is None
-    assert router._deployment_max_input_tokens("m", mapped) == 100
+    assert router.deployment_max_input_tokens("m", unmapped) is None
+    assert router.deployment_max_input_tokens("m", mapped) == 100
     assert router._pre_call_checks_need_token_count("m", [unmapped, mapped]) is True
 
 
@@ -4780,8 +4780,8 @@ def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
     short_input = "hi"
     long_instructions = "you are a helpful assistant. " * 20
 
-    input_only_tokens = router._count_pre_call_check_tokens(messages=None, input=short_input)
-    with_instructions_tokens = router._count_pre_call_check_tokens(
+    input_only_tokens = router.count_pre_call_check_tokens(messages=None, input=short_input)
+    with_instructions_tokens = router.count_pre_call_check_tokens(
         messages=None, input=short_input, request_kwargs={"instructions": long_instructions}
     )
     assert with_instructions_tokens > input_only_tokens
@@ -4854,7 +4854,7 @@ def test_pre_call_checks_counts_tool_definition_tokens(monkeypatch, prompt_kwarg
         {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
     ]
 
-    prompt_only_tokens = router._count_pre_call_check_tokens(
+    prompt_only_tokens = router.count_pre_call_check_tokens(
         messages=prompt_kwargs.get("messages"), input=prompt_kwargs.get("input")
     )
     monkeypatch.setattr(
@@ -4898,7 +4898,7 @@ def test_pre_call_checks_counts_anthropic_system_tokens(monkeypatch, system):
     ]
     messages = [{"role": "user", "content": "hi"}]
 
-    messages_only_tokens = router._count_pre_call_check_tokens(messages=messages, input=None)
+    messages_only_tokens = router.count_pre_call_check_tokens(messages=messages, input=None)
     monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": messages_only_tokens})
 
     assert len(router._pre_call_checks(model="m", healthy_deployments=deployments, messages=messages)) == 1
@@ -4958,7 +4958,7 @@ async def test_aanthropic_messages_enforces_context_window_with_system_and_tools
 
 def test_count_pre_call_check_tokens_across_api_surfaces():
     """
-    _count_pre_call_check_tokens must count tokens from chat `messages`, a Responses
+    count_pre_call_check_tokens must count tokens from chat `messages`, a Responses
     API string `input`, and a Responses API list `input`, and raise when given neither.
     """
     router = litellm.Router(
@@ -4967,11 +4967,11 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
         ],
     )
 
-    messages_tokens = router._count_pre_call_check_tokens(
+    messages_tokens = router.count_pre_call_check_tokens(
         messages=[{"role": "user", "content": "hello world"}], input=None
     )
-    string_input_tokens = router._count_pre_call_check_tokens(messages=None, input="hello world")
-    list_input_tokens = router._count_pre_call_check_tokens(
+    string_input_tokens = router.count_pre_call_check_tokens(messages=None, input="hello world")
+    list_input_tokens = router.count_pre_call_check_tokens(
         messages=None, input=[{"role": "user", "content": "hello world"}]
     )
 
@@ -4980,7 +4980,131 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
     assert list_input_tokens > 0
 
     with pytest.raises(ValueError, match='Either messages or input must be provided to count tokens'):
-        router._count_pre_call_check_tokens(messages=None, input=None)
+        router.count_pre_call_check_tokens(messages=None, input=None)
+
+
+def test_count_pre_call_check_tokens_uses_selected_deployment_model(monkeypatch):
+    router = litellm.Router(
+        model_list=[{"model_name": "m", "litellm_params": {"model": "openai/gpt-5.6"}}],
+    )
+
+    def model_specific_count(*, model, **kwargs):
+        return 17 if model == "selected-wire-model" else 3
+
+    monkeypatch.setattr(litellm, "token_counter", model_specific_count)
+    assert (
+        router.count_pre_call_check_tokens(
+            messages=[{"role": "user", "content": "hello"}],
+            input=None,
+            model="selected-wire-model",
+        )
+        == 17
+    )
+
+
+@pytest.mark.asyncio
+async def test_selected_request_compression_returns_a_retryable_summary_policy(monkeypatch):
+    from litellm.router_strategy.complexity_router.context_compression import ContextCompressionPolicy
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "compressor",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-only",
+                    "api_base": "https://compressor.test/v1",
+                },
+                "model_info": {"id": "compressor-id", "max_input_tokens": 4096},
+            }
+        ]
+    )
+    policy = ContextCompressionPolicy(model="compressor", buffer=0.8)
+    request_kwargs = {
+        "messages": [{"role": "user", "content": "historical context " * 200}],
+        "_complexity_router_context_compression_model": policy,
+    }
+    deployment = {
+        "litellm_params": {"model": "openai/gpt-5.6"},
+        "model_info": {"id": "target-id", "max_input_tokens": 64},
+    }
+    with respx.mock(assert_all_mocked=True) as upstream:
+        upstream.post(host="compressor.test").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "summary"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+                },
+            )
+        )
+        prepared, retry_policy = await router._compress_selected_request_if_needed(
+            model="target", deployment=deployment, request_kwargs=request_kwargs, surface="chat"
+        )
+        compressor_hosts: Final = [call.request.url.host for call in upstream.calls]
+
+    assert retry_policy is not None
+    assert retry_policy.summary == "summary"
+    assert prepared["messages"] == [{"role": "user", "content": "summary"}]
+    assert "_complexity_router_context_compression_model" not in prepared
+    assert compressor_hosts == ["compressor.test"]
+
+
+@pytest.mark.asyncio
+async def test_memoized_summary_does_not_replace_history_that_fits_the_selected_target():
+    from litellm.router_strategy.complexity_router.context_compression import ContextCompressionPolicy
+
+    router: Final = Router(model_list=[])
+    policy: Final = ContextCompressionPolicy(model="compressor", buffer=0.8, summary="paid summary")
+    original_messages: Final = [{"role": "user", "content": "short original history"}]
+    request_kwargs: Final = {
+        "messages": original_messages,
+        "_complexity_router_context_compression_model": policy,
+    }
+    deployment: Final = {
+        "litellm_params": {"model": "openai/gpt-5.6"},
+        "model_info": {"id": "large-target-id", "max_input_tokens": 4096},
+    }
+
+    prepared, retry_policy = await router._compress_selected_request_if_needed(
+        model="target", deployment=deployment, request_kwargs=request_kwargs, surface="chat"
+    )
+
+    assert prepared["messages"] == original_messages
+    assert retry_policy is policy
+    assert "_complexity_router_context_compression_model" not in prepared
+
+
+@pytest.mark.asyncio
+async def test_selected_request_compression_skips_unsupported_generic_surface():
+    from litellm.router_strategy.complexity_router.context_compression import ContextCompressionPolicy
+
+    router: Final = Router(model_list=[])
+    original_input: Final = [{"role": "user", "content": "historical context " * 1000}]
+    request_kwargs: Final = {
+        "input": original_input,
+        "_complexity_router_context_compression_model": ContextCompressionPolicy(model="compressor", buffer=0.8),
+    }
+
+    with respx.mock(assert_all_mocked=True) as upstream:
+        prepared, retry_policy = await router._compress_selected_request_if_needed(
+            model="target",
+            deployment={"litellm_params": {"model": "openai/gpt-5.6"}},
+            request_kwargs=request_kwargs,
+            surface=None,
+        )
+
+    assert prepared["input"] == original_input
+    assert "_complexity_router_context_compression_model" not in prepared
+    assert retry_policy is None
+    assert not upstream.calls
 
 
 def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
@@ -4999,10 +5123,10 @@ def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
     )
 
     counted: list[dict] = []
-    original = router._count_pre_call_check_tokens
+    original = router.count_pre_call_check_tokens
     monkeypatch.setattr(
         router,
-        "_count_pre_call_check_tokens",
+        "count_pre_call_check_tokens",
         lambda **kwargs: counted.append(kwargs) or original(**kwargs),
     )
 
@@ -10838,7 +10962,7 @@ class TestTaggedAutoRouterOnSharedModelName:
             assert deployment["litellm_params"]["model"] == "openai/gpt-4o"
 
     def test_deployment_without_litellm_params_mapping_is_not_a_marker(self):
-        assert litellm.Router._is_strategy_marker_deployment({"model_name": "gpt4o"}) is False
+        assert litellm.Router.is_strategy_marker_deployment({"model_name": "gpt4o"}) is False
 
 
 class TestAutoRouterSharedModelNameConnectionParams:
@@ -11769,7 +11893,7 @@ class TestTeamPublicNameReachesPreRoutingStrategies:
                 callable_names = [
                     name
                     for name, deployment in zip(resolved, router.deployments_for_request(model, request_kwargs))
-                    if not router._is_strategy_marker_deployment(deployment)
+                    if not router.is_strategy_marker_deployment(deployment)
                 ]
                 if resolved and not callable_names:
                     with pytest.raises(litellm.BadRequestError, match="strategy router marker"):

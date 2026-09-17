@@ -24,7 +24,7 @@ AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
 StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
 
-StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding"]
+StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding", "compression"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +164,7 @@ def strategy_router_dependencies(
                 if complexity.get("semantic_keyword_matching")
                 else ()
             )
+            + _named(complexity.get("context_window_compression_model"), "compression")
         )
     )
 

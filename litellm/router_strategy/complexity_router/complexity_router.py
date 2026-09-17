@@ -3099,7 +3099,11 @@ class ComplexityRouter(CustomLogger):
         resolved_messages: Sequence[Mapping[str, object]] | None,
         request_kwargs: Mapping[str, object],
     ) -> _RequestContextFit:
-        if not self.config.enable_context_window_escalation or not resolved_messages:
+        if (
+            not self.config.enable_context_window_escalation
+            or self.config.context_window_compression_model is not None
+            or not resolved_messages
+        ):
             return _RequestContextFit(EMPTY_MAPPING, None, self.config.context_window_escalation_buffer)
         names: Final = frozenset(model for pool in self._tier_pools().values() for model in pool) | frozenset(
             (self.config.default_model,) if self.config.default_model else ()
@@ -3125,7 +3129,11 @@ class ComplexityRouter(CustomLogger):
         (the placement stands). Only a real tokenizer count ever moves a request, escalation
         lands only on groups whose every deployment declares a fitting window, and a group
         with no resolvable window is never moved on faith in either direction."""
-        if not self.config.enable_context_window_escalation or not resolved_messages:
+        if (
+            not self.config.enable_context_window_escalation
+            or self.config.context_window_compression_model is not None
+            or not resolved_messages
+        ):
             return None
         pools: Final = self._tier_pools()
         pool: Final = pool_override if pool_override is not None else tuple(pools.get(_tier_name(tier), ()))

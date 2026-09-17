@@ -36,7 +36,10 @@ from litellm.proxy.litellm_pre_call_utils import (
     clean_headers,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
-from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
+from litellm.litellm_core_utils.internal_call_metadata import (
+    MODEL_ACCESS_GROUP_METADATA_KEY,
+    internal_completion_call_origin,
+)
 from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_logging_from_dynamic_params
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -51,7 +54,7 @@ from litellm.constants import (
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
-from litellm.types.utils import CredentialItem
+from litellm.types.utils import AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN, CredentialItem
 
 
 def test_check_if_token_is_service_account():
@@ -1019,6 +1022,40 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "mock_response" not in snapshot_body
     assert "mock_tool_calls" not in snapshot_body
     assert "pillar_response_headers" not in snapshot_body["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_restores_trusted_internal_completion_origin():
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    data = {
+        "model": "compressor",
+        "messages": [{"role": "user", "content": "summarize"}],
+        "metadata": {"internal_call_origin": "untrusted"},
+    }
+
+    with internal_completion_call_origin(AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN):
+        updated = await add_litellm_data_to_request(
+            data=data,
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    assert updated["metadata"]["internal_call_origin"] == AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN
+    assert (
+        updated["proxy_server_request"]["body"]["metadata"]["internal_call_origin"]
+        == AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN
+    )
 
 
 @pytest.mark.asyncio

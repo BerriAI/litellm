@@ -198,10 +198,13 @@ def test_config_check_ignores_the_model_entirely():
         (
             {
                 "model": "auto_router/complexity_router",
-                "complexity_router_config": {"tiers": {"SIMPLE": "a", "MEDIUM": ["b", "c"]}},
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": "a", "MEDIUM": ["b", "c"]},
+                    "context_window_compression_model": "cmp",
+                },
                 "complexity_router_default_model": "d",
             },
-            (("a", "tier"), ("b", "tier"), ("c", "tier"), ("d", "default")),
+            (("a", "tier"), ("b", "tier"), ("c", "tier"), ("d", "default"), ("cmp", "compression")),
         ),
         (
             {

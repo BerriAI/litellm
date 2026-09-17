@@ -323,6 +323,9 @@ if TYPE_CHECKING:
     from litellm.router_strategy.complexity_router.complexity_router import (
         ComplexityRouter,
     )
+    from litellm.router_strategy.complexity_router.context_compression import (
+        ContextCompressionPolicy,
+    )
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
     )
@@ -404,6 +407,11 @@ _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
+_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG: Final = "_complexity_router_context_compression_model"
+_CONTEXT_WINDOW_COMPRESSION_POLICY_EXCEPTION_ATTR: Final = "_complexity_router_context_compression_policy"
+_COMPRESSION_GENERIC_SURFACES: Final[Mapping[str, Literal["messages", "responses"]]] = MappingProxyType(
+    {"anthropic_messages": "messages", "aresponses": "responses", "responses": "responses"}
+)
 _CLAUDE_CODE_SESSION_ID_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 _CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS: Final = 3600
 
@@ -3565,6 +3573,8 @@ class Router:
         """
         model_name = None
         deployment = None
+        deployment_ready: bool = False  # rebind-ok: distinguishes local preparation from target dispatch failures
+        retry_compression_policy: "ContextCompressionPolicy | None" = None  # noqa: UP037  # Runtime import would cycle through Router
         _timeout_debug_deployment_dict = {}  # this is a temporary dict to debug timeout issues
         try:
             input_kwargs_for_streaming_fallback: Final = kwargs.copy()
@@ -3623,32 +3633,37 @@ class Router:
             kwargs.setdefault("messages", messages)
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
+            prepared_kwargs, retry_compression_policy = await self._compress_selected_request_if_needed(
+                model=model, deployment=deployment, request_kwargs=kwargs, surface="chat"
+            )
+            input_kwargs_for_streaming_fallback[_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG] = retry_compression_policy
+            deployment_ready = True
 
             model_name = litellm_params["model"]
 
             model_client: Final = self._get_async_openai_model_client(
                 deployment=deployment,
-                kwargs=kwargs,
+                kwargs=prepared_kwargs,
             )
             self.total_calls[model_name] += 1
 
             input_kwargs: Final = {
                 **litellm_params,
-                "messages": messages,
+                "messages": prepared_kwargs.get("messages", messages),
                 "caching": self.cache_responses,
                 "client": model_client,
-                **kwargs,
+                **prepared_kwargs,
             }
             input_kwargs.pop("silent_model", None)
             input_kwargs.pop("include_fallback_errors", None)
 
             _response: Final = litellm.acompletion(**input_kwargs)
 
-            logging_obj: Final[LiteLLMLogging | None] = kwargs.get("litellm_logging_obj", None)
+            logging_obj: Final[LiteLLMLogging | None] = prepared_kwargs.get("litellm_logging_obj", None)
 
             rpm_semaphore: Final = self._get_client(
                 deployment=deployment,
-                kwargs=kwargs,
+                kwargs=prepared_kwargs,
                 client_type="max_parallel_requests",
             )
             async with contextlib.AsyncExitStack() as deployment_slot:
@@ -3664,7 +3679,7 @@ class Router:
                 ## CHECK CONTENT FILTER ERROR ##
                 if isinstance(response, ModelResponse):
                     _should_raise = self._should_raise_content_policy_error(
-                        model=model, response=response, kwargs=kwargs
+                        model=model, response=response, kwargs=prepared_kwargs
                     )
                     if _should_raise:
                         raise litellm.ContentPolicyViolationError(
@@ -3706,18 +3721,32 @@ class Router:
             if litellm.expose_router_debug_in_errors:
                 e.message += f"\n\nDeployment Info: request_timeout: {deployment_request_timeout_param}\ntimeout: {deployment_timeout_param}"
             # Set per-deployment num_retries on exception for retry logic
-            if deployment is not None:
+            if deployment is not None and deployment_ready:
                 self._set_deployment_num_retries_on_exception(e, deployment)
                 self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
+            timeout_compression_policy: Final = getattr(
+                e,
+                _CONTEXT_WINDOW_COMPRESSION_POLICY_EXCEPTION_ATTR,
+                retry_compression_policy,
+            )
+            if timeout_compression_policy is not None:
+                setattr(e, _CONTEXT_WINDOW_COMPRESSION_POLICY_EXCEPTION_ATTR, timeout_compression_policy)
             raise e
         except Exception as e:
             verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             # Set per-deployment num_retries on exception for retry logic
-            if deployment is not None:
+            if deployment is not None and deployment_ready:
                 self._set_deployment_num_retries_on_exception(e, deployment)
                 self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
+            compression_policy: Final = getattr(
+                e,
+                _CONTEXT_WINDOW_COMPRESSION_POLICY_EXCEPTION_ATTR,
+                retry_compression_policy,
+            )
+            if compression_policy is not None:
+                setattr(e, _CONTEXT_WINDOW_COMPRESSION_POLICY_EXCEPTION_ATTR, compression_policy)
             raise e
 
     def _update_kwargs_before_fallbacks(
@@ -3969,7 +3998,7 @@ class Router:
 
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
 
-    def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
+    def _get_async_openai_model_client(self, deployment: dict, kwargs: Mapping[str, object]):
         """
         Helper to get AsyncOpenAI or AsyncAzureOpenAI client that was created for the deployment
 
@@ -5251,13 +5280,21 @@ class Router:
             request_kwargs=None,
         )
 
-    async def _ageneric_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
+    async def _ageneric_api_call_with_fallbacks(
+        self,
+        model: str,
+        original_function: Callable,
+        compression_policy_sink: Callable[["ContextCompressionPolicy"], object] | None = None,
+        **kwargs,
+    ):
         """
         Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
         """
         try:
             kwargs["model"] = model
             kwargs["original_generic_function"] = original_function
+            if compression_policy_sink is not None:
+                kwargs["compression_policy_sink"] = compression_policy_sink
             kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs, metadata_variable_name="litellm_metadata")
             verbose_router_logger.debug(
@@ -5307,7 +5344,43 @@ class Router:
             kwargs["endpoint"] = replace_path_segment(kwargs["endpoint"], model, replacement_model_name)
         return kwargs
 
-    async def _ageneric_api_call_with_fallbacks_helper(self, model: str, original_generic_function: Callable, **kwargs):
+    async def _compress_selected_request_if_needed(
+        self,
+        model: str,
+        deployment: Mapping[str, object],
+        request_kwargs: Mapping[str, object],
+        surface: Literal["chat", "responses", "messages"] | None,
+    ) -> tuple[Mapping[str, object], "ContextCompressionPolicy | None"]:
+        from litellm.router_strategy.complexity_router.context_compression import (
+            ContextCompressionPolicy,
+            compress_selected_request,
+        )
+
+        policy: Final = request_kwargs.get(_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG)
+        if not isinstance(policy, ContextCompressionPolicy):
+            return request_kwargs, None
+        cleaned_kwargs: Final = MappingProxyType(
+            {key: value for key, value in request_kwargs.items() if key != _CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG}
+        )
+        if surface is None:
+            return cleaned_kwargs, None
+        result: Final = await compress_selected_request(
+            router=self,
+            model=model,
+            deployment=deployment,
+            request_kwargs=cleaned_kwargs,
+            policy=policy,
+            surface=surface,
+        )
+        return result.request_kwargs, result.policy
+
+    async def _ageneric_api_call_with_fallbacks_helper(
+        self,
+        model: str,
+        original_generic_function: Callable,
+        compression_policy_sink: Callable[["ContextCompressionPolicy"], object] | None = None,
+        **kwargs,
+    ):
         """
         Helper function to make a generic LLM API call through the router, this allows you to use retries/fallbacks with litellm router
         """
@@ -5315,6 +5388,8 @@ class Router:
         passthrough_on_no_deployment: Final = kwargs.pop("passthrough_on_no_deployment", False)
         function_name: Final = "_ageneric_api_call_with_fallbacks"
         deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
+        deployment_ready: bool = False  # rebind-ok: distinguishes local preparation from target dispatch failures
+        retry_compression_policy: "ContextCompressionPolicy | None" = None  # noqa: UP037  # Runtime import would cycle through Router
         try:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
             try:
@@ -5331,23 +5406,29 @@ class Router:
                 raise e
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
-
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
-            self.total_calls[model_name] += 1
-
             self._add_deployment_model_to_endpoint_for_llm_passthrough_route(
                 kwargs=kwargs, model=model, model_name=model_name
             )
+            surface: Final = _COMPRESSION_GENERIC_SURFACES.get(getattr(original_generic_function, "__name__", ""))
+            prepared_kwargs, retry_compression_policy = await self._compress_selected_request_if_needed(
+                model=model, deployment=deployment, request_kwargs=kwargs, surface=surface
+            )
+            if retry_compression_policy is not None and compression_policy_sink is not None:
+                compression_policy_sink(retry_compression_policy)
+            deployment_ready = True
+
+            self.total_calls[model_name] += 1
 
             custom_llm_provider: Final = provider_for_generic_call(data)
 
             response_kwargs: Final = {
                 **data,
                 "caching": self.cache_responses,
-                **kwargs,
+                **prepared_kwargs,
                 "model": model_name,
-                **_with_router_resolved_session_model(kwargs.get("session"), model_name),
+                **_with_router_resolved_session_model(prepared_kwargs.get("session"), model_name),
             }
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
@@ -5398,10 +5479,16 @@ class Router:
             verbose_router_logger.info(
                 "ageneric_api_call_with_fallbacks(model=%s)\x1b[31m Exception %s\x1b[0m", model, e
             )
-            if model is not None:
+            if deployment is not None and deployment_ready:
                 self.fail_calls[model] += 1
-            if deployment is not None:
                 self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
+            compression_policy: Final = getattr(
+                e,
+                _CONTEXT_WINDOW_COMPRESSION_POLICY_EXCEPTION_ATTR,
+                retry_compression_policy,
+            )
+            if compression_policy is not None:
+                setattr(e, _CONTEXT_WINDOW_COMPRESSION_POLICY_EXCEPTION_ATTR, compression_policy)
             raise e
 
     async def _aresponses_with_streaming_fallbacks(
@@ -5448,7 +5535,11 @@ class Router:
             fallback_kwargs["metadata"] = safe_deep_copy(fallback_kwargs["metadata"])
         fallback_kwargs["original_generic_function"] = original_function
 
-        response: Final = await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
+        response: Final = await self._ageneric_api_call_with_fallbacks(
+            original_function=original_function,
+            compression_policy_sink=partial(fallback_kwargs.__setitem__, _CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG),
+            **kwargs,
+        )
 
         # The snapshot predates the pre-routing hook, so the tier it stamped into the live kwargs
         # is carried over write-or-clear: a stale or caller-supplied selection left in the copy
@@ -5771,7 +5862,11 @@ class Router:
             fallback_kwargs["metadata"] = safe_deep_copy(fallback_kwargs["metadata"])
         fallback_kwargs["original_generic_function"] = original_function
 
-        response: Final = await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
+        response: Final = await self._ageneric_api_call_with_fallbacks(
+            original_function=original_function,
+            compression_policy_sink=partial(fallback_kwargs.__setitem__, _CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG),
+            **kwargs,
+        )
 
         # The snapshot predates the pre-routing hook, so the tier it stamped into the live kwargs
         # is carried over write-or-clear: a stale or caller-supplied selection left in the copy
@@ -7399,6 +7494,13 @@ class Router:
             "original_exception": original_exception,
             **kwargs,
         }
+        compression_policy: Final = getattr(
+            original_exception,
+            _CONTEXT_WINDOW_COMPRESSION_POLICY_EXCEPTION_ATTR,
+            None,
+        )
+        if compression_policy is not None:
+            input_kwargs[_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG] = compression_policy
 
         if "max_fallbacks" not in input_kwargs:
             input_kwargs["max_fallbacks"] = self.max_fallbacks
@@ -7846,6 +7948,13 @@ class Router:
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
+                compression_policy: Final = getattr(
+                    original_exception,
+                    _CONTEXT_WINDOW_COMPRESSION_POLICY_EXCEPTION_ATTR,
+                    None,
+                )
+                if compression_policy is not None:
+                    kwargs[_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG] = compression_policy
                 first_skipped_ids: Final = self._deployment_ids_to_skip_on_retry(
                     exception=original_exception,
                     already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
@@ -7891,6 +8000,14 @@ class Router:
 
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
+                    if (
+                        updated_compression_policy := getattr(
+                            e,
+                            _CONTEXT_WINDOW_COMPRESSION_POLICY_EXCEPTION_ATTR,
+                            None,
+                        )
+                    ) is not None:
+                        kwargs[_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG] = updated_compression_policy
                     remaining_retries = num_retries - current_attempt - 1
                     _model: str | None = kwargs.get("model")
                     if _model is not None:
@@ -8591,7 +8708,9 @@ class Router:
         )
         return resolved is not None
 
-    def _should_raise_content_policy_error(self, model: str, response: ModelResponse, kwargs: dict) -> bool:
+    def _should_raise_content_policy_error(
+        self, model: str, response: ModelResponse, kwargs: Mapping[str, object]
+    ) -> bool:
         """
         Determines if a content policy error should be raised.
 
@@ -12238,7 +12357,7 @@ class Router:
             self._init_routing_groups(self._routing_groups_input)
         verbose_router_logger.debug("Updated Router settings: %s", self.get_settings())
 
-    def _get_client(self, deployment, kwargs, client_type=None):
+    def _get_client(self, deployment, kwargs: Mapping[str, object], client_type=None):
         """
         Returns the appropriate client based on the given deployment, kwargs, and client_type.
 
@@ -12278,11 +12397,12 @@ class Router:
                 client = self.cache.get_cache(key=cache_key, parent_otel_span=parent_otel_span)
                 return client
 
-    def _count_pre_call_check_tokens(
+    def count_pre_call_check_tokens(
         self,
         messages: list[dict[str, str]] | None,
         input: str | list | None,
         request_kwargs: Mapping[str, object] | None = None,
+        model: str | None = None,
     ) -> int:
         """
         Count input tokens for context-window pre-call checks.
@@ -12313,7 +12433,7 @@ class Router:
         system_message: Final = anthropic_system_to_openai_message(extras.get("system"))
         if messages is not None:
             counted_messages: Final = (system_message, *messages) if system_message is not None else messages
-            return litellm.token_counter(messages=counted_messages, tools=tools)
+            return litellm.token_counter(model=model or "", messages=counted_messages, tools=tools)
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
@@ -12327,12 +12447,13 @@ class Router:
                 responses_api_request={"instructions": instructions} if instructions is not None else {},
             )
             return litellm.token_counter(
+                model=model or "",
                 messages=cast(list, input_messages),  # cast-ok: transformed chat messages
                 tools=tools,
             )
         raise ValueError("Either messages or input must be provided to count tokens")
 
-    def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
+    def deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
         """The deployment's declared context window, or None when it declares none or cannot be resolved."""
         try:
             model_info: Final = self.get_router_model_info(
@@ -12341,7 +12462,7 @@ class Router:
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an unmappable deployment must not hide the others
             verbose_router_logger.debug(
-                "litellm.router.py::_deployment_max_input_tokens: skipping deployment. Got - %s", e
+                "litellm.router.py::deployment_max_input_tokens: skipping deployment. Got - %s", e
             )
             return None
         max_input_tokens: Final = model_info.get("max_input_tokens")
@@ -12356,7 +12477,7 @@ class Router:
         cannot hide a later one that does declare a limit.
         """
         return any(
-            self._deployment_max_input_tokens(model, deployment) is not None for deployment in healthy_deployments
+            self.deployment_max_input_tokens(model, deployment) is not None for deployment in healthy_deployments
         )
 
     async def _acount_pre_call_check_tokens(
@@ -12375,10 +12496,16 @@ class Router:
         """
         if messages is None and input is None:
             return None
+        if (
+            request_kwargs is not None
+            and request_kwargs.get(_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG) is not None
+            and request_kwargs.get("previous_response_id") is None
+        ):
+            return None
         try:
             if not self._pre_call_checks_need_token_count(model, healthy_deployments):
                 return None
-            return await offload_token_count(self._count_pre_call_check_tokens)(
+            return await offload_token_count(self.count_pre_call_check_tokens)(
                 messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
                 input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
                 request_kwargs=request_kwargs,
@@ -12428,7 +12555,12 @@ class Router:
         _rate_limit_error = False
         parent_otel_span: Final = _get_parent_otel_span_from_kwargs(request_kwargs)
 
-        has_countable_input: Final = messages is not None or input is not None
+        compression_pending: Final = (
+            request_kwargs is not None
+            and request_kwargs.get(_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG) is not None
+            and request_kwargs.get("previous_response_id") is None
+        )
+        has_countable_input: Final = (messages is not None or input is not None) and not compression_pending
 
         ## get model group RPM ##
         dt: Final = get_utc_datetime()
@@ -12457,7 +12589,7 @@ class Router:
                         if skip_inline_token_count:
                             return _returned_deployments
                         try:
-                            input_tokens = self._count_pre_call_check_tokens(
+                            input_tokens = self.count_pre_call_check_tokens(
                                 messages=messages, input=input, request_kwargs=request_kwargs
                             )
                         except Exception as e:
@@ -12673,7 +12805,7 @@ class Router:
         return self._team_deployments_across_teams(registered_name)
 
     @staticmethod
-    def _is_strategy_marker_deployment(deployment: Mapping[str, object]) -> bool:
+    def is_strategy_marker_deployment(deployment: Mapping[str, object]) -> bool:
         litellm_params: Final = deployment.get("litellm_params")
         if not isinstance(litellm_params, Mapping):
             return False
@@ -12810,7 +12942,7 @@ class Router:
     ) -> list[DeploymentTypedDict]:
         """A strategy marker is never a callable deployment, whichever resolution arm produced it."""
         selectable: Final = [  # mutable-ok: matches _common_checks_available_deployment's list contract
-            d for d in deployments if not self._is_strategy_marker_deployment(d)
+            d for d in deployments if not self.is_strategy_marker_deployment(d)
         ]
         if deployments and not selectable:
             raise litellm.BadRequestError(
@@ -13562,7 +13694,7 @@ class Router:
         if (
             (self.enable_tag_filtering or request_scoped_filtering)
             and all(tagged.tags for tagged in candidates)
-            and any(not self._is_strategy_marker_deployment(d) for d in deployments)
+            and any(not self.is_strategy_marker_deployment(d) for d in deployments)
         ):
             return None
         return candidates[0]
@@ -13705,6 +13837,7 @@ class Router:
             model=registered_model_name, request_kwargs=request_kwargs
         )
         if selected_strategy is None:
+            request_kwargs.pop(_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG, None)
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, value=None
@@ -13713,6 +13846,27 @@ class Router:
                 request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_METADATA_KEY, value=None
             )
             return None
+
+        from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
+        from litellm.router_strategy.complexity_router.context_compression import ContextCompressionPolicy
+
+        if isinstance(selected_strategy.strategy, ComplexityRouter):
+            compression_model: Final = selected_strategy.strategy.config.context_window_compression_model
+            compression_buffer: Final = selected_strategy.strategy.config.context_window_escalation_buffer
+            existing_policy: Final = request_kwargs.get(_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG)
+            if compression_model is None:
+                request_kwargs.pop(_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG, None)
+            elif not (
+                isinstance(existing_policy, ContextCompressionPolicy)
+                and existing_policy.model == compression_model
+                and existing_policy.buffer == compression_buffer
+            ):
+                request_kwargs[_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG] = ContextCompressionPolicy(
+                    model=compression_model,
+                    buffer=compression_buffer,
+                )
+        else:
+            request_kwargs.pop(_CONTEXT_WINDOW_COMPRESSION_MODEL_KWARG, None)
 
         from litellm.proxy.auth.auto_router_checks import authorize_member_auto_router_inference
 

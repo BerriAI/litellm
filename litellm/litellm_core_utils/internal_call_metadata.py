@@ -17,15 +17,71 @@ caller's identity metadata, minus two things that must never be forwarded as-is:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Protocol
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, NON_INFERENCE_CALL_TYPES
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, InternalCallOrigin
 
 BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
+
+
+class InternalCompletionExecutor(Protocol):
+    async def __call__(self, request_data: Mapping[str, object]) -> object: ...
+
+
+_INTERNAL_COMPLETION_EXECUTOR: Final[ContextVar[InternalCompletionExecutor | None]] = ContextVar(
+    "litellm_internal_completion_executor", default=None
+)
+_INTERNAL_COMPLETION_CALL_ORIGIN: Final[ContextVar[InternalCallOrigin | None]] = ContextVar(
+    "litellm_internal_completion_call_origin", default=None
+)
+_INTERNAL_COMPLETION_TURN_OFF_MESSAGE_LOGGING: Final[ContextVar[bool | str | None]] = ContextVar(
+    "litellm_internal_completion_turn_off_message_logging", default=None
+)
+
+
+@contextmanager
+def internal_completion_call_origin(origin: InternalCallOrigin) -> Generator[None, None, None]:
+    token: Final = _INTERNAL_COMPLETION_CALL_ORIGIN.set(origin)
+    try:
+        yield
+    finally:
+        _INTERNAL_COMPLETION_CALL_ORIGIN.reset(token)
+
+
+def get_internal_completion_call_origin() -> InternalCallOrigin | None:
+    return _INTERNAL_COMPLETION_CALL_ORIGIN.get()
+
+
+@contextmanager
+def internal_completion_turn_off_message_logging(value: bool | str | None) -> Generator[None, None, None]:
+    token: Final = _INTERNAL_COMPLETION_TURN_OFF_MESSAGE_LOGGING.set(value)
+    try:
+        yield
+    finally:
+        _INTERNAL_COMPLETION_TURN_OFF_MESSAGE_LOGGING.reset(token)
+
+
+def get_internal_completion_turn_off_message_logging() -> bool | str | None:
+    return _INTERNAL_COMPLETION_TURN_OFF_MESSAGE_LOGGING.get()
+
+
+def get_internal_completion_executor() -> InternalCompletionExecutor | None:
+    return _INTERNAL_COMPLETION_EXECUTOR.get()
+
+
+def bind_internal_completion_executor(executor: InternalCompletionExecutor) -> Token[InternalCompletionExecutor | None]:
+    return _INTERNAL_COMPLETION_EXECUTOR.set(executor)
+
+
+def reset_internal_completion_executor(token: Token[InternalCompletionExecutor | None]) -> None:
+    _INTERNAL_COMPLETION_EXECUTOR.reset(token)
+
 
 MODEL_ACCESS_GROUP_METADATA_KEY: Final = "user_api_key_matched_model_access_groups"
 """Where auth records the model access groups that authorized the request, for the spend writer.

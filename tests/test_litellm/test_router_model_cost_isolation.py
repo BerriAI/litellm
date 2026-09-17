@@ -315,7 +315,7 @@ async def test_discovered_limits_are_isolated_overridable_and_refreshable(
         assert listing is not None
         assert listing.max_input_tokens == 8192
         assert router.get_configured_token_limits("local") == (8192, 8192)
-        assert router._deployment_max_input_tokens("local", router.model_list[1]) == 4096
+        assert router.deployment_max_input_tokens("local", router.model_list[1]) == 4096
         allowed: Final = router._pre_call_checks(
             model="local", healthy_deployments=router.model_list, input="prompt", input_token_count=5000
         )

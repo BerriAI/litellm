@@ -14219,6 +14219,12 @@ class TestHealthFallbackDispatch:
         tagged: bool = False,
         budgeted: bool = False,
         config: Mapping[str, object] | None = None,
+        target_limit: int | None = None,
+        fallback_limit: int | None = None,
+        compressor_limit: int = 4096,
+        num_retries: int = 0,
+        fallbacks: list | None = None,
+        compression_fallback_router: bool = False,
     ) -> Router:
         provider: Final = "anthropic/claude-sonnet-5" if surface == "messages" else "openai/gpt-5.6"
         base_suffix: Final = "" if surface == "messages" else "/v1"
@@ -14238,6 +14244,25 @@ class TestHealthFallbackDispatch:
                         },
                     },
                 },
+                *(
+                    (
+                        {
+                            "model_name": "compression-fallback-router",
+                            "litellm_params": {
+                                "model": "auto_router/complexity_router",
+                                "complexity_router_default_model": "fallback",
+                                "complexity_router_config": {
+                                    "tiers": {"SIMPLE": "fallback", "MEDIUM": "fallback"},
+                                    "deployment_affinity": False,
+                                    "max_tokens_from_tier_model": False,
+                                    "context_window_compression_model": "compressor",
+                                },
+                            },
+                        },
+                    )
+                    if compression_fallback_router
+                    else ()
+                ),
                 *[
                     {
                         "model_name": name,
@@ -14248,12 +14273,33 @@ class TestHealthFallbackDispatch:
                             **({"tags": [name]} if tagged else {}),
                             **({"max_budget": 1.0, "budget_duration": "1d"} if budgeted and name == "primary" else {}),
                         },
-                        "model_info": {"id": f"{name}-id"},
+                        "model_info": {
+                            "id": f"{name}-id",
+                            **(
+                                {"max_input_tokens": fallback_limit}
+                                if name == "fallback" and fallback_limit is not None
+                                else {"max_input_tokens": target_limit}
+                                if target_limit is not None
+                                else {}
+                            ),
+                        },
                     }
                     for name in ("primary", "peer", "fallback")
                 ],
+                {
+                    "model_name": "compressor",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "test-only",
+                        "api_base": "https://compressor.test/v1",
+                    },
+                    "model_info": {"id": "compressor-id", "max_input_tokens": compressor_limit},
+                },
             ],
-            num_retries=0,
+            num_retries=num_retries,
+            retry_policy={"ServiceUnavailableErrorRetries": num_retries} if num_retries else None,
+            disable_cooldowns=num_retries > 0,
+            fallbacks=fallbacks,
             enable_health_check_routing=True,
             enable_tag_filtering=tagged,
         )
@@ -14347,25 +14393,35 @@ class TestHealthFallbackDispatch:
         )
 
     @staticmethod
-    async def _request(router: Router, surface: str, stream: bool, metadata: dict[str, object]) -> str:
+    async def _request(
+        router: Router,
+        surface: str,
+        stream: bool,
+        metadata: dict[str, object],
+        prompt: str = "Hello!",
+        request_kwargs: Mapping[str, object] | None = None,
+    ) -> str:
+        request_body: Final = request_kwargs if request_kwargs is not None else (
+            {"input": prompt} if surface == "responses" else {"messages": [{"role": "user", "content": prompt}]}
+        )
         if surface == "responses":
             result = await router.aresponses(
-                model="health-router", input="Hello!", stream=stream, litellm_metadata=metadata
+                model="health-router", stream=stream, litellm_metadata=metadata, **request_body
             )
         elif surface == "messages":
             result = await router.aanthropic_messages(
                 model="health-router",
-                messages=[{"role": "user", "content": "Hello!"}],
                 max_tokens=32,
                 stream=stream,
                 litellm_metadata=metadata,
+                **request_body,
             )
         else:
             result = await router.acompletion(
                 model="health-router",
-                messages=[{"role": "user", "content": "Hello!"}],
                 stream=stream,
                 metadata=metadata,
+                **request_body,
             )
         if not stream:
             payload = result if isinstance(result, dict) else result.model_dump()
@@ -14385,6 +14441,968 @@ class TestHealthFallbackDispatch:
             return "".join(c["delta"] for c in chunks if c["type"] == "response.output_text.delta")
         assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
         return "".join(c["choices"][0]["delta"].get("content") or "" for c in chunks if c["choices"])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_oversized_request_compresses_for_the_selected_target(self, surface: str) -> None:
+        router: Final = self._router(
+            surface,
+            config={"context_window_compression_model": "compressor"},
+            target_limit=64,
+        )
+        router.enable_pre_call_checks = True
+        prompt: Final = "historical context " * 200
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            assert await self._request(router, surface, False, {}, prompt) == "primary"
+            assert [call.request.url.host for call in upstream.calls] == ["compressor.test", "primary.test"]
+            target_body: Final = json.loads(upstream.calls[-1].request.content)
+            assert "compressor" in json.dumps(target_body)
+            assert prompt not in json.dumps(target_body)
+
+    @pytest.mark.asyncio
+    async def test_compression_takes_precedence_over_context_window_escalation(self) -> None:
+        router: Final = self._router(
+            config={
+                "context_window_compression_model": "compressor",
+                "enable_context_window_escalation": True,
+                "tiers": {"SIMPLE": "primary", "MEDIUM": "fallback"},
+            },
+            target_limit=64,
+        )
+        router.enable_pre_call_checks = True
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary|fallback)\.test$").mock(side_effect=self._http_response)
+            result: Final = await router.acompletion(
+                model="health-router",
+                messages=[{"role": "user", "content": "historical context " * 200}],
+            )
+            assert result.choices[0].message.content == "primary"
+            assert [call.request.url.host for call in upstream.calls] == ["compressor.test", "primary.test"]
+
+    @pytest.mark.asyncio
+    async def test_compressor_chunks_requests_larger_than_its_context(self) -> None:
+        router: Final = self._router(
+            config={"context_window_compression_model": "compressor"},
+            target_limit=128,
+            compressor_limit=2300,
+        )
+        router.enable_pre_call_checks = True
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            result: Final = await router.acompletion(
+                model="health-router",
+                messages=[{"role": "user", "content": "historical context " * 200}],
+            )
+            assert result.choices[0].message.content == "primary"
+            hosts: Final = [call.request.url.host for call in upstream.calls]
+            assert hosts[-1] == "primary.test"
+            assert hosts[:-1].count("compressor.test") > 1
+
+    @pytest.mark.asyncio
+    async def test_heterogeneous_compressor_deployments_use_smallest_source_budget(self) -> None:
+        smallest_context_limit: Final = 2300
+        router: Final = self._router(
+            config={"context_window_compression_model": "compressor"},
+            target_limit=128,
+            compressor_limit=4096,
+        )
+        router.add_deployment(
+            Deployment(
+                model_name="compressor",
+                litellm_params=LiteLLM_Params(
+                    model="openai/gpt-4o-mini",
+                    api_key="test-only",
+                    api_base="https://compressor-small.test/v1",
+                ),
+                model_info={"id": "compressor-small-id", "max_input_tokens": smallest_context_limit},
+            )
+        )
+        router.enable_pre_call_checks = True
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor(-small)?|primary)\.test$").mock(side_effect=self._http_response)
+            result: Final = await router.acompletion(
+                model="health-router",
+                messages=[{"role": "user", "content": "historical context " * 2000}],
+            )
+            assert result.choices[0].message.content == "primary"
+            compressor_bodies: Final = tuple(
+                json.loads(call.request.content)
+                for call in upstream.calls
+                if call.request.url.host.startswith("compressor")
+            )
+            assert len(compressor_bodies) >= 2
+            assert all(
+                litellm.token_counter(model=body["model"], messages=body["messages"]) + body["max_tokens"]
+                <= smallest_context_limit
+                for body in compressor_bodies
+            )
+
+    @pytest.mark.asyncio
+    async def test_compressor_reduces_summaries_until_the_target_budget_fits(self) -> None:
+        router: Final = self._router(
+            config={"context_window_compression_model": "compressor"},
+            target_limit=64,
+        )
+        router.enable_pre_call_checks = True
+        summaries = iter(("expanded summary " * 100, "short summary"))
+
+        def response(request: httpx.Request) -> httpx.Response:
+            if request.url.host != "compressor.test":
+                return self._http_response(request)
+            payload = self._http_response(request).json()
+            payload["choices"][0]["message"]["content"] = next(summaries)
+            return httpx.Response(200, json=payload)
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=response)
+            result: Final = await router.acompletion(
+                model="health-router",
+                messages=[{"role": "user", "content": "historical context " * 200}],
+            )
+            assert result.choices[0].message.content == "primary"
+            assert [call.request.url.host for call in upstream.calls] == [
+                "compressor.test",
+                "compressor.test",
+                "primary.test",
+            ]
+
+    @pytest.mark.asyncio
+    async def test_invariant_context_overflow_skips_compressor_and_target(self) -> None:
+        router: Final = self._router(
+            config={"context_window_compression_model": "compressor"},
+            target_limit=64,
+        )
+        router.enable_pre_call_checks = True
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            with pytest.raises(litellm.ContextWindowExceededError, match="cannot be compressed"):
+                await router.acompletion(
+                    model="health-router",
+                    messages=[
+                        {"role": "system", "content": "required policy " * 200},
+                        {"role": "user", "content": "historical context " * 200},
+                    ],
+                )
+            assert not upstream.calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_compressor_failure_never_calls_the_selected_target(self, surface: str) -> None:
+        router: Final = self._router(
+            surface,
+            config={"context_window_compression_model": "compressor"},
+            target_limit=64,
+        )
+        router.enable_pre_call_checks = True
+
+        def response(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "compressor.test":
+                return httpx.Response(503, json={"error": {"message": "compressor unavailable"}})
+            return self._http_response(request)
+
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=response)
+            with pytest.raises(litellm.ServiceUnavailableError):
+                await self._request(router, surface, False, {}, "historical context " * 200)
+            assert [call.request.url.host for call in upstream.calls] == ["compressor.test"]
+            assert router.fail_calls["openai/gpt-5.6"] == 0
+            assert router.fail_calls["health-router"] == 0
+
+    @pytest.mark.asyncio
+    async def test_compressor_keeps_its_output_cap_when_tier_ceiling_is_enabled(self) -> None:
+        router: Final = self._router(
+            config={
+                "context_window_compression_model": "compressor",
+                "max_tokens_from_tier_model": True,
+            },
+            target_limit=64,
+        )
+        router.enable_pre_call_checks = True
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            result: Final = await router.acompletion(
+                model="health-router",
+                messages=[{"role": "user", "content": "historical context " * 200}],
+            )
+            assert result.choices[0].message.content == "primary"
+            compressor_body: Final = json.loads(upstream.calls[0].request.content)
+            assert compressor_body["max_tokens"] == 2048
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_request_that_fits_skips_compressor(self, surface: str) -> None:
+        router: Final = self._router(
+            surface,
+            config={"context_window_compression_model": "compressor"},
+            target_limit=64,
+        )
+        router.enable_pre_call_checks = True
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host="primary.test").mock(side_effect=self._http_response)
+            assert await self._request(router, surface, False, {}) == "primary"
+            assert [call.request.url.host for call in upstream.calls] == ["primary.test"]
+
+    @pytest.mark.asyncio
+    async def test_compression_preserves_the_latest_user_task_when_it_fits(self) -> None:
+        router: Final = self._router(
+            config={"context_window_compression_model": "compressor"},
+            target_limit=80,
+        )
+        router.enable_pre_call_checks = True
+        latest_task: Final = "Return the final answer as JSON"
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            result: Final = await router.acompletion(
+                model="health-router",
+                messages=[
+                    {"role": "user", "content": "historical context " * 200},
+                    {"role": "user", "content": latest_task},
+                ],
+            )
+            assert result.choices[0].message.content == "primary"
+            target_body: Final = json.loads(upstream.calls[-1].request.content)
+            assert target_body["messages"][-1]["content"] == latest_task
+            assert target_body["messages"][-2]["content"] == "compressor"
+
+    @pytest.mark.asyncio
+    async def test_compression_preserves_terminal_assistant_prefill(self) -> None:
+        router: Final = self._router(
+            config={"context_window_compression_model": "compressor"},
+            target_limit=80,
+        )
+        router.enable_pre_call_checks = True
+        prefill: Final = "Continue from this exact prefix"
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            result: Final = await router.acompletion(
+                model="health-router",
+                messages=[
+                    {"role": "user", "content": "historical context " * 200},
+                    {"role": "assistant", "content": prefill},
+                ],
+            )
+            assert result.choices[0].message.content == "primary"
+            target_body: Final = json.loads(upstream.calls[-1].request.content)
+            assert target_body["messages"][-1] == {"role": "assistant", "content": prefill}
+
+    @pytest.mark.asyncio
+    async def test_compression_rejects_terminal_assistant_prefill_that_cannot_fit(self) -> None:
+        router: Final = self._router(
+            config={"context_window_compression_model": "compressor"},
+            target_limit=64,
+        )
+        router.enable_pre_call_checks = True
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            with pytest.raises(
+                litellm.ContextWindowExceededError,
+                match="terminal assistant message does not fit the selected model",
+            ):
+                await router.acompletion(
+                    model="health-router",
+                    messages=[{"role": "assistant", "content": "prefill " * 200}],
+                )
+            assert not upstream.calls
+
+    @pytest.mark.asyncio
+    async def test_previous_response_continuation_fails_before_provider_dispatch(self) -> None:
+        router: Final = self._router(
+            "messages",
+            config={"context_window_compression_model": "compressor"},
+            target_limit=32,
+        )
+        router.enable_pre_call_checks = True
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            with pytest.raises(
+                litellm.ContextWindowExceededError,
+                match="does not support Responses requests with stored previous_response_id history",
+            ):
+                await router.aresponses(
+                    model="health-router",
+                    input="Continue",
+                    previous_response_id="resp_prior",
+                )
+            assert not upstream.calls
+
+    @pytest.mark.asyncio
+    async def test_target_retry_reuses_paid_compression(self) -> None:
+        router: Final = self._router(
+            config={
+                "context_window_compression_model": "compressor",
+                "default_model": "primary",
+            },
+            target_limit=64,
+            num_retries=1,
+        )
+        router.enable_pre_call_checks = True
+        primary_outcomes: Final = iter((503, 200))
+
+        def response(request: httpx.Request) -> httpx.Response:
+            if request.url.host != "primary.test" or next(primary_outcomes) == 200:
+                return self._http_response(request)
+            return httpx.Response(503, json={"error": {"message": "retry", "type": "server_error"}})
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=response)
+            result: Final = await router.acompletion(
+                model="health-router",
+                messages=[{"role": "user", "content": "historical context " * 200}],
+                num_retries=1,
+            )
+            assert result.choices[0].message.content == "primary"
+            assert [call.request.url.host for call in upstream.calls] == [
+                "compressor.test",
+                "primary.test",
+                "primary.test",
+            ]
+
+    @pytest.mark.asyncio
+    async def test_later_retry_reuses_compression_first_paid_on_an_earlier_retry(self) -> None:
+        router: Final = self._router(
+            config={
+                "context_window_compression_model": "compressor",
+                "default_model": "fallback",
+            },
+            target_limit=64,
+            fallback_limit=4096,
+            num_retries=2,
+        )
+        router.enable_pre_call_checks = True
+        router.health_state_cache.set_deployment_health_states(
+            {
+                "primary-id": {"is_healthy": False, "timestamp": time.time()},
+                "fallback-id": {"is_healthy": True, "timestamp": time.time()},
+            }
+        )
+        primary_outcomes: Final = iter((503, 200))
+
+        def response(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "fallback.test":
+                router.health_state_cache.set_deployment_health_states(
+                    {
+                        "primary-id": {"is_healthy": True, "timestamp": time.time()},
+                        "fallback-id": {"is_healthy": False, "timestamp": time.time()},
+                    }
+                )
+                return httpx.Response(503, json={"error": {"message": "retry", "type": "server_error"}})
+            if request.url.host == "primary.test" and next(primary_outcomes) == 503:
+                return httpx.Response(503, json={"error": {"message": "retry", "type": "server_error"}})
+            return self._http_response(request)
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary|fallback)\.test$").mock(side_effect=response)
+            result: Final = await router.acompletion(
+                model="health-router",
+                messages=[{"role": "user", "content": "historical context " * 200}],
+                num_retries=2,
+            )
+            assert result.choices[0].message.content == "primary"
+            assert [call.request.url.host for call in upstream.calls] == [
+                "fallback.test",
+                "compressor.test",
+                "primary.test",
+                "primary.test",
+            ]
+
+    @pytest.mark.asyncio
+    async def test_streaming_fallback_replays_original_history_after_compression(self) -> None:
+        router: Final = self._router(
+            config={"context_window_compression_model": "compressor"},
+            target_limit=64,
+            fallback_limit=4096,
+            fallbacks=[{"health-router": ["fallback"]}],
+        )
+        router.enable_pre_call_checks = True
+        prompt: Final = "historical context " * 200
+
+        def response(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "primary.test":
+                return httpx.Response(
+                    200,
+                    text='data: {"error": {"message": "temporary stream failure"}}\n\n',
+                    headers={"content-type": "text/event-stream"},
+                )
+            return self._http_response(request)
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary|fallback)\.test$").mock(side_effect=response)
+            assert await self._request(router, "chat", True, {}, prompt) == "fallback"
+            assert [call.request.url.host for call in upstream.calls] == [
+                "compressor.test",
+                "primary.test",
+                "fallback.test",
+            ]
+            fallback_body: Final = json.loads(upstream.calls[-1].request.content)
+            assert fallback_body["messages"] == [{"role": "user", "content": prompt}]
+
+    @pytest.mark.asyncio
+    async def test_structured_history_fails_before_compressor_or_target(self) -> None:
+        router: Final = self._router(
+            config={"context_window_compression_model": "compressor"},
+            target_limit=32,
+        )
+        router.enable_pre_call_checks = True
+        with respx.mock(assert_all_mocked=False, assert_all_called=False) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            with pytest.raises(litellm.ContextWindowExceededError, match="cannot be compressed safely"):
+                await router.acompletion(
+                    model="health-router",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "historical context " * 200},
+                                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+                            ],
+                        }
+                    ],
+                )
+            assert not upstream.calls
+            assert router.fail_calls["openai/gpt-5.6"] == 0
+
+    @staticmethod
+    def _tool_exchange(surface: str, results: Sequence[tuple[str, str]]) -> tuple[Mapping[str, object], ...]:
+        if surface == "responses":
+            return (
+                *(
+                    {"type": "function_call", "call_id": call_id, "name": "Read", "arguments": '{"path":"file.txt"}'}
+                    for call_id, _ in results
+                ),
+                *(
+                    {"type": "function_call_output", "call_id": call_id, "output": text}
+                    for call_id, text in reversed(results)
+                ),
+            )
+        if surface == "messages":
+            return (
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Inspecting the requested files"},
+                        *(
+                            {"type": "tool_use", "id": call_id, "name": "Read", "input": {"path": "file.txt"}}
+                            for call_id, _ in results
+                        ),
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "The requested observations follow"},
+                        *(
+                            {"type": "tool_result", "tool_use_id": call_id, "content": text}
+                            for call_id, text in reversed(results)
+                        ),
+                    ],
+                },
+            )
+        return (
+            {
+                "role": "assistant",
+                "content": "Inspecting the requested files",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": "Read", "arguments": '{"path":"file.txt"}'},
+                    }
+                    for call_id, _ in results
+                ],
+            },
+            *({"role": "tool", "tool_call_id": call_id, "content": text} for call_id, text in reversed(results)),
+        )
+
+    @staticmethod
+    def _tool_request(surface: str, history: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+        definition: Final = {
+            "name": "Read",
+            "description": "Read a local text file",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        }
+        if surface == "responses":
+            return {
+                "input": list(history),
+                "instructions": "Keep verification codes exact",
+                "tools": [{"type": "function", **definition}],
+            }
+        if surface == "messages":
+            return {
+                "messages": list(history),
+                "system": "Keep verification codes exact",
+                "tools": [{"name": definition["name"], "description": definition["description"],
+                           "input_schema": definition["parameters"]}],
+            }
+        return {
+            "messages": [{"role": "system", "content": "Keep verification codes exact"}, *history],
+            "tools": [{"type": "function", "function": definition}],
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_tools_declaration_allows_plain_history_compression(self, surface: str) -> None:
+        router: Final = self._router(
+            surface,
+            config={"context_window_compression_model": "compressor"},
+            target_limit=768,
+            compressor_limit=8192,
+        )
+        router.enable_pre_call_checks = True
+        request: Final = self._tool_request(surface, ({"role": "user", "content": "historical context " * 1000},))
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            assert await self._request(router, surface, False, {}, request_kwargs=request) == "primary"
+            assert [call.request.url.host for call in upstream.calls] == ["compressor.test", "primary.test"]
+            target: Final = json.loads(upstream.calls[-1].request.content)
+            assert target["tools"] == request["tools"]
+            assert "historical context " * 1000 not in json.dumps(target)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    @pytest.mark.parametrize("stream", [False, True])
+    async def test_tool_history_compacts_completed_work_and_preserves_active_exchange(
+        self, surface: str, stream: bool
+    ) -> None:
+        router: Final = self._router(
+            surface,
+            config={"context_window_compression_model": "compressor"},
+            target_limit=768,
+            compressor_limit=8192,
+        )
+        router.enable_pre_call_checks = True
+        task: Final = {"role": "user", "content": "Check the files and return verification code V-7291"}
+        historical: Final = self._tool_exchange(surface, (("call_old", "ARCHIVED_OBSERVATION " * 600),))
+        terminal: Final = self._tool_exchange(surface, (("call_a", "A=17"), ("call_b", "B=29")))
+        request: Final = self._tool_request(surface, (task, *historical, *terminal))
+        before: Final = deepcopy(request)
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            assert await self._request(router, surface, stream, {}, request_kwargs=request) == "primary"
+            assert [call.request.url.host for call in upstream.calls] == ["compressor.test", "primary.test"]
+            target: Final = json.loads(upstream.calls[-1].request.content)
+            items: Final = target["input" if surface == "responses" else "messages"]
+            assert items[-len(terminal):] == list(terminal)
+            assert task in items
+            assert "ARCHIVED_OBSERVATION" not in json.dumps(target)
+            assert target["tools"] == request["tools"]
+            if surface == "chat":
+                assert items[0] == request["messages"][0]
+            else:
+                invariant: Final = "instructions" if surface == "responses" else "system"
+                assert target[invariant] == request[invariant]
+            compressor: Final = json.loads(upstream.calls[0].request.content)
+            assert not compressor.get("tools")
+            assert compressor.get("tool_choice") in (None, "none")
+            assert "ARCHIVED_OBSERVATION" in compressor["messages"][-1]["content"]
+            assert "call_old" in compressor["messages"][-1]["content"]
+            assert "V-7291" not in compressor["messages"][-1]["content"]
+            assert request == before
+
+    @pytest.mark.asyncio
+    async def test_messages_compression_preserves_mixed_follow_up_before_terminal_exchange(self) -> None:
+        router: Final = self._router(
+            "messages",
+            config={"context_window_compression_model": "compressor"},
+            target_limit=768,
+            compressor_limit=8192,
+        )
+        router.enable_pre_call_checks = True
+        task: Final = {"role": "user", "content": "Check the files and return verification code V-7291"}
+        historical: Final = (
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "call_old", "name": "Read", "input": {"path": "old.txt"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "call_old", "content": "ARCHIVED_OBSERVATION " * 600},
+            ]},
+        )
+        mixed: Final = (
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "call_follow_up", "name": "Read", "input": {"path": "follow-up.txt"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "call_follow_up", "content": "Follow-up check passed"},
+                {"type": "text", "text": "Keep follow-up code F-6382 exact"},
+            ]},
+        )
+        terminal: Final = (
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "call_final", "name": "Read", "input": {"path": "final.txt"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "call_final", "content": "Final check passed"},
+            ]},
+        )
+        request: Final = self._tool_request("messages", (task, *historical, *mixed, *terminal))
+        before: Final = deepcopy(request)
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            assert await self._request(router, "messages", False, {}, request_kwargs=request) == "primary"
+            inference_hosts: Final = tuple(call.request.url.host for call in upstream.calls)
+            assert inference_hosts == ("compressor.test", "primary.test")
+            target: Final = json.loads(upstream.calls[-1].request.content)
+            assert task in target["messages"]
+            assert target["messages"][-len(terminal):] == list(terminal)
+            assert "ARCHIVED_OBSERVATION" not in json.dumps(target)
+            assert target["tools"] == request["tools"]
+            assert target["system"] == request["system"]
+            compressor: Final = json.loads(upstream.calls[0].request.content)
+            assert not compressor.get("tools")
+            source: Final = compressor["messages"][-1]["content"]
+            assert target["messages"][-len(mixed + terminal):] == list(mixed + terminal)
+            assert "ARCHIVED_OBSERVATION" in source
+            assert "call_old" in source
+            assert "call_follow_up" not in source
+            assert "F-6382" not in source
+            assert "V-7291" not in source
+            assert "call_final" not in source
+            assert request == before
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_tool_history_that_fits_bypasses_compression(self, surface: str) -> None:
+        router: Final = self._router(
+            surface,
+            config={"context_window_compression_model": "compressor"},
+            target_limit=8192,
+        )
+        router.enable_pre_call_checks = True
+        request: Final = self._tool_request(
+            surface,
+            ({"role": "user", "content": "Read both files"},
+             *self._tool_exchange(surface, (("call_a", "A=17"), ("call_b", "B=29")))),
+        )
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host="primary.test").mock(side_effect=self._http_response)
+            assert await self._request(router, surface, False, {}, request_kwargs=request) == "primary"
+            assert [call.request.url.host for call in upstream.calls] == ["primary.test"]
+            target: Final = json.loads(upstream.calls[0].request.content)
+            history_key: Final = "input" if surface == "responses" else "messages"
+            assert target[history_key] == request[history_key]
+            assert target["tools"] == request["tools"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_tool_history_protected_result_overflow_fails_before_inference(self, surface: str) -> None:
+        router: Final = self._router(
+            surface,
+            config={"context_window_compression_model": "compressor"},
+            target_limit=768,
+        )
+        router.enable_pre_call_checks = True
+        request: Final = self._tool_request(
+            surface,
+            ({"role": "user", "content": "Read both files"},
+             *self._tool_exchange(surface, (("call_old", "ARCHIVED_OBSERVATION " * 600),)),
+             *self._tool_exchange(surface, (("call_a", "ACTIVE_RESULT " * 1000), ("call_b", "B=29")))),
+        )
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            with pytest.raises(litellm.ContextWindowExceededError):
+                await self._request(router, surface, False, {}, request_kwargs=request)
+            assert not upstream.calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    @pytest.mark.parametrize(
+        "invalid",
+        ["valid", "orphan", "missing", "malformed", "duplicate", "duplicate_result", "interrupted", "cross_surface", "opaque"],
+    )
+    async def test_tool_history_validation_precedes_inference(self, surface: str, invalid: str) -> None:
+        router: Final = self._router(
+            surface,
+            config={"context_window_compression_model": "compressor"},
+            target_limit=768,
+        )
+        router.enable_pre_call_checks = True
+        exchange: Final = self._tool_exchange(surface, (("call_a", "A=17"),))
+        opaque: Final = {
+            "chat": {"role": "assistant", "content": "Visible answer", "reasoning_content": "opaque-state"},
+            "responses": {"type": "reasoning", "id": "rs_test", "encrypted_content": "opaque-state", "summary": []},
+            "messages": {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "Private reasoning", "signature": "opaque-state"}
+            ]},
+        }[surface]
+        invalid_history: Final = {
+            "valid": exchange,
+            "orphan": exchange[1:],
+            "missing": exchange[:1],
+            "malformed": self._tool_exchange(surface, (("", "A=17"),)),
+            "duplicate": self._tool_exchange(surface, (("call_a", "A=17"), ("call_a", "B=29"))),
+            "duplicate_result": (*exchange, exchange[-1]),
+            "interrupted": (exchange[0], {"role": "user", "content": "Interrupt pending calls"}, *exchange[1:]),
+            "cross_surface": self._tool_exchange("chat" if surface == "responses" else "responses", (("call_x", "X"),)),
+            "opaque": (opaque,),
+        }[invalid]
+        request: Final = self._tool_request(
+            surface,
+            ({"role": "user", "content": "historical context " * 1000},
+             {"role": "assistant", "content": "Earlier work completed"},
+             {"role": "user", "content": "Check the remaining file"},
+             *invalid_history,
+             *self._tool_exchange(surface, (("call_final", "Final check passed"),))),
+        )
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            if invalid == "valid":
+                assert await self._request(router, surface, False, {}, request_kwargs=request) == "primary"
+                assert upstream.calls[0].request.url.host == "compressor.test"
+                assert upstream.calls[-1].request.url.host == "primary.test"
+            else:
+                with pytest.raises(litellm.ContextWindowExceededError):
+                    await self._request(router, surface, False, {}, request_kwargs=request)
+                assert not upstream.calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("surface", "case"),
+        [
+            ("chat", "valid"),
+            ("responses", "valid"),
+            ("messages", "valid"),
+            ("chat", "invariant_content"),
+            ("responses", "invariant_content"),
+            ("messages", "system_role"),
+            ("messages", "is_error_false"),
+            ("messages", "is_error_true"),
+            ("messages", "is_error_zero"),
+            ("messages", "is_error_one"),
+        ],
+    )
+    async def test_history_invariant_and_result_flag_validation_precedes_inference(
+        self, surface: str, case: str
+    ) -> None:
+        router: Final = self._router(
+            surface,
+            config={"context_window_compression_model": "compressor"},
+            target_limit=768,
+            compressor_limit=8192,
+        )
+        router.enable_pre_call_checks = True
+        invariants: Final = (
+            ({"role": "system", "content": {"text": "Keep instructions exact"}},)
+            if case == "invariant_content"
+            else ({"role": "system", "content": "Keep instructions exact"},)
+            if surface != "messages" or case == "system_role"
+            else ()
+        )
+        exchange: Final = self._tool_exchange(surface, (("call_final", "Final check passed"),))
+        terminal: Final = (
+            (exchange[0], {"role": "user", "content": [{
+                "type": "tool_result",
+                "tool_use_id": "call_final",
+                "content": "Final check passed",
+                "is_error": {
+                    "is_error_false": False,
+                    "is_error_true": True,
+                    "is_error_zero": 0,
+                    "is_error_one": 1,
+                }[case],
+            }]})
+            if case.startswith("is_error_") else exchange
+        )
+        request: Final = self._tool_request(
+            surface,
+            (*invariants,
+             {"role": "user", "content": "historical context " * 1000},
+             {"role": "assistant", "content": "Earlier work completed"},
+             {"role": "user", "content": "Check the remaining file"},
+             *terminal),
+        )
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            if case in ("valid", "is_error_false", "is_error_true"):
+                assert await self._request(router, surface, False, {}, request_kwargs=request) == "primary"
+                assert [call.request.url.host for call in upstream.calls] == ["compressor.test", "primary.test"]
+            else:
+                expected_error: Final = (
+                    ValueError if surface == "responses" and case == "invariant_content"
+                    else litellm.ContextWindowExceededError
+                )
+                with pytest.raises(expected_error):
+                    await self._request(router, surface, False, {}, request_kwargs=request)
+                assert not upstream.calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_tool_history_target_retry_reuses_paid_summary(self, surface: str) -> None:
+        router: Final = self._router(
+            surface,
+            config={"context_window_compression_model": "compressor", "default_model": "primary"},
+            target_limit=768,
+            compressor_limit=8192,
+            num_retries=1,
+        )
+        router.enable_pre_call_checks = True
+        outcomes: Final = iter((503, 200))
+        request: Final = self._tool_request(
+            surface,
+            ({"role": "user", "content": "Keep code V-7291"},
+             *self._tool_exchange(surface, (("call_old", "ARCHIVED_OBSERVATION " * 600),)),
+             *self._tool_exchange(surface, (("call_a", "A=17"), ("call_b", "B=29")))),
+        )
+
+        def response(incoming: httpx.Request) -> httpx.Response:
+            if incoming.url.host == "primary.test" and next(outcomes) == 503:
+                return httpx.Response(503, json={"error": {"message": "retry", "type": "server_error"}})
+            return self._http_response(incoming)
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=response)
+            assert await self._request(router, surface, False, {}, request_kwargs=request) == "primary"
+            assert [call.request.url.host for call in upstream.calls] == [
+                "compressor.test", "primary.test", "primary.test"
+            ]
+            first: Final = json.loads(upstream.calls[1].request.content)
+            retried: Final = json.loads(upstream.calls[2].request.content)
+            history_key: Final = "input" if surface == "responses" else "messages"
+            assert first[history_key] == retried[history_key]
+            assert retried["tools"] == request["tools"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    @pytest.mark.parametrize("stream", [False, True])
+    async def test_tool_history_small_fallback_reuses_paid_summary(self, surface: str, stream: bool) -> None:
+        router: Final = self._router(
+            surface,
+            config={"context_window_compression_model": "compressor"},
+            target_limit=768,
+            compressor_limit=8192,
+            fallback_limit=768,
+            fallbacks=[{"health-router": ["compression-fallback-router"]}],
+            compression_fallback_router=True,
+        )
+        router.enable_pre_call_checks = True
+        request: Final = self._tool_request(
+            surface,
+            ({"role": "user", "content": "Keep code V-7291"},
+             *self._tool_exchange(surface, (("call_old", "ARCHIVED_OBSERVATION " * 600),)),
+             *self._tool_exchange(surface, (("call_a", "A=17"), ("call_b", "B=29")))),
+        )
+
+        def response(incoming: httpx.Request) -> httpx.Response:
+            if incoming.url.host != "primary.test":
+                return self._http_response(incoming)
+            if not stream:
+                return httpx.Response(503, json={"error": {"message": "fallback", "type": "server_error"}})
+            return httpx.Response(
+                200,
+                text=(
+                    'event: error\ndata: {"type":"error","error":'
+                    '{"type":"overloaded_error","message":"temporary stream failure"}}\n\n'
+                ),
+                headers={"content-type": "text/event-stream"},
+            )
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary|fallback)\.test$").mock(side_effect=response)
+            assert await self._request(router, surface, stream, {}, request_kwargs=request) == "fallback"
+            assert [call.request.url.host for call in upstream.calls] == [
+                "compressor.test", "primary.test", "fallback.test"
+            ]
+            primary: Final = json.loads(upstream.calls[1].request.content)
+            fallback: Final = json.loads(upstream.calls[2].request.content)
+            history_key: Final = "input" if surface == "responses" else "messages"
+            assert primary[history_key] == fallback[history_key]
+            assert "ARCHIVED_OBSERVATION" not in json.dumps(fallback)
+            assert fallback["tools"] == request["tools"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])
+    async def test_tool_history_streaming_fallback_receives_original(self, surface: str) -> None:
+        router: Final = self._router(
+            surface,
+            config={"context_window_compression_model": "compressor"},
+            target_limit=768,
+            compressor_limit=8192,
+            fallback_limit=16384,
+            fallbacks=[{"health-router": ["fallback"]}],
+        )
+        router.enable_pre_call_checks = True
+        request: Final = self._tool_request(
+            surface,
+            ({"role": "user", "content": "Keep code V-7291"},
+             *self._tool_exchange(surface, (("call_old", "ARCHIVED_OBSERVATION " * 600),)),
+             *self._tool_exchange(surface, (("call_a", "A=17"), ("call_b", "B=29")))),
+        )
+
+        def response(incoming: httpx.Request) -> httpx.Response:
+            if incoming.url.host == "primary.test":
+                return httpx.Response(
+                    200,
+                    text=(
+                        'event: error\ndata: {"type":"error","error":'
+                        '{"type":"overloaded_error","message":"temporary stream failure"}}\n\n'
+                    ),
+                    headers={"content-type": "text/event-stream"},
+                )
+            return self._http_response(incoming)
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary|fallback)\.test$").mock(side_effect=response)
+            assert await self._request(router, surface, True, {}, request_kwargs=request) == "fallback"
+            assert [call.request.url.host for call in upstream.calls] == [
+                "compressor.test", "primary.test", "fallback.test"
+            ]
+            fallback: Final = json.loads(upstream.calls[-1].request.content)
+            history_key: Final = "input" if surface == "responses" else "messages"
+            assert fallback[history_key] == request[history_key]
+            assert fallback["tools"] == request["tools"]
+
+    @pytest.mark.asyncio
+    async def test_multichunk_compression_has_only_per_call_deadlines(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.router_strategy.complexity_router import context_compression
+
+        deadline: Final = 0.1
+        monkeypatch.setattr(context_compression, "_SUMMARY_TIMEOUT_SECONDS", deadline)
+        router: Final = self._router(
+            config={"context_window_compression_model": "compressor"},
+            target_limit=128,
+            compressor_limit=2300,
+        )
+        router.enable_pre_call_checks = True
+
+        async def response(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "compressor.test":
+                await asyncio.sleep(deadline * 0.75)
+            return self._http_response(request)
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=response)
+            assert await self._request(router, "chat", False, {}, "historical context " * 200) == "primary"
+            compressor_calls: Final = tuple(call for call in upstream.calls if call.request.url.host == "compressor.test")
+            assert len(compressor_calls) >= 2
+            assert len(compressor_calls) * deadline * 0.75 > deadline
+            assert upstream.calls[-1].request.url.host == "primary.test"
+
+    @pytest.mark.asyncio
+    async def test_interleaved_instructions_fail_before_compressor_or_target(self) -> None:
+        router: Final = self._router(
+            config={"context_window_compression_model": "compressor"},
+            target_limit=32,
+        )
+        router.enable_pre_call_checks = True
+        with respx.mock(assert_all_mocked=False, assert_all_called=False) as upstream:
+            upstream.post(host__regex=r"^(compressor|primary)\.test$").mock(side_effect=self._http_response)
+            with pytest.raises(litellm.ContextWindowExceededError, match="cannot be compressed safely"):
+                await router.acompletion(
+                    model="health-router",
+                    messages=[
+                        {"role": "user", "content": "historical context " * 200},
+                        {"role": "developer", "content": "Apply this instruction only after the history"},
+                    ],
+                )
+            assert not upstream.calls
+
+    def test_compressor_rejects_a_source_character_larger_than_its_chunk_budget(self) -> None:
+        from litellm.router_strategy.complexity_router.context_compression import _chunk_text
+
+        with pytest.raises(
+            litellm.ContextWindowExceededError,
+            match="cannot fit one source character",
+        ):
+            _chunk_text("🙂", 1, ("unknown-compressor-model",), 1)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("surface", ["chat", "responses", "messages"])

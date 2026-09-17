@@ -27,6 +27,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _request_stash,
     get_or_create_request_stash,
     get_request_stash,
+    isolated_internal_completion_request,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
@@ -35,6 +36,7 @@ from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
+    AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN,
     EmbeddingResponse,
     ModelResponse,
     TextCompletionResponse,
@@ -4434,6 +4436,246 @@ async def test_read_only_gauge_check_counts_without_acquiring_v3():
 
 
 @pytest.mark.asyncio
+async def test_internal_completion_borrows_only_parent_parallel_slot_and_settles_its_own_limits_v3():
+    api_key = hash_token("sk-internal-compression")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    parallel_counter_key = handler.create_rate_limit_keys("api_key", api_key, "max_parallel_requests")
+    outer_stash = get_or_create_request_stash()
+    outer_stash.owner_litellm_call_id = "parent-call"
+    outer_stash.parallel_slot = ParallelSlotAcquisition(slot_id="parent-slot", counter_keys=[parallel_counter_key])
+    parent_acquired_at = handler._get_current_time().timestamp()
+    await local_cache.async_set_cache(
+        key=parallel_counter_key,
+        value={"parent-slot": parent_acquired_at},
+        local_only=True,
+    )
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        max_parallel_requests=1,
+        rpm_limit=5,
+        tpm_limit=100,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "compress this"}],
+        "max_tokens": 1,
+        "litellm_call_id": "compression-success",
+    }
+    kwargs = {
+        "litellm_call_id": "compression-success",
+        "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+        "litellm_params": {
+            "metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN}
+        },
+        "model": "gpt-4o-mini",
+    }
+    response = ModelResponse(
+        id="compression-success",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="gpt-4o-mini",
+        choices=[],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    with isolated_internal_completion_request():
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=data,
+            call_type="acompletion",
+        )
+        child_stash = get_request_stash()
+        assert child_stash is not None
+        assert child_stash is not outer_stash
+        assert child_stash.owner_litellm_call_id == "compression-success"
+        assert child_stash.parallel_slot is None
+        assert child_stash.reserved_tokens > 0
+        assert await local_cache.async_get_cache(key=parallel_counter_key) == {"parent-slot": parent_acquired_at}
+        assert await local_cache.async_get_cache(
+            key=handler.create_rate_limit_keys("api_key", api_key, "requests")
+        ) == 1
+        assert await local_cache.async_get_cache(
+            key=handler.create_rate_limit_keys("api_key", api_key, "tokens")
+        ) == child_stash.reserved_tokens
+
+        await handler.async_log_success_event(
+            kwargs=kwargs,
+            response_obj=response,
+            start_time=None,
+            end_time=None,
+        )
+
+        assert await local_cache.async_get_cache(
+            key=handler.create_rate_limit_keys("api_key", api_key, "tokens")
+        ) == 2
+        assert await local_cache.async_get_cache(key=parallel_counter_key) == {"parent-slot": parent_acquired_at}
+
+    failure_data = {**data, "litellm_call_id": "compression-failure"}
+    failure_kwargs = {**kwargs, "litellm_call_id": "compression-failure"}
+    with isolated_internal_completion_request():
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data=failure_data,
+            call_type="acompletion",
+        )
+        failure_stash = get_request_stash()
+        assert failure_stash is not None
+        assert failure_stash.reserved_tokens > 0
+
+        await handler.async_log_failure_event(
+            kwargs=failure_kwargs,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+
+        assert await local_cache.async_get_cache(
+            key=handler.create_rate_limit_keys("api_key", api_key, "requests")
+        ) == 2
+        assert await local_cache.async_get_cache(
+            key=handler.create_rate_limit_keys("api_key", api_key, "tokens")
+        ) == 2
+        assert await local_cache.async_get_cache(key=parallel_counter_key) == {"parent-slot": parent_acquired_at}
+
+    assert get_request_stash() is outer_stash
+
+    distinct_api_key = hash_token("sk-distinct-compressor")
+    distinct_parallel_counter_key = handler.create_rate_limit_keys(
+        "api_key", distinct_api_key, "max_parallel_requests"
+    )
+    distinct_auth = UserAPIKeyAuth(
+        api_key=distinct_api_key,
+        max_parallel_requests=1,
+        rpm_limit=5,
+        tpm_limit=100,
+    )
+    distinct_data = {**data, "litellm_call_id": "compression-distinct"}
+    distinct_kwargs = {
+        **kwargs,
+        "litellm_call_id": "compression-distinct",
+        "standard_logging_object": {"metadata": {"user_api_key_hash": distinct_api_key}},
+    }
+    with isolated_internal_completion_request():
+        await handler.async_pre_call_hook(
+            user_api_key_dict=distinct_auth,
+            cache=local_cache,
+            data=distinct_data,
+            call_type="acompletion",
+        )
+        distinct_stash = get_request_stash()
+        assert distinct_stash is not None
+        assert distinct_stash.parallel_slot is not None
+        distinct_slot_id = distinct_stash.parallel_slot["slot_id"]
+        assert await local_cache.async_get_cache(key=distinct_parallel_counter_key) == {
+            distinct_slot_id: pytest.approx(parent_acquired_at, abs=1)
+        }
+
+        await handler.async_log_failure_event(
+            kwargs=distinct_kwargs,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+
+        assert await local_cache.async_get_cache(key=distinct_parallel_counter_key) == {}
+        assert await local_cache.async_get_cache(key=parallel_counter_key) == {"parent-slot": parent_acquired_at}
+
+    no_parent_token = _request_stash.set(None)
+    try:
+        with isolated_internal_completion_request():
+            with pytest.raises(HTTPException) as exc_info:
+                await handler.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=local_cache,
+                    data={**data, "litellm_call_id": "compression-without-parent-slot"},
+                    call_type="acompletion",
+                )
+    finally:
+        _request_stash.reset(no_parent_token)
+
+    assert exc_info.value.status_code == 429
+    assert await local_cache.async_get_cache(key=parallel_counter_key) == {"parent-slot": parent_acquired_at}
+    assert get_request_stash() is outer_stash
+
+
+@pytest.mark.asyncio
+async def test_internal_completion_without_parent_slot_obeys_parallel_limit_v3():
+    api_key = hash_token("sk-internal-no-parent-slot")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    parallel_counter_key = handler.create_rate_limit_keys("api_key", api_key, "max_parallel_requests")
+    await _seed_max_parallel_requests_slots(local_cache, parallel_counter_key, ["occupied-slot"])
+
+    with isolated_internal_completion_request():
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1),
+                cache=local_cache,
+                data={"model": "gpt-4o-mini", "litellm_call_id": "child-call"},
+                call_type="acompletion",
+            )
+
+    assert exc_info.value.status_code == 429
+    assert handler._gauge_in_flight_from_cache_value(
+        await local_cache.async_get_cache(key=parallel_counter_key)
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_internal_completion_acquires_and_releases_nonmatching_parallel_slot_v3():
+    parent_api_key = hash_token("sk-parent-parallel-slot")
+    child_api_key = hash_token("sk-child-parallel-slot")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    parent_counter_key = handler.create_rate_limit_keys("api_key", parent_api_key, "max_parallel_requests")
+    child_counter_key = handler.create_rate_limit_keys("api_key", child_api_key, "max_parallel_requests")
+    parent_acquired_at = handler._get_current_time().timestamp()
+    await local_cache.async_set_cache(
+        key=parent_counter_key,
+        value={"parent-slot": parent_acquired_at},
+        local_only=True,
+    )
+    outer_stash = get_or_create_request_stash()
+    outer_stash.parallel_slot = ParallelSlotAcquisition(
+        slot_id="parent-slot",
+        counter_keys=[parent_counter_key],
+    )
+
+    with isolated_internal_completion_request():
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key=child_api_key, max_parallel_requests=1),
+            cache=local_cache,
+            data={"model": "gpt-4o-mini", "litellm_call_id": "child-call"},
+            call_type="acompletion",
+        )
+        child_stash = get_request_stash()
+        assert child_stash is not None
+        assert child_stash.parallel_slot is not None
+        assert child_stash.parallel_slot["counter_keys"] == [child_counter_key]
+        assert handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=child_counter_key)
+        ) == 1
+
+        await handler.async_log_failure_event(
+            kwargs={"litellm_call_id": "child-call"},
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+        assert handler._gauge_in_flight_from_cache_value(
+            await local_cache.async_get_cache(key=child_counter_key)
+        ) == 0
+        assert await local_cache.async_get_cache(key=parent_counter_key) == {
+            "parent-slot": parent_acquired_at
+        }
+
+    assert get_request_stash() is outer_stash
+
+
+@pytest.mark.asyncio
 async def test_redis_release_script_updates_local_mirror_v3():
     """
     With Redis available, releases go through the release script with this
@@ -6031,9 +6273,7 @@ async def test_configured_estimate_blocks_the_overrun_the_static_floor_admits(mo
 
 
 def test_internal_call_origin_success_ops_are_skipped():
-    """Internal sub-calls (auto-router classifier, shadow eval shadow/judge) bill spend
-    to the caller's key but must not consume its TPM counters: the same kwargs charge
-    ops without the origin stamp and none with it."""
+    """Background internal calls skip TPM, while context compression consumes caller TPM."""
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache())
     )
@@ -6063,9 +6303,15 @@ def test_internal_call_origin_success_ops_are_skipped():
         response_obj=response,
         rate_limit_type="output",
     )
+    compression_charged = handler._build_success_event_pipeline_operations(
+        kwargs=_kwargs({INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN}),
+        response_obj=response,
+        rate_limit_type="output",
+    )
 
     assert charged
     assert skipped == []
+    assert compression_charged == charged
 
 
 def _conflicting_budget_bodies() -> Dict[str, Dict[str, object]]:

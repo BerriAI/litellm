@@ -20,6 +20,10 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
+from litellm.litellm_core_utils.internal_call_metadata import (
+    get_internal_completion_call_origin,
+    get_internal_completion_turn_off_message_logging,
+)
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
@@ -52,6 +56,392 @@ from litellm.router import Router
 
 
 class TestProxyBaseLLMRequestProcessing:
+    @pytest.mark.asyncio
+    async def test_internal_completion_executor_runs_through_proxy_auth_and_mocked_upstream(self, monkeypatch):
+        import openai
+
+        from litellm.caching.caching import DualCache
+        from litellm.litellm_core_utils.internal_call_metadata import INTERNAL_CALL_ORIGIN_METADATA_KEY
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.auth_checks import model_access_group_registry_cache_key
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+            ParallelSlotAcquisition,
+            RequestRateLimiterStash,
+            _PROXY_MaxParallelRequestsHandler_v3,
+            _request_stash,
+            get_request_stash,
+        )
+        from litellm.proxy.utils import InternalUsageCache, hash_token
+        from litellm.types.utils import AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN
+
+        upstream_requests = []
+        child_observations = []
+        child_success_logged = asyncio.Event()
+
+        class _ChildRequestObserver(CustomLogger):
+            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+                stash = get_request_stash()
+                child_observations.append(
+                    {
+                        "call_id": data["litellm_call_id"],
+                        "metadata": copy.deepcopy(data["metadata"]),
+                        "proxy_body": copy.deepcopy(data["proxy_server_request"]["body"]),
+                        "turn_off_message_logging": data.get("turn_off_message_logging"),
+                        "stash": stash,
+                        "reserved_tokens": stash.reserved_tokens if stash is not None else None,
+                    }
+                )
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+                child_success_logged.set()
+
+        observer = _ChildRequestObserver()
+
+        def upstream(request: httpx.Request) -> httpx.Response:
+            upstream_requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-child",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "summary"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+
+        upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        openai_client = openai.AsyncOpenAI(api_key="sk-upstream", http_client=upstream_client)
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "compressor",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-upstream"},
+                }
+            ],
+            default_litellm_params={"client": openai_client},
+            num_retries=0,
+        )
+        raw_key = "sk-context-compression-allowed"
+        hashed_key = hash_token(raw_key)
+        key_cache = UserApiKeyCache()
+        key_cache.set_cache(
+            hashed_key,
+            ProxyUserAPIKeyAuth(
+                token=hashed_key,
+                api_key=hashed_key,
+                models=["compressor"],
+                max_parallel_requests=1,
+                rpm_limit=5,
+                tpm_limit=100,
+            ),
+        )
+        limiter_cache = DualCache()
+        limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(limiter_cache))
+        parallel_counter_key = limiter.create_rate_limit_keys("api_key", hashed_key, "max_parallel_requests")
+        parent_acquired_at = limiter._get_current_time().timestamp()
+        await limiter_cache.async_set_cache(
+            key=parallel_counter_key,
+            value={"parent-slot": parent_acquired_at},
+            local_only=True,
+        )
+        outer_stash = RequestRateLimiterStash(
+            owner_litellm_call_id="parent-call",
+            parallel_slot=ParallelSlotAcquisition(
+                slot_id="parent-slot",
+                counter_keys=[parallel_counter_key],
+            ),
+        )
+        stash_token = _request_stash.set(outer_stash)
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [limiter, observer]
+        key_cache.set_cache(model_access_group_registry_cache_key(), ())
+        monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "general_settings", {"disable_budget_reservation": True})
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", key_cache)
+        monkeypatch.setattr(proxy_server, "prisma_client", object())
+        monkeypatch.setattr(litellm, "max_budget", 0.0)
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/messages",
+                "raw_path": b"/v1/messages",
+                "root_path": "",
+                "scheme": "http",
+                "server": ("proxy.test", 80),
+                "client": ("192.0.2.1", 1234),
+                "headers": [(b"authorization", f"Bearer {raw_key}".encode())],
+                "query_string": b"source=parent",
+            }
+        )
+        try:
+            response = await ProxyBaseLLMRequestProcessing(data={})._internal_completion_executor(request=request)(
+                {
+                    "model": "compressor",
+                    "messages": [{"role": "user", "content": "summarize"}],
+                    "max_tokens": 7,
+                    "stream": True,
+                    "litellm_call_id": "parent-call",
+                    "litellm_metadata": {"routing_decision": "parent"},
+                    "turn_off_message_logging": True,
+                }
+            )
+            await asyncio.wait_for(child_success_logged.wait(), timeout=2)
+            assert get_request_stash() is outer_stash
+        finally:
+            litellm.callbacks = original_callbacks
+            _request_stash.reset(stash_token)
+            await openai_client.close()
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response.choices[0].message.content == "summary"
+        assert len(upstream_requests) == 1
+        assert json.loads(upstream_requests[0].content) == {
+            "messages": [{"role": "user", "content": "summarize"}],
+            "model": "gpt-4o-mini",
+            "max_tokens": 7,
+        }
+        assert len(child_observations) == 1
+        child_observation = child_observations[0]
+        assert child_observation["call_id"] != "parent-call"
+        assert child_observation["stash"] is not outer_stash
+        assert child_observation["reserved_tokens"] > 0
+        assert child_observation["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] == (
+            AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN
+        )
+        assert child_observation["turn_off_message_logging"] is True
+        assert child_observation["proxy_body"]["turn_off_message_logging"] is True
+        assert child_observation["proxy_body"]["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] == (
+            AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN
+        )
+        assert await limiter_cache.async_get_cache(key=parallel_counter_key) == {"parent-slot": parent_acquired_at}
+        assert (
+            await limiter_cache.async_get_cache(key=limiter.create_rate_limit_keys("api_key", hashed_key, "requests"))
+            == 1
+        )
+        assert (
+            await limiter_cache.async_get_cache(key=limiter.create_rate_limit_keys("api_key", hashed_key, "tokens"))
+            == 2
+        )
+        assert get_internal_completion_call_origin() is None
+        assert get_internal_completion_turn_off_message_logging() is None
+
+    @pytest.mark.asyncio
+    async def test_internal_completion_executor_rejects_compressor_when_parent_key_only_authorizes_facade(
+        self, monkeypatch
+    ):
+        import openai
+
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.auth_checks import model_access_group_registry_cache_key
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+        from litellm.proxy.utils import hash_token
+
+        upstream_requests = []
+
+        def upstream(request: httpx.Request) -> httpx.Response:
+            upstream_requests.append(request)
+            return httpx.Response(500)
+
+        upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        openai_client = openai.AsyncOpenAI(api_key="sk-upstream", http_client=upstream_client)
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "customer-auto-router",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-upstream"},
+                },
+                {
+                    "model_name": "compressor",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-upstream"},
+                },
+            ],
+            default_litellm_params={"client": openai_client},
+            num_retries=0,
+        )
+        raw_key = "sk-context-compression-denied"
+        hashed_key = hash_token(raw_key)
+        key_cache = UserApiKeyCache()
+        key_cache.set_cache(
+            hashed_key,
+            ProxyUserAPIKeyAuth(token=hashed_key, api_key=hashed_key, models=["customer-auto-router"]),
+        )
+        key_cache.set_cache(model_access_group_registry_cache_key(), ())
+        monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "general_settings", {"disable_budget_reservation": True})
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", key_cache)
+        monkeypatch.setattr(proxy_server, "prisma_client", object())
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/messages",
+                "raw_path": b"/v1/messages",
+                "root_path": "",
+                "scheme": "http",
+                "server": ("proxy.test", 80),
+                "client": ("192.0.2.1", 1234),
+                "headers": [(b"authorization", f"Bearer {raw_key}".encode())],
+                "query_string": b"",
+            }
+        )
+        try:
+            with pytest.raises(HTTPException) as exc_info:
+                await ProxyBaseLLMRequestProcessing(data={})._internal_completion_executor(request=request)(
+                    {"model": "compressor", "messages": [{"role": "user", "content": "summarize"}]}
+                )
+        finally:
+            await openai_client.close()
+
+        assert exc_info.value.status_code == 403
+        assert upstream_requests == []
+        assert get_internal_completion_call_origin() is None
+
+    @pytest.mark.asyncio
+    async def test_internal_completion_executor_cancels_child_route_and_restores_parent_stash(self, monkeypatch):
+        import openai
+
+        from litellm.caching.caching import DualCache
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.auth_checks import model_access_group_registry_cache_key
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+            ParallelSlotAcquisition,
+            RequestRateLimiterStash,
+            _PROXY_MaxParallelRequestsHandler_v3,
+            _request_stash,
+            get_request_stash,
+        )
+        from litellm.proxy.utils import InternalUsageCache, hash_token
+
+        upstream_started = asyncio.Event()
+        upstream_cancelled = asyncio.Event()
+
+        async def upstream(_: httpx.Request) -> httpx.Response:
+            upstream_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                upstream_cancelled.set()
+                raise
+            raise AssertionError("the canceled child request resumed")
+
+        upstream_client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        openai_client = openai.AsyncOpenAI(api_key="sk-upstream", http_client=upstream_client)
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "compressor",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-upstream"},
+                }
+            ],
+            default_litellm_params={"client": openai_client},
+            num_retries=0,
+        )
+        raw_key = "sk-context-compression-cancel"
+        hashed_key = hash_token(raw_key)
+        key_cache = UserApiKeyCache()
+        key_cache.set_cache(
+            hashed_key,
+            ProxyUserAPIKeyAuth(
+                token=hashed_key,
+                api_key=hashed_key,
+                models=["compressor"],
+                max_parallel_requests=1,
+                rpm_limit=5,
+                tpm_limit=100,
+            ),
+        )
+        key_cache.set_cache(model_access_group_registry_cache_key(), ())
+        limiter_cache = DualCache()
+        limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(limiter_cache))
+        parallel_counter_key = limiter.create_rate_limit_keys("api_key", hashed_key, "max_parallel_requests")
+        parent_acquired_at = limiter._get_current_time().timestamp()
+        await limiter_cache.async_set_cache(
+            key=parallel_counter_key,
+            value={"parent-slot": parent_acquired_at},
+            local_only=True,
+        )
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [limiter]
+        monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "general_settings", {"disable_budget_reservation": True})
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", key_cache)
+        monkeypatch.setattr(proxy_server, "prisma_client", object())
+        monkeypatch.setattr(litellm, "max_budget", 0.0)
+
+        outer_stash = RequestRateLimiterStash(
+            owner_litellm_call_id="parent-call",
+            parallel_slot=ParallelSlotAcquisition(
+                slot_id="parent-slot",
+                counter_keys=[parallel_counter_key],
+            ),
+        )
+        stash_token = _request_stash.set(outer_stash)
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/messages",
+                "raw_path": b"/v1/messages",
+                "root_path": "",
+                "scheme": "http",
+                "server": ("proxy.test", 80),
+                "client": ("192.0.2.1", 1234),
+                "headers": [(b"authorization", f"Bearer {raw_key}".encode())],
+                "query_string": b"",
+            }
+        )
+        child_task = asyncio.create_task(
+            ProxyBaseLLMRequestProcessing(data={})._internal_completion_executor(request=request)(
+                {
+                    "model": "compressor",
+                    "messages": [{"role": "user", "content": "summarize"}],
+                    "max_tokens": 1,
+                }
+            )
+        )
+        try:
+            await asyncio.wait_for(upstream_started.wait(), timeout=2)
+            assert (
+                await limiter_cache.async_get_cache(key=limiter.create_rate_limit_keys("api_key", hashed_key, "tokens"))
+                > 0
+            )
+            child_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await child_task
+            assert get_request_stash() is outer_stash
+        finally:
+            litellm.callbacks = original_callbacks
+            _request_stash.reset(stash_token)
+            await openai_client.close()
+
+        assert upstream_cancelled.is_set()
+        assert (
+            await limiter_cache.async_get_cache(key=limiter.create_rate_limit_keys("api_key", hashed_key, "requests"))
+            == 1
+        )
+        assert (
+            await limiter_cache.async_get_cache(key=limiter.create_rate_limit_keys("api_key", hashed_key, "tokens"))
+            == 0
+        )
+        assert await limiter_cache.async_get_cache(key=parallel_counter_key) == {"parent-slot": parent_acquired_at}
+        assert get_internal_completion_call_origin() is None
+        assert get_request_stash() is not outer_stash
     @pytest.mark.asyncio
     async def test_base_passthrough_process_llm_request_preserves_litellm_headers_for_non_streaming_response(
         self, monkeypatch

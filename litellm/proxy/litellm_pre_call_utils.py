@@ -39,7 +39,11 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     _request_blocked_callback_params,
     iter_client_callback_metadata_dicts,
 )
-from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
+from litellm.litellm_core_utils.internal_call_metadata import (
+    MODEL_ACCESS_GROUP_METADATA_KEY,
+    get_internal_completion_call_origin,
+    get_internal_completion_turn_off_message_logging,
+)
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     is_url_destination_allowed_by_host,
@@ -2207,6 +2211,12 @@ async def add_litellm_data_to_request(
     #     self-reference — body.proxy_server_request.body would be the same
     #     dict as body, producing an infinite traversal loop for any consumer
     #     that walks the structure.
+    internal_message_logging: Final = get_internal_completion_turn_off_message_logging()
+    if internal_message_logging is not None:
+        data["turn_off_message_logging"] = internal_message_logging  # rebind-ok: data is the request's out-param
+    internal_completion_origin: Final = get_internal_completion_call_origin()
+    if internal_completion_origin is not None:
+        data[_metadata_variable_name][INTERNAL_CALL_ORIGIN_METADATA_KEY] = internal_completion_origin
     refresh_proxy_server_request_body_snapshot(data)
 
     # Snapshot the requester-supplied metadata for downstream consumers.

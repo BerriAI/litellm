@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     MaskedHTTPStatusError,
     _get_httpx_client,
     get_ssl_configuration,
+    temporary_async_http_handler,
 )
 
 
@@ -1113,6 +1114,56 @@ def test_sync_close_leaves_caller_supplied_client_open():
 
     assert not supplied.is_closed
     supplied.close()
+
+
+@pytest.mark.asyncio
+async def test_async_close_leaves_constructor_supplied_client_open():
+    async def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, json={"status": "ok"})
+
+    supplied = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    handler = AsyncHTTPHandler(client=supplied)
+
+    response = await handler.post("https://example.invalid/borrowed")
+    await handler.close()
+
+    assert response.json() == {"status": "ok"}
+    assert not supplied.is_closed
+    await supplied.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_post_preserves_constructor_supplied_transport_on_connect_error():
+    async def fail(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("injected transport failure", request=request)
+
+    supplied = httpx.AsyncClient(transport=httpx.MockTransport(fail))
+    handler = AsyncHTTPHandler(client=supplied)
+
+    with pytest.raises(httpx.ConnectError, match="injected transport failure"):
+        await handler.post("http://127.0.0.1:1/borrowed")
+
+    assert not supplied.is_closed
+    await supplied.aclose()
+
+
+@pytest.mark.asyncio
+async def test_temporary_async_http_handler_closes_supplied_transport():
+    closed = asyncio.Event()
+
+    class ClosingTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, request=request, json={"status": "ok"})
+
+        async def aclose(self) -> None:
+            closed.set()
+
+    async with temporary_async_http_handler(ClosingTransport()) as handler:
+        response = await handler.post("https://example.invalid/temporary")
+        assert response.json() == {"status": "ok"}
+        assert not closed.is_set()
+
+    assert closed.is_set()
 
 
 @pytest.mark.asyncio

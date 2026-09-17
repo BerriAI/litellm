@@ -2,7 +2,12 @@
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.litellm_core_utils.internal_call_metadata import (
+    bind_internal_completion_executor,
     forwarded_internal_call_metadata,
+    get_internal_completion_call_origin,
+    get_internal_completion_executor,
+    internal_completion_call_origin,
+    reset_internal_completion_executor,
     sanitized_forwardable_call_metadata,
 )
 from litellm.types.utils import SHADOW_EVAL_ROUTER_CALL_ORIGIN
@@ -16,6 +21,24 @@ PARENT = {
     "routing_decision": {"router_model_name": "my-router"},
     "headers": {"x-request-id": "abc"},
 }
+
+
+def test_internal_completion_executor_is_request_scoped():
+    async def executor(request_data):
+        return request_data
+
+    assert get_internal_completion_executor() is None
+    token = bind_internal_completion_executor(executor)
+    assert get_internal_completion_executor() is executor
+    reset_internal_completion_executor(token)
+    assert get_internal_completion_executor() is None
+
+
+def test_internal_completion_origin_is_request_scoped():
+    assert get_internal_completion_call_origin() is None
+    with internal_completion_call_origin("autorouter_context_compression"):
+        assert get_internal_completion_call_origin() == "autorouter_context_compression"
+    assert get_internal_completion_call_origin() is None
 
 
 def test_forwarded_metadata_strips_reservation_everywhere_and_stamps_origin():

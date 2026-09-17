@@ -8,7 +8,8 @@ import sys
 import threading
 import time
 import weakref
-from collections.abc import AsyncIterable, Callable, Iterable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Iterable, Mapping
+from contextlib import asynccontextmanager
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
 from types import MappingProxyType
@@ -605,13 +606,14 @@ class AsyncHTTPHandler:
         client_alias: str | None = None,  # name for client in logs
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
+        client: httpx.AsyncClient | None = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
         self.ssl_verify = ssl_verify
         self.shared_session = shared_session
-        self._owns_client = True
-        self._client = self.create_client(
+        self._owns_client = client is None
+        self._client = client or self.create_client(
             timeout=timeout,
             event_hooks=event_hooks,
             ssl_verify=ssl_verify,
@@ -811,6 +813,8 @@ class AsyncHTTPHandler:
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
+            if not self._owns_client:
+                raise
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
@@ -1345,6 +1349,14 @@ class AsyncHTTPHandler:
         return _environment_proxy_mounts(
             lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2_enabled())
         )
+
+
+@asynccontextmanager
+async def temporary_async_http_handler(
+    transport: httpx.AsyncBaseTransport,
+) -> AsyncGenerator[AsyncHTTPHandler, None]:
+    async with httpx.AsyncClient(transport=transport) as client:
+        yield AsyncHTTPHandler(client=client)
 
 
 class HTTPHandler:

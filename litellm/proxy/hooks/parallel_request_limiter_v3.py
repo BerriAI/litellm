@@ -9,8 +9,8 @@ import binascii
 import logging
 import os
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Set
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping, Sequence, Set
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -66,6 +66,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.utils import (
+    AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN,
     CallTypes,
     EmbeddingResponse,
     ModelResponse,
@@ -553,10 +554,40 @@ class RequestRateLimiterStash:
 _request_stash: Final[ContextVar[RequestRateLimiterStash | None]] = ContextVar(
     "litellm_v3_rate_limiter_request_stash", default=None
 )
+_INTERNAL_COMPLETION_BORROWED_PARALLEL_COUNTER_KEYS: Final[ContextVar[frozenset[str]]] = ContextVar(
+    "litellm_internal_completion_borrowed_parallel_counter_keys", default=frozenset()
+)
+
+
+@contextmanager
+def isolated_internal_completion_request() -> Generator[None, None, None]:
+    parent_stash: Final = _request_stash.get()
+    parent_slot: Final = parent_stash.parallel_slot if parent_stash is not None else None
+    borrowed_counter_keys: Final = frozenset(parent_slot["counter_keys"]) if parent_slot is not None else frozenset()
+    stash_token: Final = _request_stash.set(RequestRateLimiterStash())
+    borrowed_counter_keys_token: Final = _INTERNAL_COMPLETION_BORROWED_PARALLEL_COUNTER_KEYS.set(borrowed_counter_keys)
+    try:
+        yield
+    finally:
+        _INTERNAL_COMPLETION_BORROWED_PARALLEL_COUNTER_KEYS.reset(borrowed_counter_keys_token)
+        _request_stash.reset(stash_token)
 
 
 def get_request_stash() -> RequestRateLimiterStash | None:
     return _request_stash.get()
+
+
+async def release_internal_completion_request_on_cancel(callbacks: Sequence[object]) -> None:
+    limiter_callbacks: Final = tuple(
+        callback for callback in callbacks if isinstance(callback, _PROXY_MaxParallelRequestsHandler_v3)
+    )
+    for callback in limiter_callbacks:
+        await callback.async_log_failure_event(
+            kwargs=MappingProxyType({}),
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
 
 
 def get_or_create_request_stash() -> RequestRateLimiterStash:
@@ -1261,6 +1292,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         parent_otel_span: Span | None = None,
         read_only: bool = False,
         skip_tpm_check: bool = False,
+        borrowed_parallel_counter_keys: frozenset[str] = frozenset(),
         parallel_slot_id: str | None = None,
     ) -> RateLimitResponse:
         """
@@ -1297,6 +1329,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         keys_to_fetch, key_metadata, gauges = self._collect_windowed_keys_and_gauges(
             descriptors=descriptors,
             skip_tpm_check=skip_tpm_check,
+            borrowed_parallel_counter_keys=borrowed_parallel_counter_keys,
         )
 
         windowed_response = RateLimitResponse(overall_code="OK", statuses=[])
@@ -1385,6 +1418,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         descriptors: Sequence[RateLimitDescriptor],
         skip_tpm_check: bool,
+        borrowed_parallel_counter_keys: frozenset[str],
     ) -> tuple[list[str], dict[str, WindowKeyMetadata], list[ParallelRequestGauge]]:
         """
         Split descriptors into the windowed (window_key, counter_key) fetch
@@ -1406,13 +1440,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             window_size = rate_limit.get("window_size") or self.window_size
 
             window_key = f"{{{descriptor_key}:{descriptor_value}}}:window"
+            parallel_counter_key = self.create_rate_limit_keys(
+                descriptor_key, descriptor_value, "max_parallel_requests"
+            )
 
-            if max_parallel_requests_limit is not None:
+            if max_parallel_requests_limit is not None and parallel_counter_key not in borrowed_parallel_counter_keys:
                 gauges.append(
                     ParallelRequestGauge(
-                        counter_key=self.create_rate_limit_keys(
-                            descriptor_key, descriptor_value, "max_parallel_requests"
-                        ),
+                        counter_key=parallel_counter_key,
                         limit=int(max_parallel_requests_limit),
                         descriptor_key=descriptor_key,
                     )
@@ -3591,10 +3626,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # then because _reserve_project_io_tokens_or_raise below charges
             # them unconditionally and counting them here too would
             # double-charge every request.
-            parallel_counter_keys: Final = [
-                self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
+            borrowed_parallel_counter_keys: Final = _INTERNAL_COMPLETION_BORROWED_PARALLEL_COUNTER_KEYS.get()
+            parallel_counter_keys: Final = [  # mutable-ok: shared slot-release contract requires a list
+                counter_key
                 for d in descriptors
-                if (d.get("rate_limit") or {}).get("max_parallel_requests") is not None
+                if (d.get("rate_limit") or MappingProxyType({})).get("max_parallel_requests") is not None
+                and (counter_key := self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests"))
+                not in borrowed_parallel_counter_keys
             ]
             parallel_slot_id: Final = uuid.uuid4().hex if parallel_counter_keys else None
 
@@ -3609,6 +3647,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 descriptors=first_pass_descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 skip_tpm_check=self.tpm_reservation_enabled,
+                borrowed_parallel_counter_keys=borrowed_parallel_counter_keys,
                 parallel_slot_id=parallel_slot_id,
             )
 
@@ -4429,7 +4468,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # 'metadata' and 'litellm_metadata' fields from litellm_params
         standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
         request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
-        if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
+        internal_call_origin: Final = request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+        if internal_call_origin and internal_call_origin != AUTOROUTER_CONTEXT_COMPRESSION_CALL_ORIGIN:
             # Internal sub-calls bill spend to the caller but are not the caller's
             # traffic; charging them here would let background evals eat TPM headroom.
             return []
