@@ -1309,7 +1309,7 @@ def _ensure_litellm_received_at_on_request_state(request: Request) -> datetime:
     received_at: Final = datetime.now(timezone.utc)
     try:
         request.state.litellm_received_at = received_at
-    except Exception:
+    except Exception:  # noqa: BLE001  # organization lookup must not fail authentication
         pass
     return received_at
 
