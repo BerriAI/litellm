@@ -154,10 +154,12 @@ describe("AddAgentForm logos", () => {
 
   it("includes selected access groups in the create payload", async () => {
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
-    vi.mocked(networking.createAgentCall).mockReset().mockResolvedValue({
-      agent_id: "agent-1",
-      agent_name: "Test Agent",
-    } as never);
+    vi.mocked(networking.createAgentCall)
+      .mockReset()
+      .mockResolvedValue({
+        agent_id: "agent-1",
+        agent_name: "Test Agent",
+      } as never);
     vi.mocked(networking.keyListCall).mockResolvedValue({ keys: [] });
 
     renderForm();
