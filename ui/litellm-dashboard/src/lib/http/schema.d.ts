@@ -28334,6 +28334,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Guardrails */
@@ -28498,6 +28500,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Expires */
@@ -33700,6 +33704,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Expires */
@@ -35571,6 +35577,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Grace Period */
@@ -38851,6 +38859,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Guardrails */

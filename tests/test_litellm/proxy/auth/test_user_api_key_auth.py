@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -4372,6 +4373,142 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
         "user_api_key_user_table_max_budget": None,
         "user_api_key_user_alias": "Alice",
     }
+
+
+def _end_user_budget_row(budget_id: str, max_budget: float) -> MagicMock:
+    row = MagicMock()
+    row.dict = lambda: {"budget_id": budget_id, "max_budget": max_budget}
+    return row
+
+
+async def _run_centralized_checks_with_key_end_user_budget(
+    token: UserAPIKeyAuth,
+    end_user_row: MagicMock | None,
+    budgets: Mapping[str, float],
+    request_user: str | None = None,
+    user_api_key_cache: DualCache | None = None,
+) -> UserAPIKeyAuth:
+    """Run the centralized checks with a fake DB and return the token handed to budget reservation."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    async def _find_budget(where: Mapping[str, str]) -> MagicMock | None:
+        budget_id = where["budget_id"]
+        return _end_user_budget_row(budget_id, budgets[budget_id]) if budget_id in budgets else None
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=end_user_row)
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(side_effect=_find_budget)
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
+        "prisma_client": prisma_client,
+        "user_api_key_cache": user_api_key_cache if user_api_key_cache is not None else DualCache(),
+        "proxy_logging_obj": proxy_logging_obj,
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(  # test-quality-ok: the authz gate has its own tests above; this one checks what reaches reservation
+                "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+            ),
+            patch(  # test-quality-ok: reservation is the observable boundary; its input token is what is asserted
+                "litellm.proxy.auth.user_api_key_auth._reserve_budget_after_common_checks",
+                new_callable=AsyncMock,
+            ) as mock_reserve,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-5.4-mini", "user": request_user or token.end_user_id},
+                route="/chat/completions",
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    mock_reserve.assert_awaited_once()
+    return mock_reserve.call_args.kwargs["user_api_key_auth_obj"]
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_keeps_a_validated_away_end_user_when_the_key_has_a_default(monkeypatch):
+    """With ``validate_end_user_id_in_db`` on and no proxy-wide default, the builder drops an
+    unregistered customer id before it knows the key. The central gate must re-resolve it with the
+    key's default so the customer is both budgeted and attributed on the first request."""
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    monkeypatch.setattr(litellm, "validate_end_user_id_in_db", True)
+    cache = DualCache()
+    await cache.async_set_cache(key="end_user_validation:cust-new", value="invalid")
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed",
+        end_user_id=None,
+        metadata={"service_account_id": "svc-a", "end_user_budget_id": "svc-a-budget"},
+    )
+
+    reserved_token = await _run_centralized_checks_with_key_end_user_budget(
+        token, end_user_row=None, budgets={"svc-a-budget": 0.5}, request_user="cust-new", user_api_key_cache=cache
+    )
+
+    assert reserved_token.end_user_id == "cust-new"
+    assert reserved_token.end_user_max_budget == 0.5
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_reserves_key_default_budget_for_a_brand_new_end_user(monkeypatch):
+    """A service-account key's ``end_user_budget_id`` must reach the token before the budget
+    reservation runs, on the very first request, when no end-user row exists yet and even though
+    the builder already applied the proxy-wide default."""
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "global-eu-budget")
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed",
+        end_user_id="cust-new",
+        end_user_max_budget=100.0,
+        metadata={"service_account_id": "svc-a", "end_user_budget_id": "svc-a-budget"},
+    )
+
+    reserved_token = await _run_centralized_checks_with_key_end_user_budget(
+        token, end_user_row=None, budgets={"global-eu-budget": 100.0, "svc-a-budget": 0.5}
+    )
+
+    assert reserved_token.end_user_max_budget == 0.5
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_keeps_an_end_users_own_budget_over_the_key_default(monkeypatch):
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed",
+        end_user_id="cust-vip",
+        end_user_max_budget=500.0,
+        metadata={"service_account_id": "svc-a", "end_user_budget_id": "svc-a-budget"},
+    )
+    end_user_row = MagicMock()
+    end_user_row.dict = lambda: {
+        "user_id": "cust-vip",
+        "blocked": False,
+        "spend": 0.0,
+        "budget_id": "vip-budget",
+        "litellm_budget_table": {"budget_id": "vip-budget", "max_budget": 500.0},
+    }
+
+    reserved_token = await _run_centralized_checks_with_key_end_user_budget(
+        token, end_user_row=end_user_row, budgets={"svc-a-budget": 0.5}
+    )
+
+    assert reserved_token.end_user_max_budget == 500.0
 
 
 class _RecordingTeamModelBudgetLimiter:

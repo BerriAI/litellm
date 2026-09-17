@@ -55,6 +55,7 @@ from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     can_team_access_model,
     get_jwt_key_mapping_cache_keys_for_token,
+    get_key_end_user_budget_id,
     get_org_object,
     get_project_object,
     get_team_object,
@@ -1174,6 +1175,13 @@ async def _common_key_generation_helper(
             status_code=403,
             detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
         )
+
+    await _validate_end_user_budget_id_change(
+        requested_budget_id=_requested_end_user_budget_id(data),
+        existing_budget_id=None,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
 
     enforce_output_token_estimates_are_admin_only(
         data=data,
@@ -2887,6 +2895,40 @@ def _require_prisma_client(prisma_client: PrismaClient | None) -> PrismaClient:
     return prisma_client
 
 
+def _requested_end_user_budget_id(data: KeyRequestBase) -> str | None:
+    """A ``metadata`` body replaces the stored metadata wholesale, so one without the field clears it."""
+    if data.end_user_budget_id is not None:
+        return data.end_user_budget_id
+    if data.metadata is None:
+        return None
+    return get_key_end_user_budget_id(data.metadata) or ""
+
+
+async def _validate_end_user_budget_id_change(
+    requested_budget_id: str | None,
+    existing_budget_id: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+) -> None:
+    """A key's default end-user budget overrides the proxy-wide one, so only proxy admins
+    may change it, and a non-empty value must name an existing budget (empty clears it)."""
+    if requested_budget_id is None or requested_budget_id == (existing_budget_id or ""):
+        return
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        forbidden_detail: Final = {  # mutable-ok: FastAPI detail contract
+            "error": "Only proxy admins can set end_user_budget_id on a key."
+        }
+        raise HTTPException(status_code=403, detail=forbidden_detail)
+    if requested_budget_id == "":
+        return
+    budget_row: Final = await BudgetRepository(_require_prisma_client(prisma_client)).find_by_id(requested_budget_id)
+    if budget_row is None:
+        missing_detail: Final = {  # mutable-ok: FastAPI detail contract
+            "error": f"end_user_budget_id={requested_budget_id} does not match any budget."
+        }
+        raise HTTPException(status_code=400, detail=missing_detail)
+
+
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -2994,6 +3036,15 @@ async def _validate_update_key_data(
             status_code=403,
             detail={"error": "Only proxy admins can enable throttle_on_budget_exceeded on a key."},
         )
+
+    await _validate_end_user_budget_id_change(
+        requested_budget_id=_requested_end_user_budget_id(data),
+        existing_budget_id=get_key_end_user_budget_id(
+            _existing_metadata if isinstance(_existing_metadata, dict) else None
+        ),
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=checked_prisma_client,
+    )
 
     enforce_output_token_estimates_are_admin_only(
         data=data,
@@ -5382,6 +5433,14 @@ async def _execute_virtual_key_regeneration(
             existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,
             entity="key",
+        )
+        await _validate_end_user_budget_id_change(
+            requested_budget_id=_requested_end_user_budget_id(data),
+            existing_budget_id=get_key_end_user_budget_id(
+                _existing_key_metadata if isinstance(_existing_key_metadata, dict) else None
+            ),
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
         )
 
     new_token: Final = await get_new_token(data=data)
