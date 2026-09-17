@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from pydantic import BaseModel, ConfigDict
+
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
@@ -54,14 +56,6 @@ if TYPE_CHECKING:
 _BATCH_TX_TIMEOUT: Final = timedelta(seconds=60)
 _NO_METADATA: Final = MappingProxyType({})
 _WITH_BUDGET: Final = MappingProxyType({"litellm_budget_table": True})
-_AUDITED_LIMITS: Final = (
-    "max_budget",
-    "tpm_limit",
-    "rpm_limit",
-    "budget_duration",
-    "budget_reset_at",
-    "allowed_models",
-)
 
 
 def _membership_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
@@ -93,33 +87,51 @@ async def _shared_budget_ids(tx: "Prisma", budget_ids: frozenset[str]) -> frozen
     return frozenset(budget_id for budget_id in budget_ids if sum(1 for row in rows if row.budget_id == budget_id) > 1)
 
 
-def _audit_value(value: object) -> object:
-    return value.isoformat() if isinstance(value, datetime) else value
+class _AuditedMemberBudget(BaseModel):
+    """One member's limits as the audit log's before/after values record them."""
+
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str
+    budget_id: str | None = None
+    max_budget: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    budget_reset_at: datetime | None = None
+    allowed_models: tuple[str, ...] | None = None
 
 
-def _limits_audit_value(
-    rows: "Sequence[prisma_models.LiteLLM_TeamMembership]",
-) -> str:
-    """Serialize the members' limits for an audit-log value.
+class _AuditedMemberBudgets(BaseModel):
+    """The audit-log columns hold a JSON object, so the per-member list is nested under a key."""
 
-    The audit-log columns hold a JSON object, so the per-member list is nested under a
-    key rather than serialized as a top-level array.
-    """
+    model_config = ConfigDict(frozen=True)
+
+    team_member_budgets: tuple[_AuditedMemberBudget, ...]
+
+
+def _audited_member_budget(row: "prisma_models.LiteLLM_TeamMembership") -> _AuditedMemberBudget:
+    budget: Final = row.litellm_budget_table
+    if budget is None:
+        return _AuditedMemberBudget(user_id=row.user_id, budget_id=row.budget_id)
+    return _AuditedMemberBudget(
+        user_id=row.user_id,
+        budget_id=row.budget_id,
+        max_budget=budget.max_budget,
+        tpm_limit=budget.tpm_limit,
+        rpm_limit=budget.rpm_limit,
+        budget_duration=budget.budget_duration,
+        budget_reset_at=budget.budget_reset_at,
+        allowed_models=tuple(budget.allowed_models) if budget.allowed_models is not None else None,
+    )
+
+
+def _limits_audit_value(rows: "Sequence[prisma_models.LiteLLM_TeamMembership]") -> str:
+    """Serialize the members' limits for an audit-log value, dropping the limits they do not set."""
     return safe_dumps(
-        {  # mutable-ok: the audit-log JSON column rejects a top-level array, so this value must be an object
-            "team_member_budgets": tuple(
-                {
-                    "user_id": row.user_id,
-                    "budget_id": row.budget_id,
-                    **{
-                        field: _audit_value(getattr(row.litellm_budget_table, field))
-                        for field in _AUDITED_LIMITS
-                        if row.litellm_budget_table is not None and getattr(row.litellm_budget_table, field) is not None
-                    },
-                }
-                for row in sorted(rows, key=lambda row: row.user_id)
-            )
-        }
+        _AuditedMemberBudgets(
+            team_member_budgets=tuple(_audited_member_budget(row) for row in sorted(rows, key=lambda row: row.user_id))
+        ).model_dump(exclude_none=True, mode="json")
     )
 
 
