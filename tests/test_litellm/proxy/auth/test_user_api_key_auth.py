@@ -5296,22 +5296,26 @@ async def test_centralized_common_checks_backfills_org_id_from_team(key_org_id, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "key_org_id,team_id,team_org_id,existing_alias,lookup_mode,expected_org_id,expected_alias",
+    "key_org_id,team_id,team_org_id,existing_alias,existing_rpm,lookup_mode,expected_org_id,expected_alias,expected_limits",
     [
-        (None, "t1", "org-from-team", None, "success", "org-from-team", "acme-org"),
-        ("org-jwt", None, None, None, "success", "org-jwt", "acme-org"),
-        ("org-pinned", None, None, "preset", "success", "org-pinned", "preset"),
-        ("org-missing", None, None, None, "missing", "org-missing", None),
+        (None, "t1", "org-from-team", None, None, "success", "org-from-team", "acme-org", (12.5, 700, 7)),
+        ("org-jwt", None, None, None, None, "success", "org-jwt", "acme-org", (12.5, 700, 7)),
+        ("org-pinned", None, None, "preset", None, "success", "org-pinned", "preset", (None, None, None)),
+        ("org-view", None, None, None, 3, "success", "org-view", None, (None, None, 3)),
+        ("org-missing", None, None, None, None, "missing", "org-missing", None, (None, None, None)),
+        ("org-nobudget", None, None, None, None, "no_budget", "org-nobudget", "acme-org", (None, None, None)),
     ],
 )
-async def test_centralized_common_checks_inherits_org_alias(
+async def test_centralized_common_checks_inherits_org_identity(
     key_org_id,
     team_id,
     team_org_id,
     existing_alias,
+    existing_rpm,
     lookup_mode,
     expected_org_id,
     expected_alias,
+    expected_limits,
 ):
     import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
@@ -5325,6 +5329,7 @@ async def test_centralized_common_checks_inherits_org_alias(
         team_id=team_id,
         org_id=key_org_id,
         organization_alias=existing_alias,
+        organization_rpm_limit=existing_rpm,
     )
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
@@ -5336,9 +5341,15 @@ async def test_centralized_common_checks_inherits_org_alias(
         organization_id=expected_org_id,
         organization_alias="acme-org",
         budget_id="budget-id",
+        metadata={"model_rpm_limit": {"gpt-4o": 2}},
         models=[],
         created_by="test",
         updated_by="test",
+        litellm_budget_table=(
+            None
+            if lookup_mode == "no_budget"
+            else LiteLLM_BudgetTable(budget_id="budget-id", max_budget=12.5, tpm_limit=700, rpm_limit=7)
+        ),
     )
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
@@ -5380,16 +5391,25 @@ async def test_centralized_common_checks_inherits_org_alias(
         mock_checks.assert_awaited_once()
         assert token.org_id == expected_org_id
         assert token.organization_alias == expected_alias
+        assert (
+            token.organization_max_budget,
+            token.organization_tpm_limit,
+            token.organization_rpm_limit,
+        ) == expected_limits
         assert identity_seen_by_common_checks == [(expected_org_id, expected_alias)]
         if team_id is None:
             mock_get_team_object.assert_not_awaited()
         else:
             mock_get_team_object.assert_awaited_once()
-        if existing_alias is not None:
+        if existing_alias is not None or existing_rpm is not None:
             mock_get_org_object.assert_not_awaited()
+            assert token.organization_metadata is None
         else:
             mock_get_org_object.assert_awaited_once()
             assert mock_get_org_object.await_args.kwargs["org_id"] == expected_org_id
+            assert mock_get_org_object.await_args.kwargs["include_budget_table"] is True
+            if lookup_mode != "missing":
+                assert token.organization_metadata == {"model_rpm_limit": {"gpt-4o": 2}}
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)

@@ -2409,11 +2409,17 @@ async def _inherit_org_identity(
 ) -> None:
     if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
         user_api_key_auth_obj.org_id = team_object.organization_id
-    if (
-        user_api_key_auth_obj.org_id is None
-        or user_api_key_auth_obj.organization_alias is not None
-        or prisma_client is None
-    ):
+    already_populated: Final = any(
+        value is not None
+        for value in (
+            user_api_key_auth_obj.organization_alias,
+            user_api_key_auth_obj.organization_max_budget,
+            user_api_key_auth_obj.organization_tpm_limit,
+            user_api_key_auth_obj.organization_rpm_limit,
+            user_api_key_auth_obj.organization_metadata,
+        )
+    )
+    if user_api_key_auth_obj.org_id is None or already_populated or prisma_client is None:
         return
     try:
         org_object: Final = await get_org_object(
@@ -2422,12 +2428,21 @@ async def _inherit_org_identity(
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            include_budget_table=True,
         )
     except Exception:
-        verbose_proxy_logger.debug("org alias lookup failed for org_id=%s", user_api_key_auth_obj.org_id, exc_info=True)
+        verbose_proxy_logger.debug("org lookup failed for org_id=%s", user_api_key_auth_obj.org_id, exc_info=True)
         return
-    if org_object is not None:
-        user_api_key_auth_obj.organization_alias = org_object.organization_alias
+    if org_object is None:
+        return
+    user_api_key_auth_obj.organization_alias = org_object.organization_alias
+    user_api_key_auth_obj.organization_metadata = org_object.metadata
+    budget: Final = org_object.litellm_budget_table
+    if budget is None:
+        return
+    user_api_key_auth_obj.organization_max_budget = budget.max_budget
+    user_api_key_auth_obj.organization_tpm_limit = budget.tpm_limit
+    user_api_key_auth_obj.organization_rpm_limit = budget.rpm_limit
 
 
 @tracer.wrap()
