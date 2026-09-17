@@ -178,12 +178,23 @@ def start_child_span(
     The server derives the trace's name and I/O from every observation marked
     root, last start time wins, so only the generation may claim root. Nesting
     the rest under it keeps a post-call guardrail from rewriting the trace.
+
+    The trace's ``public`` flag is folded the same way, with a missing attribute
+    read as ``False``, so the child repeats the generation's value.
     """
+    parent_span: Final = parent._otel_span  # pyright: ignore[reportPrivateUsage]  # the wrapper exposes no public span handle
     otel_span: Final = client._otel_tracer.start_span(  # pyright: ignore[reportPrivateUsage]  # only route to a historical start time
         name=name,
-        context=otel_trace.set_span_in_context(parent._otel_span),  # pyright: ignore[reportPrivateUsage]  # the wrapper exposes no public span handle
+        context=otel_trace.set_span_in_context(parent_span),
         start_time=to_unix_nanos(start_time),
     )
+    public: Final = (
+        parent_span.attributes.get(PUBLIC_ATTRIBUTE)
+        if isinstance(parent_span, ReadableSpan) and parent_span.attributes is not None
+        else None
+    )
+    if public is not None:
+        otel_span.set_attribute(PUBLIC_ATTRIBUTE, public)
     return LangfuseSpan(otel_span=otel_span, langfuse_client=client, **attributes)  # pyright: ignore[reportArgumentType]  # kwargs-ok: callback-built params, v2 accepted the same shapes
 
 

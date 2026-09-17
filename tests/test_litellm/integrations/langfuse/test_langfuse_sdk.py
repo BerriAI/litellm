@@ -227,6 +227,30 @@ def test_trace_public_flag_is_absent_when_not_requested(client):
     assert PUBLIC_ATTRIBUTE not in _only_span(exporter, "gen").attributes
 
 
+@pytest.mark.parametrize("public", [True, False, None], ids=["public", "private", "unset"])
+def test_child_span_repeats_the_generation_public_flag(client, public):
+    """The server folds ``public`` across observations and reads a missing value as False.
+
+    A guardrail span without the flag turned a ``trace_public: true`` request private on Langfuse Cloud.
+    """
+    lf, exporter = client
+    context, claim_root = open_trace_context(client=lf, trace_id="c" * 32, parent_observation_id=None)
+    generation = start_generation(
+        client=lf,
+        context=context,
+        name="gen",
+        start_time=CALL_START,
+        claim_trace_root=claim_root,
+        public=public,
+        attributes={},
+    )
+    start_child_span(client=lf, parent=generation, name="guardrail", start_time=CALL_END, attributes={}).end()
+    generation.end(end_time=to_unix_nanos(CALL_END))
+    lf.flush()
+
+    assert _only_span(exporter, "guardrail").attributes.get(PUBLIC_ATTRIBUTE) is public
+
+
 def test_request_release_beats_the_client_wide_release(monkeypatch):
     """A client configured with its own release must not overwrite trace_release."""
     monkeypatch.setenv("LANGFUSE_RELEASE", "client-wide-release")
