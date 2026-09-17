@@ -20,7 +20,13 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.utils import SpecialEnums
+from litellm.types.utils import (
+    Choices,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    SpecialEnums,
+)
 
 
 @pytest.fixture
@@ -691,6 +697,48 @@ class TestAsyncPostCallStreamingIteratorHook:
 
         assert streamed_id == "resp_rawprovider123"
         assert not responses_id_security._is_encrypted_response_id(streamed_id)
+
+    @pytest.mark.asyncio
+    async def test_model_response_converted_to_streaming_chunk(
+        self, responses_id_security, monkeypatch
+    ):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-abcdefghij")
+
+        mock_auth = MagicMock()
+        mock_auth.user_id = "user-a"
+        mock_auth.team_id = "team-a"
+        mock_auth.request_route = "/chat/completions"
+
+        model_response = ModelResponse(
+            id="chatcmpl-test12345",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Final search result", role="assistant"),
+                )
+            ],
+            created=1677652288,
+            model="gpt-4o",
+            object="chat.completion",
+        )
+
+        collected = [
+            out
+            async for out in responses_id_security.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=mock_auth,
+                response=model_response,
+                request_data={},
+            )
+        ]
+
+        assert len(collected) == 1
+        chunk = collected[0]
+        assert isinstance(chunk, ModelResponseStream)
+        assert chunk.id == "chatcmpl-test12345"
+        assert chunk.object == "chat.completion.chunk"
+        assert chunk.choices[0].delta.content == "Final search result"
+        assert chunk.choices[0].finish_reason == "stop"
 
 
 class TestStreamedGenericEventIdEncryption:
