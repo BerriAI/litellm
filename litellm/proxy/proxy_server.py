@@ -1323,8 +1323,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         user_api_key_cache=user_api_key_cache,
     )
 
-    if prompt_injection_detection_obj is not None:  # [TODO] - REFACTOR THIS
-        prompt_injection_detection_obj.update_environment(router=llm_router)
+    for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(_OPTIONAL_PromptInjectionDetection):
+        if isinstance(callback, _OPTIONAL_PromptInjectionDetection):
+            callback.update_environment(router=llm_router)
 
     verbose_proxy_logger.debug("prisma_client: %s", prisma_client)
     if prisma_client is not None and litellm.max_budget > 0:
