@@ -5149,7 +5149,7 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
     return tool_block_list
 
 
-def _append_function_prompt_to_message(message: Any, function_prompt: str) -> Any:
+def _with_function_prompt(message: Any, function_prompt: str) -> Any:
     if "system" not in message["role"]:
         return message
     content: Final = message["content"]
@@ -5172,7 +5172,7 @@ def function_call_prompt(messages: list, functions: list):  # mutable-ok: public
     header: Final = 'Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}} The following functions are available to you:'
     function_prompt: Final = header + "".join(f"\n{function}\n" for function in functions)
     if any("system" in message["role"] for message in messages):
-        return [_append_function_prompt_to_message(message, function_prompt) for message in messages]  # mutable-ok: OpenAI messages contract requires list
+        return [_with_function_prompt(m, function_prompt) for m in messages]  # mutable-ok: OpenAI messages contract
     new_system_msg: Final[ChatCompletionSystemMessage] = {"role": "system", "content": function_prompt}
     return [*messages, new_system_msg]  # mutable-ok: OpenAI messages contract requires list
 
