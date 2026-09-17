@@ -477,7 +477,7 @@ def _run_teardowns(state: _LangfuseLifecycleState, clients: tuple[Langfuse, ...]
             for index, client in enumerate(batch):
                 try:
                     _teardown_langfuse_client(client)
-                except Exception:
+                except Exception:  # noqa: BLE001  # SDK shutdown can raise anything; the request holding the lease must survive it
                     verbose_logger.exception("Langfuse client teardown failed during cache eviction")
                 except BaseException:
                     state.requeue(batch[index:])
