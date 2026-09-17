@@ -5,6 +5,7 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
+import openai
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
@@ -59,7 +60,8 @@ def map_failure(error: Exception, request: LiteLLMOcrRequest, request_provider: 
     original: Final = _upstream_failure(error)
     public_error: Final = failures.map_failure(original, request.model, request_provider, arguments(request))
     if isinstance(original, UpstreamFailure) and public_error.__context__ is original:
-        public_error.response = original.response
-        public_error.status_code = original.status_code
         public_error.__context__ = error
+        if isinstance(public_error, openai.APIStatusError):
+            public_error.response = original.response
+            public_error.status_code = original.status_code
     return public_error
