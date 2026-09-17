@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -29,21 +28,10 @@ struct ProjectedOcrHost {
     secret_fields: Vec<&'static str>,
     azure_ad_token_provider: Option<PythonTokenProvider>,
     pre_call: Option<callbacks::OcrLoggingFields>,
-    payload: Option<CapturedOcrPayload>,
     reader: Option<PythonFileReader>,
     reader_failed: bool,
-}
-
-struct CapturedOcrPayload {
-    body: Py<PyDict>,
-    headers: Py<PyDict>,
-}
-
-impl CapturedOcrPayload {
-    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.body)?;
-        visit.call(&self.headers)
-    }
+    body: Option<Py<PyDict>>,
+    headers: Option<Py<PyDict>>,
 }
 
 impl PythonOcrHost {
@@ -77,9 +65,10 @@ impl PythonOcrHost {
             secret_fields: projected.secret_fields,
             azure_ad_token_provider: projected.azure_ad_token_provider,
             pre_call: None,
-            payload: None,
             reader: projected.reader,
             reader_failed: false,
+            body: None,
+            headers: None,
         });
         Ok(OcrHostResult::Request(Ok((
             Box::new(
@@ -121,23 +110,15 @@ impl PythonOcrHost {
         for (name, value) in &request.headers {
             headers.set_item(name, value)?;
         }
-        logger.pre_ocr(
-            py,
-            request.api_key.as_deref(),
-            &body,
-            &headers,
-            &request.url,
-        )?;
+        logger.pre_ocr(py, request.api_key.as_deref(), &body, &headers, &request.url)?;
         request.body = from_py(&body)?;
         request.headers = headers
             .iter()
             .map(|(name, value)| Ok((name.extract::<String>()?, value.extract::<String>()?)))
             .collect::<PyResult<Vec<_>>>()?;
         let projected = self.projected_mut()?;
-        projected.payload = Some(CapturedOcrPayload {
-            body: body.unbind(),
-            headers: headers.unbind(),
-        });
+        projected.body = Some(body.unbind());
+        projected.headers = Some(headers.unbind());
         Ok(request)
     }
 
@@ -147,12 +128,11 @@ impl PythonOcrHost {
         request: OcrPostCallRequest,
     ) -> PyResult<OcrPostCallRequest> {
         let projected = self.projected()?;
-        let payload = projected.payload.as_ref();
         self.state.logger()?.post_ocr(
             py,
             &request.original_response,
-            payload.map(|payload| &payload.body),
-            payload.map(|payload| &payload.headers),
+            projected.body.as_ref(),
+            projected.headers.as_ref(),
         )?;
         Ok(request)
     }
@@ -247,7 +227,7 @@ impl PythonRoute for PythonOcrHost {
         self.projected = None;
     }
 
-    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+    fn traverse(&self, visit: &pyo3::gc::PyVisit<'_>) -> Result<(), pyo3::gc::PyTraverseError> {
         let Some(projected) = &self.projected else {
             return Ok(());
         };
@@ -257,10 +237,8 @@ impl PythonRoute for PythonOcrHost {
         if let Some(reader) = &projected.reader {
             reader.traverse(visit)?;
         }
-        if let Some(payload) = &projected.payload {
-            payload.traverse(visit)?;
-        }
-        Ok(())
+        visit.call(&projected.body)?;
+        visit.call(&projected.headers)
     }
 }
 

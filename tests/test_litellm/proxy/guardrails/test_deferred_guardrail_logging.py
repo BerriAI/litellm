@@ -461,16 +461,10 @@ def test_native_pending_logging_is_released_only_for_ocr(call_type: str, excepti
     )
 
     if call_type in ("ocr", "aocr"):
-        if exception_raised:
-            pending.close.assert_called_once_with()
-            pending.assert_not_called()
-        else:
-            pending.assert_called_once_with()
-            pending.close.assert_not_called()
+        pending.release.assert_called_once_with(not exception_raised)
         assert logger._native_pending_logging is None
     else:
-        pending.assert_not_called()
-        pending.close.assert_not_called()
+        pending.release.assert_not_called()
         assert logger._native_pending_logging is pending
     if exception_raised:
         enqueue.assert_not_called()

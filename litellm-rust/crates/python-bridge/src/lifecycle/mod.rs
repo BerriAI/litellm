@@ -538,9 +538,11 @@ struct PendingLogging {
 
 #[pymethods]
 impl PendingLogging {
-    fn __call__(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<()> {
+    fn release(slf: &Bound<'_, Self>, py: Python<'_>, success: bool) -> PyResult<()> {
         let pending = slf.borrow_mut().pending.take();
-        if let Some(pending) = pending {
+        if let Some(pending) = pending
+            && success
+        {
             match pending.asynchronous(py) {
                 Err(error) if error.is_instance_of::<PyException>(py) => {
                     error.write_unraisable(py, Some(pending.logger.object(py)));
@@ -561,13 +563,9 @@ impl PendingLogging {
         Ok(())
     }
 
-    fn close(slf: &Bound<'_, Self>) {
+    fn __clear__(slf: &Bound<'_, Self>) {
         let pending = slf.borrow_mut().pending.take();
         drop(pending);
-    }
-
-    fn __clear__(slf: &Bound<'_, Self>) {
-        Self::close(slf);
     }
 }
 
@@ -991,7 +989,7 @@ sys.unraisablehook = old_hook
     }
 
     #[test]
-    fn deferred_logging_uses_call_context_and_allows_reentry_once() {
+    fn deferred_release_uses_release_context_and_allows_reentry_once() {
         let _guard = PYTHON_GLOBALS
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -1024,7 +1022,7 @@ class Coroutine:
 class Worker:
     def ensure_initialized_and_enqueue(self, coroutine):
         observed.append(marker.get())
-        pending()
+        pending.release(True)
         coroutine.close()
 
 class Logger:
@@ -1062,72 +1060,10 @@ logger = Logger()
             py.run(
                 pyo3::ffi::c_str!(
                     r#"
-marker.set('call')
-pending()
-pending()
-assert observed == ['created', 'call', 'closed']
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-        });
-    }
-
-    #[test]
-    fn deferred_logging_close_is_reentry_safe_and_invalidates_aliases() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-observed = []
-
-class Retained:
-    def __del__(self):
-        observed.append('finalized')
-        alias()
-
-class Logger:
-    def async_success_handler(self, *args):
-        observed.append('enqueued')
-
-logger = Logger()
-retained = Retained()
-"#
-                ),
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let pending = Py::new(
-                py,
-                PendingLogging {
-                    pending: Some(PendingSuccess {
-                        logger: locals
-                            .get_item("logger")
-                            .unwrap()
-                            .unwrap()
-                            .extract()
-                            .unwrap(),
-                        response: Some(locals.get_item("retained").unwrap().unwrap().unbind()),
-                        start: py.None(),
-                        end: None,
-                    }),
-                },
-            )
-            .unwrap();
-            locals.set_item("pending", &pending).unwrap();
-            locals.set_item("alias", &pending).unwrap();
-            locals.del_item("retained").unwrap();
-            py.run(
-                pyo3::ffi::c_str!(
-                    r#"
-pending.close()
-alias()
-assert observed == ['finalized']
+marker.set('release')
+pending.release(True)
+pending.release(True)
+assert observed == ['created', 'release', 'closed']
 "#
                 ),
                 Some(&locals),
