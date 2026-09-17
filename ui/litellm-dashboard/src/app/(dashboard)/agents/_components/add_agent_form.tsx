@@ -783,6 +783,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         </Select>
       </Field>
 
+      <AgentIdentityFields accessToken={accessToken} />
+
       <div className="mt-4">
         {agentType === CUSTOM_AGENT_TYPE ? (
           <FieldGroup>
@@ -1047,12 +1049,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
             <FormProvider {...form}>
               <form onSubmit={(event) => event.preventDefault()} className="space-y-4">
-                {currentStep === 0 && (
-                  <>
-                    {renderConfigureStep()}
-                    <AgentIdentityFields accessToken={accessToken} />
-                  </>
-                )}
+                {currentStep === 0 && renderConfigureStep()}
                 {currentStep === 1 && renderEntitlementsStep()}
                 {currentStep === 2 && renderObservabilityStep()}
                 {currentStep === 3 && renderAssignKeyStep()}
