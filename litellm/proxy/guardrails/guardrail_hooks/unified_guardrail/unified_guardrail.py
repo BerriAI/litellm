@@ -1092,6 +1092,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         chunks_yielded = False
         last_scan_key: StreamingScanKey | None = None  # rebind-ok: replaced after every scan round
         tool_calls_in_flight = False  # rebind-ok: tracks the latest scan key's unscanned tool calls
+        endpoint_translation: BaseTranslation | None = None  # rebind-ok: one instance per stream, memoizes context
 
         async for item in response:
             chunk_counter += 1
@@ -1112,6 +1113,8 @@ class UnifiedLLMGuardrails(CustomLogger):
                 async for remaining_item in response:
                     yield remaining_item
                 return
+            if endpoint_translation is None:
+                endpoint_translation = mappings[CallTypes(call_type)]()
 
             # If end_of_stream_only mode, yield chunks without processing.
             # When buffering, withhold them instead -- they are released (or
@@ -1119,7 +1122,6 @@ class UnifiedLLMGuardrails(CustomLogger):
             # moderation runs below.
             if end_of_stream_only:
                 if not buffer_until_moderated:
-                    endpoint_translation = mappings[CallTypes(call_type)]()
                     stream_has_ended = hasattr(
                         endpoint_translation, "_check_streaming_has_ended"
                     ) and endpoint_translation._check_streaming_has_ended(responses_so_far)
@@ -1137,7 +1139,6 @@ class UnifiedLLMGuardrails(CustomLogger):
             if buffer_until_moderated:
                 withheld_items.append(item)
             if chunk_counter % sampling_rate == 0:
-                endpoint_translation = mappings[CallTypes(call_type)]()
                 scan_key = endpoint_translation.get_streaming_scan_key(responses_so_far)
                 if scan_key is not None:
                     tool_calls_in_flight = scan_key.tool_calls_in_flight
@@ -1236,14 +1237,12 @@ class UnifiedLLMGuardrails(CustomLogger):
                     yield item
 
         # Stream has ended - do final processing with all collected chunks
-        if call_type is not None and CallTypes(call_type) in mappings:
+        if call_type is not None and endpoint_translation is not None:
             verbose_proxy_logger.debug(
                 "Processing final streaming response with all %s chunks for guardrail %s",
                 len(responses_so_far),
                 guardrail_to_apply.guardrail_name,
             )
-
-            endpoint_translation = mappings[CallTypes(call_type)]()
 
             buffered_items: Final = (
                 tuple(copy.deepcopy(withheld_items))

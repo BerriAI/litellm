@@ -57,9 +57,6 @@ class RequestScanContext:
         )
 
 
-REQUEST_SCAN_CONTEXT_KEY: Final = "litellm_request_scan_context"
-
-
 @dataclass(slots=True)
 class StreamTransformSink:
     """Out-parameter used by ``process_output_streaming_response`` to hand the
@@ -116,6 +113,25 @@ class BaseTranslation(ABC):
     Responses, and Messages translations do. A streaming pipeline runs a guardrail that only
     has the legacy post-call hook against that response, so on a translation without it such
     a guardrail keeps running on its own."""
+
+    def __init__(self, *, pinned_request_scan_context: RequestScanContext | None = None) -> None:
+        self.pinned_request_scan_context: Final = pinned_request_scan_context
+        self._memoized_request_scan_context: tuple[int, int, RequestScanContext] | None = None
+
+    def _request_scan_context_for(
+        self, request_data: Mapping[str, object], guardrail_to_apply: "CustomGuardrail"
+    ) -> RequestScanContext:
+        """A pinned context wins (an output scan of a request logged in another shape); otherwise the
+        request is scoped once per translation instance, which serves every scan round of a stream."""
+        if self.pinned_request_scan_context is not None:
+            return self.pinned_request_scan_context
+        memo_key: Final = (id(request_data), id(guardrail_to_apply))
+        memoized: Final = self._memoized_request_scan_context
+        if memoized is not None and memoized[:2] == memo_key:
+            return memoized[2]
+        context: Final = self.request_scan_context(request_data, guardrail_to_apply)
+        self._memoized_request_scan_context = (*memo_key, context)
+        return context
 
     def post_call_hook_response(self, response: object) -> object:
         """The ``response`` this endpoint's non-streaming post-call hooks receive, derived from
@@ -322,12 +338,7 @@ class BaseTranslation(ABC):
         """``inputs`` plus the scoped request conversation, closed by the scanned reply, and the request tools."""
         if request_data is None:
             return inputs
-        precomputed: Final = request_data.get(REQUEST_SCAN_CONTEXT_KEY)
-        context: Final = (
-            precomputed
-            if isinstance(precomputed, RequestScanContext)
-            else self.request_scan_context(request_data, guardrail_to_apply)
-        )
+        context: Final = self._request_scan_context_for(request_data, guardrail_to_apply)
         if not context.conversation_supplied:
             return inputs
         assistant_turn: Final = response_assistant_turn(inputs.get("texts") or (), inputs.get("tool_calls") or ())

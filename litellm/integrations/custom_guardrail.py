@@ -16,7 +16,6 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     redact_nested_match_and_regex_keys,
 )
-from litellm.llms.base_llm.guardrail_translation.base_translation import REQUEST_SCAN_CONTEXT_KEY
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
@@ -909,13 +908,13 @@ class CustomGuardrail(CustomLogger):
         )
         from litellm.types.utils import ModelResponse
 
-        output_translation: Final = (
-            get_guardrail_translation_mapping(CallTypes.acompletion)()
+        output_translation_cls: Final = (
+            get_guardrail_translation_mapping(CallTypes.acompletion)
             if isinstance(response, ModelResponse)
-            else translation
+            else type(translation)
         )
         try:
-            await self._scan_logged_call(kwargs, response, translation, output_translation, scratch_metadata)
+            await self._scan_logged_call(kwargs, response, translation, output_translation_cls, scratch_metadata)
         except Exception as e:
             verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
         recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
@@ -934,7 +933,7 @@ class CustomGuardrail(CustomLogger):
         kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
         response: object | None,
         translation: "BaseTranslation",
-        output_translation: "BaseTranslation",
+        output_translation_cls: type["BaseTranslation"],
         scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
         optional_params: Final = kwargs.get("optional_params") or {}
@@ -950,27 +949,30 @@ class CustomGuardrail(CustomLogger):
         await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
         if response is None:
             return
-        output_request: Final = (
-            scratch_request
-            if type(output_translation) is type(translation)
-            else self._chat_shaped_request(scratch_request, translation)
+        output_translation, output_request = (
+            (translation, scratch_request)
+            if output_translation_cls is type(translation)
+            else self._chat_shaped_output_scan(scratch_request, translation, output_translation_cls)
         )
         await output_translation.process_output_response(
             response=copy.deepcopy(response), guardrail_to_apply=self, request_data=output_request
         )
 
-    def _chat_shaped_request(
+    def _chat_shaped_output_scan(
         self,
         scratch_request: Mapping[str, object],
         translation: "BaseTranslation",
-    ) -> dict[str, object]:  # mutable-ok: BaseTranslation.process_output_response contract
-        """The logged request in OpenAI chat shape, for an output scan whose translation differs from the input's."""
+        output_translation_cls: type["BaseTranslation"],
+    ) -> tuple["BaseTranslation", dict[str, object]]:  # mutable-ok: BaseTranslation.process_output_response contract
+        """The output translation, pinned to the input's scan context, and the logged request in chat shape."""
         context: Final = translation.request_scan_context(scratch_request, self)
-        return {
+        output_translation: Final = output_translation_cls(pinned_request_scan_context=context)
+        if not context.conversation_supplied:
+            return output_translation, dict(scratch_request)
+        return output_translation, {
             **scratch_request,
             "messages": list(context.structured_messages),
             "tools": list(context.tools),
-            REQUEST_SCAN_CONTEXT_KEY: context,
         }
 
     def supports_scan_only_tool_results(self) -> bool:

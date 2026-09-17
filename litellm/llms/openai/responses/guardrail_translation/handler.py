@@ -467,7 +467,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             tools=tuple(
                 cast(ChatCompletionToolParam, tool)  # cast-ok: mcp tools ride along in the guardrail's tool list
                 for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(
-                    tuple(raw_tools) if isinstance(raw_tools, list) else ()
+                    tuple(raw_tools) if isinstance(raw_tools, list) else (), validate_name_collisions=False
                 )
                 for tool in form.chat_tools
             ),

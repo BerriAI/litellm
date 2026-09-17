@@ -240,6 +240,36 @@ def test_build_akto_payload_with_response_mirrors_request_not_scan_context(
     assert resp_body["choices"][0]["message"]["content"] == "Paris."
 
 
+def test_build_akto_payload_with_response_keeps_tool_calls_of_a_tool_only_reply(akto_ingest, sample_request_data):
+    request_messages = [{"role": "user", "content": "Weather in Paris?"}]
+    tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}]
+    response_inputs = GenericGuardrailAPIInputs(
+        texts=[],
+        model="claude-opus-4-5",
+        tool_calls=tool_calls,
+        structured_messages=[*request_messages, {"role": "assistant", "content": None, "tool_calls": tool_calls}],
+    )
+    payload = akto_ingest.build_akto_payload(
+        response_inputs, {**sample_request_data, "messages": request_messages}, include_response=True
+    )
+    req_body = json.loads(json.loads(payload["requestPayload"])["body"])
+    assert req_body["messages"] == request_messages
+    assert req_body["tool_calls"] == tool_calls
+    resp_body = json.loads(json.loads(payload["responsePayload"])["body"])
+    assert resp_body["choices"] == [{"message": {"content": None, "role": "assistant", "tool_calls": tool_calls}}]
+
+
+def test_build_response_body_puts_tool_calls_on_the_first_choice_only():
+    tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}]
+    body = AktoGuardrail.build_response_body(
+        GenericGuardrailAPIInputs(texts=["Sunny.", "Rainy."], tool_calls=tool_calls)
+    )
+    assert body["choices"] == [
+        {"message": {"content": "Sunny.", "role": "assistant", "tool_calls": tool_calls}},
+        {"message": {"content": "Rainy.", "role": "assistant"}},
+    ]
+
+
 def test_build_akto_payload_custom_account_ids(sample_inputs, sample_request_data):
     g = AktoGuardrail(
         akto_base_url="http://localhost:9090",

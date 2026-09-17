@@ -2040,8 +2040,11 @@ class LiteLLMCompletionResponsesConfig:
         return ResponsesToolChatForm(chat_tools=(cast(ChatToolParam, tool),), web_search_options=None)
 
     @staticmethod
-    def responses_tools_to_chat_forms(tools: ResponseTools) -> tuple[ResponsesToolChatForm, ...]:
-        LiteLLMCompletionResponsesConfig._validate_namespace_name_collisions(tools)
+    def responses_tools_to_chat_forms(
+        tools: ResponseTools, *, validate_name_collisions: bool = True
+    ) -> tuple[ResponsesToolChatForm, ...]:
+        if validate_name_collisions:
+            LiteLLMCompletionResponsesConfig._validate_namespace_name_collisions(tools)
         return tuple(LiteLLMCompletionResponsesConfig._responses_tool_to_chat_form(tool) for tool in tools or ())
 
     @staticmethod

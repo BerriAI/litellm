@@ -155,6 +155,21 @@ def _text_under_review(inputs: GenericGuardrailAPIInputs, input_type: JudgeInput
     return latest_user_turn if latest_user_turn is not None else all_text
 
 
+def _judge_conversation(
+    inputs: GenericGuardrailAPIInputs,
+    request_data: Mapping[str, object],
+    input_type: JudgeInputType,
+) -> Sequence[JudgeMessage]:
+    """The context turns; on a response scan the reply is the subject under review, not context."""
+    scan_messages: Final = inputs.get("structured_messages")
+    if not scan_messages:
+        fallback: Final = request_data.get("messages")
+        return fallback if isinstance(fallback, list) else []
+    if input_type == "response" and scan_messages[-1].get("role") == "assistant":
+        return scan_messages[:-1]
+    return scan_messages
+
+
 def _build_judge_prompt(
     criteria: Sequence[JudgeCriterion],
     messages: Sequence[JudgeMessage],
@@ -254,9 +269,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         judge_result: dict[str, object] = {}
 
         try:
-            messages: Final[Sequence[JudgeMessage]] = (
-                inputs.get("structured_messages") or request_data.get("messages") or []
-            )
+            messages: Final = _judge_conversation(inputs, request_data, input_type)
 
             try:
                 judge_result = await self._run_judge(messages, text_under_review, input_type)

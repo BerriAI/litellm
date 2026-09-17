@@ -11,6 +11,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.base_llm.guardrail_translation.base_translation import RequestScanContext
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.utils import (
@@ -2680,11 +2681,16 @@ class TestLoggingOnlyApplyGuardrail:
         kwargs, response = _logged_call(
             [
                 {"role": "user", "content": "What is the capital of France?"},
-                {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {}}]},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {}}],
+                },
                 {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "Paris"}]},
             ]
         )
-        kwargs["optional_params"] = {"tools": [{"name": "lookup", "input_schema": {"type": "object", "properties": {}}}]}
+        kwargs["optional_params"] = {
+            "tools": [{"name": "lookup", "input_schema": {"type": "object", "properties": {}}}]
+        }
 
         await guardrail.async_logging_hook(kwargs, response, CallTypes.anthropic_messages.value)
 
@@ -2739,6 +2745,54 @@ class TestLoggingOnlyApplyGuardrail:
             ("request", ["user", "system", "user"]),
             ("response", ["user", "system", "user", "assistant"]),
         ]
+
+    @pytest.mark.asyncio
+    async def test_anthropic_messages_response_scan_request_data_holds_only_chat_shaped_request(self):
+        class _RequestDataObserver(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                self.calls.append((input_type, dict(request_data)))
+                return inputs
+
+        guardrail = _RequestDataObserver()
+        kwargs, response = _logged_call(
+            [
+                {"role": "user", "content": "What is the capital of France?"},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "Paris"}]},
+            ]
+        )
+        kwargs["optional_params"] = {"tools": [{"name": "lookup", "input_schema": {"type": "object", "properties": {}}}]}
+
+        await guardrail.async_logging_hook(kwargs, response, CallTypes.anthropic_messages.value)
+
+        (_, response_request_data) = guardrail.calls[-1]
+        assert response_request_data["messages"] == [
+            {"role": "user", "content": "What is the capital of France?"},
+            {"role": "assistant", "content": None, "tool_calls": [ANY], "thinking_blocks": None},
+            {"role": "tool", "tool_call_id": "toolu_01", "content": "Paris"},
+        ]
+        assert response_request_data["tools"] == [
+            {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}}}
+        ]
+        assert not any(isinstance(value, RequestScanContext) for value in response_request_data.values())
+
+    @pytest.mark.asyncio
+    async def test_streamed_text_completion_response_scan_keeps_the_logged_prompt(self):
+        class _RequestDataObserver(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                self.calls.append((input_type, request_data.get("messages"), inputs.get("texts")))
+                return inputs
+
+        guardrail = _RequestDataObserver()
+        prompt_messages = [{"role": "user", "content": "SECRET PROMPT"}]
+        kwargs, response = _logged_call(prompt_messages)
+        kwargs["async_complete_streaming_response"] = response
+
+        await guardrail.async_logging_hook(kwargs, object(), CallTypes.atext_completion.value)
+
+        assert guardrail.calls[-1] == ("response", prompt_messages, ["general kenobi"])
 
     @pytest.mark.asyncio
     async def test_async_success_handler_records_verdict_in_standard_logging_object(self):

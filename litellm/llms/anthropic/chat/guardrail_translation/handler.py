@@ -308,8 +308,8 @@ class AnthropicMessagesHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *, pinned_request_scan_context: RequestScanContext | None = None) -> None:
+        super().__init__(pinned_request_scan_context=pinned_request_scan_context)
         self.adapter = LiteLLMAnthropicMessagesAdapter()
 
     def post_call_hook_response(self, response: object) -> object:

@@ -201,9 +201,20 @@ class AktoGuardrail(CustomGuardrail):
             return model_response.model_dump()
 
         texts: Final = inputs.get("texts", [])
-        if texts:
-            return {"choices": [{"message": {"content": t, "role": "assistant"}} for t in texts]}
-        return {}
+        tool_calls: Final = inputs.get("tool_calls") or []
+        if not texts and not tool_calls:
+            return {}
+        first_message: Final = {
+            "content": texts[0] if texts else None,
+            "role": "assistant",
+            **({"tool_calls": tool_calls} if tool_calls else {}),
+        }
+        return {
+            "choices": [
+                {"message": first_message},
+                *({"message": {"content": t, "role": "assistant"}} for t in texts[1:]),
+            ]
+        }
 
     @staticmethod
     def build_tag_metadata(request_data: dict) -> dict[str, str]:
@@ -232,7 +243,11 @@ class AktoGuardrail(CustomGuardrail):
         """
         request_path: Final = self.extract_request_path(request_data)
         request_headers: Final = self.build_request_headers(request_data)
-        request_inputs: Final = GenericGuardrailAPIInputs(model=inputs.get("model")) if include_response else inputs
+        request_inputs: Final = (
+            GenericGuardrailAPIInputs(model=inputs.get("model"), tool_calls=inputs.get("tool_calls") or [])
+            if include_response
+            else inputs
+        )
         request_body: Final = self.build_request_body(request_inputs, request_data)
         tag: Final = self.build_tag_metadata(request_data)
 

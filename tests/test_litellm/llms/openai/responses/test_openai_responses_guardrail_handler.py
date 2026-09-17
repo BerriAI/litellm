@@ -3349,6 +3349,35 @@ class TestResponsesResponseScanCarriesRequestConversation:
         assert response_inputs["tools"][0]["function"]["name"] == "run_shell"
 
     @pytest.mark.asyncio
+    async def test_response_scan_tolerates_a_namespace_name_collision_the_request_path_rejects(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = TypedInputsRecordingGuardrail()
+        request = {
+            **self._request(),
+            "tools": [
+                {"type": "function", "name": "admin__run", "parameters": {"type": "object"}},
+                {
+                    "type": "namespace",
+                    "name": "admin",
+                    "tools": [{"type": "function", "name": "run", "parameters": {"type": "object"}}],
+                },
+            ],
+        }
+
+        await handler.process_output_response(self._tool_call_response(), guardrail, request_data=request)
+
+        [(input_type, inputs)] = guardrail.seen
+        assert input_type == "response"
+        assert [m["role"] for m in inputs["structured_messages"]] == [
+            "system",
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+        ]
+        assert [t["function"]["name"] for t in inputs["tools"]] == ["admin__run", "admin__run"]
+
+    @pytest.mark.asyncio
     async def test_terminal_streaming_envelope_scan_carries_request_turns(self):
         handler = OpenAIResponsesHandler()
         guardrail = TypedInputsRecordingGuardrail()

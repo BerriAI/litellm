@@ -451,6 +451,47 @@ async def test_apply_guardrail_response_prompt_unchanged():
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_response_context_does_not_repeat_the_reply_under_review():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.post_call, router_provider=lambda: router)
+    inputs: Final = {
+        "texts": ["It is sunny"],
+        "structured_messages": [
+            {"role": "system", "content": "You are a weather bot"},
+            {"role": "user", "content": "Weather in Paris?"},
+            {"role": "assistant", "content": "It is sunny"},
+        ],
+    }
+
+    await guardrail.apply_guardrail(inputs, {"messages": [], "metadata": {}}, "response")
+
+    prompt: Final = router.acompletion.call_args.kwargs["messages"][1]["content"]
+    assert (
+        "Conversation:\nSYSTEM: You are a weather bot\nUSER: Weather in Paris?\n\n"
+        "Assistant response to evaluate:\nIt is sunny"
+    ) in prompt
+    assert prompt.count("It is sunny") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_request_context_keeps_a_trailing_assistant_prefill():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(router_provider=lambda: router)
+    inputs: Final = {
+        "texts": ["Weather in Paris?"],
+        "structured_messages": [
+            {"role": "user", "content": "Weather in Paris?"},
+            {"role": "assistant", "content": "The weather in Paris is"},
+        ],
+    }
+
+    await guardrail.apply_guardrail(inputs, {"messages": [], "metadata": {}}, "request")
+
+    prompt: Final = router.acompletion.call_args.kwargs["messages"][1]["content"]
+    assert "USER: Weather in Paris?\nASSISTANT: The weather in Paris is" in prompt
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_empty_response_passthrough():
     guardrail = _make_guardrail()
     inputs = {"texts": []}

@@ -2543,6 +2543,16 @@ def test_cache_control_not_preserved_in_tools_for_non_claude():
     assert "cache_control" not in result[0]
 
 
+def test_translate_anthropic_tools_to_openai_leaves_the_request_input_schema_untouched():
+    input_schema = {"type": "object", "properties": {"location": {"type": "string"}}}
+    tools = [{"name": "get_weather", "input_schema": input_schema, "defer_loading": True, "input_examples": [{}]}]
+
+    result, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(tools=tools, model=None)
+
+    assert result[0]["function"]["parameters"] == {**input_schema, "defer_loading": True, "input_examples": [{}]}
+    assert input_schema == {"type": "object", "properties": {"location": {"type": "string"}}}
+
+
 def test_translate_anthropic_tools_to_openai_fills_missing_tool_name():
     """Schema-only tools (no ``name``) must not crash the Converse adapter path."""
     tools = [

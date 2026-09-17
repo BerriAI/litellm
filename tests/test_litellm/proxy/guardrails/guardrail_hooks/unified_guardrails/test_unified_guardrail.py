@@ -2411,3 +2411,46 @@ class TestTranslationMappingsAreReadLive:
             for name, value in vars(unified_module).items()
             if isinstance(value, dict) and CallTypes.aocr in value
         ]
+
+
+class _ConversationRecordingGuardrail(_ScanCountingGuardrail):
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        self.scans = (*self.scans, {"structured_messages": list(inputs.get("structured_messages") or [])})
+        return inputs
+
+
+class TestStreamingRequestContextIsBuiltOnce:
+    @pytest.mark.asyncio
+    async def test_every_streaming_round_reuses_the_request_context(self, monkeypatch):
+        class _CountingHandler(OpenAIChatCompletionsHandler):
+            scoped_request_ids: tuple[int, ...] = ()
+
+            def request_scan_context(self, data, guardrail_to_apply):
+                type(self).scoped_request_ids = (*type(self).scoped_request_ids, id(data))
+                return super().request_scan_context(data, guardrail_to_apply)
+
+        _patch_translation_mappings(
+            monkeypatch, {**load_guardrail_translation_mappings(), CallTypes.acompletion: _CountingHandler}
+        )
+        guardrail = _ConversationRecordingGuardrail(sampling_rate=1)
+        request_messages = [{"role": "system", "content": "You are terse"}, {"role": "user", "content": "hi"}]
+        request_data = {"guardrail_to_apply": guardrail, "model": "gpt-4", "messages": request_messages}
+
+        async def _stream():
+            for chunk in (_stream_chunk("a"), _stream_chunk("b"), _stream_chunk("c", finish_reason="stop")):
+                yield chunk
+
+        out = [
+            item
+            async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+                response=_stream(),
+                request_data=request_data,
+            )
+        ]
+
+        assert len(out) == 3
+        assert [scan["structured_messages"] for scan in guardrail.scans] == [
+            [*request_messages, {"role": "assistant", "content": text}] for text in ("a", "ab", "abc")
+        ]
+        assert _CountingHandler.scoped_request_ids == (id(request_data),)
