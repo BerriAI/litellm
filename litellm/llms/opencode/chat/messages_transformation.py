@@ -195,11 +195,11 @@ class OpenCodeMessagesConfig(AnthropicMessagesConfig):
         ``qwen3.7-plus``), so qualify it with the surface prefix for the
         ``litellm.model_cost`` lookup.
 
-        Unlike the chat arm, this path never reaches the mitigation inside
-        ``responses_api_bridge_check``, so apply it here first: on a cost map
-        that predates this provider the lookup below finds no cap at all, and a
-        placeholder entry registered by ``Router`` can outrank the bare-name
-        sibling and bill zero.
+        Apply the mitigation here rather than relying on the chat arm's call
+        inside ``responses_api_bridge_check``: that check is not on every path
+        through this arm, so on a cost map that predates this provider the
+        lookup below can find no cap at all, and a placeholder entry registered
+        by ``Router`` can outrank the bare-name sibling and bill zero.
         """
         ensure_opencode_pricing(f"opencode_{self.surface}", model)
         default_max_tokens: Final = (
