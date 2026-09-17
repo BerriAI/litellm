@@ -630,8 +630,6 @@ def _apply_budget_limits_to_end_user_params(
 
 
 async def user_api_key_auth_websocket(websocket: WebSocket):
-    # Accept the WebSocket connection
-
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
