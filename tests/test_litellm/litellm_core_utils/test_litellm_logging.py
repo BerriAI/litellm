@@ -6554,9 +6554,9 @@ async def test_prompt_hook_injection_marker_recorded_for_every_surface(logging_o
     assert pre_choice["metadata"]["litellm_gateway_injected_cache"] == ""
 
 
-def _responses_ws_logging_obj() -> LitellmLogging:
+def _responses_ws_logging_obj(model: str = "gpt-4o") -> LitellmLogging:
     return LitellmLogging(
-        model="gpt-4o",
+        model=model,
         messages=[],
         stream=False,
         call_type=CallTypes.aresponses_websocket.value,
@@ -6636,6 +6636,62 @@ def test_normalize_logging_result_bills_incomplete_responses_websocket_turns():
     assert normalized.usage.prompt_tokens == 55
     assert normalized.usage.completion_tokens == 20
     assert normalized.usage.total_tokens == 75
+
+
+def test_normalize_logging_result_prices_responses_websocket_at_returned_service_tier():
+    """Issue #41299: a WebSocket turn billed at priority tier reported it on
+    response.completed.response.service_tier, but the logging object dropped it and the
+    session was priced at the default tier."""
+    events = [
+        {"type": "response.created", "response": {}},
+        {
+            "type": "response.completed",
+            "response": {
+                "service_tier": "priority",
+                "usage": {"input_tokens": 100, "output_tokens": 40, "total_tokens": 140},
+            },
+        },
+    ]
+
+    normalized = _responses_ws_logging_obj(model="gpt-5.4").normalize_logging_result(result=events)
+
+    assert isinstance(normalized, LiteLLMRealtimeStreamLoggingObject)
+    assert normalized.service_tier == "priority"
+
+    usage = ResponseAPIUsage(input_tokens=100, output_tokens=40, total_tokens=140)
+    ws_cost = litellm.completion_cost(
+        completion_response=normalized,
+        model="gpt-5.4",
+        call_type=CallTypes.aresponses_websocket.value,
+        custom_llm_provider="openai",
+    )
+    priority_http_cost = litellm.completion_cost(
+        completion_response=ResponsesAPIResponse(
+            id="resp-priority",
+            created_at=1700000000,
+            output=[],
+            service_tier="priority",
+            usage=usage,
+        ),
+        model="gpt-5.4",
+        call_type=CallTypes.aresponses.value,
+        custom_llm_provider="openai",
+    )
+    default_http_cost = litellm.completion_cost(
+        completion_response=ResponsesAPIResponse(
+            id="resp-default",
+            created_at=1700000000,
+            output=[],
+            service_tier="default",
+            usage=usage,
+        ),
+        model="gpt-5.4",
+        call_type=CallTypes.aresponses.value,
+        custom_llm_provider="openai",
+    )
+
+    assert ws_cost == priority_http_cost
+    assert priority_http_cost > default_http_cost
 
 
 def test_get_standard_logging_object_payload_reads_overhead_from_logging_obj_for_dict_results(logging_obj):
@@ -7155,3 +7211,21 @@ def test_get_additional_headers_survives_a_thread_growing_headers_mid_copy():
         assert copied["llm_provider-x-custom-1999"] == "1999"
 
     _run_while_a_thread_grows(headers, read, reads=300)
+
+
+def test_add_dynamic_callback_registers_once_per_list_without_touching_the_callers_list(logging_obj: LitellmLogging):
+    callback: Final = CustomLogger()
+    caller_owned: Final = ["langfuse"]
+    logging_obj.dynamic_success_callbacks = caller_owned
+
+    logging_obj.add_dynamic_callback(callback)
+    logging_obj.add_dynamic_callback(callback)
+
+    assert caller_owned == ["langfuse"]
+    assert logging_obj.dynamic_success_callbacks == ["langfuse", callback]
+    assert logging_obj.dynamic_input_callbacks == [callback]
+    assert logging_obj.dynamic_async_success_callbacks == [callback]
+    assert logging_obj.dynamic_failure_callbacks == [callback]
+    assert logging_obj.dynamic_async_failure_callbacks == [callback]
+    assert LitellmLogging._with_dynamic_callback(None, callback) == [callback]
+    assert LitellmLogging._with_dynamic_callback((callback,), callback) == [callback]

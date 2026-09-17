@@ -1,12 +1,13 @@
 use serde_json::{Map, Value, json};
 
+use crate::audio_transcription::Error;
 use crate::audio_transcription::transformation::{
     AudioTranscriptionAuth, AudioTranscriptionProviderConfig,
 };
 use crate::audio_transcription::types::{
     AudioTranscriptionRequestData, AudioTranscriptionResponseData,
 };
-use crate::error::{Error, json_type_name};
+use crate::http_utils::json_type_name;
 
 pub use super::aws_base::{aws_auth_config, bedrock_model_id_and_region, resolve_bedrock_region};
 use super::constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE};
@@ -46,12 +47,10 @@ fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a 
 }
 
 impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn supported_transcription_params(&self) -> &'static [&'static str] {
         SUPPORTED_PARAMS
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_transcription_request(
         &self,
         _model: &str,
@@ -85,7 +84,6 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         })
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_transcription_response(
         &self,
         _model: &str,

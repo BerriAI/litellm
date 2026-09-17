@@ -182,6 +182,7 @@ class ModelInfo(MirroredPricingParams):
 
     # the model_name that can be used by the team when making LLM calls
     team_public_model_name: str | None = None
+    member_auto_router: bool = False
 
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
     blocked: bool | None = None
@@ -623,6 +624,12 @@ class Deployment(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class DiscoveredDeploymentModelInfo:
+    deployment: Mapping[str, object]
+    limits: Mapping[str, int]
+
+
+@dataclass(frozen=True, slots=True)
 class DeploymentModelListingInfo:
     """What the deployments behind a model name contribute to its OpenAI-compatible listing entry.
 
@@ -721,6 +728,7 @@ class ModelGroupInfo(BaseModel):
     supports_url_context: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
+    supports_fast_mode: bool = Field(default=False)
     supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
@@ -956,6 +964,19 @@ class FallbackAccessCheck(Protocol):
 
     The router runs it before every cross-model-group fallback attempt and skips targets it
     rejects, so a fallback can never reach a model the caller could not have requested directly.
+    """
+
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+
+
+class FallbackBudgetCheck(Protocol):
+    """
+    Decides whether the caller behind `request_kwargs` is still within budget for fallback `model`.
+
+    Budget is enforced once during auth, against the *requested* model group. A fallback target is
+    chosen later, inside the router, so a zero-cost group that falls back to a priced one bills
+    without any budget gate. The router runs this before every cross-model-group fallback attempt
+    and skips targets it rejects, leaving the free attempt itself untouched.
     """
 
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...

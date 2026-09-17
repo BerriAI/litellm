@@ -155,8 +155,8 @@ class LicenseCheck:
 
     def auto_router_capability_limit(self) -> int | None:
         """
-        How many auto-routers may claim each licensed capability (heuristic_v2, operator-defined
-        tier_definitions): unlimited (None) only when the signed license lists the auto_router
+        How many auto-routers may claim each gated classifier or customization capability:
+        unlimited (None) only when the signed license lists the auto_router
         feature, otherwise one per capability. A license verified through the API carries no
         feature list, so it does not lift the limit either.
         """

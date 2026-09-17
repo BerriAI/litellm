@@ -27,6 +27,13 @@ def string_value(value: JsonValue) -> str:
     return value
 
 
+def delete_key_if_present(candidate: Gateway, key: str) -> None:
+    digest: Final = sha256(key.encode()).hexdigest()
+    if read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)):
+        candidate.post("/key/delete", {"keys": [key]})
+    assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)) == []
+
+
 def eventually(read: Callable[[], T], satisfied: Callable[[T], bool], seconds: float = 10) -> T:
     deadline: Final = time.monotonic() + seconds
     while True:
@@ -132,8 +139,10 @@ class Scenario:
 
     def delete_key(self, token: str) -> None:
         self.gateway.post("/key/delete", {"keys": [token]})
-        response: Final = self.gateway.request("GET", "/key/info", params={"key": sha256(token.encode()).hexdigest()})
-        assert response.status_code == 404, f"Deleted key remains readable: {response.status_code}"
+        hashed: Final = sha256(token.encode()).hexdigest()
+        assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token = %s', (hashed,)) == []
+        info: Final = object_value(self.gateway.get("/key/info", {"key": hashed})["info"])
+        assert info["status"] == "deleted", f"Deleted key still served as live: {info['status']}"
 
     def delete_model(self, identity: str) -> None:
         self.gateway.post("/model/delete", {"id": identity})

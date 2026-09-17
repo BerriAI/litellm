@@ -31,6 +31,12 @@ INTERNAL_FIELDS: Final = frozenset(
 )
 
 
+def error_type(status: int) -> str:
+    if status == 429:
+        return "rate_limit_error"
+    return "invalid_request_error" if status < 500 else "server_error"
+
+
 @dataclass(frozen=True, slots=True)
 class Observation:
     path: str
@@ -66,7 +72,7 @@ class Provider:
             status: Final = script.popleft()
             if status != 200:
                 return JSONResponse(
-                    {"error": {"message": "Controlled provider failure", "type": "api_error", "code": str(status)}},
+                    {"error": {"message": "Controlled provider failure", "type": error_type(status), "code": str(status)}},
                     status_code=status,
                 )
         return await chat_completions(request)

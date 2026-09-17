@@ -69,6 +69,11 @@ def _response_attr(source: object, name: str) -> object:
     return getattr(source, name, None)
 
 
+def _upstream_status_code(error: Exception) -> int:
+    code: Final = getattr(error, "status_code", None)
+    return code if isinstance(code, int) else 500
+
+
 def _raise_vector_store_scan_depth_exceeded() -> None:
     raise HTTPException(
         status_code=400,
@@ -814,6 +819,6 @@ async def rag_query(
     except Exception as e:
         verbose_proxy_logger.exception("RAG Query failed: %s", e)
         raise HTTPException(
-            status_code=500,
+            status_code=_upstream_status_code(e),
             detail={"error": str(e)},
         )

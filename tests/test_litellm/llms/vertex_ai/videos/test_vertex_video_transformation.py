@@ -717,6 +717,33 @@ class TestVertexAIVideoConfig:
         assert video_obj.usage["duration_seconds"] == 8.0
         assert video_obj.usage["video_resolution"] == "1080p"
 
+    @pytest.mark.parametrize(
+        "sample_count,expected_video_count",
+        [(2, 2), (1, 1), (None, None), (0, None), ("2", None)],
+        ids=["two", "one", "unset", "zero", "string"],
+    )
+    def test_transform_video_create_response_usage_includes_video_count(self, sample_count, expected_video_count):
+        """Regression for LIT-6896: sampleCount is the number of generated videos and must reach usage for billing."""
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "name": "projects/p/locations/us-central1/publishers/google/models/veo-3.1-fast-generate-001/operations/op-1"
+        }
+        parameters = {"durationSeconds": 4, "resolution": "720p"}
+        if sample_count is not None:
+            parameters["sampleCount"] = sample_count
+
+        video_obj = self.config.transform_video_create_response(
+            model="veo-3.1-fast-generate-001",
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="vertex_ai",
+            request_data={"instances": [{"prompt": "a red ball"}], "parameters": parameters},
+        )
+
+        assert video_obj.usage is not None
+        assert video_obj.usage["duration_seconds"] == 4.0
+        assert video_obj.usage.get("video_count") == expected_video_count
+
     def test_transform_video_remix_request_not_supported(self):
         """Test that video remix raises NotImplementedError."""
         with pytest.raises(NotImplementedError, match="Video remix is not supported"):

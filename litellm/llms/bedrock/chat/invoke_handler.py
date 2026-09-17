@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Final, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -51,6 +52,15 @@ bedrock_tool_name_mappings: Final[InMemoryCache] = InMemoryCache(max_size_in_mem
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
 converse_config: Final = AmazonConverseConfig()
+NOVA_INVOKE_STREAM_EVENT_TYPES: Final = (
+    "messageStart",
+    "contentBlockStart",
+    "contentBlockDelta",
+    "contentBlockStop",
+    "messageStop",
+    "metadata",
+)
+NOVA_INVOKE_STREAM_EVENT_PAYLOAD: Final = TypeAdapter(dict[str, object])
 
 
 class AmazonCohereChatConfig:
@@ -601,14 +611,12 @@ class AWSEventStreamDecoder:
             if thinking_blocks:
                 self._thinking_ran = True
 
-            carries_message_content: Final = any(
-                key in chunk_data for key in ("start", "delta", "contentBlockIndex", "stopReason", "trace")
+            trace: Final = chunk_data.get("trace")
+            carries_message_content: Final = bool(trace) or any(
+                key in chunk_data for key in ("start", "delta", "contentBlockIndex", "stopReason")
             )
 
-            model_response_provider_specific_fields: Final = {}
-            if "trace" in chunk_data:
-                trace: Final = chunk_data.get("trace")
-                model_response_provider_specific_fields["trace"] = trace
+            model_response_provider_specific_fields: Final = {"trace": trace} if trace else {}
             response: Final = ModelResponseStream(
                 choices=[
                     StreamingChoices(
@@ -654,10 +662,10 @@ class AWSEventStreamDecoder:
         ):
             return self.converse_chunk_parser(chunk_data=chunk_data)
         ######### /bedrock/invoke nova mappings ###############
-        elif "contentBlockDelta" in chunk_data:
-            # when using /bedrock/invoke/nova, the chunk_data is nested under "contentBlockDelta"
-            _chunk_data: Final = chunk_data.get("contentBlockDelta", {})
-            return self.converse_chunk_parser(chunk_data=_chunk_data)
+        elif nova_event_type := next((key for key in NOVA_INVOKE_STREAM_EVENT_TYPES if key in chunk_data), None):
+            return self.converse_chunk_parser(
+                chunk_data=NOVA_INVOKE_STREAM_EVENT_PAYLOAD.validate_python(chunk_data[nova_event_type])
+            )
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:
             if len(chunk_data["outputs"]) == 1 and chunk_data["outputs"][0].get("text", None) is not None:
