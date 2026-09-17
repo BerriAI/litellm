@@ -290,7 +290,7 @@ class PolicyAttachment(BaseModel):
     )
     priority: int | None = Field(
         default=None,
-        description="Explicit execution order. Attachments with a priority run before those without, lower first; ties fall back to scope specificity.",
+        description="Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
     )
 
     model_config = ConfigDict(extra="forbid")

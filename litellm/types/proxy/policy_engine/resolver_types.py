@@ -307,7 +307,7 @@ class PolicyAttachmentCreateRequest(BaseModel):
     )
     priority: int | None = Field(
         default=None,
-        description="Explicit execution order. Attachments with a priority run before those without, lower first; ties fall back to scope specificity.",
+        description="Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
     )
 
 
@@ -323,7 +323,7 @@ class PolicyAttachmentDBResponse(BaseModel):
     tags: list[str] = Field(default_factory=list, description="Tag patterns.")
     priority: int | None = Field(
         default=None,
-        description="Explicit execution order. Attachments with a priority run before those without, lower first; ties fall back to scope specificity.",
+        description="Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
     )
     created_at: datetime | None = Field(default=None, description="When the attachment was created.")
     updated_at: datetime | None = Field(default=None, description="When the attachment was last updated.")
