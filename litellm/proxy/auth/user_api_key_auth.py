@@ -46,7 +46,6 @@ from litellm.proxy.auth.auth_checks import (
     _can_object_call_model,
     _check_end_user_budget,
     _delete_cache_key_object,
-    _effective_team_member_budget,
     _get_user_role,
     _is_model_cost_zero,
     _is_user_proxy_admin,
@@ -2249,8 +2248,7 @@ async def _user_api_key_auth_builder(
                             )
 
                     if team_member_info is not None and team_member_info.litellm_budget_table is not None:
-                        team_member_budget: Final = _effective_team_member_budget(
-                            team_member_info.litellm_budget_table,
+                        team_member_budget: Final = team_member_info.litellm_budget_table.effective_max_budget(
                             now=datetime.now(timezone.utc),
                         )
                         if team_member_budget is not None and team_member_budget > 0:
