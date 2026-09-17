@@ -1,0 +1,72 @@
+name: Label sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/labels.json
+      - scripts/sync-labels.ts
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Log which labels would be created or recoloured without touching anything
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - .github/workflows/label_sync.yml
+      - .github/labels.json
+      - scripts/sync-labels.ts
+      - scripts/sync-labels.test.ts
+      - scripts/issue-labels.ts
+
+permissions: {}
+
+jobs:
+  sync-tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.0"
+
+      - name: Test the sync
+        run: bun test scripts/sync-labels.test.ts
+
+  sync:
+    if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout manifest and script
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: |
+            .github
+            scripts
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # Exact version, never latest: the next step holds an issues: write token
+          bun-version: "1.4.0"
+
+      - name: Create or recolour every label in .github/labels.json
+        run: bun run scripts/sync-labels.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
