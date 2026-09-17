@@ -93,7 +93,7 @@ describe("MCPNetworkSettings", () => {
     await waitFor(() =>
       expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges", ["10.0.0.0/8"]),
     );
-    expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges");
   });
 
   it("clears the setting instead of saving an empty list", async () => {
@@ -102,5 +102,69 @@ describe("MCPNetworkSettings", () => {
 
     await waitFor(() => expect(deleteConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges"));
     expect(updateConfigFieldSetting).not.toHaveBeenCalled();
+  });
+
+  it("renders the stored allowed client names once settings load", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_allowed_clients", field_value: ["antigravity-cli", "codex-mcp-client"] },
+    ]);
+
+    renderSettings();
+
+    expect(await screen.findByText("antigravity-cli")).toBeInTheDocument();
+    expect(screen.getByText("codex-mcp-client")).toBeInTheDocument();
+  });
+
+  it("adds typed client names on Enter and saves them under mcp_allowed_clients", async () => {
+    renderSettings();
+    const input = await screen.findByRole("textbox", { name: "Allowed client names" });
+
+    await userEvent.type(input, "antigravity-cli, codex-mcp-client{Enter}");
+
+    expect(screen.getByText("antigravity-cli")).toBeInTheDocument();
+    expect(screen.getByText("codex-mcp-client")).toBeInTheDocument();
+    expect(input).toHaveValue("");
+
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() =>
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", [
+        "antigravity-cli",
+        "codex-mcp-client",
+      ]),
+    );
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_allowed_clients");
+  });
+
+  it("removes a client name and clears the setting when the list becomes empty", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_allowed_clients", field_value: ["claude-code"] },
+    ]);
+
+    renderSettings();
+    await userEvent.click(await screen.findByRole("button", { name: "Remove claude-code" }));
+
+    expect(screen.queryByText("claude-code")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(deleteConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients"));
+    expect(updateConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_allowed_clients", expect.anything());
+  });
+
+  it("keeps the private ranges and the allowed clients as independent settings on save", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+      { field_name: "mcp_internal_ip_ranges", field_value: ["10.0.0.0/8"] },
+      { field_name: "mcp_allowed_clients", field_value: ["antigravity-cli"] },
+    ]);
+
+    renderSettings();
+    await userEvent.click(await screen.findByRole("button", { name: /Save/ }));
+
+    await waitFor(() =>
+      expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients", ["antigravity-cli"]),
+    );
+    expect(updateConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_internal_ip_ranges", ["10.0.0.0/8"]);
+    expect(deleteConfigFieldSetting).not.toHaveBeenCalled();
   });
 });

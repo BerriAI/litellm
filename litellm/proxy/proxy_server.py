@@ -7179,6 +7179,9 @@ class ProxyConfig:
                 "enable_openai_websocket_passthrough"
             )
 
+        if "mcp_allowed_clients" not in self._yaml_general_settings_keys:
+            general_settings["mcp_allowed_clients"] = _general_settings.get("mcp_allowed_clients")
+
         if "user_api_key_cache_max_size" not in self._yaml_general_settings_keys:
             db_cache_max_size: Final = _general_settings.get("user_api_key_cache_max_size")
             try:
@@ -17137,6 +17140,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "maximum_spend_logs_cleanup_run_budget": "String",
         "maximum_spend_logs_cleanup_batch_timeout": "String",
         "mcp_internal_ip_ranges": "List",
+        "mcp_allowed_clients": "List",
         "mcp_trusted_proxy_ranges": "List",
         "mcp_xff_num_trusted_hops": "Integer",
         "always_include_stream_usage": "Boolean",

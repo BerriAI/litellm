@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import contextvars
 import os
 from datetime import datetime, timedelta
@@ -2033,6 +2034,249 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
         assert headers[b"x-mcp-debug-auth-resolution"] == (b"stored-user-token" if method == "POST" else b"unresolved")
     else:
         assert not any(name.startswith(b"x-mcp-debug") for name in headers)
+
+
+_CLAUDE_CODE_INITIALIZE: Final = (
+    b'{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18",'
+    b'"capabilities":{},"clientInfo":{"name":"claude-code","version":"2.1.274"}}}'
+)
+_ANTIGRAVITY_INITIALIZE: Final = (
+    b'{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18",'
+    b'"capabilities":{},"clientInfo":{"name":"antigravity-cli","version":"1.0.0"}}}'
+)
+_ANONYMOUS_INITIALIZE: Final = b'{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{}}}'
+_TOOLS_LIST: Final = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+
+
+async def _drain_body(receive) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        message = await receive()
+        chunks.append(message.get("body", b""))
+        if not message.get("more_body", False):
+            return b"".join(chunks)
+
+
+def _forbidden_client_response(send: AsyncMock) -> tuple[int, dict[str, str]]:
+    import json as _json
+
+    start: Final = send.call_args_list[0].args[0]
+    body: Final = b"".join(call.args[0].get("body", b"") for call in send.call_args_list[1:])
+    return start["status"], _json.loads(body)
+
+
+@contextlib.contextmanager
+def _client_allowlist_patches(allowed_clients: object):
+    settings: Final = {} if allowed_clients is None else {"mcp_allowed_clients": allowed_clients}
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(UserAPIKeyAuth(user_id="allowlist-user"), None, None, None, None, {}),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True),
+        patch("litellm.proxy.proxy_server.general_settings", settings),
+    ):
+        yield
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_body", "expected_details"),
+    (
+        (
+            _CLAUDE_CODE_INITIALIZE,
+            "MCP client 'claude-code' is not listed in this gateway's mcp_allowed_clients.",
+        ),
+        (
+            _ANONYMOUS_INITIALIZE,
+            "MCP initialize request did not identify the client application (clientInfo.name). "
+            "This gateway only admits clients listed in mcp_allowed_clients.",
+        ),
+    ),
+)
+async def test_streamable_http_rejects_initialize_from_unlisted_client_before_session_creation(
+    request_body: bytes, expected_details: str
+) -> None:
+    from starlette.types import Scope
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    receive: Final = AsyncMock(return_value={"type": "http.request", "body": request_body, "more_body": False})
+    send: Final = AsyncMock()
+    stateful_handle: Final = AsyncMock()
+    stateless_handle: Final = AsyncMock()
+    session_cap: Final = AsyncMock(return_value=True)
+
+    with (
+        _client_allowlist_patches(["antigravity-cli"]),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful_handle),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=stateless_handle),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server._enforce_stateful_session_cap_for_owner", session_cap),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    assert _forbidden_client_response(send) == (403, {"error": "Forbidden", "details": expected_details})
+    stateful_handle.assert_not_awaited()
+    stateless_handle.assert_not_awaited()
+    session_cap.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_clients", "request_body"),
+    (
+        (["antigravity-cli"], _ANTIGRAVITY_INITIALIZE),
+        (["claude-code", "antigravity-cli"], _CLAUDE_CODE_INITIALIZE),
+        (None, _CLAUDE_CODE_INITIALIZE),
+        (None, _ANONYMOUS_INITIALIZE),
+    ),
+)
+async def test_streamable_http_admits_listed_or_unrestricted_initialize_and_replays_body(
+    allowed_clients: list[str] | None, request_body: bytes
+) -> None:
+    from starlette.types import Receive, Scope, Send
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    receive: Final = AsyncMock(
+        side_effect=[
+            {"type": "http.request", "body": request_body[:20], "more_body": True},
+            {"type": "http.request", "body": request_body[20:], "more_body": False},
+        ]
+    )
+    send: Final = AsyncMock()
+    downstream_bodies: Final[list[bytes]] = []
+
+    async def handle_request(_: Scope, downstream_receive: Receive, __: Send) -> None:
+        downstream_bodies.append(await _drain_body(downstream_receive))
+
+    stateful_handle: Final = AsyncMock(side_effect=handle_request)
+    stateless_handle: Final = AsyncMock()
+
+    with (
+        _client_allowlist_patches(allowed_clients),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful_handle),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=stateless_handle),
+        ),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    assert downstream_bodies == [request_body]
+    stateless_handle.assert_not_awaited()
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowed_clients", ([], "claude-code", [{"name": "claude-code"}]))
+async def test_streamable_http_empty_or_malformed_allowlist_admits_nobody(allowed_clients: object) -> None:
+    from starlette.types import Scope
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    receive: Final = AsyncMock(
+        return_value={"type": "http.request", "body": _CLAUDE_CODE_INITIALIZE, "more_body": False}
+    )
+    send: Final = AsyncMock()
+    stateful_handle: Final = AsyncMock()
+
+    with (
+        _client_allowlist_patches(allowed_clients),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful_handle),
+        ),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    status, body = _forbidden_client_response(send)
+    assert status == 403
+    assert body["details"] == "MCP client 'claude-code' is not listed in this gateway's mcp_allowed_clients."
+    stateful_handle.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_allowlist_only_inspects_initialize_requests() -> None:
+    from starlette.types import Receive, Scope, Send
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": _TOOLS_LIST, "more_body": False}])
+    send: Final = AsyncMock()
+    downstream_bodies: Final[list[bytes]] = []
+
+    async def handle_request(_: Scope, downstream_receive: Receive, __: Send) -> None:
+        downstream_bodies.append(await _drain_body(downstream_receive))
+
+    with (
+        _client_allowlist_patches(["antigravity-cli"]),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=AsyncMock(side_effect=handle_request)),
+        ),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    assert downstream_bodies == [_TOOLS_LIST]
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_body", "admitted"),
+    ((_ANTIGRAVITY_INITIALIZE, True), (_CLAUDE_CODE_INITIALIZE, False), (_ANONYMOUS_INITIALIZE, False)),
+)
+async def test_sse_endpoint_applies_the_same_client_allowlist(request_body: bytes, admitted: bool) -> None:
+    from starlette.types import Receive, Scope, Send
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp/sse", "headers": []}
+    receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": request_body, "more_body": False}])
+    send: Final = AsyncMock()
+    downstream_bodies: Final[list[bytes]] = []
+
+    async def handle_request(_: Scope, downstream_receive: Receive, __: Send) -> None:
+        downstream_bodies.append(await _drain_body(downstream_receive))
+
+    with (
+        _client_allowlist_patches(["antigravity-cli"]),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+            new_callable=AsyncMock,
+        ),
+        patch.object(mcp_module.sse_session_manager, "handle_request", side_effect=handle_request),
+    ):
+        await mcp_module.handle_sse_mcp(scope, receive, send)
+
+    if admitted:
+        assert downstream_bodies == [request_body]
+        send.assert_not_awaited()
+        return
+    assert downstream_bodies == []
+    status, body = _forbidden_client_response(send)
+    assert status == 403
+    assert body["error"] == "Forbidden"
+    assert "mcp_allowed_clients" in body["details"]
 
 
 @pytest.mark.asyncio
