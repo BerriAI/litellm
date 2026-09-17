@@ -146,8 +146,11 @@ const toEnvRecord = (raw: unknown): Readonly<Record<string, string>> =>
 const buildStdioFields = (
   rawStdioConfig: string | undefined,
   rawEnvJson: string | undefined,
-  rawCommand: string | undefined,
-  rawArgs: readonly string[] | undefined,
+  commandFields: {
+    readonly rawCommand: string | undefined;
+    readonly rawArgs: readonly string[] | undefined;
+    readonly savedEnv: MCPServer["env"];
+  },
 ): StdioFieldsResult => {
   if (rawStdioConfig) {
     try {
@@ -171,6 +174,7 @@ const buildStdioFields = (
   }
 
   const envResult = ((): Readonly<Record<string, string>> | "invalid" => {
+    if (rawEnvJson === undefined) return toEnvRecord(commandFields.savedEnv);
     if (!rawEnvJson) return {};
     try {
       return toEnvRecord(JSON.parse(rawEnvJson));
@@ -182,11 +186,11 @@ const buildStdioFields = (
     return { kind: "invalid_stdio_env_json" };
   }
 
-  const parsedCommand = rawCommand ? String(rawCommand).trim() : "";
+  const parsedCommand = commandFields.rawCommand ? String(commandFields.rawCommand).trim() : "";
   if (!parsedCommand) {
     return { kind: "stdio_command_required" };
   }
-  return { kind: "ok", fields: { command: parsedCommand, args: toStringArgs(rawArgs), env: envResult } };
+  return { kind: "ok", fields: { command: parsedCommand, args: toStringArgs(commandFields.rawArgs), env: envResult } };
 };
 
 interface StdioConfigShape {
@@ -284,7 +288,7 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
 
   const stdio =
     rawRestValues.transport === "stdio"
-      ? buildStdioFields(rawStdioConfig, rawEnvJson, rawCommand, rawArgs)
+      ? buildStdioFields(rawStdioConfig, rawEnvJson, { rawCommand, rawArgs, savedEnv: mcpServer.env })
       : ({ kind: "ok", fields: {} } as StdioFieldsResult);
   if (stdio.kind !== "ok") {
     return stdio;

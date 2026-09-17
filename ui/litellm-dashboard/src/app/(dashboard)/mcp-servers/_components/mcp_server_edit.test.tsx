@@ -162,6 +162,69 @@ describe("MCPServerEdit (stdio)", () => {
     expect(screen.getByRole("tab", { name: "Server Configuration" })).toBeInTheDocument();
   });
 
+  it("should preserve existing environment variables unless explicitly cleared", async () => {
+    const existingEnv = {
+      API_TOKEN: "secret-token",
+      REGION: "us-east-1",
+    };
+    const mcpServer = {
+      server_id: "server-1",
+      server_name: "TestServer",
+      alias: "test",
+      description: "desc",
+      transport: "stdio",
+      url: null,
+      auth_type: "none",
+      command: "npx",
+      args: ["-y", "@vendor/mcp"],
+      env: existingEnv,
+      created_at: "2024-01-01T00:00:00Z",
+      created_by: "user-1",
+      updated_at: "2024-01-01T00:00:00Z",
+      updated_by: "user-1",
+      mcp_access_groups: [],
+    };
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(mcpServer);
+
+    render(
+      <MCPServerEdit
+        mcpServer={mcpServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const envTextarea = screen.getByLabelText("Environment (JSON object)");
+    expect(envTextarea).toHaveValue(JSON.stringify(existingEnv, null, 2));
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.env).toEqual(existingEnv);
+
+    await act(async () => {
+      fireEvent.change(envTextarea, { target: { value: "" } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(2);
+    });
+
+    const [, clearedPayload] = vi.mocked(networking.updateMCPServer).mock.calls[1];
+    expect(clearedPayload.env).toEqual({});
+  });
+
   it("should allow updating stdio transport configuration", async () => {
     const onCancel = vi.fn();
     const onSuccess = vi.fn();

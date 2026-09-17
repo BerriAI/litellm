@@ -112,7 +112,13 @@ const CASES: readonly Case[] = [
   {
     label: "stdio drops auth_type and url and adds the stdio trio",
     server: { ...BASE, transport: "stdio", url: null, command: "npx", args: ["-y", "pkg"], env: { A: "1" } },
-    expected: { ...without(["auth_type", "url"]), args: ["-y", "pkg"], command: "npx", env: {}, transport: "stdio" },
+    expected: {
+      ...without(["auth_type", "url"]),
+      args: ["-y", "pkg"],
+      command: "npx",
+      env: { A: "1" },
+      transport: "stdio",
+    },
   },
   {
     label: "openapi swaps url for spec_path",
