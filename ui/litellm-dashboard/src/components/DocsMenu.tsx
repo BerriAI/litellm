@@ -12,18 +12,6 @@ interface DocsMenuProps {
   className?: string;
 }
 
-/**
- * A dropdown menu for multiple documentation links.
- * Linear-style: Single "Docs" button that expands to show multiple relevant links.
- *
- * @example
- * <DocsMenu items={[
- *   { label: "Custom pricing for models", href: "https://docs.litellm.ai/docs/proxy/custom_pricing" },
- *   { label: "Spend tracking", href: "https://docs.litellm.ai/docs/proxy/cost_tracking" }
- * ]}>
- *   Docs
- * </DocsMenu>
- */
 export const DocsMenu: React.FC<DocsMenuProps> = ({ items, children = "Docs", className = "" }) => {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
