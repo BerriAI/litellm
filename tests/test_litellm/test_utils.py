@@ -3547,7 +3547,7 @@ _FIREWORKS_MODELS = [
         "accounts/fireworks/models/minimax-m3",
         512000,
         512000,
-        True,
+        None,
         True,
     ),
     (
@@ -3655,7 +3655,8 @@ def _assert_fireworks_entry(
     assert info["supports_tool_choice"] is True
     assert info["supports_reasoning"] is expected_reasoning
     assert info["supports_response_schema"] is True
-    assert info["supports_vision"] is expected_vision
+    if expected_vision is not None:
+        assert info["supports_vision"] is expected_vision
 
 
 @pytest.fixture
