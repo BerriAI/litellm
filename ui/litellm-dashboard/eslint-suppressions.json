@@ -1066,7 +1066,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
@@ -1684,9 +1684,6 @@
   },
   "src/components/key_team_helpers/key_list.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
