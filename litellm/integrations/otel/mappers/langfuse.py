@@ -17,7 +17,7 @@ from typing import Final
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
     collect,
-    drop_none,
+    drop_none_pairs,
     json_if,
     output_messages,
     serialize_messages,
@@ -84,13 +84,13 @@ class LangfuseMapper:
 
     @staticmethod
     def trace_attributes(trace: TraceControls) -> AttributeMap:
-        return drop_none(
-            {
-                LANGFUSE_TRACE_NAME: trace.name or None,
-                LANGFUSE_TRACE_USER_ID: trace.user_id or None,
-                LANGFUSE_TRACE_SESSION_ID: trace.session_id or None,
-                LANGFUSE_TRACE_TAGS: trace.tags or None,
-            }
+        return drop_none_pairs(
+            (
+                (LANGFUSE_TRACE_NAME, trace.name or None),
+                (LANGFUSE_TRACE_USER_ID, trace.user_id or None),
+                (LANGFUSE_TRACE_SESSION_ID, trace.session_id or None),
+                (LANGFUSE_TRACE_TAGS, trace.tags or None),
+            )
         )
 
     @classmethod
