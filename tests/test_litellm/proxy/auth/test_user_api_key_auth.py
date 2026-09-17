@@ -35,6 +35,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.auth_checks import (
+    OrganizationNotFoundError,
     TeamNotFoundError,
     UserNotFoundError,
     get_key_object,
@@ -5814,7 +5815,7 @@ async def test_centralized_common_checks_backfills_org_id_from_team(key_org_id, 
         ("org-jwt", None, None, None, None, "success", False, False, "org-jwt", "acme-org", (12.5, 700, 7)),
         ("org-pinned", None, None, "preset", None, "success", False, False, "org-pinned", "preset", (None, None, None)),
         ("org-view", None, None, None, 3, "success", False, False, "org-view", None, (None, None, 3)),
-        ("org-missing", None, None, None, None, "missing", True, False, "org-missing", None, (None, None, None)),
+        ("org-missing", None, None, None, None, "missing", False, False, "org-missing", None, (None, None, None)),
         ("org-db-failure-allowed", None, None, None, None, "db_failure", True, False, "org-db-failure-allowed", None, (None, None, None)),
         ("org-db-failure-denied", None, None, None, None, "db_failure", False, True, "org-db-failure-denied", None, (None, None, None)),
         ("org-nobudget", None, None, None, None, "no_budget", False, False, "org-nobudget", "acme-org", (None, None, None)),
@@ -5892,7 +5893,7 @@ async def test_centralized_common_checks_inherits_org_identity(
             ) as mock_checks,
         ):
             if lookup_mode == "missing":
-                mock_get_org_object.return_value = None
+                mock_get_org_object.side_effect = OrganizationNotFoundError("x")
             elif lookup_mode == "db_failure":
                 mock_get_org_object.side_effect = RuntimeError("db unavailable")
 
