@@ -17,7 +17,6 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from itertools import takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, TypeVar, Union, cast, overload
 
@@ -955,7 +954,6 @@ class _CallbackCapabilities:
     has_guardrail: bool = False
     has_pre_call_override: bool = False
     has_content_enforcer: bool = False
-    has_moderation_override: bool = False
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
@@ -964,11 +962,6 @@ class _CallbackCapabilities:
     # avoids the per-request ``get_custom_logger_compatible_class`` walk for
     # every string entry in ``litellm.callbacks``.
     resolved_callbacks: tuple[object, ...] = field(default_factory=tuple)
-
-
-def _overrides_moderation_hook(callback: CustomLogger) -> bool:
-    leaf_to_base: Final = takewhile(lambda klass: klass is not CustomLogger, type(callback).__mro__)
-    return any("async_moderation_hook" in klass.__dict__ for klass in leaf_to_base)
 
 
 class ProxyLogging:
@@ -2518,7 +2511,6 @@ class ProxyLogging:
         has_guardrail = False
         has_pre_call_override = False
         has_content_enforcer = False
-        has_moderation_override = False
         iterator_overrides: Final[list[tuple[Any, str]]] = []  # (callback, kind)
         resolved_callbacks: Final[list[CustomLogger]] = []
 
@@ -2537,8 +2529,6 @@ class ProxyLogging:
                 continue
             if isinstance(resolved, CustomGuardrail):
                 has_guardrail = True
-            elif _overrides_moderation_hook(resolved):
-                has_moderation_override = True
             # Use the same leaf-class ``__dict__`` check as the other hook
             # capabilities: only callbacks that actually override the hook
             # contribute to the flag. Setting this for every ``CustomLogger``
@@ -2583,7 +2573,6 @@ class ProxyLogging:
             has_guardrail=has_guardrail,
             has_pre_call_override=has_pre_call_override,
             has_content_enforcer=has_content_enforcer,
-            has_moderation_override=has_moderation_override,
             iterator_overrides=tuple(iterator_overrides),
             resolved_callbacks=tuple(resolved_callbacks),
         )
@@ -2645,27 +2634,20 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
     ):
-        caps: Final = ProxyLogging._callback_capabilities()
-        if not caps.has_guardrail and not caps.has_moderation_override:
+        """
+        Runs the CustomGuardrail's async_moderation_hook() in parallel
+        """
+        # Fast path: skip the entire guardrail scan when no CustomGuardrail
+        # callbacks are registered. Saves per-request iteration over
+        # ``litellm.callbacks`` plus an ``asyncio.gather([])`` round trip on
+        # deployments with no guardrails configured.
+        if not ProxyLogging._callback_capabilities().has_guardrail:
             return data
         # Step 1: Collect all guardrail tasks to run in parallel
         guardrail_tasks: Final = []
 
         for callback in litellm.callbacks:
-            if (
-                isinstance(callback, CustomLogger)
-                and not isinstance(callback, CustomGuardrail)
-                and _overrides_moderation_hook(callback)
-                and user_api_key_dict is not None
-            ):
-                guardrail_tasks.append(
-                    callback.async_moderation_hook(
-                        data=data,
-                        user_api_key_dict=user_api_key_dict,
-                        call_type=call_type,
-                    )
-                )
-            elif isinstance(callback, CustomGuardrail):
+            if isinstance(callback, CustomGuardrail):
                 ################################################################
                 # Check if guardrail should be run for GuardrailEventHooks.during_call hook
                 ################################################################
