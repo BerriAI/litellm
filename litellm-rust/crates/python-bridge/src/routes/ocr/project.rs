@@ -215,7 +215,7 @@ mod tests {
     fn url_document(url: &str) -> OcrDocumentInput {
         litellm_core::ocr::OcrDocument::DocumentUrl {
             document_url: url.into(),
-            extra_fields: Map::new(),
+            extra_fields: Default::default(),
         }
         .into()
     }

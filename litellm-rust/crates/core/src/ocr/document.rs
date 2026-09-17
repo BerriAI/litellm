@@ -5,9 +5,11 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::mime::Mime;
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError};
 use reqwest::Url;
-use serde_json::Map;
+use std::collections::BTreeMap as Map;
 
-use super::error::{OcrError, OcrRequestError, OcrResponseError};
+use super::Error as OcrError;
+use super::Error as OcrRequestError;
+use super::Error as OcrResponseError;
 use super::types::{OcrConnection, OcrDocument, OcrDocumentInput};
 use crate::constants::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS};
 use crate::media::Error as MediaError;
@@ -47,11 +49,10 @@ pub fn read_path_document(
         })
         .map_err(|source| super::Error::FileRead {
             path: path.to_owned(),
-            kind: source.kind(),
-            message: source.to_string(),
+            source: std::sync::Arc::new(source),
         })?;
     let name = path.file_name().map(|name| name.to_string_lossy());
-    Ok(encode_file_document(&bytes, name.as_deref(), mime_type)?)
+    encode_file_document(&bytes, name.as_deref(), mime_type)
 }
 
 pub fn encode_file_document(
@@ -164,7 +165,7 @@ pub(crate) async fn inline_remote_document(
     connection: &OcrConnection,
 ) -> Result<OcrDocument, OcrError> {
     let source = document.source();
-    if !source.starts_with("http://") && !source.starts_with("https://") {
+    if !document.is_remote() {
         validate_inline_document(&document)?;
         return Ok(document);
     }
@@ -193,12 +194,12 @@ pub(crate) async fn inline_remote_document(
 
 fn map_media_error(error: MediaError) -> OcrError {
     match error {
-        MediaError::BlockedUrl => OcrRequestError::BlockedDocumentUrl.into(),
-        MediaError::DownloadDisabled => OcrRequestError::DownloadDisabled.into(),
-        MediaError::DownloadTooLarge => OcrRequestError::DownloadTooLarge.into(),
-        MediaError::TooManyRedirects => OcrRequestError::TooManyRedirects.into(),
-        MediaError::MissingRedirectLocation => OcrResponseError::MissingRedirectLocation.into(),
-        MediaError::InvalidRedirect => OcrResponseError::InvalidRedirect.into(),
+        MediaError::BlockedUrl => OcrRequestError::BlockedDocumentUrl,
+        MediaError::DownloadDisabled => OcrRequestError::DownloadDisabled,
+        MediaError::DownloadTooLarge => OcrRequestError::DownloadTooLarge,
+        MediaError::TooManyRedirects => OcrRequestError::TooManyRedirects,
+        MediaError::MissingRedirectLocation => OcrResponseError::MissingRedirectLocation,
+        MediaError::InvalidRedirect => OcrResponseError::InvalidRedirect,
         MediaError::Http(status) => TransportError::Http {
             status,
             body: "OCR document download failed".into(),
@@ -216,7 +217,7 @@ fn map_media_error(error: MediaError) -> OcrError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Map;
+    use std::collections::BTreeMap as Map;
 
     fn document(source: &str) -> OcrDocument {
         OcrDocument::DocumentUrl {
@@ -286,17 +287,17 @@ mod tests {
             document("data:application/pdf;base64,YWJj")
         );
         std::fs::write(&path, vec![b'a'; OCR_INLINE_MAX_BYTES + 1]).unwrap();
-        assert_eq!(
+        assert!(matches!(
             prepare_document(OcrDocumentInput::Path {
                 path: path.clone(),
                 mime_type: None,
             }),
-            Err(OcrRequestError::InlineDocumentTooLarge.into())
-        );
+            Err(OcrRequestError::InlineDocumentTooLarge)
+        ));
         std::fs::remove_dir_all(&dir).unwrap();
 
         let missing = dir.join("missing.pdf");
-        let Err(super::super::Error::FileRead { path, kind, .. }) =
+        let Err(super::super::Error::FileRead { path, source, .. }) =
             prepare_document(OcrDocumentInput::Path {
                 path: missing.clone(),
                 mime_type: None,
@@ -305,7 +306,7 @@ mod tests {
             panic!("missing paths must surface a file read error");
         };
         assert_eq!(path, missing);
-        assert_eq!(kind, std::io::ErrorKind::NotFound);
+        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]
@@ -325,10 +326,10 @@ mod tests {
     #[test]
     fn file_encoding_enforces_decoded_size_limit() {
         let bytes = vec![b'a'; OCR_INLINE_MAX_BYTES + 1];
-        assert_eq!(
+        assert!(matches!(
             encode_file_document(&bytes, None, None),
             Err(OcrRequestError::InlineDocumentTooLarge)
-        );
+        ));
         let document = encode_file_document(&bytes[..OCR_INLINE_MAX_BYTES], None, None).unwrap();
         let inline = InlineDocument::parse(document.source()).unwrap().unwrap();
         assert_eq!(
@@ -359,10 +360,10 @@ mod tests {
         ] {
             let inline = InlineDocument::parse(source).unwrap().unwrap();
             assert_eq!(inline.decode(expected.len()).unwrap(), expected);
-            assert_eq!(
+            assert!(matches!(
                 inline.decode(expected.len() - 1),
                 Err(OcrRequestError::InlineDocumentTooLarge)
-            );
+            ));
         }
     }
 
@@ -427,7 +428,7 @@ mod tests {
             client.document_fetcher(),
             OcrDocument::ImageUrl {
                 image_url: format!("http://{address}/image"),
-                extra_fields: Map::from_iter([("detail".into(), serde_json::json!("high"))]),
+                extra_fields: Map::from_iter([("detail".into(), "high".into())]),
             },
             &OcrConnection::default(),
         )
@@ -439,7 +440,7 @@ mod tests {
             converted,
             OcrDocument::ImageUrl {
                 image_url: "data:image/png;base64,YWJj".into(),
-                extra_fields: Map::from_iter([("detail".into(), serde_json::json!("high"))]),
+                extra_fields: Map::from_iter([("detail".into(), "high".into())]),
             }
         );
         assert!(!request.to_ascii_lowercase().contains("authorization"));

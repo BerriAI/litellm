@@ -23,11 +23,12 @@ async fn facade_maps_pages_features_and_url_document() {
         &base,
         json!({"pages":[2,0,0,1],"features":["keyValuePairs","languages"]}),
     );
-    request.document = serde_json::from_value(json!({
+    request.document = serde_json::from_value::<super::OcrDocument>(json!({
         "type":"document_url",
         "document_url":"https://example.com/document.pdf"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     perform_ocr(request).await.unwrap();
     server.await.unwrap();
@@ -118,13 +119,13 @@ async fn immediate_response_normalizes_pages_and_preserves_native() {
     .unwrap();
     server.await.unwrap();
 
-    assert_eq!(result.pages[0]["index"], 1);
-    assert_eq!(result.pages[0]["markdown"], "A\n\nB");
+    assert_eq!(result.pages[0].index, 1);
+    assert_eq!(result.pages[0].markdown, "A\n\nB");
     assert_eq!(
-        result.pages[0]["dimensions"],
+        serde_json::to_value(&result.pages[0].dimensions).unwrap(),
         json!({"width":816,"height":1056,"dpi":96})
     );
-    assert_eq!(result.usage_info, Some(json!({"pages_processed":1})));
+    assert_eq!(result.usage_info.as_ref().unwrap().pages_processed, Some(1));
     let serialized = result.clone().into_json();
     assert_eq!(serialized["content"], "A\n\nB");
     assert_eq!(serialized["tables"], json!([{"cells":[]}]));
@@ -133,7 +134,10 @@ async fn immediate_response_normalizes_pages_and_preserves_native() {
         json!([{"key":{"content":"A"}}])
     );
     assert!(serialized.get("key_value_pairs").is_none());
-    assert_eq!(result.provider_native_response, Some(operation));
+    assert_eq!(
+        result.provider_native_response.map(Value::Object),
+        Some(operation)
+    );
 }
 
 #[tokio::test]
@@ -159,13 +163,16 @@ async fn accepted_response_polls_to_success_with_only_credentials() {
         json!({"req_format":"native"}),
     );
     request
-        .connection
+        .transport
         .extra_headers
         .push(("X-Trace".into(), "initial-only".into()));
 
     let result = perform_ocr(request).await.unwrap();
     server.await.unwrap();
-    assert_eq!(result.provider_native_response, Some(operation));
+    assert_eq!(
+        result.provider_native_response.map(Value::Object),
+        Some(operation)
+    );
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 3);
     assert!(requests[0].to_ascii_lowercase().contains("x-trace:"));
@@ -239,8 +246,8 @@ async fn polling_forwards_bearer_credentials() {
     ])
     .await;
     let mut request = wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({}));
-    request.connection.api_key = None;
-    request.connection.extra_headers = vec![("Authorization".into(), "Bearer token".into())];
+    request.credentials.api_key = None;
+    request.transport.extra_headers = vec![("Authorization".into(), "Bearer token".into())];
 
     perform_ocr(request).await.unwrap();
     server.await.unwrap();
@@ -375,7 +382,7 @@ async fn polling_deadline_bounds_retry_delay() {
     ])
     .await;
     let mut request = wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({}));
-    request.connection.poll_timeout = std::time::Duration::from_millis(100);
+    request.transport.poll_timeout = std::time::Duration::from_millis(100);
 
     let error = tokio::time::timeout(std::time::Duration::from_secs(1), perform_ocr(request))
         .await
