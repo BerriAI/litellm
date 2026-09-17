@@ -1,4 +1,4 @@
-import { isAdminRole } from "@/utils/roles";
+import { isAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { CircleHelp, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -561,7 +561,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 Submitted MCPs
               </TabsTrigger>
             )}
-            {isAdminRole(userRole) && (
+            {isProxyAdminTierRole(userRole) && (
               <TabsTrigger value="connections" className="flex-none rounded-none px-4 py-2">
                 Live Connections
               </TabsTrigger>
@@ -753,7 +753,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               <MCPSubmissionsTab accessToken={accessToken} />
             </TabsContent>
           )}
-          {isAdminRole(userRole) && (
+          {isProxyAdminTierRole(userRole) && (
             <TabsContent value="connections">
               <MCPGatewaySessionsTab accessToken={accessToken} />
             </TabsContent>
