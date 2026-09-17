@@ -738,6 +738,7 @@ class Router:
         stream_timeout: float | None = None,
         default_litellm_params: dict | None = None,  # default params for Router.chat.completion.create
         default_max_parallel_requests: int | None = None,
+        default_max_parallel_requests_queue_size: int | None = None,
         set_verbose: bool = False,
         debug_level: Literal["DEBUG", "INFO"] = "INFO",
         default_fallbacks: list[str] | None = None,  # generic fallbacks, works across all deployments
@@ -935,6 +936,7 @@ class Router:
             None  # use this to track the users default deployment, when they want to use model = *
         )
         self.default_max_parallel_requests = default_max_parallel_requests
+        self._default_max_parallel_requests_queue_size = default_max_parallel_requests_queue_size
         self.provider_default_deployment_ids: list[str] = []
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
@@ -3630,8 +3632,6 @@ class Router:
             input_kwargs.pop("silent_model", None)
             input_kwargs.pop("include_fallback_errors", None)
 
-            _response: Final = litellm.acompletion(**input_kwargs)
-
             logging_obj: Final[LiteLLMLogging | None] = kwargs.get("litellm_logging_obj", None)
 
             rpm_semaphore: Final = self._get_client(
@@ -3647,7 +3647,7 @@ class Router:
                     logging_obj=logging_obj,
                     parent_otel_span=parent_otel_span,
                 )
-                response = await _response
+                response = await litellm.acompletion(**input_kwargs)
 
                 ## CHECK CONTENT FILTER ERROR ##
                 if isinstance(response, ModelResponse):
@@ -4574,38 +4574,16 @@ class Router:
             )
 
             self.total_calls[model_name] += 1
-            response = litellm.aimage_generation(
-                **{
-                    **data,
-                    "prompt": prompt,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
-
-            ### CONCURRENCY-SAFE RPM CHECKS ###
-            rpm_semaphore: Final = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
-
-            if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
-                    await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment, parent_otel_span=parent_otel_span
-                    )
-                    response = await response
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, parent_otel_span=parent_otel_span
+            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+                response = await litellm.aimage_generation(
+                    **{
+                        **data,
+                        "prompt": prompt,
+                        "caching": self.cache_responses,
+                        "client": model_client,
+                        **kwargs,
+                    }
                 )
-                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.aimage_generation(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -4679,38 +4657,16 @@ class Router:
             )
 
             self.total_calls[model_name] += 1
-            response = litellm.atranscription(
-                **{
-                    **data,
-                    "file": file,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
-
-            ### CONCURRENCY-SAFE RPM CHECKS ###
-            rpm_semaphore: Final = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
-
-            if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
-                    await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment, parent_otel_span=parent_otel_span
-                    )
-                    response = await response
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, parent_otel_span=parent_otel_span
+            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+                response = await litellm.atranscription(
+                    **{
+                        **data,
+                        "file": file,
+                        "caching": self.cache_responses,
+                        "client": model_client,
+                        **kwargs,
+                    }
                 )
-                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.atranscription(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -4794,38 +4750,16 @@ class Router:
             )
 
             self.total_calls[model_name] += 1
-            response = litellm.aspeech(
-                **{
-                    **data,
-                    "input": input,
-                    "voice": data.get("voice") if voice is None else voice,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
-
-            ### CONCURRENCY-SAFE RPM CHECKS ###
-            rpm_semaphore: Final = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
-
-            if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
-                    await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment, parent_otel_span=parent_otel_span
-                    )
-                    response = await response
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, parent_otel_span=parent_otel_span
+            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+                response = await litellm.aspeech(
+                    **{
+                        **data,
+                        "input": input,
+                        "voice": data.get("voice") if voice is None else voice,
+                        "client": model_client,
+                        **kwargs,
+                    }
                 )
-                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.aspeech(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -4990,37 +4924,16 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            response = litellm.atext_completion(
-                **{
-                    **data,
-                    "prompt": prompt,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
-
-            rpm_semaphore: Final = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
-
-            if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
-                    await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment, parent_otel_span=parent_otel_span
-                    )
-                    response = await response
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, parent_otel_span=parent_otel_span
+            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+                response = await litellm.atext_completion(
+                    **{
+                        **data,
+                        "prompt": prompt,
+                        "caching": self.cache_responses,
+                        "client": model_client,
+                        **kwargs,
+                    }
                 )
-                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.atext_completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -5081,37 +4994,16 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            response = litellm.aadapter_completion(
-                **{
-                    **data,
-                    "adapter_id": adapter_id,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
-
-            rpm_semaphore: Final = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
-
-            if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
-                    await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment, parent_otel_span=parent_otel_span
-                    )
-                    response = await response
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, parent_otel_span=parent_otel_span
+            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+                response = await litellm.aadapter_completion(
+                    **{
+                        **data,
+                        "adapter_id": adapter_id,
+                        "caching": self.cache_responses,
+                        "client": model_client,
+                        **kwargs,
+                    }
                 )
-                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.aadapter_completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -5341,29 +5233,8 @@ class Router:
             if custom_llm_provider is not None:
                 response_kwargs["custom_llm_provider"] = custom_llm_provider
 
-            response = original_generic_function(**response_kwargs)
-
-            rpm_semaphore: Final = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
-
-            if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
-                    await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment, parent_otel_span=parent_otel_span
-                    )
-                    response = await response
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, parent_otel_span=parent_otel_span
-                )
-                response = await response
+            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+                response = await original_generic_function(**response_kwargs)
 
             if self._should_raise_anthropic_refusal_error(
                 model=model,
@@ -5971,38 +5842,16 @@ class Router:
             )
 
             self.total_calls[model_name] += 1
-            response = litellm.aembedding(
-                **{
-                    **data,
-                    "input": input,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
-
-            ### CONCURRENCY-SAFE RPM CHECKS ###
-            rpm_semaphore: Final = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
-
-            if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
-                    await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment, parent_otel_span=parent_otel_span
-                    )
-                    response = await response
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, parent_otel_span=parent_otel_span
+            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+                response = await litellm.aembedding(
+                    **{
+                        **data,
+                        "input": input,
+                        "caching": self.cache_responses,
+                        "client": model_client,
+                        **kwargs,
+                    }
                 )
-                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.aembedding(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -6111,37 +5960,18 @@ class Router:
                     "gcs_bucket_name" in data
                 ):  # TODO: Remove this once we have a better way to handle GCS bucket name:  Problem is that we need to pass the gcs_bucket_name to the router for the create_file call but it doesn't show up there
                     kwargs_copy.setdefault("litellm_metadata", {})["gcs_bucket_name"] = data["gcs_bucket_name"]
-                response = litellm.acreate_file(
-                    **{
-                        **data,
-                        "custom_llm_provider": custom_llm_provider,
-                        "caching": self.cache_responses,
-                        "client": model_client,
-                        **kwargs_copy,
-                    }
-                )
-
-                rpm_semaphore: Final = self._get_client(
-                    deployment=deployment,
-                    kwargs=kwargs_copy,
-                    client_type="max_parallel_requests",
-                )
-
-                if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                    async with rpm_semaphore:
-                        """
-                        - Check rpm limits before making the call
-                        - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                        """
-                        await self.async_routing_strategy_pre_call_checks(
-                            deployment=deployment, parent_otel_span=parent_otel_span
-                        )
-                        response = await response
-                else:
-                    await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment, parent_otel_span=parent_otel_span
+                async with self._deployment_slot(
+                    deployment=deployment, kwargs=kwargs_copy, parent_otel_span=parent_otel_span
+                ):
+                    response = await litellm.acreate_file(
+                        **{
+                            **data,
+                            "custom_llm_provider": custom_llm_provider,
+                            "caching": self.cache_responses,
+                            "client": model_client,
+                            **kwargs_copy,
+                        }
                     )
-                    response = await response
 
                 self.success_calls[model_name] += 1
                 verbose_router_logger.info("litellm.acreate_file(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -6231,33 +6061,16 @@ class Router:
             )
             custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
 
-            response = avector_store_create_sdk(
-                **{
-                    **data,
-                    "custom_llm_provider": custom_llm_provider,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
-
-            rpm_semaphore: Final = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
-
-            if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                async with rpm_semaphore:
-                    await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment, parent_otel_span=parent_otel_span
-                    )
-                    response = await response
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, parent_otel_span=parent_otel_span
+            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+                response = await avector_store_create_sdk(
+                    **{
+                        **data,
+                        "custom_llm_provider": custom_llm_provider,
+                        "caching": self.cache_responses,
+                        "client": model_client,
+                        **kwargs,
+                    }
                 )
-                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.avector_store_create(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -6343,37 +6156,16 @@ class Router:
             )
             custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
 
-            response = litellm.acreate_batch(
-                **{
-                    **data,
-                    "custom_llm_provider": custom_llm_provider,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
-
-            rpm_semaphore: Final = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
-
-            if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
-                    await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment, parent_otel_span=parent_otel_span
-                    )
-                    response = await response
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, parent_otel_span=parent_otel_span
+            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+                response = await litellm.acreate_batch(
+                    **{
+                        **data,
+                        "custom_llm_provider": custom_llm_provider,
+                        "caching": self.cache_responses,
+                        "client": model_client,
+                        **kwargs,
+                    }
                 )
-                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.acreate_batch(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -6564,37 +6356,16 @@ class Router:
             )
             custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
 
-            response = litellm.acancel_batch(
-                **{
-                    **data,
-                    "custom_llm_provider": custom_llm_provider,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
-
-            rpm_semaphore: Final = self._get_client(
-                deployment=deployment,
-                kwargs=kwargs,
-                client_type="max_parallel_requests",
-            )
-
-            if rpm_semaphore is not None and isinstance(rpm_semaphore, asyncio.Semaphore):
-                async with rpm_semaphore:
-                    """
-                    - Check rpm limits before making the call
-                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
-                    """
-                    await self.async_routing_strategy_pre_call_checks(
-                        deployment=deployment, parent_otel_span=parent_otel_span
-                    )
-                    response = await response
-            else:
-                await self.async_routing_strategy_pre_call_checks(
-                    deployment=deployment, parent_otel_span=parent_otel_span
+            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+                response = await litellm.acancel_batch(
+                    **{
+                        **data,
+                        "custom_llm_provider": custom_llm_provider,
+                        "caching": self.cache_responses,
+                        "client": model_client,
+                        **kwargs,
+                    }
                 )
-                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.acancel_batch(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -8728,6 +8499,23 @@ class Router:
                             )
                         )
                     raise e
+
+    @contextlib.asynccontextmanager
+    async def _deployment_slot(
+        self, deployment: dict, kwargs: Mapping[str, object], parent_otel_span: Span | None
+    ) -> AsyncGenerator[None, None]:
+        """Holds the deployment's max_parallel_requests slot, if it has one, around the provider call. Routing
+        strategy pre-call checks run inside the slot so their rpm accounting stays concurrency-safe."""
+        rpm_semaphore: Final = self._get_client(
+            deployment=deployment,
+            kwargs=kwargs,
+            client_type="max_parallel_requests",
+        )
+        async with contextlib.AsyncExitStack() as slot:
+            if isinstance(rpm_semaphore, asyncio.Semaphore):
+                await slot.enter_async_context(rpm_semaphore)
+            await self.async_routing_strategy_pre_call_checks(deployment=deployment, parent_otel_span=parent_otel_span)
+            yield
 
     async def async_callback_filter_deployments(
         self,
@@ -12055,7 +11843,19 @@ class Router:
                 _settings_to_return[var] = self.lowestlatency_logger.routing_args.json()
 
         _settings_to_return["routing_groups"] = [group.model_dump() for group in self._routing_groups.values()]
+        _settings_to_return["default_max_parallel_requests_queue_size"] = self.default_max_parallel_requests_queue_size
         return _settings_to_return
+
+    @property
+    def default_max_parallel_requests_queue_size(self) -> int | None:
+        return self._default_max_parallel_requests_queue_size
+
+    @default_max_parallel_requests_queue_size.setter
+    def default_max_parallel_requests_queue_size(self, queue_size: int | None) -> None:
+        self._default_max_parallel_requests_queue_size = None if queue_size is None else int(queue_size)
+        InitalizeCachedClient.apply_default_max_parallel_requests_queue_size(
+            litellm_router_instance=self, queue_size=self._default_max_parallel_requests_queue_size
+        )
 
     def update_settings(self, **kwargs):
         """

@@ -245,6 +245,17 @@ ROUTER_SETTINGS_FIELDS: Final[list[RouterSettingsField]] = [
         ui_field_name="Max Parallel Requests",
     ),
     RouterSettingsField(
+        field_name="default_max_parallel_requests_queue_size",
+        field_type="Integer",
+        field_value=None,
+        field_description=(
+            "Default cap on how many requests may wait for a deployment's max_parallel_requests slot before "
+            "further requests get a 429. Unset queues without a bound"
+        ),
+        field_default=None,
+        ui_field_name="Max Parallel Requests Queue Size",
+    ),
+    RouterSettingsField(
         field_name="enable_tag_filtering",
         field_type="Boolean",
         field_value=None,

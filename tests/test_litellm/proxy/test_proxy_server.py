@@ -5052,6 +5052,39 @@ async def test_add_router_settings_from_db_config_empty_db_list_still_clears_unc
 
 
 @pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_null_queue_size_reaches_router():
+    """A cleared Admin UI field is stored as null. The reload must hand that None to the
+    router so a config.yaml bound is lifted, while an unrelated null still falls back to
+    the config value."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    config_data = {"router_settings": {"default_max_parallel_requests_queue_size": 2, "num_retries": 1}}
+
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {"default_max_parallel_requests_queue_size": None, "num_retries": None}
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data=config_data,
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    combined_settings = mock_router.update_settings.call_args.kwargs
+    assert "default_max_parallel_requests_queue_size" in combined_settings
+    assert combined_settings["default_max_parallel_requests_queue_size"] is None
+    assert combined_settings["num_retries"] == 1
+
+
+@pytest.mark.asyncio
 async def test_add_router_settings_from_db_config_edge_cases():
     """
     Test edge cases for _add_router_settings_from_db_config method.
@@ -9330,6 +9363,32 @@ def test_update_config_litellm_settings_request_wins_for_non_callback_keys(
         stored = prisma.db.litellm_config.rows["litellm_settings"]
         assert stored["drop_params"] is False
         assert stored["set_verbose"] is True
+    finally:
+        restore()
+
+
+def test_update_config_router_settings_null_clears_max_parallel_requests_queue_size(
+    _update_config_setup,
+):
+    """Clearing the Admin UI field sends null. The stored row must hold null so the
+    reload hands None to the router and queueing becomes unbounded again, while an
+    unrelated null is still dropped rather than persisted."""
+    client, prisma, restore = _update_config_setup(
+        initial_rows={
+            "router_settings": {"default_max_parallel_requests_queue_size": 3, "num_retries": 2},
+        }
+    )
+    try:
+        resp = client.post(
+            "/config/update",
+            json={"router_settings": {"default_max_parallel_requests_queue_size": None, "timeout": None}},
+        )
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["router_settings"]
+        assert "default_max_parallel_requests_queue_size" in stored
+        assert stored["default_max_parallel_requests_queue_size"] is None
+        assert stored["num_retries"] == 2
+        assert "timeout" not in stored
     finally:
         restore()
 
