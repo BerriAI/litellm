@@ -776,6 +776,7 @@ from litellm.types.router import (
     RoutingPlugin,
     SearchToolTypedDict,
     updateDeployment,
+    validate_max_parallel_requests_queue_size,
 )
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.scheduler import DefaultPriorities
@@ -16936,6 +16937,17 @@ async def update_config(
                         )
                     },
                 )
+            raw_queue_size: Final = raw_router_settings.get("default_max_parallel_requests_queue_size")
+            try:
+                validate_max_parallel_requests_queue_size(raw_queue_size)
+            except ValueError as invalid_queue_size:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"default_max_parallel_requests_queue_size={raw_queue_size!r} is not valid, "
+                        "it must be a non-negative integer or null"
+                    ),
+                ) from invalid_queue_size
 
         if prisma_client is None:
             raise Exception("No DB Connected")

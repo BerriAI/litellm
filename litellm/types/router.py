@@ -6,10 +6,10 @@ import datetime
 import enum
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
@@ -314,6 +314,14 @@ class CredentialLiteLLMParams(BaseModel):
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
 
+MaxParallelRequestsQueueSize = Annotated[int, Field(strict=True, ge=0)]
+_MAX_PARALLEL_REQUESTS_QUEUE_SIZE_ADAPTER: Final = TypeAdapter(MaxParallelRequestsQueueSize | None)
+
+
+def validate_max_parallel_requests_queue_size(value: object) -> int | None:
+    return _MAX_PARALLEL_REQUESTS_QUEUE_SIZE_ADAPTER.validate_python(value)
+
+
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
@@ -324,6 +332,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     rpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
+    max_parallel_requests_queue_size: MaxParallelRequestsQueueSize | None = None
     timeout: float | str | httpx.Timeout | None = None  # if str, pass in as os.environ/
     stream_timeout: float | str | None = None  # timeout when making stream=True calls, if str, pass in as os.environ/
     max_retries: int | None = None
@@ -497,7 +506,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     order: int | None
     weight: int | None
     max_parallel_requests: int | None
-    max_parallel_requests_queue_size: ReadOnly[int | None]
+    max_parallel_requests_queue_size: ReadOnly[MaxParallelRequestsQueueSize | None]
     api_key: str | None
     api_base: str | None
     api_version: str | None

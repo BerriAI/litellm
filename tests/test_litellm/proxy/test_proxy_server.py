@@ -9393,6 +9393,25 @@ def test_update_config_router_settings_null_clears_max_parallel_requests_queue_s
         restore()
 
 
+@pytest.mark.parametrize("invalid_queue_size", [-1, 2.5, "3"])
+def test_update_config_rejects_invalid_max_parallel_requests_queue_size_before_persisting(
+    _update_config_setup, invalid_queue_size
+):
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"router_settings": {"default_max_parallel_requests_queue_size": 3}},
+    )
+    try:
+        resp = client.post(
+            "/config/update",
+            json={"router_settings": {"default_max_parallel_requests_queue_size": invalid_queue_size}},
+        )
+        assert resp.status_code == 400
+        assert "default_max_parallel_requests_queue_size" in resp.json()["error"]["message"]
+        assert prisma.db.litellm_config.rows["router_settings"] == {"default_max_parallel_requests_queue_size": 3}
+    finally:
+        restore()
+
+
 def test_update_config_success_callback_normalizes_existing_mixed_case(
     _update_config_setup,
 ):

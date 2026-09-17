@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_router_logger
 from litellm.exceptions import RateLimitError, RateLimitErrorCategory, RateLimitType
-from litellm.types.router import RouterErrors
+from litellm.types.router import RouterErrors, validate_max_parallel_requests_queue_size
 from litellm.utils import calculate_max_parallel_requests
 
 if TYPE_CHECKING:
@@ -26,7 +26,7 @@ class DeploymentSemaphore:
         self.max_parallel_requests: Final = max_parallel_requests
         self.model_id: Final = model_id
         self.model_group: Final = model_group
-        self.queue_size = queue_size
+        self.queue_size = validate_max_parallel_requests_queue_size(queue_size)
         self.waiting = 0
 
     def locked(self) -> bool:

@@ -263,6 +263,7 @@ from litellm.types.router import (
     RoutingStrategy,
     SearchToolTypedDict,
     TaggedPreRoutingStrategy,
+    validate_max_parallel_requests_queue_size,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -936,7 +937,9 @@ class Router:
             None  # use this to track the users default deployment, when they want to use model = *
         )
         self.default_max_parallel_requests = default_max_parallel_requests
-        self._default_max_parallel_requests_queue_size = default_max_parallel_requests_queue_size
+        self._default_max_parallel_requests_queue_size = validate_max_parallel_requests_queue_size(
+            default_max_parallel_requests_queue_size
+        )
         self.provider_default_deployment_ids: list[str] = []
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
@@ -11852,7 +11855,7 @@ class Router:
 
     @default_max_parallel_requests_queue_size.setter
     def default_max_parallel_requests_queue_size(self, queue_size: int | None) -> None:
-        self._default_max_parallel_requests_queue_size = None if queue_size is None else int(queue_size)
+        self._default_max_parallel_requests_queue_size = validate_max_parallel_requests_queue_size(queue_size)
         InitalizeCachedClient.apply_default_max_parallel_requests_queue_size(
             litellm_router_instance=self, queue_size=self._default_max_parallel_requests_queue_size
         )
