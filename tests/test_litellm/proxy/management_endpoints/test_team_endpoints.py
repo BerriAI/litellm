@@ -8462,6 +8462,9 @@ def test_transform_teams_to_deleted_records():
     assert "litellm_model_table" not in record1
     assert "object_permission" not in record1
     assert "id" not in record1
+    # LiteLLM_DeletedTeamTable has no rollover_max_budget column; the prisma
+    # create_many payload must not carry it
+    assert all("rollover_max_budget" not in record for record in records)
 
     record2 = records[1]
     assert record2["team_id"] == "team-2"

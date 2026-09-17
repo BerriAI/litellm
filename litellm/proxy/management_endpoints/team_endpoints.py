@@ -4507,6 +4507,7 @@ def _transform_teams_to_deleted_records(
             "object_permission",
             "id",
             "budget_limits",  # not in LiteLLM_DeletedTeamTable schema
+            "rollover_max_budget",  # not in LiteLLM_DeletedTeamTable schema
             "default_team_member_models",  # not in LiteLLM_DeletedTeamTable schema
         ):
             record.pop(rel_key, None)
