@@ -119,7 +119,15 @@ def _parse_setup(session_configuration_request: str) -> BidiGenerateContentSetup
 # 175 text tokens/min of output (ai.google.dev/gemini-api/docs/pricing).
 GEMINI_LIVE_TRANSCRIBE_AUDIO_TOKENS_PER_SECOND: Final = 25
 GEMINI_LIVE_TRANSCRIBE_OUTPUT_TEXT_TOKENS_PER_MINUTE: Final = 175
-PCM16_INPUT_AUDIO_BYTES_PER_SECOND: Final = 48000
+
+# The MIME rate controls server resampling and must describe the input bytes.
+GEMINI_LIVE_INPUT_AUDIO_SAMPLE_RATE_HZ: Final = 16000
+PCM16_BYTES_PER_SAMPLE: Final = 2
+# Bound client-controlled rates because they affect the duration billed.
+MIN_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ: Final = 8000
+MAX_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ: Final = 48000
+# The beta pcm16 codec implies 24kHz, matching the beta-to-GA conversion.
+BETA_PCM16_INPUT_AUDIO_SAMPLE_RATE_HZ: Final = 24000
 
 
 def _base64_decoded_byte_count(data: str) -> int:
@@ -136,7 +144,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # Gemini Live sometimes emits usageMetadata in a standalone frame between
         # turns; buffer it here so the next response.done carries the token counts.
         self._pending_usage_metadata: dict | None = None
-        self._unbilled_input_audio_bytes: int = 0
+        # Store per-chunk duration so later rate changes cannot reprice earlier audio.
+        self._unbilled_input_audio_seconds: float = 0.0
+        self._input_audio_sample_rate_hz: int = GEMINI_LIVE_INPUT_AUDIO_SAMPLE_RATE_HZ
 
     def is_setup_message(self, msg_obj: dict) -> bool:
         return "setup" in msg_obj
@@ -230,7 +240,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     def get_audio_mime_type(self, input_audio_format: str = "pcm16"):
         mime_types: Final = {
-            "pcm16": "audio/pcm;rate=24000",
+            "pcm16": f"audio/pcm;rate={self._input_audio_sample_rate_hz}",
             "g711_ulaw": "audio/pcmu",
             "g711_alaw": "audio/pcma",
         }
@@ -450,6 +460,45 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
         return setup
 
+    @staticmethod
+    def _declared_rate_from_ga_shape(session_payload: Mapping[str, object]) -> object:
+        audio = session_payload.get("audio")
+        if not isinstance(audio, dict):
+            return None
+        audio_input = audio.get("input")
+        if not isinstance(audio_input, dict):
+            return None
+        audio_format = audio_input.get("format")
+        if not isinstance(audio_format, dict):
+            return None
+        return audio_format.get("rate")
+
+    @staticmethod
+    def _declared_rate_from_beta_shape(session_payload: Mapping[str, object]) -> object:
+        """Only pcm16 implies a rate here because append frames are sent as pcm16."""
+        if session_payload.get("input_audio_format") == "pcm16":
+            return BETA_PCM16_INPUT_AUDIO_SAMPLE_RATE_HZ
+        return None
+
+    def _record_input_audio_sample_rate(self, session_payload: Mapping[str, object]) -> None:
+        """Read both shapes so the OpenAI-Beta header cannot change the audio's declared rate."""
+        rate = self._declared_rate_from_ga_shape(session_payload)
+        if rate is None:
+            rate = self._declared_rate_from_beta_shape(session_payload)
+        if isinstance(rate, bool) or not isinstance(rate, int):
+            return
+        if not (MIN_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ <= rate <= MAX_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ):
+            verbose_logger.warning(
+                "Gemini Realtime: ignoring declared input audio rate %s, outside the accepted "
+                "%s-%s Hz range; keeping %s Hz",
+                rate,
+                MIN_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ,
+                MAX_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ,
+                self._input_audio_sample_rate_hz,
+            )
+            return
+        self._input_audio_sample_rate_hz = rate
+
     def _handle_session_update(
         self,
         json_message: _OpenAIRealtimeClientEvent,
@@ -475,6 +524,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # explicit modality / transcription / turn-detection settings
         # would be silently dropped because ``map_openai_params`` only
         # recognises the flat OpenAI-beta key names.
+        self._record_input_audio_sample_rate(session_payload)
         session_payload = self._normalize_session_payload_for_mapping(session_payload)
         new_overrides: Final = self.map_openai_params(optional_params={}, non_default_params=session_payload)
 
@@ -605,7 +655,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if msg_type == "input_audio_buffer.append":
             audio_b64: Final = json_message["audio"]
             if isinstance(audio_b64, str):
-                self._unbilled_input_audio_bytes += _base64_decoded_byte_count(audio_b64)
+                self._unbilled_input_audio_seconds += _base64_decoded_byte_count(audio_b64) / (
+                    self._input_audio_sample_rate_hz * PCM16_BYTES_PER_SAMPLE
+                )
             realtime_input_dict["audio"] = HttpxBlobType(mimeType=self.get_audio_mime_type(), data=audio_b64)
 
             realtime_input_dict = cast(
@@ -1195,10 +1247,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     def _consume_input_transcription_usage_estimate(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         """Gemini Live sends no usageMetadata for transcribe sessions; estimate billing from streamed audio duration."""
-        if self._unbilled_input_audio_bytes <= 0 or not self._is_text_only_live_model(model):
+        if self._unbilled_input_audio_seconds <= 0 or not self._is_text_only_live_model(model):
             return None
-        audio_seconds: Final = self._unbilled_input_audio_bytes / PCM16_INPUT_AUDIO_BYTES_PER_SECOND
-        self._unbilled_input_audio_bytes = 0
+        audio_seconds: Final = self._unbilled_input_audio_seconds
+        self._unbilled_input_audio_seconds = 0.0
         audio_tokens: Final = round(audio_seconds * GEMINI_LIVE_TRANSCRIBE_AUDIO_TOKENS_PER_SECOND)
         output_tokens: Final = round(audio_seconds * GEMINI_LIVE_TRANSCRIBE_OUTPUT_TEXT_TOKENS_PER_MINUTE / 60)
         usage: Final[RealtimeInputAudioTranscriptionUsage] = {
