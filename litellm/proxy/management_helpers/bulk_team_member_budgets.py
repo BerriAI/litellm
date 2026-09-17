@@ -122,7 +122,7 @@ def _audited_member_budget(row: "prisma_models.LiteLLM_TeamMembership") -> _Audi
         rpm_limit=budget.rpm_limit,
         budget_duration=budget.budget_duration,
         budget_reset_at=budget.budget_reset_at,
-        allowed_models=tuple(budget.allowed_models) if budget.allowed_models is not None else None,
+        allowed_models=tuple(budget.allowed_models),
     )
 
 
