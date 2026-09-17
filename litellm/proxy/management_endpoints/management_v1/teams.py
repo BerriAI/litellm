@@ -2,7 +2,7 @@
 
 from typing import Annotated, Final
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
@@ -108,6 +108,12 @@ async def bulk_update_team_member_budgets_action(
     team_id: str,
     data: BulkTeamMemberBudgetUpdateRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    litellm_changed_by: Annotated[
+        str | None,
+        Header(
+            description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+        ),
+    ] = None,
 ) -> BulkTeamMemberBudgetUpdateResponse:
     """
     Set per-member limits for up to 500 members of one team in one call. Same
@@ -135,7 +141,7 @@ async def bulk_update_team_member_budgets_action(
     ```
     """
     try:
-        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+        from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client, user_api_key_cache
 
         if prisma_client is None:
             raise ManagementProblem(
@@ -153,6 +159,8 @@ async def bulk_update_team_member_budgets_action(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+            litellm_changed_by=litellm_changed_by,
         )
         return BulkTeamMemberBudgetUpdateResponse(data=results)
 

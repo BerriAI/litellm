@@ -4,10 +4,10 @@ use crate::http_utils::{has_header, string_headers};
 use crate::litellm_core_utils::get_llm_provider_logic::{
     CustomLlmProvider, get_custom_llm_provider,
 };
-use crate::llms::base_llm::audio_transcription::transformation::{
+use litellm_providers::base_llm::audio_transcription::transformation::{
     AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
 };
-use crate::llms::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
+use litellm_providers::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
 
 fn provider_config(provider: &str) -> Option<&'static dyn BaseAudioTranscriptionConfig> {
     if provider == "bedrock" {

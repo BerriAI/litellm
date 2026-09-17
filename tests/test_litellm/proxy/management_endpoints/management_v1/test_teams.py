@@ -7,6 +7,7 @@ table and the membership/budget relation the bulk budget writer needs.
 """
 
 import copy
+import json
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -244,6 +245,7 @@ def _budget(
     tpm_limit: int | None = None,
     rpm_limit: int | None = None,
     budget_duration: str | None = None,
+    budget_reset_at: datetime | None = None,
 ) -> _BudgetRow:
     return _BudgetRow(
         budget_id=budget_id,
@@ -251,6 +253,7 @@ def _budget(
         tpm_limit=tpm_limit,
         rpm_limit=rpm_limit,
         budget_duration=budget_duration,
+        budget_reset_at=budget_reset_at,
     )
 
 
@@ -267,6 +270,7 @@ async def _bulk_update(
         user_api_key_dict=caller,
         prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
         user_api_key_cache=cache or UserApiKeyCache(),
+        litellm_proxy_admin_name="default_user_id",
     )
 
 
@@ -629,6 +633,95 @@ async def test_the_roster_authz_read_runs_on_the_writer_so_a_lagging_replica_can
 
     assert raised.value.problem.status == 403
     assert writer.db.litellm_budgettable.rows["priv-m1"].max_budget == 1.0
+
+
+@pytest.mark.asyncio
+async def test_the_batch_writes_one_audit_entry_carrying_every_written_members_limits_before_and_after(monkeypatch):
+    import litellm
+    from litellm.proxy._types import LitellmTableNames
+
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    captured: list[object] = []
+
+    async def capture(request_data):
+        captured.append(request_data)
+
+    monkeypatch.setattr("litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update", capture)
+    prisma = _FakePrisma(
+        teams=[_team("m1", "m2")],
+        memberships=[_membership("m1", "priv-m1"), _membership("m2", "priv-m2")],
+        budgets=[_budget("priv-m1", max_budget=1.0), _budget("priv-m2", max_budget=2.0)],
+    )
+
+    await _bulk_update(prisma, [{"user_id": "m1", "max_budget_in_team": 10}])
+
+    assert len(captured) == 1
+    entry = captured[0]
+    assert (entry.object_id, entry.action, entry.table_name) == (
+        TEAM_ID,
+        "updated",
+        LitellmTableNames.TEAM_TABLE_NAME,
+    )
+    before = {row["user_id"]: row for row in json.loads(entry.before_value)["team_member_budgets"]}
+    after = {row["user_id"]: row for row in json.loads(entry.updated_values)["team_member_budgets"]}
+    assert (before["m1"]["max_budget"], after["m1"]["max_budget"]) == (1.0, 10.0)
+    assert "m2" not in before and "m2" not in after
+
+
+@pytest.mark.asyncio
+async def test_no_audit_entry_is_written_when_audit_logging_is_off(monkeypatch):
+    import litellm
+
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    captured: list[object] = []
+
+    async def capture(request_data):
+        captured.append(request_data)
+
+    monkeypatch.setattr("litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update", capture)
+    prisma = _FakePrisma(
+        teams=[_team("m1")],
+        memberships=[_membership("m1", "priv-m1")],
+        budgets=[_budget("priv-m1", max_budget=1.0)],
+    )
+
+    await _bulk_update(prisma, [{"user_id": "m1", "max_budget_in_team": 10}])
+
+    assert captured == []
+    assert _budget_of(prisma, "m1").max_budget == 10.0
+
+
+@pytest.mark.asyncio
+async def test_forking_a_shared_row_keeps_its_reset_window_so_an_unrelated_limit_edit_grants_no_free_period():
+    shared_reset_at = datetime.now(timezone.utc) + timedelta(days=3)
+    prisma = _FakePrisma(
+        teams=[_team("m1", "m2")],
+        memberships=[_membership("m1", "shared-b"), _membership("m2", "shared-b")],
+        budgets=[_budget("shared-b", max_budget=100.0, budget_duration="30d", budget_reset_at=shared_reset_at)],
+    )
+
+    results = await _bulk_update(prisma, [{"user_id": "m1", "tpm_limit": 9}])
+
+    assert [(r.success, r.budget_duration) for r in results] == [(True, "30d")]
+    assert _budget_id_of(prisma, "m1") not in (None, "shared-b")
+    assert _budget_of(prisma, "m1").budget_reset_at == shared_reset_at
+    assert prisma.db.litellm_budgettable.rows["shared-b"].budget_reset_at == shared_reset_at
+
+
+@pytest.mark.asyncio
+async def test_forking_a_shared_row_does_restart_the_window_when_the_patch_sets_a_new_duration():
+    shared_reset_at = datetime.now(timezone.utc) + timedelta(days=3)
+    prisma = _FakePrisma(
+        teams=[_team("m1", "m2")],
+        memberships=[_membership("m1", "shared-b"), _membership("m2", "shared-b")],
+        budgets=[_budget("shared-b", max_budget=100.0, budget_duration="30d", budget_reset_at=shared_reset_at)],
+    )
+
+    await _bulk_update(prisma, [{"user_id": "m1", "budget_duration": "1d"}])
+
+    forked = _budget_of(prisma, "m1").budget_reset_at
+    assert forked is not None and forked != shared_reset_at
+    assert forked <= datetime.now(timezone.utc) + timedelta(days=1)
 
 
 app = FastAPI()
