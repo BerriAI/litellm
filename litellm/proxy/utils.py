@@ -468,9 +468,6 @@ def _record_raising_guardrail(request_data: Mapping[str, object], callback: obje
 
 
 class _UpstreamStreamBoundary(Generic[_T]):
-    """Remembers the exception the upstream iterator raised, so the wrapper around a
-    streaming hook can tell a pass-through failure from one the hook raised itself."""
-
     __slots__ = ("_upstream", "failure")
 
     def __init__(self, upstream: AsyncIterable[_T]) -> None:
@@ -2548,14 +2545,6 @@ class ProxyLogging:
         hook: _StreamIteratorHook[_T],
         request_data: Mapping[str, object],
     ) -> AsyncGenerator[_T, None]:
-        """
-        Run `hook` over `response` and yield its chunks. If the hook itself raises,
-        enrich an HTTPException's dict detail with the callback's `guardrail_name`
-        and `guardrail_mode` and record the callback in `applied_guardrails` before
-        re-raising. Failures raised by `response` (the provider stream or an inner
-        layer of the async_post_call_streaming_iterator_hook chain) pass through
-        untouched, so only the layer that actually raised is attributed.
-        """
         upstream: Final = _UpstreamStreamBoundary(response)
         try:
             async for chunk in hook(response=upstream):
