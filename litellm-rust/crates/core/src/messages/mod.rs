@@ -7,7 +7,8 @@
 //! is the streaming variant; it hands the raw upstream response back so a host
 //! can splice the event stream to its own caller.
 
-use crate::Error;
+mod error;
+pub use error::Error;
 mod client;
 mod common_utils;
 mod handler;
@@ -18,7 +19,6 @@ pub mod types;
 use handler::{execute_messages_provider_call, execute_messages_provider_stream};
 use types::{AnthropicMessagesResponse, MessagesRequest};
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
     execute_messages_provider_call(request).await
 }

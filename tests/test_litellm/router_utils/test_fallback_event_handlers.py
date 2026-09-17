@@ -27,6 +27,7 @@ class StreamingWrapper:
 
 class FakeRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def log_retry(self, kwargs, e):
         return kwargs
@@ -37,6 +38,7 @@ class FakeRouter:
 
 class AlwaysFailRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def log_retry(self, kwargs, e):
         return kwargs
@@ -101,6 +103,7 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
 
 class RecordingRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def __init__(self):
         self.received_kwargs = None
@@ -162,6 +165,7 @@ async def test_run_async_fallback_skips_original_model_group():
 
 class AttemptRecordingRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def __init__(self):
         self.attempted_model_groups = []
@@ -471,6 +475,8 @@ class AccessCheckedRouter(AttemptRecordingRouter):
         self.allowed_models = allowed_models
         self.access_checks = []
 
+    fallback_budget_check = None
+
     async def fallback_access_check(self, *, model, request_kwargs, llm_router):
         self.access_checks.append((model, request_kwargs["metadata"]["user_api_key"], llm_router is self))
         return model in self.allowed_models
@@ -542,6 +548,7 @@ async def test_run_async_fallback_does_not_consult_access_check_for_same_model_g
 
 class RecordingFailRouter:
     fallback_access_check = None
+    fallback_budget_check = None
 
     def __init__(self):
         self.attempted_models = []
@@ -1053,6 +1060,7 @@ class TestTriggerCooldownForFailedDeployment:
 class TestRunAsyncFallbackTriggersCooldown:
     class RouterWithLoggingKwarg:
         fallback_access_check = None
+        fallback_budget_check = None
 
         def __init__(self):
             self.cooldown_time = 60.0

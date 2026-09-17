@@ -45,6 +45,7 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _get_bearer_token,
+    is_no_auth_dev_mode,
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
@@ -709,8 +710,7 @@ async def anthropic_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
-        custom_headers=auth_header if auth_header is not None else {},
-        _forward_headers=True,
+        custom_headers=_upstream_headers_for_anthropic_route(request, user_api_key_dict, auth_header),
         is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value: Final = await endpoint_func(
@@ -1180,9 +1180,8 @@ async def bedrock_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(prepped.url),
-        custom_headers=prepped.headers,
+        custom_headers=_upstream_headers_for_bedrock_agent_runtime_route(request, user_api_key_dict, prepped.headers),
         is_streaming_request=is_streaming_request,
-        _forward_headers=True,
     )  # dynamically construct pass-through endpoint based on incoming path
     setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, data)
     # SigV4 signs an exact payload; pass-through must send prepped.body, not json.dumps
@@ -1989,6 +1988,22 @@ _HEADERS_NEVER_FORWARDED_TO_VERTEX: Final = frozenset({"content-length", "host"}
     SpecialHeaders.litellm_credential_header_names() - _VERTEX_UPSTREAM_CREDENTIAL_HEADERS
 )
 
+_CREDENTIALLESS_ANTHROPIC_MISSING_CREDENTIAL_DETAIL: Final = (
+    "No Anthropic credential is configured on this proxy and the request carried no upstream "
+    "Anthropic credential. The LiteLLM virtual key is not forwarded to Anthropic. Configure an "
+    "Anthropic credential (ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN, or a model with "
+    "use_in_pass_through: true), or send your own Anthropic API key in the x-api-key header or "
+    "your own Anthropic OAuth token in the Authorization header."
+)
+
+_ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset({"authorization", "x-api-key"})
+_HEADERS_NEVER_FORWARDED_TO_ANTHROPIC: Final = frozenset({"content-length", "host", "accept-encoding"}) | (
+    SpecialHeaders.litellm_credential_header_names() - _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS
+)
+_HEADERS_NEVER_FORWARDED_TO_BEDROCK: Final = (
+    frozenset({"content-length", "host", "accept-encoding"}) | SpecialHeaders.litellm_credential_header_names()
+)
+
 
 _MAPPED_ROUTE_CALLER_KEY_HEADER: Final = "litellm_user_api_key"
 
@@ -2026,8 +2041,11 @@ def _is_authenticated_caller_jwt(value: str, jwt_claims: Mapping[str, object]) -
 
 
 def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
-    """Whether a header value is the master key, the JWT that authenticated, or the key stored as ``api_key``."""
-    from litellm.proxy.proxy_server import master_key
+    """Whether a header value is the master key, the JWT that authenticated, or the key stored as ``api_key``.
+
+    A proxy in no-auth dev mode without custom auth authenticated nothing, so none of the caller's values is one.
+    """
+    from litellm.proxy.proxy_server import general_settings, master_key, user_custom_auth
 
     normalized: Final = _normalize_credential_value(value)
     if master_key is not None and hmac.compare_digest(normalized.encode(), master_key.encode()):
@@ -2035,33 +2053,63 @@ def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAut
     jwt_claims: Final = user_api_key_dict.jwt_claims
     if jwt_claims and _is_authenticated_caller_jwt(normalized, jwt_claims):
         return True
+    if is_no_auth_dev_mode(master_key, general_settings) and user_custom_auth is None:
+        return False
     authenticated_key: Final = user_api_key_dict.api_key
     if authenticated_key is None:
         return False
-    if master_key is None and not normalized.startswith("sk-"):
-        return False
     stored_representation: Final = UserAPIKeyAuth._safe_hash_litellm_api_key(normalized)  # pyright: ignore[reportPrivateUsage]  # the exact transform auth applied when it stored api_key
     return hmac.compare_digest(stored_representation.encode(), authenticated_key.encode())
+
+
+def _caller_headers_without_litellm_secrets(
+    request: Request, user_api_key_dict: UserAPIKeyAuth, never_forwarded: frozenset[str]
+) -> Mapping[str, str]:
+    incoming: Final = _safe_get_request_headers(request)
+    dropped_by_name: Final = never_forwarded.union(
+        (_MAPPED_ROUTE_CALLER_KEY_HEADER, *_operator_configured_caller_key_header_names())
+    )
+    return MappingProxyType(
+        {
+            name: value
+            for name, value in incoming.items()
+            if name not in dropped_by_name and not _is_authenticated_caller_secret(value, user_api_key_dict)
+        }
+    )
 
 
 def _forwarded_headers_for_credentialless_vertex_passthrough(
     request: Request, user_api_key_dict: UserAPIKeyAuth
 ) -> Mapping[str, str]:
     """Caller headers to forward on the bring-your-own-credentials Vertex branch, minus LiteLLM secrets."""
-    incoming: Final = _safe_get_request_headers(request)
-    never_forwarded: Final = _HEADERS_NEVER_FORWARDED_TO_VERTEX.union(
-        (_MAPPED_ROUTE_CALLER_KEY_HEADER, *_operator_configured_caller_key_header_names())
+    forwarded: Final = _caller_headers_without_litellm_secrets(
+        request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_VERTEX
     )
-    forwarded: Final = MappingProxyType(
-        {
-            name: value
-            for name, value in incoming.items()
-            if name not in never_forwarded and not _is_authenticated_caller_secret(value, user_api_key_dict)
-        }
-    )
-    if "authorization" not in forwarded and "x-goog-api-key" not in forwarded:
+    if _VERTEX_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(forwarded):
         raise HTTPException(status_code=401, detail=_CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL)
     return forwarded
+
+
+def _upstream_headers_for_anthropic_route(
+    request: Request, user_api_key_dict: UserAPIKeyAuth, proxy_auth_header: Mapping[str, str] | None
+) -> Mapping[str, str]:
+    caller_headers: Final = _caller_headers_without_litellm_secrets(
+        request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_ANTHROPIC
+    )
+    if proxy_auth_header is None and _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(caller_headers):
+        raise HTTPException(status_code=401, detail=_CREDENTIALLESS_ANTHROPIC_MISSING_CREDENTIAL_DETAIL)
+    return MappingProxyType({**caller_headers, **(proxy_auth_header or {})})
+
+
+def _upstream_headers_for_bedrock_agent_runtime_route(
+    request: Request, user_api_key_dict: UserAPIKeyAuth, signed_headers: Mapping[str, object]
+) -> Mapping[str, object]:
+    caller_headers: Final = _caller_headers_without_litellm_secrets(
+        request,
+        user_api_key_dict,
+        _HEADERS_NEVER_FORWARDED_TO_BEDROCK | frozenset(name.lower() for name in signed_headers),
+    )
+    return MappingProxyType({**caller_headers, **signed_headers})
 
 
 async def _prepare_vertex_auth_headers(

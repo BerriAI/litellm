@@ -48,9 +48,24 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useFieldArray } from "react-hook-form";
 import { z } from "zod/v4";
 import GuardrailsSelect from "./GuardrailsSelect";
+import {
+  type CallerEditAccess,
+  parseTeamEditAccess,
+  TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION,
+  TEAM_ADMIN_EDITING_DISABLED_TITLE,
+  type TeamAdminSettingsChanges,
+} from "./teamAdminEditAccess";
+import TeamAdminSettingsForm from "./TeamAdminSettingsForm";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
+import {
+  ModelBudgetUsage,
+  ModelMaxBudget,
+  ModelMaxBudgetField,
+  modelMaxBudgetToEntries,
+} from "../key_team_helpers/ModelMaxBudgetEditor";
+import { modelMaxBudgetUpdate, StoredModelMaxBudget } from "../key_team_helpers/modelMaxBudgetPayload";
 import {
   computeTeamModelBadges,
   normalizeTeamModelSelection,
@@ -268,6 +283,8 @@ export interface TeamData {
     max_budget: number | null;
     soft_budget?: number | null;
     budget_duration: string | null;
+    model_max_budget?: StoredModelMaxBudget | null;
+    model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
     models: string[];
     blocked: boolean;
     spend: number;
@@ -288,6 +305,7 @@ export interface TeamData {
     guardrails?: string[];
     policies?: string[];
     object_permission?: ObjectPermission | null;
+    caller_edit_access?: CallerEditAccess;
     team_member_budget_table: {
       max_budget: number;
       budget_duration: string | null;
@@ -306,7 +324,6 @@ export interface TeamInfoProps {
   accessToken: string | null;
   is_team_admin: boolean;
   is_proxy_admin: boolean;
-  is_org_admin?: boolean;
   userModels: string[];
   editTeam: boolean;
   premiumUser?: boolean;
@@ -522,7 +539,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   accessToken,
   is_team_admin,
   is_proxy_admin,
-  is_org_admin = false,
   userModels,
   editTeam,
   premiumUser = false,
@@ -563,9 +579,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
+  const [teamModelMaxBudget, setTeamModelMaxBudget] = useState<ModelMaxBudget>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
-  const { userRole, userId } = useAuthorized();
+  const { userRole } = useAuthorized();
   const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
   const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
   const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
@@ -574,14 +591,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const { data: userOrganizations = [] } = useOrganizations();
   const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
-
-  // Check if user is org admin for this team's organization
-  const isOrgAdminForTeam = useMemo(() => {
-    const teamOrgId = teamData?.team_info?.organization_id;
-    if (!teamOrgId || !userId) return false;
-    const org = userOrganizations.find((o) => o.organization_id === teamOrgId);
-    return org?.members?.some((m: any) => m.user_id === userId && m.user_role === "org_admin") ?? false;
-  }, [teamData, userOrganizations, userId]);
 
   // Models currently selected in the team edit form, used to scope the per-model
   // rate limit dropdown to models this team actually has access to.
@@ -606,15 +615,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     return unfurlWildcardModelsInList(selected, userModels);
   }, [watchedModels, teamData, userModels]);
 
-  const isTeamAdminFromTeamData = useMemo(
-    () =>
-      teamData?.team_info?.members_with_roles?.some(
-        (member) => member.user_id != null && member.user_id === userId && member.role === "admin",
-      ) ?? false,
-    [teamData, userId],
-  );
-
-  const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
+  const teamEditAccess = useMemo(() => parseTeamEditAccess(teamData?.team_info?.caller_edit_access), [teamData]);
+  const canEditTeam = is_team_admin || is_proxy_admin || teamEditAccess.kind !== "none";
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
   const { onTabChange, hasVisited } = useVisitedTabs(defaultTabKey);
@@ -628,9 +630,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const startEditing = () => {
     form.reset(teamFormValues());
+    setTeamModelMaxBudget((teamData?.team_info?.model_max_budget ?? {}) as ModelMaxBudget);
     setTeamMemberSettingsOpen(false);
     setSearchToolSettingsOpen(false);
     setIsEditing(true);
+  };
+
+  const openSettingsEditor = (modelAliases: Record<string, string>) => {
+    if (teamEditAccess.kind === "team_admin_disabled") {
+      toast.error(TEAM_ADMIN_EDITING_DISABLED_TITLE, { description: TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION });
+      return;
+    }
+    setTeamModelAliases(modelAliases);
+    startEditing();
   };
 
   const applyKillSwitchToGuardrails = (checked: boolean) => {
@@ -850,6 +862,27 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const handleDeleteCancel = () => {
     setIsDeleteModalOpen(false);
     setMemberToDelete(null);
+  };
+
+  const persistTeamUpdate = async (token: string, updateData: Record<string, unknown>) => {
+    await teamUpdateCall(token, updateData);
+    queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+
+    toast.success("Team settings updated successfully");
+    setIsEditing(false);
+    fetchTeamInfo();
+  };
+
+  const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges) => {
+    if (!accessToken) return;
+    setIsTeamSaving(true);
+    try {
+      await persistTeamUpdate(accessToken, { team_id: teamId, ...changes });
+    } catch (error) {
+      console.error("Error updating team:", error);
+    } finally {
+      setIsTeamSaving(false);
+    }
   };
 
   const handleTeamUpdate = async (values: any) => {
@@ -1078,6 +1111,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.model_aliases = teamModelAliases;
       }
 
+      const modelBudgets = modelMaxBudgetUpdate(teamModelMaxBudget, info.model_max_budget);
+      if (modelBudgets !== undefined) {
+        updateData.model_max_budget = modelBudgets;
+      }
+
       // Handle router_settings - read fresh values from DOM at save time.
       const currentRouterSettings = routerSettingsRef.current?.getValue();
       if (currentRouterSettings?.router_settings) {
@@ -1097,12 +1135,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      await teamUpdateCall(accessToken, updateData);
-      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
-
-      toast.success("Team settings updated successfully");
-      setIsEditing(false);
-      fetchTeamInfo();
+      await persistTeamUpdate(accessToken, updateData);
     } catch (error) {
       console.error("Error updating team:", error);
     } finally {
@@ -1119,6 +1152,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   }
 
   const { team_info: info } = teamData;
+
+  const teamAdminSettingsEditor =
+    teamEditAccess.kind === "team_admin" ? (
+      <TeamAdminSettingsForm
+        initialValues={{ tpm_limit: info.tpm_limit, rpm_limit: info.rpm_limit, max_budget: info.max_budget }}
+        editableFields={teamEditAccess.editableFields}
+        isSaving={isTeamSaving}
+        onCancel={() => setIsEditing(false)}
+        onSave={saveTeamAdminSettings}
+      />
+    ) : null;
 
   const inheritedMcpServers = computeInheritedGrants(
     info.access_group_mcp_server_ids,
@@ -1324,10 +1368,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             {canEditTeam && !isEditing && (
               <Button
                 variant="outline"
-                onClick={() => {
-                  setTeamModelAliases(info.litellm_model_table?.model_aliases ?? {});
-                  startEditing();
-                }}
+                onClick={() => openSettingsEditor(info.litellm_model_table?.model_aliases ?? {})}
               >
                 <Pencil />
                 Edit Settings
@@ -1335,8 +1376,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             )}
           </div>
 
-          {isEditing && isGuardrailsLoading ? (
-            <div className="p-4">Loading...</div>
+          {isEditing && (teamAdminSettingsEditor !== null || isGuardrailsLoading) ? (
+            teamAdminSettingsEditor ?? <div className="p-4">Loading...</div>
           ) : isEditing ? (
             <TooltipProvider>
               <form onSubmit={(event) => void form.handleSubmit(onTeamUpdateSubmit)(event)}>
@@ -1535,6 +1576,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       />
                     )}
                   </FormField>
+
+                  <ModelMaxBudgetField
+                    premiumUser={premiumUser}
+                    value={teamModelMaxBudget}
+                    onChange={setTeamModelMaxBudget}
+                    availableModels={availableRateLimitModels}
+                    usage={info.model_max_budget_usage}
+                    hint="Cap this team's spend on individual models, each with its own reset window. Every key on the team shares the cap unless the key sets its own budget for that model."
+                  />
 
                   <FormField control={form.control} name="tpm_limit" label="Tokens per minute Limit (TPM)">
                     {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
@@ -2051,6 +2101,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     : "No Limit"}
                 </div>
                 <div>Budget Reset: {info.budget_duration || "Never"}</div>
+                {modelMaxBudgetToEntries(info.model_max_budget as ModelMaxBudget | null | undefined).map(
+                  ({ model, budgetLimit, timePeriod }) => {
+                    const spent = model === null ? undefined : info.model_max_budget_usage?.[model]?.current_spend;
+                    return (
+                      <div key={model}>
+                        Per-Model Budget ({model}): ${budgetLimit ?? "?"} per {timePeriod}
+                        {spent !== undefined && `, spent $${spent}`}
+                      </div>
+                    );
+                  },
+                )}
                 {info.metadata?.soft_budget_alerting_emails &&
                   Array.isArray(info.metadata.soft_budget_alerting_emails) &&
                   info.metadata.soft_budget_alerting_emails.length > 0 && (
