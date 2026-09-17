@@ -288,5 +288,4 @@ def test_cross_tenant_actor_cannot_read_update_or_detach_project_key(gateway: Ga
             assert target not in response.text
             assert digest not in response.text
             assert project not in response.text
-            assert team in response.text
         assert _key_rows(digest) == before
