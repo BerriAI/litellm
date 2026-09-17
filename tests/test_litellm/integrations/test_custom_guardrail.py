@@ -2716,7 +2716,7 @@ class TestLoggingOnlyApplyGuardrail:
         assert guardrail.calls == [("response", [{"role": "assistant", "content": "general kenobi"}], None)]
 
     @pytest.mark.asyncio
-    async def test_anthropic_messages_response_scan_keeps_midturn_system_turns_under_skip_system(self):
+    async def test_anthropic_messages_response_scan_keeps_midturn_system_when_skip_system(self):
         class _ContextObserver(_ApplyOnlyObserver):
             @log_guardrail_information
             async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
@@ -2727,7 +2727,8 @@ class TestLoggingOnlyApplyGuardrail:
         guardrail.skip_system_message_in_guardrail = True
         kwargs, response = _logged_call(
             [
-                {"role": "system", "content": "Mid-turn operator note"},
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": "mid-turn note"},
                 {"role": "user", "content": "What is the capital of France?"},
             ]
         )
@@ -2735,8 +2736,8 @@ class TestLoggingOnlyApplyGuardrail:
         await guardrail.async_logging_hook(kwargs, response, CallTypes.anthropic_messages.value)
 
         assert guardrail.calls == [
-            ("request", ["system", "user"]),
-            ("response", ["system", "user", "assistant"]),
+            ("request", ["user", "system", "user"]),
+            ("response", ["user", "system", "user", "assistant"]),
         ]
 
     @pytest.mark.asyncio
