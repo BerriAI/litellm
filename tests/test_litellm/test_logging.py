@@ -1015,6 +1015,23 @@ def test_stamped_record_is_not_scanned_again(monkeypatch):
     assert counting.calls == 1
 
 
+def test_caller_supplied_stamp_never_skips_the_scrub(monkeypatch):
+    """The stamp is a private sentinel, so a caller passing extra={"litellm_redacted": True}
+    still gets the full scrub, and only the filter's own stamp lets a later pass skip it."""
+    counting = _CountingPattern(secret_redaction._SECRET_RE)
+    monkeypatch.setattr(secret_redaction, "_SECRET_RE", counting)
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.DEBUG, "api_key=sk-1234567890abcdefghij")
+    record.litellm_redacted = True
+
+    assert SecretRedactionFilter().filter(record) is True
+    assert "sk-1234567890abcdefghij" not in record.getMessage()
+    assert counting.calls == 1
+
+    assert SecretRedactionFilter().filter(record) is True
+    assert counting.calls == 1
+
+
 def test_stack_info_is_scrubbed_before_the_plain_formatter(monkeypatch):
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.INFO, "call failed")
