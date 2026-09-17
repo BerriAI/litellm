@@ -219,6 +219,38 @@ class TestChatGPTResponsesAPITransformation:
             }
         ]
 
+    def test_chatgpt_omits_replayed_private_output_items(self):
+        config = ChatGPTResponsesAPIConfig()
+        input_items = [
+            {"type": "reasoning", "id": "rs_fixture", "encrypted_content": "opaque"},
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "continue"}],
+            },
+            {"type": "web_search_call", "id": "ws_fixture", "status": "completed"},
+            {
+                "type": "function_call",
+                "id": "fc_fixture",
+                "call_id": "call_fixture",
+                "name": "read_file",
+                "arguments": '{"path":"README.md"}',
+            },
+        ]
+
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input=input_items,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert [item["type"] for item in request["input"]] == [
+            "message",
+            "function_call",
+        ]
+
     @pytest.mark.parametrize(
         "model_name",
         [
