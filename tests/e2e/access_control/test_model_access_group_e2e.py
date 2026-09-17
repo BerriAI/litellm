@@ -111,22 +111,18 @@ def _await_group_members(client: AccessControlClient, access_group: str, expecte
     )
 
 
-def _await_team_allowlist(client: AccessControlClient, grant_key: str, access_group: str) -> None:
-    """Registering a team-scoped deployment appends its public name to the team's
-    allow-list, and a wildcard sitting there directly would grant the model under test
-    on its own. Poll a denial until the message enumerates the allow-list the test
-    means to exercise: the group, and nothing else."""
-    allowlist: Final = f"models=['{access_group}']"
+def _await_team_allowlist(client: AccessControlClient, team_id: str, access_group: str) -> None:
     deadline = time.monotonic() + client.proxy.poll_timeout
-    body = ""
+    listed: list[str] | None = None
     while time.monotonic() < deadline:
-        body = client.chat_status(
-            grant_key, UNCOVERED_OPENAI_MODEL, f"{PROMPT} {unique_marker()}", MAX_COMPLETION_TOKENS
-        ).body
-        if allowlist in body:
+        listed = client.team_models(team_id)
+        if listed == [access_group]:
             return
         time.sleep(client.proxy.poll_interval)
-    pytest.fail(f"the team's allow-list never settled to {allowlist}; last denial read {body[:300]}")
+    pytest.fail(
+        f"/team/info never settled the team's allow-list to [{access_group!r}] after the team-scoped "
+        f"deployment was registered; last read {listed}"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -174,7 +170,7 @@ def team_grant(client: AccessControlClient) -> Iterator[TeamGrant]:
     )
     client.set_team_models(team_id, team_alias, [access_group])
     try:
-        _await_team_allowlist(client, key, access_group)
+        _await_team_allowlist(client, team_id, access_group)
         yield TeamGrant(access_group=access_group, team_id=team_id, key=key)
     finally:
         client.proxy.delete_model(model_id)
