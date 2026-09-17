@@ -6,6 +6,7 @@ This module handles transforming between:
 - Responses API format (OpenAI's format with input[], instructions, etc.)
 """
 
+import base64
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Final, cast
@@ -24,6 +25,13 @@ from litellm.types.llms.openai import (
 )
 
 _STEP_TYPE_ROLES: Final = MappingProxyType({"user_input": "user", "model_output": "assistant"})
+
+_IMAGE_MAGIC_BYTES: Final[tuple[tuple[bytes, str], ...]] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
 
 
 class LiteLLMResponsesInteractionsConfig:
@@ -191,22 +199,36 @@ class LiteLLMResponsesInteractionsConfig:
 
     @staticmethod
     def _transform_image_content_item(item: Mapping[str, object]) -> Mapping[str, object]:
-        """
-        Transform an Interactions API image content part
-        ({"type": "image", "data": <base64>, "mime_type": ...} or {"uri": ...})
-        into a Responses API `input_image` part, so it isn't silently dropped.
-        """
         uri: Final = item.get("uri")
         if isinstance(uri, str) and uri:
             return {"type": "input_image", "image_url": uri}
 
         data: Final = item.get("data")
         if isinstance(data, str) and data:
-            mime_type: Final = item.get("mime_type") or "image/jpeg"
+            mime_type: Final = (
+                item.get("mime_type")
+                or LiteLLMResponsesInteractionsConfig._sniff_image_mime_type(data)
+                or "application/octet-stream"
+            )
             return {"type": "input_image", "image_url": f"data:{mime_type};base64,{data}"}
 
-        # No usable data/uri - fall back to passing through unchanged.
         return item
+
+    @staticmethod
+    def _sniff_image_mime_type(data: str) -> str | None:
+        prefix_len = (min(len(data), 24) // 4) * 4
+        if prefix_len == 0:
+            return None
+        try:
+            prefix = base64.b64decode(data[:prefix_len])
+        except ValueError:
+            return None
+        for magic, mime in _IMAGE_MAGIC_BYTES:
+            if prefix.startswith(magic):
+                return mime
+        if prefix[:4] == b"RIFF" and prefix[8:12] == b"WEBP":
+            return "image/webp"
+        return None
 
     @staticmethod
     def transform_responses_response_to_interactions_response(

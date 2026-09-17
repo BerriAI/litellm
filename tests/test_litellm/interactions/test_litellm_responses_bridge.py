@@ -5,6 +5,7 @@ Inherits from BaseInteractionsTest to run the same test suite against
 the litellm_responses bridge provider, which calls litellm.responses() internally.
 """
 
+import base64
 import os
 
 from litellm.interactions.litellm_responses_transformation.transformation import (
@@ -92,10 +93,7 @@ class TestBridgeInputTransformation:
             }
         ]
 
-    def test_image_content_is_transformed_to_input_image(self):
-        """Gemini-native image parts must become valid Responses API `input_image`
-        parts, not pass through unchanged - see GH issue #41427, where the
-        untransformed part was silently dropped by the Responses API."""
+    def test_image_content_with_mime_type_is_transformed_to_input_image(self):
         image_part = {"type": "image", "data": "base64data", "mime_type": "image/png"}
         transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
             [{"type": "user_input", "content": [image_part]}]
@@ -106,6 +104,38 @@ class TestBridgeInputTransformation:
                 "content": [{"type": "input_image", "image_url": "data:image/png;base64,base64data"}],
             }
         ]
+
+    def test_image_content_with_uri_is_transformed_to_input_image(self):
+        image_part = {"type": "image", "uri": "https://example.com/cat.jpg"}
+        transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
+            [{"type": "user_input", "content": [image_part]}]
+        )
+        assert transformed == [
+            {
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": "https://example.com/cat.jpg"}],
+            }
+        ]
+
+    def test_image_content_missing_mime_type_is_sniffed_from_data(self):
+        png_signature_b64 = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"rest-of-file").decode()
+        image_part = {"type": "image", "data": png_signature_b64}
+        transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
+            [{"type": "user_input", "content": [image_part]}]
+        )
+        assert transformed == [
+            {
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": f"data:image/png;base64,{png_signature_b64}"}],
+            }
+        ]
+
+    def test_image_content_missing_mime_type_and_unrecognized_data_defaults_to_octet_stream(self):
+        image_part = {"type": "image", "data": "not-a-real-image-signature"}
+        transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
+            [{"type": "user_input", "content": [image_part]}]
+        )
+        assert transformed[0]["content"][0]["image_url"].startswith("data:application/octet-stream;base64,")
 
     def test_unrecognized_content_type_passes_through_unchanged(self):
         other_part = {"type": "document", "data": "base64data", "mime_type": "application/pdf"}
