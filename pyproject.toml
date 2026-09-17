@@ -309,7 +309,7 @@ constraint-dependencies = [
     "tornado>=6.5.8",
     "aiohttp>=3.14.2,<4.0",
     "packaging>=24.0",
-    "soupsieve>=2.8.4",
+    "soupsieve>=2.9",
     "httplib2>=0.32.0",
     "setuptools>=83.0.0",
 ]
