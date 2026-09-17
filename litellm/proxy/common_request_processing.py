@@ -16,6 +16,7 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
+    cast,
     overload,
     runtime_checkable,
 )
@@ -93,7 +94,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
-from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.route_llm_request import raise_if_model_not_routable, route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
@@ -2103,6 +2104,12 @@ class ProxyBaseLLMRequestProcessing:
 
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
+        await raise_if_model_not_routable(
+            data=cast(dict[str, object], self.data),
+            llm_router=llm_router,
+            user_model=user_model,
+            route_type=route_type,
+        )
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,

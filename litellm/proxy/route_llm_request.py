@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from fastapi import HTTPException, status
@@ -146,6 +146,125 @@ ROUTE_ENDPOINT_MAPPING: Final = {
 
 
 _AVAILABLE_MODELS_HINT: Final = "Call `/v1/models` to view available models for your key."
+
+_EVAL_ROUTE_TYPES: Final = frozenset(
+    {
+        "acreate_eval",
+        "alist_evals",
+        "aget_eval",
+        "aupdate_eval",
+        "adelete_eval",
+        "acancel_eval",
+        "acreate_run",
+        "alist_runs",
+        "aget_run",
+        "acancel_run",
+        "adelete_run",
+    }
+)
+
+_CONTAINER_ROUTE_TYPES: Final = frozenset(
+    {
+        "acreate_container",
+        "alist_containers",
+        "aretrieve_container",
+        "adelete_container",
+        "aupload_container_file",
+        "alist_container_files",
+        "aretrieve_container_file",
+        "adelete_container_file",
+        "aretrieve_container_file_content",
+    }
+)
+
+_INTERACTION_ROUTE_TYPES: Final = frozenset(
+    {
+        "acreate_interaction",
+        "aget_interaction",
+        "adelete_interaction",
+        "acancel_interaction",
+    }
+)
+
+_MANAGED_AGENT_ROUTE_TYPES: Final = frozenset(
+    {
+        "acreate_agent",
+        "alist_agents",
+        "aget_agent",
+        "adelete_agent",
+        "alist_agent_versions",
+    }
+)
+
+_MODEL_OPTIONAL_ROUTE_TYPES: Final = frozenset(
+    {
+        "avideo_list",
+        "avideo_status",
+        "avideo_content",
+        "avideo_remix",
+        "avideo_create_character",
+        "avideo_get_character",
+        "avideo_edit",
+        "avideo_extension",
+        "avector_store_file_list",
+        "avector_store_file_retrieve",
+        "avector_store_file_content",
+        "avector_store_file_delete",
+        "acreate_skill",
+        "alist_skills",
+        "aget_skill",
+        "adelete_skill",
+        "aingest",
+    }
+)
+
+_MODEL_OPTIONAL_FALLBACK_ROUTE_TYPES: Final = frozenset(
+    {
+        "amoderation",
+        "aget_responses",
+        "adelete_responses",
+        "acancel_responses",
+        "alist_input_items",
+        "avector_store_create",
+        "avector_store_search",
+        "avector_store_retrieve",
+        "avector_store_list",
+        "avector_store_update",
+        "avector_store_delete",
+        "avector_store_file_create",
+        "avector_store_file_list",
+        "avector_store_file_retrieve",
+        "avector_store_file_content",
+        "avector_store_file_update",
+        "avector_store_file_delete",
+        "asearch",
+        "acreate_container",
+        "alist_containers",
+        "aretrieve_container",
+        "adelete_container",
+        "aupload_container_file",
+        "alist_container_files",
+        "aretrieve_container_file",
+        "adelete_container_file",
+        "aretrieve_container_file_content",
+    }
+)
+
+_VIDEO_FALLBACK_ROUTE_TYPES: Final = frozenset(
+    {
+        "avideo_status",
+        "avideo_content",
+        "avideo_remix",
+        "avideo_create_character",
+        "avideo_get_character",
+        "avideo_edit",
+        "avideo_extension",
+    }
+)
+
+# Route types whose callers go through common_processing_pre_call_logic but
+# never dispatch through route_request, so no model routing exists for them.
+_NO_MODEL_ROUTING_ROUTE_TYPES: Final = frozenset({"apply_guardrail", "call_mcp_tool"})
 
 
 class ProxyModelNotFoundError(HTTPException):
@@ -460,6 +579,95 @@ async def route_request(
         )
 
 
+def _router_can_route(
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+    route_type: str,
+) -> bool:
+    """Pure predicate mirroring the branch structure of _route_request_single_attempt.
+
+    Returns True when the existing routing tree would dispatch this request
+    somewhere instead of falling through to the final ProxyModelNotFoundError.
+    """
+    if llm_router is None:
+        return True
+    if route_type in _NO_MODEL_ROUTING_ROUTE_TYPES:
+        return True
+    if "api_key" in data or "api_base" in data:
+        return True
+    model: Final = data.get("model")
+    if route_type == "acompletion" and isinstance(model, str) and "," in model:
+        return True
+    if "user_config" in data or "router_settings_override" in data:
+        return True
+    if (
+        route_type in _EVAL_ROUTE_TYPES
+        or route_type in _CONTAINER_ROUTE_TYPES
+        or route_type in _INTERACTION_ROUTE_TYPES
+        or route_type in _MANAGED_AGENT_ROUTE_TYPES
+    ):
+        return True
+    if route_type in _MODEL_OPTIONAL_ROUTE_TYPES and (model is None or model == ""):
+        return True
+    if not isinstance(model, str):
+        return True
+
+    team_id: Final = get_team_id_from_data(dict(data))
+    if team_id is not None and llm_router.map_team_model(model, team_id) is not None:
+        return True
+
+    router_model_names: Final = cast(set[str], llm_router.model_names)
+    is_proxy_admin_without_team: Final = team_id is None and _is_proxy_admin_request(dict(data))
+    if (
+        is_proxy_admin_without_team
+        and model not in router_model_names
+        and model in llm_router.team_public_model_names
+    ) or llm_router.is_recognized_model(model):
+        return True
+
+    if model in router_model_names:
+        return False
+    if llm_router.router_general_settings.pass_through_all_models:
+        return True
+    if llm_router.default_deployment is not None or len(cast(dict[str, object], llm_router.pattern_router.patterns)) > 0:
+        return True
+    if model in cast(list[str], llm_router.deployment_names):
+        return True
+    if route_type in _MODEL_OPTIONAL_FALLBACK_ROUTE_TYPES or route_type in _VIDEO_FALLBACK_ROUTE_TYPES:
+        return True
+    return _is_a2a_agent_model(model)
+
+
+async def raise_if_model_not_routable(
+    data: dict[str, object],
+    llm_router: LitellmRouter | None,
+    user_model: str | None,
+    route_type: str,
+) -> None:
+    """Raise ProxyModelNotFoundError when route_request would reject the model.
+
+    Lets pre-call steps (e.g. guardrails) skip work for requests that can never
+    route, and mirrors route_request's registry read-through retry.
+    """
+    if _router_can_route(data=data, llm_router=llm_router, route_type=route_type):
+        return
+    requested_model: Final = data.get("model")
+    if isinstance(requested_model, str) and requested_model:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.common_utils.registry_read_through import (
+            model_registry_read_through,
+        )
+
+        if await model_registry_read_through.attempt(requested_model) and _router_can_route(
+            data=data, llm_router=proxy_server.llm_router, route_type=route_type
+        ):
+            return
+    raise ProxyModelNotFoundError(
+        route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
+        model_name=requested_model if isinstance(requested_model, str) else "",
+    )
+
+
 async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited provider coroutines; the inferred union keeps route_request's callers typed
     data: dict,  # mutable-ok: request body is the proxy-wide mutable dict contract shared with route_request
     llm_router: LitellmRouter | None,
@@ -540,19 +748,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         _raise_if_model_fully_blocked(llm_router=llm_router, model_name=data.get("model"), team_id=team_id)
         # Evals API: always route to litellm directly (not through router)
         # But extract model credentials if a model is provided
-        if route_type in [
-            "acreate_eval",
-            "alist_evals",
-            "aget_eval",
-            "aupdate_eval",
-            "adelete_eval",
-            "acancel_eval",
-            "acreate_run",
-            "alist_runs",
-            "aget_run",
-            "acancel_run",
-            "adelete_run",
-        ]:
+        if route_type in _EVAL_ROUTE_TYPES:
             # If a model is provided, get its credentials from the router
             model: Final = data.get("model")
             if model and llm_router:
@@ -578,54 +774,17 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
             return getattr(litellm, f"{route_type}")(**data)
         # Skip model-based routing for container operations
-        if route_type in [
-            "acreate_container",
-            "alist_containers",
-            "aretrieve_container",
-            "adelete_container",
-            "aupload_container_file",
-            "alist_container_files",
-            "aretrieve_container_file",
-            "adelete_container_file",
-            "aretrieve_container_file_content",
-        ]:
+        if route_type in _CONTAINER_ROUTE_TYPES:
             return getattr(llm_router, f"{route_type}")(**data)
         # Interactions API: create with agent, get/delete/cancel don't need model routing
-        if route_type in [
-            "acreate_interaction",
-            "aget_interaction",
-            "adelete_interaction",
-            "acancel_interaction",
-        ]:
+        if route_type in _INTERACTION_ROUTE_TYPES:
             return getattr(llm_router, f"{route_type}")(**data)
         # Managed Agents API: these don't need model routing
-        if route_type in [
-            "acreate_agent",
-            "alist_agents",
-            "aget_agent",
-            "adelete_agent",
-            "alist_agent_versions",
-        ]:
+        if route_type in _MANAGED_AGENT_ROUTE_TYPES:
             return getattr(llm_router, f"{route_type}")(**data)
-        if route_type in [
-            "avideo_list",
-            "avideo_status",
-            "avideo_content",
-            "avideo_remix",
-            "avideo_create_character",
-            "avideo_get_character",
-            "avideo_edit",
-            "avideo_extension",
-            "avector_store_file_list",
-            "avector_store_file_retrieve",
-            "avector_store_file_content",
-            "avector_store_file_delete",
-            "acreate_skill",
-            "alist_skills",
-            "aget_skill",
-            "adelete_skill",
-            "aingest",
-        ] and (data.get("model") is None or data.get("model") == ""):
+        if route_type in _MODEL_OPTIONAL_ROUTE_TYPES and (
+            data.get("model") is None or data.get("model") == ""
+        ):
             # These endpoints don't need a model, use custom_llm_provider directly
             return getattr(litellm, f"{route_type}")(**data)
 
@@ -651,46 +810,10 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             elif data["model"] in llm_router.deployment_names:
                 # Only match deployment_names if no wildcard matched
                 return getattr(llm_router, f"{route_type}")(**data, specific_deployment=True)
-            elif route_type in [
-                "amoderation",
-                "aget_responses",
-                "adelete_responses",
-                "acancel_responses",
-                "alist_input_items",
-                "avector_store_create",
-                "avector_store_search",
-                "avector_store_retrieve",
-                "avector_store_list",
-                "avector_store_update",
-                "avector_store_delete",
-                "avector_store_file_create",
-                "avector_store_file_list",
-                "avector_store_file_retrieve",
-                "avector_store_file_content",
-                "avector_store_file_update",
-                "avector_store_file_delete",
-                "asearch",
-                "acreate_container",
-                "alist_containers",
-                "aretrieve_container",
-                "adelete_container",
-                "aupload_container_file",
-                "alist_container_files",
-                "aretrieve_container_file",
-                "adelete_container_file",
-                "aretrieve_container_file_content",
-            ]:
+            elif route_type in _MODEL_OPTIONAL_FALLBACK_ROUTE_TYPES:
                 # These endpoints can work with or without model parameter
                 return getattr(llm_router, f"{route_type}")(**data)
-            elif route_type in [
-                "avideo_status",
-                "avideo_content",
-                "avideo_remix",
-                "avideo_create_character",
-                "avideo_get_character",
-                "avideo_edit",
-                "avideo_extension",
-            ]:
+            elif route_type in _VIDEO_FALLBACK_ROUTE_TYPES:
                 # Video endpoints: If model is provided (e.g., from decoded video_id or target_model_names),
                 # try router first to allow for multi-deployment load balancing
                 try:

@@ -1308,3 +1308,116 @@ def test_proxy_model_not_found_error_keeps_the_raw_model_only_in_the_client_resp
     assert raw_model in error.detail["error"]
     assert raw_model not in error.spend_log_error_message
     assert error.spend_log_error_message.startswith("/chat/completions: Invalid model name passed in")
+
+
+def _router_with_gpt4o_mini():
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_raise_if_model_not_routable_raises_for_unknown_model(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.common_utils import registry_read_through
+    from litellm.proxy.route_llm_request import raise_if_model_not_routable
+
+    monkeypatch.setattr(
+        registry_read_through,
+        "model_registry_read_through",
+        SimpleNamespace(attempt=AsyncMock(return_value=False)),
+    )
+
+    with pytest.raises(ProxyModelNotFoundError) as exc_info:
+        await raise_if_model_not_routable(
+            data={"model": "does-not-exist", "messages": [{"role": "user", "content": "hi"}]},
+            llm_router=_router_with_gpt4o_mini(),
+            user_model=None,
+            route_type="acompletion",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "does-not-exist" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
+    "data, route_type, router_mutator",
+    [
+        (
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+            "acompletion",
+            None,
+        ),
+        (
+            {"model": "openai/anything", "messages": [{"role": "user", "content": "hi"}]},
+            "acompletion",
+            "wildcard",
+        ),
+        (
+            {"model": "does-not-exist", "api_key": "sk-user", "messages": [{"role": "user", "content": "hi"}]},
+            "acompletion",
+            None,
+        ),
+        (
+            {"model": "does-not-exist,gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+            "acompletion",
+            None,
+        ),
+        (
+            {"model": "does-not-exist", "messages": [{"role": "user", "content": "hi"}]},
+            "acompletion",
+            "pass_through_all_models",
+        ),
+        (
+            {"model": "does-not-exist", "input": "hello"},
+            "amoderation",
+            None,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_raise_if_model_not_routable_allows_routable_requests(monkeypatch, data, route_type, router_mutator):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.common_utils import registry_read_through
+    from litellm.proxy.route_llm_request import raise_if_model_not_routable
+
+    monkeypatch.setattr(
+        registry_read_through,
+        "model_registry_read_through",
+        SimpleNamespace(attempt=AsyncMock(return_value=False)),
+    )
+
+    if router_mutator == "wildcard":
+        import litellm
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "sk-test"},
+                }
+            ]
+        )
+    else:
+        router = _router_with_gpt4o_mini()
+    if router_mutator == "pass_through_all_models":
+        # router_general_settings is shared across Router instances; monkeypatch restores it
+        monkeypatch.setattr(router.router_general_settings, "pass_through_all_models", True)
+
+    await raise_if_model_not_routable(
+        data=data,
+        llm_router=router,
+        user_model=None,
+        route_type=route_type,
+    )
