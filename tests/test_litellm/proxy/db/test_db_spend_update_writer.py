@@ -979,7 +979,7 @@ async def test_commit_spend_updates_to_db_writes_team_member_spend_in_one_roster
     assert "pg_advisory_xact_lock(hashtext($1))" in lock_statement
     statement, user_ids, team_ids, costs = spend_call.args
     assert statement is _TEAM_MEMBER_SPEND_SQL
-    assert (user_ids, team_ids, costs) == ([user_id], [team_id], [response_cost])
+    assert (list(user_ids), list(team_ids), list(costs)) == ([user_id], [team_id], [response_cost])
     assert 'INSERT INTO "LiteLLM_TeamMembership"' in statement
     assert "members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', p.user_id))" in statement
     assert "ON CONFLICT (user_id, team_id) DO UPDATE" in statement

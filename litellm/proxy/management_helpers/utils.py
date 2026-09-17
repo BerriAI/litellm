@@ -476,7 +476,9 @@ async def add_new_member(
     if returned_user is not None and returned_user.user_id is not None:
         membership_table: Final[_PrismaTeamMembershipTable] = _team_membership_table(prisma_client, tx)
         membership_key: Final[Mapping[str, object]] = {"user_id": returned_user.user_id, "team_id": team_id}
-        budget_link: Final[Mapping[str, object]] = {"budget_id": _budget_id} if _budget_id is not None else {}
+        budget_link: Final[Mapping[str, str]] = (
+            MappingProxyType({"budget_id": _budget_id}) if _budget_id is not None else MappingProxyType({})
+        )
         _returned_team_membership: Final = await membership_table.upsert(
             where={"user_id_team_id": membership_key},
             data={"create": {**membership_key, **budget_link}, "update": {}},
