@@ -257,8 +257,8 @@ class DBSpendUpdateWriter:
         # Completion object fields
         kwargs: dict | None,
         completion_response: object,
-        start_time: datetime | None,
-        end_time: datetime | None,
+        start_time: datetime,
+        end_time: datetime,
         response_cost: float | None,
     ) -> bool:
         """Record the request's spend, answering whether its cost still needs charging.
