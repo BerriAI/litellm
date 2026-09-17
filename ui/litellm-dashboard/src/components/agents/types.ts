@@ -21,6 +21,7 @@ export interface Agent {
     [key: string]: any;
   };
   object_permission?: AgentObjectPermission;
+  access_group_ids?: string[] | null;
   keys?: AgentAttachedKey[] | null;
   spend?: number;
   tpm_limit?: number | null;

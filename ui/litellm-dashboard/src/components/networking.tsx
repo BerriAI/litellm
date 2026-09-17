@@ -6267,6 +6267,7 @@ export const patchAgentCall = async (
     rpm_limit?: number | null;
     session_tpm_limit?: number | null;
     session_rpm_limit?: number | null;
+    access_group_ids?: string[];
   },
 ) => {
   try {

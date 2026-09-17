@@ -189,6 +189,7 @@ class AgentConfig(TypedDict, total=False):
     session_rpm_limit: int | None
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
+    access_group_ids: ReadOnly[Sequence[str] | None]
 
 
 class PatchAgentRequest(TypedDict, total=False):
@@ -202,6 +203,7 @@ class PatchAgentRequest(TypedDict, total=False):
     session_rpm_limit: int | None
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
+    access_group_ids: ReadOnly[Sequence[str] | None]
 
 
 # Request/Response models for CRUD endpoints
@@ -226,6 +228,7 @@ class AgentResponse(BaseModel):
     session_rpm_limit: int | None = None
     static_headers: dict[str, str] | None = None
     extra_headers: list[str] | None = None
+    access_group_ids: Sequence[str] | None = None
     keys: list[AgentKeySummary] | None = None
     search_score: float | None = None
     created_at: datetime | None = None

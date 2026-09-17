@@ -2357,6 +2357,20 @@
         },
         "AgentConfig": {
           "properties": {
+            "access_group_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Group Ids"
+            },
             "agent_card_params": {
               "$ref": "#/components/schemas/AgentCard"
             },
@@ -2683,6 +2697,20 @@
         },
         "AgentResponse": {
           "properties": {
+            "access_group_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Group Ids"
+            },
             "agent_card_params": {
               "additionalProperties": true,
               "title": "Agent Card Params",
@@ -3471,6 +3499,20 @@
         },
         "PatchAgentRequest": {
           "properties": {
+            "access_group_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Group Ids"
+            },
             "agent_card_params": {
               "$ref": "#/components/schemas/AgentCard"
             },

@@ -66,9 +66,24 @@ class AgentRequestHandler:
         Resolve the agents the given user/key may reach.
 
         ``UnrestrictedAgentAccess`` is only returned when neither the key nor its team
-        carries any grant. Grants that intersect to nothing stay restricted, so
-        narrowing a caller can never widen what it reaches.
+        carries any grant and the agent behind the key has no access groups attached.
+        Grants that intersect to nothing stay restricted, so narrowing a caller can
+        never widen what it reaches.
         """
+        key_team_access: Final = await AgentRequestHandler._resolve_key_team_agent_access(user_api_key_auth)
+        agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(user_api_key_auth)
+        if agent_ceiling is None:
+            return key_team_access
+        match key_team_access:
+            case UnrestrictedAgentAccess():
+                return RestrictedAgentAccess(agent_ceiling)
+            case RestrictedAgentAccess(key_team_ids):
+                return RestrictedAgentAccess(key_team_ids & agent_ceiling)
+
+    @staticmethod
+    async def _resolve_key_team_agent_access(
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> AgentAccess:
         try:
             key_access: Final = await AgentRequestHandler._get_allowed_agents_for_key(user_api_key_auth)
             team_access: Final = await AgentRequestHandler._get_allowed_agents_for_team(user_api_key_auth)
@@ -85,6 +100,20 @@ class AgentRequestHandler:
         except Exception as e:
             verbose_logger.warning("Failed to get allowed agents: %s", e)
             return UnrestrictedAgentAccess()
+
+    @staticmethod
+    async def _agent_access_group_ceiling(
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> frozenset[str] | None:
+        """Stable IDs of the agents the calling agent's attached access groups allow; None when none attached."""
+        from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_agent_access_group_ceiling
+
+        if user_api_key_auth is None or not user_api_key_auth.agent_id:
+            return None
+        ceiling: Final = await resolve_agent_access_group_ceiling(user_api_key_auth.agent_id)
+        if ceiling is None:
+            return None
+        return _to_stable_ids(ceiling.agent_ids)
 
     @staticmethod
     async def is_agent_allowed(
