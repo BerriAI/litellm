@@ -91,7 +91,7 @@ const PromptCachingTestCard: React.FC<PromptCachingTestCardProps> = ({
       <CardContent>
         <CardTitle>Test prompt caching</CardTitle>
         <p className="mt-1 break-words text-xs text-muted-foreground">
-          Sends two identical requests with a ~5k token system prompt and no cache_control of its own. If LiteLLM
+          Sends two identical requests with a ~9k token system prompt and no cache_control of its own. If LiteLLM
           injects the breakpoints, the first call writes the cache and the second reads it.
         </p>
 
