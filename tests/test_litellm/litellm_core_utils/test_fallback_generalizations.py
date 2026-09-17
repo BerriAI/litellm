@@ -997,5 +997,45 @@ def test_shipped_claude_thinking_rules_backfill_only_anthropic(shipped_cost_map)
     assert match_fill_missing_generalizations("claude-sonnet-4-6", "anthropic") == {
         "supports_adaptive_thinking": True,
         "supports_legacy_thinking": True,
+        "supports_tool_search": True,
     }
     assert match_fill_missing_generalizations("claude-sonnet-4-6", "perplexity") is None
+
+
+@pytest.mark.parametrize(
+    "model,provider,tool_search",
+    [
+        ("us.anthropic.claude-opus-4-5", "bedrock", True),
+        ("claude-haiku-4-4", "anthropic", None),
+        ("claude-haiku-4-6", "anthropic", True),
+        ("claude-haiku-4-10", "anthropic", True),
+        ("claude-haiku-5-0", "anthropic", True),
+        ("claude-sonnet-5-1", "anthropic", True),
+        ("claude-newfam-6", "anthropic", True),
+        ("claude-haiku-4-20250514", "anthropic", None),
+    ],
+)
+def test_shipped_tool_search_rule_version_boundaries(shipped_cost_map, model, provider, tool_search):
+    """The claude-tool-search rule flags Claude 4.5 and newer in any family, bare major
+    or major-minor, and leaves 4.4 and date-suffixed 4.x ids without an opinion."""
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info.get("supports_tool_search") is tool_search, model
+
+
+def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipped_cost_map):
+    """A mapped Claude 4.5+ entry with no supports_tool_search key gets it from the rule
+    on the Claude providers, a mapped pre-4.5 entry stays without one, and a reseller
+    copy of the same model is not touched."""
+    for key, model, provider in (
+        ("claude-opus-4-7", "claude-opus-4-7", "anthropic"),
+        ("azure_ai/claude-opus-5", "claude-opus-5", "azure_ai"),
+    ):
+        assert "supports_tool_search" not in litellm.model_cost[key]
+        assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_tool_search"] is True
+
+    assert "supports_tool_search" not in litellm.model_cost["claude-opus-4-1"]
+    assert litellm.get_model_info("claude-opus-4-1", custom_llm_provider="anthropic").get("supports_tool_search") is None
+
+    assert match_fill_missing_generalizations("claude-opus-5", "bedrock")["supports_tool_search"] is True
+    assert match_fill_missing_generalizations("claude-opus-5", "perplexity") is None

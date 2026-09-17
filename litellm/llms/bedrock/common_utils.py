@@ -898,6 +898,20 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     return any(entry.get("supports_prompt_caching") is True for entry in entries)
 
 
+def bedrock_supports_tool_search(model: str) -> bool:
+    """
+    Whether Bedrock InvokeModel admits the ``tool_search_tool_*`` tool types on ``model``.
+
+    Backed by the ``supports_tool_search`` flag in ``model_prices_and_context_window.json``,
+    an exact entry or the ``claude-tool-search`` fallback rule for Claude 4.5 and newer, so a
+    newly released Claude carries the flag with no code change. An explicit ``false`` on the
+    resolved entry wins over the rule.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    return AnthropicModelInfo._supports_model_capability(model, "supports_tool_search", "bedrock")
+
+
 def is_claude_4_5_on_bedrock(model: str) -> bool:
     """
     Check if the model supports Bedrock prompt caching with an extended '1h' TTL
