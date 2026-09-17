@@ -343,7 +343,7 @@ async fn read_operation_response(
     let bytes =
         crate::ocr::client::read_response_bytes(response, connection.max_response_bytes).await?;
     crate::ocr::handler::post_call(hooks, &bytes).await?;
-    poll_operation(http_client, operation, headers, connection, native).await
+    poll_operation(http_client, operation, headers, connection, native, hooks).await
 }
 
 async fn poll_operation(
@@ -352,6 +352,7 @@ async fn poll_operation(
     headers: &[(String, String)],
     connection: &OcrConnection,
     native: bool,
+    hooks: &Arc<dyn OcrHooks>,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, crate::ocr::Error> {
     let deadline = Instant::now()
         .checked_add(connection.poll_timeout)
@@ -392,7 +393,10 @@ async fn poll_operation(
         .await
         .map_err(|_| crate::ocr::Error::PollTimeout)??;
         match &decoded.data.status {
-            Some(OperationStatus::Succeeded) => return Ok(decoded),
+            Some(OperationStatus::Succeeded) => {
+                crate::ocr::handler::post_call(hooks, decoded.text.as_bytes()).await?;
+                return Ok(decoded);
+            }
             Some(OperationStatus::Running | OperationStatus::NotStarted) => {
                 tokio::time::timeout_at(deadline, tokio::time::sleep(Duration::from_secs(retry)))
                     .await
@@ -985,7 +989,7 @@ mod tests {
 
     struct SubmissionBoundary {
         request_count: Arc<Mutex<Vec<String>>>,
-        post_calls: Arc<Mutex<Vec<Value>>>,
+        post_calls: Arc<Mutex<Vec<(usize, Value)>>>,
     }
 
     impl crate::ocr::hooks::OcrHooks for SubmissionBoundary {
@@ -994,18 +998,17 @@ mod tests {
             request: crate::ocr::hooks::OcrPostCallRequest,
         ) -> crate::ocr::hooks::OcrHookFuture<'_, crate::ocr::hooks::OcrPostCallRequest> {
             Box::pin(async move {
-                assert_eq!(self.request_count.lock().unwrap().len(), 1);
-                self.post_calls
-                    .lock()
-                    .unwrap()
-                    .push(request.original_response.clone());
+                self.post_calls.lock().unwrap().push((
+                    self.request_count.lock().unwrap().len(),
+                    request.original_response.clone(),
+                ));
                 Ok(request)
             })
         }
     }
 
     #[tokio::test]
-    async fn accepted_response_runs_post_call_once_before_polling() {
+    async fn accepted_response_runs_post_call_for_submission_and_completed_poll() {
         let (base, seen, server) = mock_server(vec![
             MockResponse {
                 status: 202,
@@ -1029,7 +1032,10 @@ mod tests {
         assert_eq!(seen.lock().unwrap().len(), 2);
         assert_eq!(
             *post_calls.lock().unwrap(),
-            [json!(r#"{"submitted":true}"#)]
+            [
+                (1, json!(r#"{"submitted":true}"#)),
+                (2, json!(r#"{"status":"succeeded"}"#)),
+            ]
         );
     }
 
