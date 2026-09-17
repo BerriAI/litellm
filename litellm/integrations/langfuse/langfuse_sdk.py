@@ -25,7 +25,9 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
-from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
+from opentelemetry.sdk.trace.sampling import Decision, Sampler, SamplingResult
+from opentelemetry.trace import Link, SpanKind, TraceState
+from opentelemetry.util.types import Attributes
 from requests import RequestException
 
 from litellm._logging import verbose_logger
@@ -36,8 +38,10 @@ __all__ = (
     "RELEASE_ATTRIBUTE",
     "DiscardingSpanExporter",
     "RetryingSpanExporter",
+    "TraceIdHashSampler",
     "acquire_langfuse_client",
     "build_isolated_tracer_provider",
+    "configured_sample_rate",
     "evict_stale_langfuse_resources",
     "lease_langfuse_client",
     "open_trace_context",
@@ -201,7 +205,64 @@ class _RequestedSpanIdGenerator(RandomIdGenerator):
 _litellm_built_providers: Final[WeakSet] = WeakSet()
 
 
-def build_isolated_tracer_provider(*, environment: str | None, release: str | None) -> TracerProvider:
+@dataclass(frozen=True, slots=True)
+class TraceIdHashSampler(Sampler):
+    """Sample on a SHA-256 of the trace id rather than its low 64 bits.
+
+    litellm trace ids are UUIDs, whose variant bits pin the top of that low word, so
+    ``TraceIdRatioBased`` drops every trace at rates up to 0.5 and skews above it.
+    """
+
+    rate: float
+
+    def should_sample(
+        self,
+        parent_context: Context | None,
+        trace_id: int,
+        name: str,
+        kind: SpanKind | None = None,
+        attributes: Attributes = None,
+        links: Sequence[Link] | None = None,
+        trace_state: TraceState | None = None,
+    ) -> SamplingResult:
+        digest: Final = sha256(trace_id.to_bytes(16, "big")).digest()
+        sampled: Final = int.from_bytes(digest[:8], "big") < round(self.rate * 2**64)
+        parent: Final = otel_trace.get_current_span(parent_context).get_span_context()
+        return SamplingResult(
+            Decision.RECORD_AND_SAMPLE if sampled else Decision.DROP,
+            attributes if sampled else None,
+            parent.trace_state if parent.is_valid else None,
+        )
+
+    def get_description(self) -> str:
+        return f"TraceIdHashSampler{{{self.rate}}}"
+
+
+def _parse_sample_rate(raw: str) -> float | None:
+    try:
+        rate: Final = float(raw)
+    except ValueError:
+        return None
+    return rate if 0.0 <= rate <= 1.0 else None
+
+
+def configured_sample_rate() -> float:
+    """``LANGFUSE_SAMPLE_RATE`` as a fraction, exporting everything when it is unset or unusable."""
+    raw: Final = os.environ.get("LANGFUSE_SAMPLE_RATE")
+    if raw is None:
+        return 1.0
+    parsed: Final = _parse_sample_rate(raw)
+    if parsed is None:
+        verbose_logger.warning(
+            "LANGFUSE_SAMPLE_RATE=%r is not a number between 0.0 and 1.0; ignoring it and exporting every trace", raw
+        )
+        return 1.0
+    return parsed
+
+
+def build_isolated_tracer_provider(
+    *, environment: str | None, release: str | None, sample_rate: float = 1.0
+) -> TracerProvider:
     """Give the langfuse client a provider of its own instead of the process-wide one.
 
     v4 is built on OpenTelemetry and otherwise either claims the global tracer
@@ -211,13 +272,9 @@ def build_isolated_tracer_provider(*, environment: str | None, release: str | No
 
     The resource is rebuilt here because langfuse only applies ``environment``
     and ``release`` when it constructs the provider itself, and the sampler is
-    rebuilt for the same reason: ``LANGFUSE_SAMPLE_RATE`` is otherwise silently
+    installed for the same reason: ``sample_rate`` is otherwise silently
     ignored and every trace exports.
     """
-    raw_sample_rate: Final = os.environ.get("LANGFUSE_SAMPLE_RATE")
-    sample_rate: Final = float(raw_sample_rate) if raw_sample_rate is not None else 1.0
-    if not 0.0 <= sample_rate <= 1.0:
-        raise ValueError(f"Sample rate must be between 0.0 and 1.0, got {sample_rate}")
     attributes: Final = MappingProxyType(
         {
             key: value
@@ -227,7 +284,7 @@ def build_isolated_tracer_provider(*, environment: str | None, release: str | No
     )
     provider: Final = TracerProvider(
         resource=Resource.create(dict(attributes)),
-        sampler=TraceIdRatioBased(sample_rate) if sample_rate < 1 else None,
+        sampler=TraceIdHashSampler(sample_rate) if sample_rate < 1 else None,
         id_generator=_RequestedSpanIdGenerator(),
     )
     with _LIVE_CLIENTS_LOCK:
@@ -549,6 +606,7 @@ def acquire_langfuse_client(
             base_url=parameters.get("base_url"),
         )
     )
+    sample_rate: Final = configured_sample_rate()
     with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
         cached: Final = _evict_if_stale_locked(
             public_key=public_key,
@@ -557,9 +615,10 @@ def acquire_langfuse_client(
         )
         client: Final = Langfuse(
             **parameters,  # pyright: ignore[reportArgumentType]  # kwargs-ok: dict mirrors the typed ctor, values resolved by the callers
+            sample_rate=sample_rate,
             tracer_provider=None
             if cached is not None
-            else build_isolated_tracer_provider(environment=environment, release=release),
+            else build_isolated_tracer_provider(environment=environment, release=release, sample_rate=sample_rate),
             span_exporter=span_exporter,
         )
         register_langfuse_client(client)

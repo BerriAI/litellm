@@ -6,8 +6,11 @@ call would otherwise record its own duration instead of the call's.
 """
 
 import json
+import logging
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import opentelemetry.trace as otel_trace
 import pytest
@@ -29,7 +32,9 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     _lifecycle_state,
     _litellm_built_providers,
     _teardown_langfuse_client,
+    acquire_langfuse_client,
     build_isolated_tracer_provider,
+    configured_sample_rate,
     evict_stale_langfuse_resources,
     lease_langfuse_client,
     open_trace_context,
@@ -371,27 +376,77 @@ def test_isolated_provider_carries_environment_and_release():
     assert attributes["langfuse.release"] == "v9"
 
 
-def test_langfuse_sample_rate_drops_spans_on_the_isolated_provider(monkeypatch):
-    """The SDK only installs its sampler on providers it builds itself; v2 sampled via the same env var."""
-    monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", "0")
-    dropped_exporter = InMemorySpanExporter()
-    dropping_provider = build_isolated_tracer_provider(environment=None, release=None)
-    dropping_provider.add_span_processor(SimpleSpanProcessor(dropped_exporter))
-    dropping_provider.get_tracer("test").start_span("dropped").end()
-    assert not dropped_exporter.get_finished_spans()
+def _generations_exported_at(sample_rate: float, trace_ids: tuple[str, ...]) -> frozenset[str]:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = build_isolated_tracer_provider(environment=None, release=None, sample_rate=sample_rate)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    pk: Final = f"pk-sample-{sample_rate}"
+    LangfuseResourceManager._instances.pop(pk, None)
+    client: Final = Langfuse(
+        public_key=pk,
+        secret_key="sk-sample",
+        host="http://127.0.0.1:1",
+        tracer_provider=provider,
+        span_exporter=exporter,
+    )
+    try:
+        for trace_id in trace_ids:
+            context, claim_root = open_trace_context(client=client, trace_id=trace_id, parent_observation_id=None)
+            start_generation(
+                client=client,
+                context=context,
+                name="sampled",
+                start_time=CALL_START,
+                claim_trace_root=claim_root,
+                attributes={},
+            ).end()
+    finally:
+        LangfuseResourceManager._instances.pop(pk, None)
+    return frozenset(format(span.context.trace_id, "032x") for span in exporter.get_finished_spans())
 
-    monkeypatch.delenv("LANGFUSE_SAMPLE_RATE")
-    kept_exporter = InMemorySpanExporter()
-    keeping_provider = build_isolated_tracer_provider(environment=None, release=None)
-    keeping_provider.add_span_processor(SimpleSpanProcessor(kept_exporter))
-    keeping_provider.get_tracer("test").start_span("kept").end()
-    assert [span.name for span in kept_exporter.get_finished_spans()] == ["kept"]
+
+def test_sample_rate_zero_drops_and_one_keeps_every_trace():
+    trace_ids: Final = tuple(resolve_trace_id(uuid.uuid4()) for _ in range(20))
+    assert _generations_exported_at(0, trace_ids) == frozenset()
+    assert _generations_exported_at(1, trace_ids) == frozenset(trace_ids)
 
 
-def test_invalid_sample_rate_fails_at_construction_like_the_sdk(monkeypatch):
-    monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", "1.5")
-    with pytest.raises(ValueError, match=r"between 0\.0 and 1\.0"):
-        build_isolated_tracer_provider(environment=None, release=None)
+def test_fractional_sample_rate_keeps_a_deterministic_share_of_uuid_trace_ids():
+    trace_ids: Final = tuple(resolve_trace_id(uuid.uuid4()) for _ in range(400))
+    kept: Final = _generations_exported_at(0.5, trace_ids)
+    assert 140 <= len(kept) <= 260
+    assert _generations_exported_at(0.5, trace_ids) == kept
+    assert kept < _generations_exported_at(0.9, trace_ids)
+
+
+@pytest.mark.parametrize("raw", ["1.5", "-0.5", "abc"])
+def test_unusable_sample_rate_warns_and_exports_everything(
+    monkeypatch: pytest.MonkeyPatch, raw: str, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", raw)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert configured_sample_rate() == 1.0
+    assert "LANGFUSE_SAMPLE_RATE" in caplog.text
+
+    pk: Final = f"pk-unusable-rate-{raw}"
+    LangfuseResourceManager._instances.pop(pk, None)
+    try:
+        client: Final = acquire_langfuse_client(
+            parameters={"public_key": pk, "secret_key": "sk", "base_url": "http://127.0.0.1:1"},
+            environment=None,
+            release=None,
+            mock_mode=True,
+        )
+        assert client._resources.sample_rate == 1.0
+    finally:
+        LangfuseResourceManager._instances.pop(pk, None)
+
+
+def test_configured_sample_rate_reads_the_env_var(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("LANGFUSE_SAMPLE_RATE", raising=False)
+    assert configured_sample_rate() == 1.0
+    monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", "0.25")
+    assert configured_sample_rate() == 0.25
 
 
 def _isolated_client_with_exporter():
