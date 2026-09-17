@@ -92,9 +92,24 @@ class TestBridgeInputTransformation:
             }
         ]
 
-    def test_non_text_content_passes_through_unchanged(self):
+    def test_image_content_is_transformed_to_input_image(self):
+        """Gemini-native image parts must become valid Responses API `input_image`
+        parts, not pass through unchanged - see GH issue #41427, where the
+        untransformed part was silently dropped by the Responses API."""
         image_part = {"type": "image", "data": "base64data", "mime_type": "image/png"}
         transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
             [{"type": "user_input", "content": [image_part]}]
         )
-        assert transformed == [{"role": "user", "content": [image_part]}]
+        assert transformed == [
+            {
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": "data:image/png;base64,base64data"}],
+            }
+        ]
+
+    def test_unrecognized_content_type_passes_through_unchanged(self):
+        other_part = {"type": "document", "data": "base64data", "mime_type": "application/pdf"}
+        transformed = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
+            [{"type": "user_input", "content": [other_part]}]
+        )
+        assert transformed == [{"role": "user", "content": [other_part]}]

@@ -179,12 +179,34 @@ class LiteLLMResponsesInteractionsConfig:
         if isinstance(item, str):
             return {"type": text_type, "text": item}
         if isinstance(item, Mapping):
-            if item.get("type") == "text":
+            item_type = item.get("type")
+            if item_type == "text":
                 return {"type": text_type, "text": str(item.get("text", ""))}
+            if item_type == "image":
+                return LiteLLMResponsesInteractionsConfig._transform_image_content_item(item)
             return item
         if isinstance(item, BaseModel):
             return LiteLLMResponsesInteractionsConfig._transform_content_item(item.model_dump(exclude_none=True), role)
         return {"type": text_type, "text": str(item)}
+
+    @staticmethod
+    def _transform_image_content_item(item: Mapping[str, object]) -> Mapping[str, object]:
+        """
+        Transform an Interactions API image content part
+        ({"type": "image", "data": <base64>, "mime_type": ...} or {"uri": ...})
+        into a Responses API `input_image` part, so it isn't silently dropped.
+        """
+        uri: Final = item.get("uri")
+        if isinstance(uri, str) and uri:
+            return {"type": "input_image", "image_url": uri}
+
+        data: Final = item.get("data")
+        if isinstance(data, str) and data:
+            mime_type: Final = item.get("mime_type") or "image/jpeg"
+            return {"type": "input_image", "image_url": f"data:{mime_type};base64,{data}"}
+
+        # No usable data/uri - fall back to passing through unchanged.
+        return item
 
     @staticmethod
     def transform_responses_response_to_interactions_response(
