@@ -4275,9 +4275,81 @@ async def test_oauth_callback_handles_invalid_state():
             state="invalid_encrypted_state",
         )
 
-        # Should return HTML error page
-        assert response.status_code == 200
-        assert "Authentication incomplete" in response.body.decode()
+        # Should return a 400 error page that points at the missing state cookie
+        assert response.status_code == 400
+        body = response.body.decode()
+        assert "did not arrive" in body
+        assert "PROXY_BASE_URL" in body
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_missing_state_cookie_logs_origin_hint(monkeypatch):
+    """A /callback whose per-flow state cookie never arrived must log a warning
+    carrying the resolved base URL and whether PROXY_BASE_URL is set, so the
+    origin-mismatch behind an ingress is diagnosable from logs."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            callback,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode, patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.verbose_logger"
+    ) as mock_logger:
+        mock_decode.side_effect = ValueError("bad state")
+
+        response = await callback(
+            request=_mock_callback_request(),
+            code="test_code",
+            state="relay-handle-without-cookie",
+        )
+
+    assert response.status_code == 400
+    mock_logger.warning.assert_called_once()
+    warning_args = mock_logger.warning.call_args
+    assert "state_cookie_present=%s" in warning_args.args[0]
+    assert "PROXY_BASE_URL_set=%s" in warning_args.args[0]
+    assert warning_args.args[1] is False
+    assert warning_args.args[2] == "http://localhost:3000"
+    assert warning_args.args[3] is False
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_undecodable_state_with_cookie_present():
+    """When the state cookie DID arrive but still does not decode, the error
+    page must not claim the cookie was lost in transit."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _oauth_state_cookie_name,
+            callback,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    state = "relay-handle"
+    request = _mock_callback_request()
+    request.cookies = {_oauth_state_cookie_name(state): "garbage"}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode:
+        mock_decode.side_effect = ValueError("bad state")
+
+        response = await callback(
+            request=request,
+            code="test_code",
+            state=state,
+        )
+
+    assert response.status_code == 400
+    body = response.body.decode()
+    assert "could not be decoded" in body
+    assert "did not arrive" not in body
 
 
 @pytest.mark.asyncio

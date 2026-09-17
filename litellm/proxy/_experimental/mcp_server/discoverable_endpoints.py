@@ -1,6 +1,7 @@
 import asyncio
 import html as _html
 import json
+import os
 import secrets
 import time
 from collections.abc import Callable, Mapping
@@ -435,6 +436,10 @@ def _resolve_encoded_oauth_state(request: Request, state: str) -> str:
     """
     cookie_value: Final = request.cookies.get(_oauth_state_cookie_name(state))
     return cookie_value if cookie_value else state
+
+
+def _oauth_state_cookie_present(request: Request, state: str) -> bool:
+    return _oauth_state_cookie_name(state) in request.cookies
 
 
 def _clear_oauth_state_cookie(response: Response, request: Request, state: str) -> None:
@@ -2235,9 +2240,28 @@ async def callback(
         )
 
     # 3. Successful authorization response.
+    encoded_state = _resolve_encoded_oauth_state(request, state)
     try:
-        encoded_state = _resolve_encoded_oauth_state(request, state)
         state_data = decode_state_hash(encoded_state)
+    except Exception:
+        cookie_present: Final = _oauth_state_cookie_present(request, state)
+        verbose_logger.warning(
+            "MCP /callback could not decode OAuth state (state_cookie_present=%s, request_base_url=%s, "
+            "PROXY_BASE_URL_set=%s). If the cookie is absent, /authorize and /callback were served from "
+            "different origins; set PROXY_BASE_URL to the public origin or configure mcp_trusted_proxy_ranges.",
+            cookie_present,
+            get_request_base_url(request),
+            bool(os.environ.get("PROXY_BASE_URL", "").strip()),
+        )
+        description: Final = (
+            "The OAuth session cookie set when authorization started did not arrive at the callback. "
+            "This usually means the authorize and callback requests used different origins. "
+            "Ask the gateway operator to set PROXY_BASE_URL to the public URL of this gateway, then retry."
+            if not cookie_present
+            else "The OAuth session could not be decoded. Start the authorization again."
+        )
+        return _render_oauth_error_html("invalid_request", description)
+    try:
         original_state = state_data["original_state"]
 
         # Re-validate the client redirect URI at the sink. /authorize
