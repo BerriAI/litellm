@@ -547,17 +547,41 @@ class TestStopCommand:
 
 
 class TestSubcommandNames:
-    def test_start_and_stop_replace_up_and_down(self):
+    def test_start_and_stop_are_the_listed_commands(self):
         """`lite up` already routes an existing proxy into Claude Code, so the ephemeral proxy's
-        launcher and its recovery path are `start` and `stop`, with no `up`/`down` alias left."""
+        launcher and its recovery path are listed as `start` and `stop`; the old names stay callable
+        but are hidden from the listing."""
         runner = CliRunner()
 
-        for retired in ("up", "down"):
-            result = runner.invoke(autoroute_group, [retired, "--help"])
-            assert result.exit_code == 2, result.output
-            assert f"No such command '{retired}'" in result.output
+        listing = runner.invoke(autoroute_group, ["--help"])
+        assert listing.exit_code == 0, listing.output
+        listed = {line.split()[0] for line in listing.output.splitlines() if line.startswith("  ")}
+        assert {"configure", "start", "stop"} <= listed
+        assert listed.isdisjoint({"up", "down"})
 
-        for name in ("start", "stop"):
+        for name in ("start", "stop", "up", "down"):
             result = runner.invoke(autoroute_group, [name, "--help"])
             assert result.exit_code == 0, result.output
             assert "Show this message and exit" in result.output
+
+    def test_up_warns_then_behaves_like_start(self, monkeypatch, tmp_path):
+        _patch_paths(monkeypatch, tmp_path)
+        runner = CliRunner()
+
+        result = runner.invoke(autoroute_group, ["up", "--port", "5555"])
+
+        assert result.exit_code == 1, result.output
+        assert "`lite autoroute up` is deprecated" in result.stderr
+        assert "run `lite autoroute start` instead" in result.stderr
+        assert "No config found. Run `lite autoroute configure` first." in result.output
+
+    def test_down_warns_then_behaves_like_stop(self, monkeypatch, tmp_path):
+        _patch_paths(monkeypatch, tmp_path)
+        runner = CliRunner()
+
+        result = runner.invoke(autoroute_group, ["down"])
+
+        assert result.exit_code == 0, result.output
+        assert "`lite autoroute down` is deprecated" in result.stderr
+        assert "run `lite autoroute stop` instead" in result.stderr
+        assert "Nothing to restore." in result.output

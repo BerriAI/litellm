@@ -668,6 +668,8 @@ lite autoroute start
 lite autoroute stop   # only needed if `start` was killed uncleanly instead of Ctrl-C'd
 ```
 
+The previous names, `lite autoroute up` and `lite autoroute down`, still work as hidden aliases of `start` and `stop`: each prints a deprecation notice on stderr and will be removed in a future release
+
 #### Caveats
 
 Adaptive mode's learned state does not persist across `lite autoroute start` sessions -- there is no local database, so every session starts adaptive selection cold. A Claude Code session already running before `start` ran, or still running when it stops, keeps whatever settings it loaded at its own startup; like `lite up`, this is a one-time file patch and restore, not a live traffic interceptor. Only Claude Code is supported, for the same reason as `lite up`: no other supported agent (for example Cursor) has an equivalent hot-patchable config file.
