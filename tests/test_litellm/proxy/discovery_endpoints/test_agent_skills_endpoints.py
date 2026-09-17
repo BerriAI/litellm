@@ -4,12 +4,14 @@ import zipfile
 from datetime import datetime, timezone
 
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 import litellm
 from litellm.models.skills import LiteLLM_SkillsTable
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.discovery_endpoints.agent_skills_endpoints import (
+    archive_caller,
     router,
     stored_skill,
     stored_skills,
@@ -80,7 +82,6 @@ def test_discovery_is_absent_until_public_skills_index_is_enabled(monkeypatch):
 
     for path in WELL_KNOWN_PATHS:
         assert client.get(path).status_code == 404
-    assert client.get("/v1/skills/litellm_skill_1/archive").status_code == 404
 
 
 @pytest.mark.parametrize("path", WELL_KNOWN_PATHS)
@@ -165,6 +166,72 @@ def test_archive_route_404s_for_a_skill_that_does_not_exist(index_enabled):
     client = client_for(skill("litellm_skill_1"))
 
     assert client.get("/v1/skills/litellm_skill_missing/archive").status_code == 404
+
+
+def authenticated_client_for(
+    *skills: LiteLLM_SkillsTable, caller: UserAPIKeyAuth | None = None
+) -> tuple[TestClient, list[UserAPIKeyAuth | None]]:
+    from litellm.proxy._types import ProxyException
+
+    app = FastAPI()
+
+    @app.exception_handler(ProxyException)
+    async def _proxy_exception(request, exc: ProxyException):
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=int(exc.code), content={"error": exc.to_dict()})
+
+    app.include_router(router)
+
+    seen: list[UserAPIKeyAuth | None] = []
+
+    def _skill(
+        skill_id: str,
+        resolved: UserAPIKeyAuth | None = Depends(archive_caller),
+    ) -> LiteLLM_SkillsTable | None:
+        seen.append(resolved)
+        return next((candidate for candidate in skills if candidate.skill_id == skill_id), None)
+
+    app.dependency_overrides[stored_skill] = _skill
+    if caller is not None:
+        app.dependency_overrides[archive_caller] = lambda: caller
+    return TestClient(app), seen
+
+
+def test_archive_route_rejects_keyless_requests_when_the_index_is_private(monkeypatch):
+    monkeypatch.setattr(litellm, "public_skills_index", False)
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    client, seen = authenticated_client_for(skill("litellm_skill_1"))
+
+    assert client.get("/v1/skills/litellm_skill_1/archive").status_code == 401
+    assert seen == []
+
+
+def test_archive_route_serves_an_authenticated_key_when_the_index_is_private(monkeypatch):
+    monkeypatch.setattr(litellm, "public_skills_index", False)
+    client, seen = authenticated_client_for(skill("litellm_skill_1"), caller=UserAPIKeyAuth(user_id="user-1"))
+
+    downloaded = client.get(
+        "/v1/skills/litellm_skill_1/archive",
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-type"] == "application/zip"
+    assert seen[0] is not None and seen[0].user_id == "user-1"
+    with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
+        assert "SKILL.md" in archive.namelist()
+
+
+def test_archive_route_stays_anonymous_while_the_index_is_public(index_enabled):
+    client, seen = authenticated_client_for(skill("litellm_skill_1"))
+
+    downloaded = client.get("/v1/skills/litellm_skill_1/archive")
+
+    assert downloaded.status_code == 200
+    assert seen == [None]
 
 
 def test_a_stored_skill_is_repacked_once_per_version(index_enabled):

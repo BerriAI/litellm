@@ -1,9 +1,11 @@
 """Serve skills stored on the proxy as an Agent Skills well-known discovery index.
 
 ``npx skills add <proxy url> -a <agent>`` reads ``/.well-known/agent-skills/index.json``
-and downloads each entry's archive. Discovery clients send no credentials, so both
-routes are unauthenticated and stay off until ``litellm_settings.public_skills_index``
+and downloads each entry's archive. Discovery clients send no credentials, so the
+index routes are unauthenticated and stay off until ``litellm_settings.public_skills_index``
 is enabled, which publishes every stored skill to anyone who can reach the proxy.
+The archive route stays anonymous while the index is public; with the index off it
+requires a LiteLLM key and stays scoped to the skill's owner.
 """
 
 import asyncio
@@ -20,6 +22,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.models.skills import LiteLLM_SkillsTable
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.discovery_endpoints.agent_skills_archive import SkillArchive, build_skill_archive
 from litellm.types.proxy.discovery_endpoints.agent_skills_endpoints import (
     MAX_SKILL_DESCRIPTION_LENGTH,
@@ -62,11 +65,22 @@ async def stored_skills() -> Sequence[LiteLLM_SkillsTable]:
     return await LiteLLMSkillsHandler.list_skills(limit=MAX_INDEXED_SKILLS)
 
 
-async def stored_skill(skill_id: str) -> LiteLLM_SkillsTable | None:
+async def archive_caller(request: Request) -> UserAPIKeyAuth | None:
+    if litellm.public_skills_index is True:
+        return None
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    return await user_api_key_auth(request=request, api_key=request.headers.get("Authorization", ""))
+
+
+async def stored_skill(
+    skill_id: str,
+    caller: UserAPIKeyAuth | None = Depends(archive_caller),
+) -> LiteLLM_SkillsTable | None:
     from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
     try:
-        return await LiteLLMSkillsHandler.get_skill(skill_id)
+        return await LiteLLMSkillsHandler.get_skill(skill_id, user_api_key_dict=caller)
     except ValueError:
         return None
 
@@ -111,14 +125,17 @@ async def agent_skills_index(
 
 @router.get(
     "/v1/skills/{skill_id}/archive",
-    dependencies=(Depends(ensure_index_enabled),),
     response_class=ZipArchiveResponse,
 )
 async def agent_skills_archive(
     skill_id: str,
     skill: LiteLLM_SkillsTable | None = Depends(stored_skill),
 ) -> ZipArchiveResponse:
-    """Stored skill upload, repacked so SKILL.md sits at the archive root."""
+    """Stored skill upload, repacked so SKILL.md sits at the archive root.
+
+    Anonymous while the public index is on; otherwise needs a LiteLLM key
+    with access to the skill's owner scope.
+    """
     archive: Final = await _archive_for(skill) if skill is not None else None
     if archive is None:
         raise HTTPException(status_code=404, detail=f"No installable skill archive for: {skill_id}")
