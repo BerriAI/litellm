@@ -12,6 +12,8 @@ from urllib.parse import unquote
 
 import litellm
 from litellm.constants import (
+    LITELLM_REDACTED_RECORD_ATTR,
+    LITELLM_REDACTED_RECORD_STAMP,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
     MAX_BASE64_LENGTH_STDOUT_LOG,
@@ -79,13 +81,11 @@ def _redact_structured_value(key: str | None, value: str) -> str:
     return redact_structured_value(key, value)
 
 
-_REDACTED_RECORD_ATTR: Final = "litellm_redacted"
-_REDACTED_STAMP: Final = object()
 _UNREDACTED_SCALAR_TYPES: Final = (bool, int, float, type(None))
 
 
 def _is_redacted(record: logging.LogRecord) -> bool:
-    return getattr(record, _REDACTED_RECORD_ATTR, None) is _REDACTED_STAMP
+    return getattr(record, LITELLM_REDACTED_RECORD_ATTR, None) is LITELLM_REDACTED_RECORD_STAMP
 
 
 def _scrubbing_changed_nothing(scrubbed: object, original: object) -> bool:
@@ -194,7 +194,7 @@ class SecretRedactionFilter(logging.Filter):
             elif not isinstance(value, _UNREDACTED_SCALAR_TYPES):
                 setattr(record, key, _redact_extra_value(key, value))
 
-        setattr(record, _REDACTED_RECORD_ATTR, _REDACTED_STAMP)
+        setattr(record, LITELLM_REDACTED_RECORD_ATTR, LITELLM_REDACTED_RECORD_STAMP)
         return True
 
 
@@ -562,7 +562,7 @@ def _get_standard_record_attrs() -> frozenset:
 
 
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
-_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
+_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {LITELLM_REDACTED_RECORD_ATTR}
 
 # CorrelationContextFilter is the only legitimate source for these two JSON fields;
 # see JsonFormatter.format() for why they're excluded from the generic message-content

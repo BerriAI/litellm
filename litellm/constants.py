@@ -1510,6 +1510,8 @@ LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE: Final = (
     "Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.) and at DEBUG level. "
     "To increase the truncation limit, set `MAX_STRING_LENGTH_STDOUT_LOG` in your env."
 )
+LITELLM_REDACTED_RECORD_ATTR: Final = "litellm_redacted"
+LITELLM_REDACTED_RECORD_STAMP: Final[object] = object()
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
