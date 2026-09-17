@@ -19,6 +19,7 @@ from typing_extensions import NotRequired, TypedDict
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -236,9 +237,11 @@ class CustomStreamWrapper:
         stream_options=None,
         make_call: Callable | None = None,
         _response_headers: dict | httpx.Headers | None = None,
+        count_prompt_tokens: Callable[[], int] | None = None,
     ):
         self.model = model
         self.make_call = make_call
+        self.count_prompt_tokens = count_prompt_tokens
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
@@ -1641,7 +1644,7 @@ class CustomStreamWrapper:
                         except Exception:
                             model_response.choices[0].delta = Delta()
                 else:
-                    if self.stream_options is not None and self.stream_options["include_usage"] is True:
+                    if self.send_stream_usage is True:
                         model_response.choices = []
                         return model_response
                     self._record_usage_only_chunk(model_response=model_response)
@@ -1996,6 +1999,7 @@ class CustomStreamWrapper:
                         chunks=self.chunks,
                         messages=self.messages,
                         logging_obj=self.logging_obj,
+                        count_prompt_tokens=self.count_prompt_tokens,
                     )
                 except Exception as e:
                     # stream_chunk_builder can re-raise (as APIError) on large agentic
@@ -2244,10 +2248,11 @@ class CustomStreamWrapper:
         if self.sent_last_chunk is True:
             # log the final chunk with accurate streaming values
             try:
-                complete_streaming_response = litellm.stream_chunk_builder(
+                complete_streaming_response = await asyncify(litellm.stream_chunk_builder)(
                     chunks=self.chunks,
                     messages=self.messages,
                     logging_obj=self.logging_obj,
+                    count_prompt_tokens=self.count_prompt_tokens,
                 )
             except Exception as e:
                 # see sync __next__: a raise from stream_chunk_builder inside this
@@ -2371,6 +2376,7 @@ class CustomStreamWrapper:
                 chunks=self.chunks,
                 messages=self.messages if isinstance(self.messages, list) else None,
                 logging_obj=self.logging_obj,
+                count_prompt_tokens=self.count_prompt_tokens,
             )
             if partial_response is None:
                 return

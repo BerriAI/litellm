@@ -501,8 +501,8 @@ def test_unmapped_model_fallback_function_calling():
     assert info["supports_function_calling"] is True
 
 
-def test_transform_messages_helper_strips_thinking_blocks():
-    """thinking_blocks must not be forwarded to Fireworks chat completions."""
+def test_transform_messages_helper_strips_thinking_blocks_but_keeps_reasoning_content():
+    """Fireworks rejects thinking_blocks but requires reasoning_content to be replayed for reasoning_history."""
     config = FireworksAIConfig()
     messages = [
         {"role": "user", "content": "Translate a poem."},
@@ -519,7 +519,7 @@ def test_transform_messages_helper_strips_thinking_blocks():
         messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
     )
     assert "thinking_blocks" not in out[1]
-    assert "reasoning_content" not in out[1]
+    assert out[1]["reasoning_content"] == "internal"
     assert out[1]["content"] == "I can help."
 
 
@@ -973,12 +973,11 @@ def test_thinking_and_reasoning_effort_conflict_rejected():
         )
 
 
-def test_minimax_m3_supports_vision_from_model_map():
+def test_llama_vision_supports_vision_from_model_map():
     config = FireworksAIConfig()
 
     for model in [
-        "fireworks_ai/accounts/fireworks/models/minimax-m3",
-        "fireworks_ai/minimax-m3",
+        "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct",
     ]:
         assert supports_vision(model=model, custom_llm_provider="fireworks_ai") is True
         assert config.get_provider_info(model)["supports_vision"] is True
@@ -1052,7 +1051,7 @@ def test_transform_messages_helper_allows_vision_image_inputs():
     ]
 
     out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
+        messages, model="accounts/fireworks/models/llama-v3p2-11b-vision-instruct", litellm_params={}
     )
     assert out == messages
 
@@ -1117,7 +1116,7 @@ def test_transform_messages_helper_no_transform_inline():
         }
     ]
     out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
+        messages, model="accounts/fireworks/models/llama-v3p2-11b-vision-instruct", litellm_params={}
     )
     block = out[0]["content"][0]
     assert block["image_url"] == url
@@ -1187,6 +1186,28 @@ def test_reasoning_effort_integer_passthrough():
     )
     assert result["reasoning_effort"] == 1000
     assert isinstance(result["reasoning_effort"], int)
+
+
+def test_reasoning_effort_dict_from_anthropic_adapter_flattened_to_effort_string():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"effort": "medium", "summary": "detailed"}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "medium"
+
+
+def test_reasoning_effort_dict_without_effort_key_dropped():
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"reasoning_effort": {"summary": "detailed"}},
+        {},
+        _REASONING_MODEL,
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in result
 
 
 def test_reasoning_effort_auto_dropped_to_model_default():
@@ -1813,3 +1834,15 @@ def test_streaming_preserves_selected_model_for_private_accounting():
         completion_response=assembled,
         custom_llm_provider="fireworks_ai",
     ) == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
+        ("glm-5p3-fast", "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"),
+        ("accounts/fireworks/models/deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
+    ],
+)
+def test_get_model_cost_key_resolves_short_names_to_long_keys(model: str, expected: str) -> None:
+    assert FireworksAIConfig().get_model_cost_key(model) == expected

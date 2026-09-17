@@ -280,6 +280,22 @@ def plan_pgbouncer(
     )
 
 
+def pooled_database_url(upstream_url: str, settings: PgBouncerSettings) -> str | PgBouncerError:
+    """The loopback URL of a PgBouncer another container in the pod already runs for ``upstream_url``.
+
+    Only the container that started PgBouncer knows the pool user's password, so
+    this logs in as the upstream user, whom the auth file lists as well.
+    """
+    plan: Final = plan_pgbouncer(upstream_url, settings, runtime_dir=Path("/nonexistent"), run_as_user=None)
+    if isinstance(plan, PgBouncerError):
+        return plan
+    password: Final = urllib.parse.urlsplit(upstream_url).password or ""
+    credentials: Final = f"{urllib.parse.quote(plan.upstream_user, safe='')}:{password}"
+    return urllib.parse.urlunsplit(
+        urllib.parse.urlsplit(plan.pooled_url)._replace(netloc=f"{credentials}@{PGBOUNCER_LISTEN_ADDR}:{settings.port}")
+    )
+
+
 def _write_private(path: Path, content: str, run_as_user: str | None) -> None:
     with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
         handle.write(content)

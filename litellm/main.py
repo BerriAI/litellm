@@ -67,7 +67,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
@@ -105,7 +105,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 )
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
@@ -850,6 +850,12 @@ def admission_input_tokens(kwargs: Mapping[str, object]) -> int | None:
     )
 
 
+def admitted_prompt_token_counter(prompt_tokens: int | None) -> Callable[[], int] | None:
+    if prompt_tokens is None:
+        return None
+    return lambda: prompt_tokens
+
+
 def mock_completion(
     model: str,
     messages: list,
@@ -935,23 +941,26 @@ def mock_completion(
 
         if stream is True:
             model_response = ModelResponseStream()
+            count_prompt_tokens: Final = admitted_prompt_token_counter(prompt_tokens)
             # don't try to access stream object,
             if kwargs.get("acompletion", False) is True:
                 return CustomStreamWrapper(
                     completion_stream=async_mock_completion_streaming_obj(
-                        model_response, mock_response=mock_response, model=model, n=n
+                        model_response, mock_response=mock_response, model=model, n=n, prompt_tokens=prompt_tokens
                     ),
                     model=model,
                     custom_llm_provider="openai",
                     logging_obj=logging,
+                    count_prompt_tokens=count_prompt_tokens,
                 )
             return CustomStreamWrapper(
                 completion_stream=mock_completion_streaming_obj(
-                    model_response, mock_response=mock_response, model=model, n=n
+                    model_response, mock_response=mock_response, model=model, n=n, prompt_tokens=prompt_tokens
                 ),
                 model=model,
                 custom_llm_provider="openai",
                 logging_obj=logging,
+                count_prompt_tokens=count_prompt_tokens,
             )
         if isinstance(mock_response, litellm.MockException):
             raise mock_response
@@ -990,12 +999,15 @@ def mock_completion(
             ),
         )
 
-        try:
-            _, custom_llm_provider, _, _ = litellm.utils.get_llm_provider(model=model)
+        if custom_llm_provider is not None:
             model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
-        except Exception:
-            # dont let setting a hidden param block a mock_respose
-            pass
+        else:
+            try:
+                _, inferred_provider, _, _ = litellm.utils.get_llm_provider(model=model)
+                model_response._hidden_params["custom_llm_provider"] = inferred_provider
+            except Exception:
+                # dont let setting a hidden param block a mock_respose
+                pass
 
         if logging is not None:
             logging.post_call(
@@ -1063,10 +1075,6 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
-        if web_search_options is not None and custom_llm_provider == "xai":
-            model_info["mode"] = "responses"
-            model = model.replace("responses/", "")
-
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
 
@@ -1074,6 +1082,10 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
+
+    if web_search_options is not None and custom_llm_provider == "xai":
+        model_info["mode"] = "responses"
+        model = model.replace("responses/", "")
 
     # OpenAI/Azure GPT-5 chat-completions that need Responses-only fields (e.g.
     # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
@@ -2332,6 +2344,10 @@ def _complete_sap(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
 def _complete_aiohttp_openai(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
+    if http2_enabled():
+        verbose_logger.warning(
+            "litellm.http2 is enabled but aiohttp_openai/ always uses aiohttp, which has no HTTP/2 client; this request stays on HTTP/1.1"
+        )
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -2583,7 +2599,9 @@ def _complete_custom_openai(
             copilot_headers.update(extra_headers)
         extra_headers = copilot_headers
 
-    if extra_headers is not None:
+    use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
+
+    if extra_headers is not None and not use_base_llm_http_handler:
         optional_params["extra_headers"] = extra_headers
 
     if litellm.enable_preview_features and metadata is not None:  # [PREVIEW] allow metadata to be passed to OPENAI
@@ -2600,8 +2618,6 @@ def _complete_custom_openai(
             optional_params[k] = v
 
     ## COMPLETION CALL
-    use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
-
     try:
         if use_base_llm_http_handler:
             response = base_llm_http_handler.completion(
@@ -5955,7 +5971,7 @@ def responses_with_retries(*args, **kwargs):
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    from litellm.responses.main import responses
+    from litellm.responses.dispatch import responses
 
     num_retries: Final = kwargs.pop("num_retries", 3)
     # reset retries in .responses()
@@ -5985,7 +6001,7 @@ async def aresponses_with_retries(*args, **kwargs):
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    from litellm.responses.main import aresponses
+    from litellm.responses.dispatch import aresponses
 
     num_retries: Final = kwargs.pop("num_retries", 3)
     kwargs["max_retries"] = 0
@@ -9118,7 +9134,7 @@ async def acount_tokens(
     fallback_messages = messages or []
     if system and fallback_messages:
         fallback_messages = [{"role": "system", "content": system}] + fallback_messages
-    local_count: Final = litellm.token_counter(
+    local_count: Final = await asyncify(litellm.token_counter)(
         model=model,
         messages=fallback_messages,
         tools=tools,

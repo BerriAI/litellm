@@ -7,7 +7,6 @@ just a form that asks the user for their API key — not a full identity-provide
 
 Endpoints implemented here:
   GET  /.well-known/oauth-authorization-server      — OAuth authorization server metadata
-  GET  /.well-known/oauth-protected-resource         — OAuth protected resource metadata
   GET  /v1/mcp/oauth/authorize                       — Shows HTML form to collect the API key
   POST /v1/mcp/oauth/authorize                       — Stores temp auth code and redirects
   POST /v1/mcp/oauth/token                           — Exchanges code for a bearer JWT token
@@ -19,7 +18,7 @@ import html as _html_module
 import time
 import uuid
 from typing import Final, cast
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import jwt
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -27,14 +26,15 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.db import store_user_credential
-from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-    get_request_base_url,
-)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    BYOK_RESOURCE_METADATA_PATH,
     TOKEN_NO_CACHE_HEADERS,
+    get_request_base_url,
     validate_loopback_redirect_uri,
+    well_known_root_suffix,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.middleware.per_request_root_path_middleware import get_server_root_paths
 
 # ---------------------------------------------------------------------------
 # In-memory store for pending authorization codes.
@@ -596,13 +596,10 @@ def _build_authorize_html(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/.well-known/oauth-authorization-server", include_in_schema=False)
-async def oauth_authorization_server_metadata(request: Request) -> JSONResponse:
-    """RFC 8414 Authorization Server Metadata for the BYOK OAuth flow."""
-    base_url: Final = get_request_base_url(request)
+def _byok_authorization_server_response(base_url: str, issuer: str) -> JSONResponse:
     return JSONResponse(
         {
-            "issuer": base_url,
+            "issuer": issuer,
             "authorization_endpoint": f"{base_url}/v1/mcp/oauth/authorize",
             "token_endpoint": f"{base_url}/v1/mcp/oauth/token",
             "response_types_supported": ["code"],
@@ -612,14 +609,36 @@ async def oauth_authorization_server_metadata(request: Request) -> JSONResponse:
     )
 
 
-@router.get("/.well-known/oauth-protected-resource", include_in_schema=False)
-async def oauth_protected_resource_metadata(request: Request) -> JSONResponse:
-    """RFC 9728 Protected Resource Metadata pointing back at this server."""
+@router.get("/.well-known/oauth-authorization-server", include_in_schema=False)
+async def oauth_authorization_server_metadata(request: Request) -> JSONResponse:
     base_url: Final = get_request_base_url(request)
+    return _byok_authorization_server_response(base_url, base_url)
+
+
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/v1/mcp/oauth", include_in_schema=False)
+async def byok_authorization_server_metadata(request: Request) -> JSONResponse:
+    base_url: Final = get_request_base_url(request)
+    return _byok_authorization_server_response(base_url, f"{base_url}/v1/mcp/oauth")
+
+
+@router.get("/.well-known/oauth-authorization-server/{root_path:path}/v1/mcp/oauth", include_in_schema=False)
+async def byok_prefixed_authorization_server_metadata(request: Request, root_path: str) -> JSONResponse:
+    prefix: Final = f"/{root_path}"
+    if prefix not in get_server_root_paths():
+        raise HTTPException(status_code=404, detail="Unknown proxy root path")
+    parsed: Final = urlparse(get_request_base_url(request))
+    base_url: Final = f"{parsed.scheme}://{parsed.netloc}{prefix}"
+    return _byok_authorization_server_response(base_url, f"{base_url}/v1/mcp/oauth")
+
+
+@router.get(BYOK_RESOURCE_METADATA_PATH, include_in_schema=False)
+async def byok_protected_resource_metadata(request: Request) -> JSONResponse:
+    base_url: Final = get_request_base_url(request)
+    parsed: Final = urlparse(base_url)
     return JSONResponse(
         {
-            "resource": base_url,
-            "authorization_servers": [base_url],
+            "resource": f"{parsed.scheme}://{parsed.netloc}",
+            "authorization_servers": (f"{base_url}/v1/mcp/oauth",),
         }
     )
 

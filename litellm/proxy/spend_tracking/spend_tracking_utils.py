@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -19,6 +19,7 @@ from litellm.constants import (
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
+    MCP_SPEND_LOG_MODEL_PREFIX,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
@@ -31,6 +32,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import (
     coerce_model_access_groups,
@@ -42,10 +44,12 @@ from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsR
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
+from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
 from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     CallTypes,
     CostBreakdown,
+    LlmProviders,
     StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
@@ -55,6 +59,9 @@ from litellm.types.utils import (
     VectorStoreSearchResponse,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 
 def _get_max_string_length_prompt_in_db() -> int:
@@ -156,9 +163,10 @@ def _get_spend_logs_metadata(
             user_api_key_team_alias=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
+            user_agent=None,
             additional_usage_values=None,
             applied_guardrails=None,
-            status=None or "success",
+            status="success",
             error_information=None,
             proxy_server_request=None,
             batch_models=None,
@@ -337,11 +345,45 @@ def _sl_attribution_fallback(
     return standard_logging_payload.get(field) or ""
 
 
+def _deployment_provider(deployment: DeploymentTypedDict) -> str | None:
+    litellm_params: Final = LiteLLM_Params.model_validate(deployment["litellm_params"])
+    if litellm.LiteLLMProxyChatConfig.should_use_litellm_proxy_by_default(litellm_params=litellm_params):
+        return LlmProviders.LITELLM_PROXY.value
+    declared: Final = declared_authenticating_provider(litellm_params.model, litellm_params.custom_llm_provider)
+    if declared is not None:
+        return declared
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(
+            model=litellm_params.model, custom_llm_provider=litellm_params.custom_llm_provider
+        )
+    except litellm.exceptions.BadRequestError:
+        return None
+    return provider or None
+
+
+def _model_group_provider(model_group: str, llm_router: "Router | None") -> str | None:
+    if llm_router is None or not model_group:
+        return None
+    providers: Final = frozenset(
+        provider
+        for deployment in llm_router.get_model_list(model_name=model_group) or ()
+        if (provider := _deployment_provider(deployment)) is not None
+    )
+    return next(iter(providers)) if len(providers) == 1 else None
+
+
 def _looks_like_model_name(model: str) -> bool:
-    return len(model) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in model)
+    candidate: Final = model.removeprefix(MCP_SPEND_LOG_MODEL_PREFIX)
+    return len(candidate) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in candidate)
 
 
-def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
+def get_logging_payload(
+    kwargs: dict | None,
+    response_obj: object,
+    start_time: datetime,
+    end_time: datetime,
+    llm_router: "Router | None" = None,
+) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
 
@@ -437,15 +479,19 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         hidden_params: Final = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
 
-    custom_llm_provider: Final = (
+    logged_provider: Final = (
         kwargs.get("custom_llm_provider")
         or _sl_attribution_fallback(standard_logging_payload, "custom_llm_provider")
         or None
     )
-    raw_model: Final = cast(str, kwargs.get("model") or "")
-    resolved_model: Final = (
-        standard_logging_payload.get("model") if standard_logging_payload is not None else None
-    ) or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
+    custom_llm_provider: Final = logged_provider or _model_group_provider(_model_group, llm_router)
+    requested_model: Final = cast(object, kwargs.get("model"))
+    raw_model: Final = requested_model if isinstance(requested_model, str) else ""
+    model_is_malformed: Final = requested_model is not None and not isinstance(requested_model, str)
+    logged_model: Final = standard_logging_payload.get("model") if standard_logging_payload is not None else None
+    resolved_model: Final = (logged_model if isinstance(logged_model, str) else None) or reconstruct_model_name(
+        raw_model, logged_provider, metadata or {}
+    )
     failed_with_prompt_shaped_model: Final = (
         _get_status_for_spend_log(metadata=metadata) == "failure"
         and not _model_group
@@ -453,7 +499,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     )
     model_name: Final = (
         UNKNOWN_MODEL_SPEND_LOG_MODEL
-        if rejected_as_unknown_model or failed_with_prompt_shaped_model
+        if rejected_as_unknown_model or failed_with_prompt_shaped_model or model_is_malformed
         else resolved_model
     )
     litellm_call_id: Final = cast(
@@ -554,10 +600,12 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
                 additional_usage_values["cache_creation_input_tokens"] = cache_write_tokens
     clean_metadata["additional_usage_values"] = additional_usage_values
 
-    if litellm.cache is not None:
-        cache_key = litellm.cache.get_cache_key(**kwargs)
-    else:
+    if litellm.cache is None:
         cache_key = "Cache OFF"
+    elif litellm_params.get("preset_cache_key") is not None:
+        cache_key = litellm_params["preset_cache_key"]
+    else:
+        cache_key = litellm.cache.get_cache_key(**kwargs)
     if cache_hit is True:
         import time
 
@@ -617,6 +665,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             status=_get_status_for_spend_log(
                 metadata=metadata,
             ),
+            litellm_call_id=litellm_call_id,
         )
 
         verbose_proxy_logger.debug(
@@ -864,7 +913,7 @@ def _get_messages_for_spend_logs_payload(
     standard_logging_payload: StandardLoggingPayload | None,
     metadata: dict | None = None,
 ) -> str:
-    if _should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs():
         if standard_logging_payload is not None:
             call_type: Final = standard_logging_payload.get("call_type", "")
             if call_type == "_arealtime":
@@ -1114,7 +1163,7 @@ def _sanitize_guardrail_information_for_spend_logs(
     here to match OTEL's defensive read pattern; otherwise iteration would
     yield the dict's keys and crash the whole spend-log write.
     """
-    if guardrail_information is None or _should_store_prompts_and_responses_in_spend_logs():
+    if guardrail_information is None or should_store_prompts_and_responses_in_spend_logs():
         return guardrail_information
     entries: Final = [guardrail_information] if isinstance(guardrail_information, dict) else guardrail_information
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
@@ -1163,6 +1212,7 @@ def _redact_prompt_fields_in_guardrail_entry(
 
 def _sanitize_error_information_for_spend_logs(
     error_information: StandardLoggingPayloadErrorInformation | None,
+    original_exception: BaseException | None = None,
 ) -> StandardLoggingPayloadErrorInformation | None:
     """
     Sanitize ``error_information`` before it lands in ``LiteLLM_SpendLogs.metadata``.
@@ -1184,9 +1234,14 @@ def _sanitize_error_information_for_spend_logs(
     if error_information is None:
         return None
 
-    sanitized = cast(dict, {**error_information})
+    persisted: Final = (
+        {**error_information, "error_message": original_exception.spend_log_error_message}
+        if isinstance(original_exception, ProxyModelNotFoundError)
+        else error_information
+    )
+    sanitized = cast(dict, {**persisted})
 
-    if not _should_store_prompts_and_responses_in_spend_logs():
+    if not should_store_prompts_and_responses_in_spend_logs():
         for field in ("error_message", "traceback"):
             value = sanitized.get(field)
             if isinstance(value, str):
@@ -1263,11 +1318,11 @@ def _get_proxy_server_request_for_spend_logs_payload(
     kwargs: dict | None = None,
 ) -> str:
     """
-    Only store if _should_store_prompts_and_responses_in_spend_logs() is True
+    Only store if should_store_prompts_and_responses_in_spend_logs() is True
 
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
-    if _should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs():
         _proxy_server_request: Final = cast(dict | None, litellm_params.get("proxy_server_request", EMPTY_MAPPING))
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", EMPTY_MAPPING) or EMPTY_MAPPING
@@ -1317,7 +1372,7 @@ def _get_vector_store_request_for_spend_logs_payload(
     """
     If user does not want to store prompts and responses, then remove the content from the vector store request metadata
     """
-    if _should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs():
         return vector_store_request_metadata
 
     # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
@@ -1341,7 +1396,7 @@ def _get_response_for_spend_logs_payload(
 ) -> str:
     if payload is None:
         return "{}"
-    if _should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs():
         response_obj: object = payload.get("response")
         if response_obj is None:
             return "{}"
@@ -1389,7 +1444,7 @@ def _get_response_for_spend_logs_payload(
     return "{}"
 
 
-def _should_store_prompts_and_responses_in_spend_logs() -> bool:
+def should_store_prompts_and_responses_in_spend_logs() -> bool:
     from litellm.proxy.proxy_server import general_settings
     from litellm.secret_managers.main import get_secret_bool
 

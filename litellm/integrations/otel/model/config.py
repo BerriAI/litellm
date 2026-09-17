@@ -210,7 +210,10 @@ class OpenTelemetryV2Config(BaseSettings):
         validation_alias=AliasChoices("baggage_metadata_keys", "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"),
         description=(
             "Metadata sub-keys promoted under the ``litellm.metadata.*`` "
-            "namespace. Configure via the ``LITELLM_OTEL_BAGGAGE_METADATA_KEYS`` "
+            "namespace. A dotted path such as ``requester_metadata.trace_id`` "
+            "reads the caller's nested ``metadata.trace_id`` and is promoted as "
+            "``litellm.metadata.trace_id``; other dotted keys keep their full path. "
+            "Configure via the ``LITELLM_OTEL_BAGGAGE_METADATA_KEYS`` "
             "env var (comma-separated) or "
             "``callback_settings.otel.baggage_metadata_keys`` in config.yaml."
         ),
