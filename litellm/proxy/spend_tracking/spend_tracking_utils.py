@@ -49,6 +49,7 @@ from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
     CallTypes,
     CostBreakdown,
+    LlmProviders,
     StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
@@ -346,6 +347,8 @@ def _sl_attribution_fallback(
 
 def _deployment_provider(deployment: DeploymentTypedDict) -> str | None:
     litellm_params: Final = LiteLLM_Params.model_validate(deployment["litellm_params"])
+    if litellm.LiteLLMProxyChatConfig.should_use_litellm_proxy_by_default(litellm_params=litellm_params):
+        return LlmProviders.LITELLM_PROXY.value
     declared: Final = declared_authenticating_provider(litellm_params.model, litellm_params.custom_llm_provider)
     if declared is not None:
         return declared
