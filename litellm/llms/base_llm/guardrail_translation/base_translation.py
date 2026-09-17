@@ -298,16 +298,11 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def chat_shaped_request_conversation(
-        self, data: dict
-    ) -> tuple[tuple["AllMessageValues", ...], tuple["ChatCompletionToolParam", ...]]:
-        """The full, unscoped request turns and tool definitions in OpenAI chat shape."""
-        return tuple(self.get_structured_messages(data) or ()), tuple(data.get("tools") or ())
-
     def request_scan_context(self, data: dict, guardrail_to_apply: "CustomGuardrail") -> RequestScanContext:
         """Override wherever ``process_input_messages`` scopes or translates the request differently."""
-        messages, tools = self.chat_shaped_request_conversation(data)
-        return RequestScanContext.scoped(messages, tools, guardrail_to_apply)
+        return RequestScanContext.scoped(
+            self.get_structured_messages(data) or (), data.get("tools") or (), guardrail_to_apply
+        )
 
     def with_response_context(
         self,

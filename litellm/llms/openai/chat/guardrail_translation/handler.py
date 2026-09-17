@@ -26,6 +26,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
+    RequestScanContext,
     StreamingScanKey,
     StreamTransformSink,
 )
@@ -84,6 +85,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
+    def __init__(self, request_scoping: BaseTranslation | None = None) -> None:
+        self._request_scoping: Final = request_scoping
+
     def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
         """
         Convert chat completions request data to OpenAI-spec structured messages.
@@ -94,6 +98,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if messages is None:
             return None
         return cast(list[AllMessageValues], messages)
+
+    def request_scan_context(self, data: dict, guardrail_to_apply: "CustomGuardrail") -> RequestScanContext:
+        """Scoped by the translation the request arrived in, so a chat-shaped reply scan sees the request's own scope."""
+        if self._request_scoping is None:
+            return super().request_scan_context(data, guardrail_to_apply)
+        return self._request_scoping.request_scan_context(data, guardrail_to_apply)
 
     async def process_input_messages(
         self,
