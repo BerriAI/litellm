@@ -22,6 +22,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm import Router
+from litellm.constants import MAX_PINNED_RETRY_DELAY
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -15704,3 +15705,189 @@ async def test_an_open_circuit_breaker_skips_the_session_binding_without_a_warni
     assert binding is None
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+_AFFINITY_GROUP: Final = "openai.gpt-5.1-codex"
+_AFFINITY_ORIGIN: Final = "deployment-origin"
+_AFFINITY_NON_PEER: Final = "deployment-other-boundary"
+
+
+def _two_encryption_boundaries() -> list[DeploymentTypedDict]:
+    return [
+        {
+            "model_name": _AFFINITY_GROUP,
+            "litellm_params": {
+                "model": "openai/gpt-5.1-codex",
+                "api_base": "https://boundary-a.openai.azure.com/",
+                "api_key": "key-a",
+            },
+            "model_info": {"id": _AFFINITY_ORIGIN},
+        },
+        {
+            "model_name": _AFFINITY_GROUP,
+            "litellm_params": {
+                "model": "openai/gpt-5.1-codex",
+                "api_base": "https://boundary-b.openai.azure.com/",
+                "api_key": "key-b",
+            },
+            "model_info": {"id": _AFFINITY_NON_PEER},
+        },
+    ]
+
+
+def _router_with_a_cooling_origin(cooldown_time: int, num_retries: int = 2) -> Router:
+    router: Final = Router(
+        model_list=_two_encryption_boundaries(),
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        enable_pre_call_checks=True,
+        allowed_fails=3,
+        cooldown_time=cooldown_time,
+        num_retries=num_retries,
+    )
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id=_AFFINITY_ORIGIN,
+        original_exception=Exception("rate limited"),
+        exception_status="429",
+        cooldown_time=float(cooldown_time),
+    )
+    return router
+
+
+def _input_pinned_to_the_origin() -> list[dict]:
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    return [
+        {
+            "type": "reasoning",
+            "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                encrypted_content="rsn_test-reasoning-state",
+                model_id=_AFFINITY_ORIGIN,
+            ),
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_request_pinned_to_a_cooling_deployment_keeps_its_retries_outside_the_cooldown():
+    cooldown_time: Final = 5
+    num_retries: Final = 2
+    router: Final = _router_with_a_cooling_origin(cooldown_time=cooldown_time, num_retries=num_retries)
+    attempted: Final[list[str]] = []
+    selected: Final[list[str]] = []
+    slept: Final[list[float]] = []
+    real_sleep: Final = asyncio.sleep
+
+    async def attempt(**kwargs) -> DeploymentTypedDict:
+        attempted.append(kwargs["model"])
+        deployment = await router.async_get_available_deployment(
+            model=kwargs["model"],
+            request_kwargs=kwargs,
+            input=kwargs["input"],
+        )
+        selected.append(deployment["model_info"]["id"])
+        return deployment
+
+    async def recording_sleep(delay: float, *args, **kwargs) -> None:
+        slept.append(delay)
+        await real_sleep(0)
+
+    with patch("asyncio.sleep", new=recording_sleep):
+        with pytest.raises(litellm.RateLimitError):
+            await router.async_function_with_retries(
+                original_function=attempt,
+                model=_AFFINITY_GROUP,
+                input=_input_pinned_to_the_origin(),
+                litellm_metadata={},
+                num_retries=num_retries,
+            )
+
+    assert selected == []
+    assert len(attempted) == num_retries + 1
+    assert len(slept) >= num_retries
+    assert all(delay >= 1 for delay in slept)
+    assert sum(slept) >= cooldown_time - 1
+
+
+@pytest.mark.asyncio
+async def test_a_request_pinned_to_a_cooling_deployment_waits_a_window_longer_than_a_minute():
+    cooldown_time: Final = 300
+    router: Final = _router_with_a_cooling_origin(cooldown_time=cooldown_time)
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        await router.async_get_available_deployment(
+            model=_AFFINITY_GROUP,
+            request_kwargs={"input": _input_pinned_to_the_origin()},
+            input=_input_pinned_to_the_origin(),
+        )
+
+    healthy_deployments, all_deployments = await router._async_get_healthy_deployments(
+        model=_AFFINITY_GROUP,
+        parent_otel_span=None,
+    )
+    advertised_backoff: Final = int(excinfo.value.response.headers["retry-after"])
+
+    assert [deployment["model_info"]["id"] for deployment in healthy_deployments] == [_AFFINITY_NON_PEER]
+    assert advertised_backoff > 60
+    assert excinfo.value.retry_after_seconds == advertised_backoff
+    assert (
+        router._time_to_sleep_before_retry(
+            e=excinfo.value,
+            remaining_retries=2,
+            num_retries=2,
+            healthy_deployments=healthy_deployments,
+            all_deployments=all_deployments,
+        )
+        >= advertised_backoff
+    )
+
+
+def test_an_unpinned_rate_limit_still_fails_over_to_a_healthy_deployment_instantly():
+    router: Final = Router(model_list=_two_encryption_boundaries())
+    rate_limited: Final = litellm.RateLimitError(
+        message="rate limited",
+        llm_provider="",
+        model=_AFFINITY_GROUP,
+        response=httpx.Response(
+            status_code=429,
+            headers={"retry-after": "4"},
+            request=httpx.Request("POST", "https://litellm.ai/"),
+        ),
+    )
+
+    assert (
+        router._time_to_sleep_before_retry(
+            e=rate_limited,
+            remaining_retries=2,
+            num_retries=2,
+            healthy_deployments=[{"model_info": {"id": _AFFINITY_NON_PEER}}],
+            all_deployments=router.model_list,
+        )
+        == 0
+    )
+
+
+def test_a_pinned_wait_is_capped_so_one_request_cannot_hold_a_worker_indefinitely():
+    router: Final = Router(model_list=_two_encryption_boundaries())
+    pinned: Final = litellm.RateLimitError(
+        message="origin cooling down",
+        llm_provider="",
+        model=_AFFINITY_GROUP,
+        response=httpx.Response(
+            status_code=429,
+            headers={"retry-after": "86400"},
+            request=httpx.Request("POST", "https://litellm.ai/"),
+        ),
+    )
+    pinned.no_compatible_deployment_available = True
+    pinned.retry_after_seconds = 86400
+
+    assert (
+        router._time_to_sleep_before_retry(
+            e=pinned,
+            remaining_retries=2,
+            num_retries=2,
+            healthy_deployments=[{"model_info": {"id": _AFFINITY_NON_PEER}}],
+            all_deployments=router.model_list,
+        )
+        == MAX_PINNED_RETRY_DELAY
+    )

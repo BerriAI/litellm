@@ -1196,6 +1196,10 @@ async def test_affinity_raises_service_unavailable_when_origin_cooled_for_non_42
     # avoid an authenticated-caller probing oracle.
     assert "deployment-a-cooled" not in str(excinfo.value)
     assert excinfo.value.status_code == 503
+    assert getattr(excinfo.value, "no_compatible_deployment_available", False) is True
+    retry_after = excinfo.value.response.headers.get("retry-after")
+    assert retry_after is not None
+    assert 1 <= int(retry_after) <= 60
 
 
 @pytest.mark.asyncio
@@ -1256,6 +1260,7 @@ async def test_affinity_raises_rate_limit_with_retry_after_when_origin_cooled_fo
 
     assert "deployment-a-cooled-429" not in str(excinfo.value)
     assert excinfo.value.status_code == 429
+    assert getattr(excinfo.value, "no_compatible_deployment_available", False) is True
     retry_after = excinfo.value.response.headers.get("retry-after")
     assert retry_after is not None
     assert 1 <= int(retry_after) <= 60
@@ -1304,6 +1309,8 @@ async def test_affinity_raises_service_unavailable_when_origin_filtered_without_
         )
 
     assert excinfo.value.status_code == 503
+    assert getattr(excinfo.value, "no_compatible_deployment_available", False) is True
+    assert excinfo.value.response.headers.get("retry-after") is None
 
 
 @pytest.mark.asyncio
