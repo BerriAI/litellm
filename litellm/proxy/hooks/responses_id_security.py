@@ -25,7 +25,13 @@ from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import CallTypesLiteral, LLMResponseTypes, ModelResponse, SpecialEnums
+from litellm.types.utils import (
+    CallTypesLiteral,
+    LLMResponseTypes,
+    ModelResponse,
+    ModelResponseStream,
+    SpecialEnums,
+)
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -331,7 +337,7 @@ class ResponsesIDSecurity(CustomLogger):
 
     async def async_post_call_streaming_iterator_hook(
         self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict
-    ) -> AsyncGenerator[Any, None]:
+    ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject | ModelResponseStream, None]:
         general_settings: Final = self._general_settings_reader()
 
         # Create a request-scoped cache for consistent encryption across streaming chunks.
