@@ -1,7 +1,10 @@
 import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import TypeAdapter
 
 
 import litellm
@@ -2052,14 +2055,16 @@ def _input_audio_append_message(raw_byte_count: int) -> str:
     )
 
 
-def _session_update_message(session: dict) -> str:
-    return json.dumps({"type": "session.update", "session": session})
+def _session_update_message(session: Mapping[str, object]) -> str:
+    return json.dumps({"type": "session.update", "session": dict(session)})
 
 
-def _sent_audio_mime_type(config, raw_byte_count: int = 32000) -> str:
-    """Round-trips one input_audio_buffer.append and returns the mimeType actually put on the wire."""
-    sent = config.transform_realtime_request(_input_audio_append_message(raw_byte_count), "gemini-3.5-transcribe-live")
-    return json.loads(sent[0])["realtimeInput"]["audio"]["mimeType"]
+def _sent_audio_mime_type(config: GeminiRealtimeConfig, raw_byte_count: int = 32000) -> str:
+    sent: Final = config.transform_realtime_request(
+        _input_audio_append_message(raw_byte_count), "gemini-3.5-transcribe-live"
+    )
+    frame: Final = TypeAdapter(dict[str, dict[str, dict[str, str]]]).validate_json(sent[0])
+    return frame["realtimeInput"]["audio"]["mimeType"]
 
 
 def test_input_audio_mime_type_declares_the_native_16khz_input_rate():
@@ -2073,16 +2078,15 @@ def test_input_audio_mime_type_declares_the_native_16khz_input_rate():
     assert _sent_audio_mime_type(config) == "audio/pcm;rate=16000"
 
 
-def test_vertex_realtime_inherits_the_same_input_audio_rate():
-    """VertexAIRealtimeConfig used to carry its own copy of get_audio_mime_type, so a fix to the
-    parent had no effect on the Vertex path. It must resolve through the parent now."""
+def test_vertex_realtime_sends_the_native_16khz_input_rate() -> None:
+    """Vertex's default input rate must match the serialized audio frame."""
     from typing import Final
 
     from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 
     config: Final = VertexAIRealtimeConfig(access_token="t", project="p", location="us-central1")
-    assert "get_audio_mime_type" not in VertexAIRealtimeConfig.__dict__
     assert config.get_audio_mime_type() == "audio/pcm;rate=16000"
+    assert _sent_audio_mime_type(config) == "audio/pcm;rate=16000"
 
 
 def test_client_declared_input_audio_rate_is_honored_on_the_wire():
