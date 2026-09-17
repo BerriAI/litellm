@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import contextvars
+import json
 import os
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -2058,11 +2059,9 @@ async def _drain_body(receive) -> bytes:
 
 
 def _forbidden_client_response(send: AsyncMock) -> tuple[int, dict[str, str]]:
-    import json as _json
-
     start: Final = send.call_args_list[0].args[0]
     body: Final = b"".join(call.args[0].get("body", b"") for call in send.call_args_list[1:])
-    return start["status"], _json.loads(body)
+    return start["status"], json.loads(body)
 
 
 @contextlib.contextmanager
@@ -2243,9 +2242,7 @@ async def test_streamable_http_allowlist_only_inspects_initialize_requests() -> 
 
 
 def _oversized_initialize(client_name: str, peek_cap: int) -> bytes:
-    import json as _json
-
-    return _json.dumps(
+    return json.dumps(
         {
             "jsonrpc": "2.0",
             "id": 0,
