@@ -41,6 +41,7 @@ from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
+    OrganizationNotFoundError,
     TeamNotFoundError,
     _cache_key_object,
     _can_object_call_model,
@@ -2634,12 +2635,12 @@ async def _inherit_org_identity(
             proxy_logging_obj=proxy_logging_obj,
             include_budget_table=True,
         )
-    except Exception:  # noqa: BLE001  # organization lookup must not fail authentication
+    except OrganizationNotFoundError:
+        return
+    except Exception:  # noqa: BLE001  # DB outage handling is decided by allow_requests_on_db_unavailable
         if not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable():
             raise
         verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
-        return
-    if org_object is None:
         return
     user_api_key_auth_obj.organization_alias = org_object.organization_alias
     user_api_key_auth_obj.organization_metadata = org_object.metadata
