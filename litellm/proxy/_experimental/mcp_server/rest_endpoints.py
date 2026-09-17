@@ -51,6 +51,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.responses.mcp.request_context import MCPRequestContext
 
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
@@ -1168,6 +1169,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=user_oauth_extra_headers or data.get("oauth2_headers"),
                     raw_headers=data.get("raw_headers"),
                     litellm_logging_obj=data.get("litellm_logging_obj"),
+                    guardrail_context=MCPRequestContext.resolve_guardrail_context(data),
                     requested_server_id=canonical_server_id,
                 )
             except Exception as e:
@@ -1212,8 +1214,8 @@ if MCP_AVAILABLE:
                     "guardrail_name": getattr(e, "guardrail_name", None),
                 },
             )
-        except GuardrailRaisedException as e:
-            verbose_logger.error("GuardrailRaisedException in MCP tool call: %s", e)
+        except (GuardrailRaisedException, ModifyResponseException) as e:
+            verbose_logger.error("Guardrail violation in MCP tool call: %s", e)
             raise HTTPException(
                 status_code=400,
                 detail={
