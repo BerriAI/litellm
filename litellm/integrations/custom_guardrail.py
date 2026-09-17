@@ -35,11 +35,6 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
 )
 
-try:
-    from fastapi.exceptions import HTTPException
-except ImportError:
-    HTTPException = None
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -107,9 +102,11 @@ def is_guardrail_intervention(e: Exception) -> bool:
         ),
     ):
         return True
-    if HTTPException is not None and isinstance(e, HTTPException) and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES:
-        return True
-    return False
+    try:
+        from fastapi.exceptions import HTTPException
+    except ImportError:
+        return False
+    return isinstance(e, HTTPException) and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES
 
 
 def _strict_guardrail_modes_enabled() -> bool:
