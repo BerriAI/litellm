@@ -14,6 +14,8 @@ on:
       - .github/prompts/issue-classifier.md
       - .github/prompts/issue-classifier.schema.json
       - .github/labels.json
+      - .github/ISSUE_TEMPLATE/bug_report.yml
+      - .github/ISSUE_TEMPLATE/feature_request.yml
       - scripts/classify-issue.ts
       - scripts/classify-issue.test.ts
       - scripts/label-issue.ts

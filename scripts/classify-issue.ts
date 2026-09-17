@@ -84,18 +84,39 @@ export const BUG_SECTIONS = ["Description", "Config", "LiteLLM Version", "Steps 
 export const FEATURE_SECTIONS = ["The Feature", "User Flow", "How far you got"] as const;
 export const DOMAIN_HEADING = "Which part of LiteLLM is this about?";
 export const VERSION_HEADING = "LiteLLM Version";
+export const DEPLOYMENT_HEADING = "How are you deploying?";
+export const NOISE_HEADINGS = [
+  "Check for existing issues",
+  "LiteLLM is hiring a founding backend engineer, are you interested in joining us and shipping to all our users?",
+  "Twitter / LinkedIn details",
+] as const;
+export const FORM_HEADINGS: readonly string[] = [
+  ...BUG_SECTIONS,
+  ...FEATURE_SECTIONS,
+  DOMAIN_HEADING,
+  DEPLOYMENT_HEADING,
+  ...NOISE_HEADINGS,
+];
 export const MIN_SECTION_CHARS = 20;
+export const SECTION_CAP_CHARS = 4000;
 export const BODY_CAP_CHARS = 8000;
 export const MAINTAINER_ASSOCIATIONS: readonly string[] = ["OWNER", "MEMBER", "COLLABORATOR"];
 const EMPTY_FIELD = "_No response_";
 const NOT_SURE = "Not sure";
 
+type Block = readonly [heading: string, lines: readonly string[]];
+
 export function sections(body: string): ReadonlyMap<string, string> {
-  const parts = body.split(/^### (.+)$/m).slice(1);
-  const pairs = parts.flatMap((part, index): readonly (readonly [string, string])[] =>
-    index % 2 === 0 ? [[part.trim(), (parts[index + 1] ?? "").trim()]] : [],
-  );
-  return new Map(pairs);
+  const blocks = body.split("\n").reduce<readonly Block[]>((acc, line) => {
+    const heading = /^### (.+?)\s*$/.exec(line)?.[1];
+    const opensField = heading !== undefined && FORM_HEADINGS.includes(heading) && !acc.some(([name]) => name === heading);
+    if (opensField) {
+      return [...acc, [heading, []]];
+    }
+    const current = acc.at(-1);
+    return current === undefined ? acc : [...acc.slice(0, -1), [current[0], [...current[1], line]]];
+  }, []);
+  return new Map(blocks.map(([heading, lines]) => [heading, lines.join("\n").trim()]));
 }
 
 export function templateFor(title: string, found: ReadonlyMap<string, string>): Template {
@@ -136,12 +157,22 @@ export function gate(issue: Pick<IssueForClassification, "title" | "body" | "aut
   };
 }
 
+const clip = (text: string, cap: number, what: string): string =>
+  text.length > cap ? `${text.slice(0, cap)}\n\n[${what} truncated at ${cap} characters]` : text;
+
+export function issueText(body: string): string {
+  const found = sections(body);
+  if (found.size === 0) {
+    return clip(body, BODY_CAP_CHARS, "body");
+  }
+  return [...found]
+    .filter(([heading]) => !NOISE_HEADINGS.some((noise) => noise === heading))
+    .map(([heading, text]) => `### ${heading}\n\n${clip(text, SECTION_CAP_CHARS, "section")}`)
+    .join("\n\n");
+}
+
 export function userMessage(issue: Pick<IssueForClassification, "title" | "body">, passed: Gate & { kind: "pass" }): string {
-  const body = issue.body ?? "";
-  const capped =
-    body.length > BODY_CAP_CHARS
-      ? `${body.slice(0, BODY_CAP_CHARS)}\n\n[body truncated at ${BODY_CAP_CHARS} characters]`
-      : body;
+  const capped = issueText(issue.body ?? "");
   const versionLine = passed.version === null ? "" : `\nLiteLLM Version (from the template): ${passed.version}`;
   return [
     `Title: ${issue.title}`,

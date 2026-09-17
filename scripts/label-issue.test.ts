@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { Comment, GitHubApi } from "./auto-close-duplicates";
 import type { Classification, GateVerdict } from "./classify-issue";
 import {
+  BOT_LOGIN,
   TEMPLATE_MARKER,
   desiredLabels,
   labelIssue,
@@ -122,8 +123,9 @@ describe("labelIssue", () => {
     id: 77,
     body: templateComment(gated),
     created_at: "2026-09-10T00:00:00Z",
-    user: { type: "Bot", login: "github-actions[bot]" },
+    user: { type: "Bot", login: BOT_LOGIN },
   };
+  const impostor: Comment = { ...notice, id: 78, user: { type: "User", login: "someone" } };
 
   function fakeApi(
     labels: readonly string[],
@@ -177,6 +179,20 @@ describe("labelIssue", () => {
     const outcome = await labelIssue(api, config, gated);
     expect(writes).toEqual([]);
     expect(outcome).toEqual({ plan: { add: [], remove: [] }, comment: null, removedNotices: 0 });
+  });
+
+  test("someone else's comment carrying the marker is neither the notice nor deleted", async () => {
+    const gatedRun = fakeApi(["bug"], [impostor]);
+    const outcome = await labelIssue(gatedRun.api, config, gated);
+    expect(outcome.comment).toContain(TEMPLATE_MARKER);
+    expect(gatedRun.writes.map((write) => write.split(" ").slice(0, 2).join(" "))).toEqual([
+      "POST /repos/BerriAI/litellm/issues/41700/labels",
+      "POST /repos/BerriAI/litellm/issues/41700/comments",
+    ]);
+
+    const passedRun = fakeApi(["needs:template"], [impostor]);
+    await labelIssue(passedRun.api, config, classified());
+    expect(passedRun.writes).not.toContain("DELETE /repos/BerriAI/litellm/issues/comments/78");
   });
 
   test("a dry run reports the plan and the comment and touches nothing", async () => {

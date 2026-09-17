@@ -28,6 +28,7 @@ export type ParsedVerdict =
   | { readonly kind: "invalid"; readonly reason: string };
 
 export const TEMPLATE_MARKER = "<!-- litellm:needs-template -->";
+export const BOT_LOGIN = "github-actions[bot]";
 const TEMPLATE_URLS: Readonly<Record<GateVerdict["template"], string>> = {
   bug: "https://github.com/BerriAI/litellm/issues/new?template=bug_report.yml",
   feature: "https://github.com/BerriAI/litellm/issues/new?template=feature_request.yml",
@@ -109,7 +110,7 @@ export async function labelIssue(api: GitHubApi, config: LabelConfig, verdict: V
     verdict,
   );
   const comments = await listAll<Comment>(api, `${issuePath}/comments`);
-  const notices = comments.filter((comment) => comment.body.includes(TEMPLATE_MARKER));
+  const notices = comments.filter((comment) => comment.user.login === BOT_LOGIN && comment.body.includes(TEMPLATE_MARKER));
   const comment = verdict.gate === "template" && notices.length === 0 ? templateComment(verdict) : null;
   const staleNotices = verdict.gate === "pass" ? notices : [];
   if (config.dryRun) {
