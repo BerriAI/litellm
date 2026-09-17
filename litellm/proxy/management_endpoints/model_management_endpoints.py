@@ -88,6 +88,7 @@ from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_team,
     authorize_member_auto_router_write,
 )
+from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_model_allowlists_for_renamed_model
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     is_ptu_cost_attribution_enabled,
@@ -984,6 +985,7 @@ async def patch_model(
         premium_user,
         prisma_client,
         store_model_in_db,
+        user_api_key_cache,
     )
 
     try:
@@ -1131,6 +1133,14 @@ async def patch_model(
                 old_name=db_model.model_name,
                 new_name=stored_model_name,
                 llm_router=llm_router,
+            )
+            await sync_model_allowlists_for_renamed_model(
+                prisma_client=prisma_client,
+                model_id=model_id,
+                old_name=db_model.model_name,
+                new_name=stored_model_name,
+                llm_router=llm_router,
+                user_api_key_cache=user_api_key_cache,
             )
 
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
@@ -2433,6 +2443,7 @@ async def update_model(
         premium_user,
         prisma_client,
         store_model_in_db,
+        user_api_key_cache,
     )
 
     try:
@@ -2565,6 +2576,14 @@ async def update_model(
                     old_name=deployment.model_name,
                     new_name=renamed_to,
                     llm_router=llm_router,
+                )
+                await sync_model_allowlists_for_renamed_model(
+                    prisma_client=prisma_client,
+                    model_id=_model_id,
+                    old_name=deployment.model_name,
+                    new_name=renamed_to,
+                    llm_router=llm_router,
+                    user_api_key_cache=user_api_key_cache,
                 )
 
             # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
