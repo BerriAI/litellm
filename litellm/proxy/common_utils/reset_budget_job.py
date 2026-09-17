@@ -7,7 +7,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Generic, Literal, Protocol, TypeVar
+from typing import (
+    Final,
+    Generic,
+    Literal,
+    Protocol,
+    TypeVar,
+    cast,  # noqa: TID251  # item_type cannot narrow the union member, cast is the only dispatch
+)
 
 from typing_extensions import assert_never
 
@@ -141,9 +148,7 @@ def _reset_band(max_budget: float | None, rollover_max_budget: float | None) -> 
     keep_overage: Final = litellm.budget_rollover is True
     lo: Final = (
         max_budget - rollover_max_budget
-        if rollover_max_budget is not None
-        and math.isfinite(rollover_max_budget)
-        and rollover_max_budget > max_budget
+        if rollover_max_budget is not None and math.isfinite(rollover_max_budget) and rollover_max_budget > max_budget
         else 0.0
     )
     if lo == 0.0 and not keep_overage:
@@ -156,6 +161,23 @@ def _reset_spend(spend: float | None, band: _ResetBand | None) -> float:
         return 0.0
     carried: Final = max((spend or 0.0) - band.base, band.lo)
     return carried if band.keep_overage else min(carried, 0.0)
+
+
+def _item_rollover_max_budget(
+    item: LiteLLM_TeamTable | LiteLLM_UserTable | LiteLLM_VerificationToken,
+    item_type: Literal["key", "team", "user"],
+) -> float | None:
+    match item_type:
+        case "key":
+            return None
+        case "user" | "team":
+            # Rows arrive as generated prisma models, not the proxy _types
+            # classes, so dispatch on item_type instead of isinstance.
+            return cast(
+                "LiteLLM_UserTable | LiteLLM_TeamTable", item
+            ).rollover_max_budget  # cast-ok: item_type already restricts the member, pyright just cannot narrow it
+        case _:
+            assert_never(item_type)
 
 
 def _row_reset_spend(row: _BudgetLinkedRow, bands: Mapping[str, _ResetBand]) -> float:
@@ -266,13 +288,14 @@ def _queue_band_resets(
        a negative credit the zero should have erased.
     """
     writes.queue_spend_set(
-        where={**base_where, "spend": {"lt": band.base + band.lo, "not": band.lo}},  # mutable-ok: prisma where filter must be a dict
+        where={
+            **base_where,
+            "spend": {"lt": band.base + band.lo, "not": band.lo},
+        },  # mutable-ok: prisma where filter must be a dict
         value=band.lo,
     )
     decrement_spend: Final[dict[str, float]] = (
-        {"gte": band.base + band.lo}
-        if band.keep_overage
-        else {"gte": band.base + band.lo, "lte": band.base}
+        {"gte": band.base + band.lo} if band.keep_overage else {"gte": band.base + band.lo, "lte": band.base}
     )
     writes.queue_spend_decrement(
         where={**base_where, "spend": decrement_spend},  # mutable-ok: prisma where filter must be a dict
@@ -827,8 +850,7 @@ class ResetBudgetJob:
             {  # mutable-ok: MappingProxyType wraps a one-shot dict comprehension
                 b.budget_id: band
                 for b in budgets_to_reset
-                if b.budget_id is not None
-                and (band := _reset_band(b.max_budget, b.rollover_max_budget)) is not None
+                if b.budget_id is not None and (band := _reset_band(b.max_budget, b.rollover_max_budget)) is not None
             }
         )
         return _BudgetCascade(
@@ -843,17 +865,11 @@ class ResetBudgetJob:
                 if b.budget_id is not None and b.budget_duration is not None
             ),
             counter_resets=(
-                *(
-                    (_team_membership_counter_key(row), _row_reset_spend(row, bands))
-                    for row in team_memberships
-                ),
+                *((_team_membership_counter_key(row), _row_reset_spend(row, bands)) for row in team_memberships),
                 *((_key_counter_key(row), _row_reset_spend(row, bands)) for row in keys),
                 *((_org_counter_key(row), _row_reset_spend(row, bands)) for row in orgs),
                 *((_tag_counter_key(row), _row_reset_spend(row, bands)) for row in tags),
-                *(
-                    (_model_access_group_counter_key(row), _row_reset_spend(row, bands))
-                    for row in model_access_groups
-                ),
+                *((_model_access_group_counter_key(row), _row_reset_spend(row, bands)) for row in model_access_groups),
             ),
             bands=bands,
             cache_keys=(
@@ -1625,11 +1641,7 @@ class ResetBudgetJob:
         still holds the pre-reset value, admitting requests past the cap.
         """
         try:
-            rollover_max_budget: Final = (
-                item.rollover_max_budget
-                if isinstance(item, (LiteLLM_UserTable, LiteLLM_TeamTable))
-                else None
-            )
+            rollover_max_budget: Final = _item_rollover_max_budget(item, item_type)
             if rollover_max_budget is None and litellm.budget_rollover is not True:
                 item.spend = 0.0
             else:

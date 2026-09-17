@@ -1198,3 +1198,73 @@ async def test_add_new_member_runs_every_write_on_the_caller_transaction(new_mem
     prisma_client.db.assert_not_called()
     prisma_client.get_data.assert_not_awaited()
     prisma_client.insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_add_new_member_clone_carries_rollover_max_budget():
+    """The member_add clone must copy rollover_max_budget from the team's
+    default member budget, or the new member's private row silently loses
+    unused-allowance rollover."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    new_member = Member(user_id="rollover-member", role="user")
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_response = MagicMock()
+    mock_user_response.model_dump.return_value = {
+        "user_id": "rollover-member",
+        "user_email": None,
+        "teams": ["team-1"],
+        "user_role": "internal_user",
+    }
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user_response)
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user_response)
+
+    mock_default_budget_row = MagicMock()
+    mock_default_budget_row.model_dump.return_value = {
+        "budget_id": "team-default-budget",
+        "max_budget": 100.0,
+        "rollover_max_budget": 250.0,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "model_max_budget": None,
+        "budget_duration": "1d",
+        "allowed_models": [],
+    }
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=mock_default_budget_row
+    )
+
+    mock_cloned_budget_row = MagicMock()
+    mock_cloned_budget_row.budget_id = "member-budget"
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=mock_cloned_budget_row
+    )
+
+    mock_membership = MagicMock()
+    mock_membership.model_dump.return_value = {
+        "team_id": "team-1",
+        "user_id": "rollover-member",
+        "budget_id": "member-budget",
+        "litellm_budget_table": None,
+    }
+    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(return_value=mock_membership)
+
+    await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=None,
+        prisma_client=mock_prisma_client,
+        team_id="team-1",
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name="admin",
+        default_team_budget_id="team-default-budget",
+    )
+
+    cloned_create_data = mock_prisma_client.db.litellm_budgettable.create.call_args.kwargs["data"]
+    assert cloned_create_data["rollover_max_budget"] == 250.0
+    assert cloned_create_data["max_budget"] == 100.0

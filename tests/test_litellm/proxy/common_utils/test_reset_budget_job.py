@@ -12,7 +12,7 @@ import prisma
 import pytest
 
 
-from litellm.proxy._types import LiteLLM_UserTable, LiteLLM_VerificationToken
+from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
@@ -382,6 +382,8 @@ def test_reset_budget_for_user(reset_budget_job, mock_prisma_client):
         (),
         {
             "spend": 200.0,
+            "max_budget": None,
+            "rollover_max_budget": None,
             "budget_duration": "7d",
             "budget_reset_at": now,
             "id": "test-user-1",
@@ -411,6 +413,8 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
         (),
         {
             "spend": 500.0,
+            "max_budget": None,
+            "rollover_max_budget": None,
             "budget_duration": "1mo",
             "budget_reset_at": now,
             "id": "test-team-1",
@@ -490,6 +494,8 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         (),
         {
             "spend": 200.0,
+            "max_budget": None,
+            "rollover_max_budget": None,
             "budget_duration": "7d",
             "budget_reset_at": now,
             "id": "test-user-1",
@@ -502,6 +508,8 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         (),
         {
             "spend": 500.0,
+            "max_budget": None,
+            "rollover_max_budget": None,
             "budget_duration": "1mo",
             "budget_reset_at": now,
             "id": "test-team-1",
@@ -1360,6 +1368,7 @@ def test_reset_budget_for_users_invalidates_redis_counter(reset_budget_job, mock
             (),
             {
                 "spend": 50.0,
+                "rollover_max_budget": None,
                 "budget_duration": "7d",
                 "budget_reset_at": now,
                 "id": "user-1",
@@ -1391,6 +1400,7 @@ def test_reset_budget_for_proxy_budget_row_invalidates_global_spend_cache(
             (),
             {
                 "spend": 150.0,
+                "rollover_max_budget": None,
                 "budget_duration": "30d",
                 "budget_reset_at": now,
                 "id": "row-1",
@@ -1418,6 +1428,7 @@ def test_reset_budget_for_ordinary_user_does_not_touch_global_spend_cache(
             (),
             {
                 "spend": 50.0,
+                "rollover_max_budget": None,
                 "budget_duration": "7d",
                 "budget_reset_at": now,
                 "id": "user-1",
@@ -1445,6 +1456,7 @@ def test_reset_budget_for_teams_invalidates_redis_counter(reset_budget_job, mock
             (),
             {
                 "spend": 200.0,
+                "rollover_max_budget": None,
                 "budget_duration": "1mo",
                 "budget_reset_at": now,
                 "id": "team-1",
@@ -2152,6 +2164,7 @@ def _user_row(user_id: str, budget_duration: Any = "30d"):
         (),
         {
             "spend": 100.0,
+            "rollover_max_budget": None,
             "budget_duration": budget_duration,
             "budget_reset_at": now - timedelta(hours=1),
             "user_id": user_id,
@@ -2166,6 +2179,7 @@ def _team_row(team_id: str, budget_duration: Any = "30d"):
         (),
         {
             "spend": 100.0,
+            "rollover_max_budget": None,
             "budget_duration": budget_duration,
             "budget_reset_at": now - timedelta(hours=1),
             "team_id": team_id,
@@ -2847,6 +2861,7 @@ def _due_row(table: str, identifier: str):
         (),
         {
             "spend": _DUE_ROW_SPEND,
+            "rollover_max_budget": None,
             "budget_duration": "30d",
             "budget_reset_at": now - timedelta(seconds=1),
             id_field: identifier,
@@ -3142,6 +3157,7 @@ def rollover_enabled(monkeypatch):
                 {
                     "spend": 150.0,
                     "max_budget": 100.0,
+                    "rollover_max_budget": None,
                     "budget_duration": "30d",
                     "budget_reset_at": now,
                     "user_id": "user-roll",
@@ -3159,6 +3175,7 @@ def rollover_enabled(monkeypatch):
                 {
                     "spend": 150.0,
                     "max_budget": 100.0,
+                    "rollover_max_budget": None,
                     "budget_duration": "1mo",
                     "budget_reset_at": now,
                     "team_id": "team-roll",
@@ -3470,7 +3487,7 @@ _RACE_TABLES = [
         lambda now: type(
             "User",
             (),
-            {"spend": 5.0, "budget_duration": "7d", "budget_reset_at": now, "user_id": "user-race"},
+            {"spend": 5.0, "rollover_max_budget": None, "budget_duration": "7d", "budget_reset_at": now, "user_id": "user-race"},
         ),
     ),
     (
@@ -3481,7 +3498,7 @@ _RACE_TABLES = [
         lambda now: type(
             "Team",
             (),
-            {"spend": 5.0, "budget_duration": "1mo", "budget_reset_at": now, "team_id": "team-race"},
+            {"spend": 5.0, "rollover_max_budget": None, "budget_duration": "1mo", "budget_reset_at": now, "team_id": "team-race"},
         ),
     ),
 ]
@@ -3569,7 +3586,7 @@ def test_reset_deletes_spend_counter_instead_of_seeding(reset_budget_job, mock_p
         type(
             "User",
             (),
-            {"spend": 5.0, "budget_duration": "7d", "budget_reset_at": now, "id": "user-r", "user_id": "carol"},
+            {"spend": 5.0, "rollover_max_budget": None, "budget_duration": "7d", "budget_reset_at": now, "id": "user-r", "user_id": "carol"},
         )
     ]
 
@@ -3644,13 +3661,17 @@ def test_direct_reset_carries_unused_allowance_as_negative_spend(
     counter_cache = _make_counter_invalidation_job(monkeypatch)
     now = datetime.now(timezone.utc)
     mock_prisma_client.data["user"] = [
-        LiteLLM_UserTable(
-            user_id="user-credit",
-            spend=30.0,
-            max_budget=100.0,
-            rollover_max_budget=600.0,
-            budget_duration="7d",
-            budget_reset_at=now,
+        type(
+            "LiteLLM_UserTable",
+            (),
+            {
+                "user_id": "user-credit",
+                "spend": 30.0,
+                "max_budget": 100.0,
+                "rollover_max_budget": 600.0,
+                "budget_duration": "7d",
+                "budget_reset_at": now,
+            },
         )
     ]
 
@@ -3673,13 +3694,17 @@ def test_direct_reset_zeroes_spend_when_cap_does_not_exceed_max_budget(
     _make_counter_invalidation_job(monkeypatch)
     now = datetime.now(timezone.utc)
     mock_prisma_client.data["user"] = [
-        LiteLLM_UserTable(
-            user_id="user-nocredit",
-            spend=30.0,
-            max_budget=100.0,
-            rollover_max_budget=100.0,
-            budget_duration="7d",
-            budget_reset_at=now,
+        type(
+            "LiteLLM_UserTable",
+            (),
+            {
+                "user_id": "user-nocredit",
+                "spend": 30.0,
+                "max_budget": 100.0,
+                "rollover_max_budget": 100.0,
+                "budget_duration": "7d",
+                "budget_reset_at": now,
+            },
         )
     ]
 
@@ -3688,6 +3713,44 @@ def test_direct_reset_zeroes_spend_when_cap_does_not_exceed_max_budget(
     writes = _batch_writes(mock_prisma_client, "user")
     assert len(writes) == 1
     assert writes[0]["data"]["spend"] == {"decrement": 30.0}
+
+
+@pytest.mark.parametrize(
+    "run_phase, table, id_field, id_value, row_name",
+    [
+        ("reset_budget_for_litellm_users", "user", "user_id", "user-prisma-credit", "LiteLLM_UserTable"),
+        ("reset_budget_for_litellm_teams", "team", "team_id", "team-prisma-credit", "LiteLLM_TeamTable"),
+    ],
+)
+def test_direct_reset_reads_rollover_cap_off_prisma_style_rows(
+    reset_budget_job, mock_prisma_client, monkeypatch, run_phase, table, id_field, id_value, row_name
+):
+    """Runtime rows are generated prisma models, not proxy _types instances:
+    the reset must read rollover_max_budget off them regardless. spend 30 with
+    base 100 and cap 250 decrements by the 100 allowance, landing at -70."""
+    _make_counter_invalidation_job(monkeypatch)
+    now = datetime.now(timezone.utc)
+    row = type(
+        row_name,
+        (),
+        {
+            id_field: id_value,
+            "spend": 30.0,
+            "max_budget": 100.0,
+            "rollover_max_budget": 250.0,
+            "budget_duration": "7d",
+            "budget_reset_at": now,
+        },
+    )
+    mock_prisma_client.data[table] = [row]
+
+    asyncio.run(getattr(reset_budget_job, run_phase)())
+
+    writes = _batch_writes(mock_prisma_client, table)
+    assert len(writes) == 1
+    assert writes[0]["where"] == {id_field: id_value}
+    assert writes[0]["data"]["spend"] == {"decrement": 100.0}
+    assert _replay_spend_writes([{"where": {}, "data": writes[0]["data"]}], 30.0) == -70.0
 
 
 def test_budget_cascade_queues_ordered_band_statements_for_capped_tier(
