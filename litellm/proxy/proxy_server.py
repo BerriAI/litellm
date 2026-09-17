@@ -638,6 +638,7 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
     PerRequestRootPathMiddleware,
     get_server_root_paths,
 )
+from litellm.proxy.middleware.gunzip_request_middleware import GunzipRequestMiddleware
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
@@ -2225,6 +2226,7 @@ app.add_middleware(
 )
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(GunzipRequestMiddleware)
 
 
 def mount_swagger_ui():
