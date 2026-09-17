@@ -853,11 +853,7 @@ def test_sync_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logg
 async def test_streaming_rate_limit_midstream_fallback_keeps_provider_headers(
     logging_obj: Logging,
 ):
-    """MidStreamFallbackError keeps the provider headers the non-streaming RateLimitError carries.
-
-    retry-after and x-request-id are what retry backoff, logging and the proxy error
-    response read, so wrapping a 429 for fallback must not drop them.
-    """
+    """MidStreamFallbackError keeps the provider headers the non-streaming RateLimitError carries."""
     from litellm.exceptions import MidStreamFallbackError
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
