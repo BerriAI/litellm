@@ -79,6 +79,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
+    UserAliasWhere,
     UserListResponse,
     UserSearchWhere,
     UserUpdateResult,
@@ -2129,6 +2130,14 @@ def _user_search_where(search: str | None) -> Mapping[str, object]:
     return search_where
 
 
+def _user_alias_where(user_alias: str | None) -> Mapping[str, object]:
+    """Prisma predicate for `/user/list?user_alias=`; empty is no filter, since contains "" drops NULL aliases."""
+    if not user_alias:
+        return _NO_SEARCH_WHERE
+    alias_where: Final[UserAliasWhere] = {"user_alias": {"contains": user_alias, "mode": "insensitive"}}
+    return alias_where
+
+
 @router.get(
     "/user/list",
     tags=["Internal User management"],
@@ -2240,9 +2249,6 @@ async def get_users(
             "mode": "insensitive",  # Case-insensitive search
         }
 
-    if user_alias:
-        where_conditions["user_alias"] = {"contains": user_alias, "mode": "insensitive"}
-
     if team is not None and isinstance(team, str):
         where_conditions["teams"] = {
             "has": team  # Array contains for string arrays in Prisma
@@ -2262,7 +2268,11 @@ async def get_users(
     ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}
     where: Final[Mapping[str, object]] = {
         key: value
-        for key, value in (*where_conditions.items(), *_user_search_where(search).items())
+        for key, value in (
+            *where_conditions.items(),
+            *_user_alias_where(user_alias).items(),
+            *_user_search_where(search).items(),
+        )
         if value is not None
     }
 
