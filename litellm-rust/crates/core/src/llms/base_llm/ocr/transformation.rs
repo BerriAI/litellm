@@ -13,6 +13,8 @@ use crate::ocr::types::{
     PreparedOcrRequest, ResolvedOcrCredentials,
 };
 
+const HEALTH_CHECK_PDF_DATA_URI: &str = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9UeXBlIC9QYWdlCi9QYXJlbnQgMSAwIFIKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KL0NvbnRlbnRzIDQgMCBSCi9SZXNvdXJjZXMgPDwvRm9udCA8PC9GMSAyIDAgUj4+Pj4+PgplbmRvYmoKNCAwIG9iago8PC9MZW5ndGggNDQ+PgpzdHJlYW0KQlQKL0YxIDI0IFRmCjEwMCA3MDAgVGQKKHRlc3QpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKMiAwIG9iago8PC9UeXBlIC9Gb250Ci9TdWJ0eXBlIC9UeXBlMQovQmFzZUZvbnQgL0hlbHZldGljYT4+CmVuZG9iagoxIDAgb2JqCjw8L1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDE+PgplbmRvYmoKNSAwIG9iago8PC9UeXBlIC9DYXRhbG9nCi9QYWdlcyAxIDAgUj4+CmVuZG9iagp0cmFpbGVyCjw8L1NpemUgNgovUm9vdCA1IDAgUj4+CnN0YXJ0eHJlZgozMjQKJSVFT0Y=";
+
 /// Output of `validate_environment`: whatever a provider resolves up front
 /// (headers at minimum; Vertex also carries the project id).
 pub(crate) trait OcrEnvironment: Send + Sync {
@@ -25,12 +27,30 @@ impl OcrEnvironment for Vec<(String, String)> {
     }
 }
 
-const HEALTH_CHECK_PDF_DATA_URI: &str = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9UeXBlIC9QYWdlCi9QYXJlbnQgMSAwIFIKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KL0NvbnRlbnRzIDQgMCBSCi9SZXNvdXJjZXMgPDwvRm9udCA8PC9GMSAyIDAgUj4+Pj4+PgplbmRvYmoKNCAwIG9iago8PC9MZW5ndGggNDQ+PgpzdHJlYW0KQlQKL0YxIDI0IFRmCjEwMCA3MDAgVGQKKHRlc3QpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKMiAwIG9iago8PC9UeXBlIC9Gb250Ci9TdWJ0eXBlIC9UeXBlMQovQmFzZUZvbnQgL0hlbHZldGljYT4+CmVuZG9iagoxIDAgb2JqCjw8L1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDE+PgplbmRvYmoKNSAwIG9iago8PC9UeXBlIC9DYXRhbG9nCi9QYWdlcyAxIDAgUj4+CmVuZG9iagp0cmFpbGVyCjw8L1NpemUgNgovUm9vdCA1IDAgUj4+CnN0YXJ0eHJlZgozMjQKJSVFT0Y=";
+#[derive(Clone, Copy)]
+pub(crate) struct OcrRequestContext<'a> {
+    pub client: &'a OcrClient,
+    pub connection: &'a OcrConnection,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct OcrResponseContext<'a> {
+    pub client: &'a OcrClient,
+    pub connection: &'a OcrConnection,
+    pub hooks: &'a Arc<dyn OcrHooks>,
+    pub request_format: OcrResponseFormat,
+    pub url: &'a str,
+    pub headers: &'a [(String, String)],
+}
 
 pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
     type OcrParams: Send + Sync;
     type ProviderRequest: Serialize + Send;
     type Environment: OcrEnvironment;
+
+    fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
+        &[]
+    }
 
     fn get_api_key_env_var(&self) -> Option<&'static str> {
         None
@@ -56,6 +76,12 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
         }
     }
 
+    fn map_ocr_params(
+        &self,
+        non_default_params: &CallArguments,
+        model: &str,
+    ) -> Result<Self::OcrParams, crate::ocr::Error>;
+
     fn validate_environment(
         &self,
         request: &PreparedOcrRequest,
@@ -68,16 +94,6 @@ pub(crate) trait BaseOcrConfig: Send + Sync + Sized + 'static {
         optional_params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error>;
-
-    fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
-        &[]
-    }
-
-    fn map_ocr_params(
-        &self,
-        arguments: &CallArguments,
-        model: &str,
-    ) -> Result<Self::OcrParams, crate::ocr::Error>;
 
     fn transform_ocr_request(
         &self,
@@ -192,20 +208,4 @@ pub(crate) fn decode_and_normalize_response<T: DeserializeOwned>(
         provider_native_response: decoded.native,
         ..normalize(model, decoded.data)?
     })
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct OcrRequestContext<'a> {
-    pub client: &'a OcrClient,
-    pub connection: &'a OcrConnection,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct OcrResponseContext<'a> {
-    pub client: &'a OcrClient,
-    pub connection: &'a OcrConnection,
-    pub hooks: &'a Arc<dyn OcrHooks>,
-    pub request_format: OcrResponseFormat,
-    pub url: &'a str,
-    pub headers: &'a [(String, String)],
 }

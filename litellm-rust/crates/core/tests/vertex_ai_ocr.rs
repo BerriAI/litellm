@@ -103,7 +103,7 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
     use std::time::Duration;
 
     use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
-    use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
+    use crate::llms::mistral::ocr::transformation::MistralOcrConfig;
     use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
     use crate::ocr::test_support::ocr_client;
 
@@ -125,7 +125,7 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
         crate::ocr::prepare::prepare_request(super::test_support::resolved_request(direct));
     let vertex =
         crate::ocr::prepare::prepare_request(super::test_support::resolved_request(vertex));
-    let direct_http = MistralOCRConfig
+    let direct_http = MistralOcrConfig
         .prepare_request(&direct, &client)
         .await
         .unwrap();
@@ -157,7 +157,7 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
     }
     let payload = json!({"pages": [{"index": 0, "markdown": "hello"}], "extra": "preserved"});
     let raw = serde_json::to_vec(&payload).unwrap();
-    let direct_response = MistralOCRConfig
+    let direct_response = MistralOcrConfig
         .transform_ocr_response(
             &direct.model,
             &raw,

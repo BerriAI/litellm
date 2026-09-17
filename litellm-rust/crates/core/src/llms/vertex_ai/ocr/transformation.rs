@@ -6,7 +6,7 @@ use crate::call_arguments::CallArguments;
 use crate::llms::base_llm::ocr::transformation::{
     BaseOcrConfig, OcrEnvironment, OcrRequestContext,
 };
-use crate::llms::mistral::ocr::transformation::{MistralOCRConfig, MistralOcrRequest};
+use crate::llms::mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest};
 use crate::ocr::OcrClient;
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::prepare::credential_env;
@@ -68,11 +68,11 @@ impl BaseOcrConfig for VertexAIOCRConfig {
         params: &OpaqueParams,
         headers: &[(String, String)],
     ) -> Result<MistralOcrRequest, crate::ocr::Error> {
-        MistralOCRConfig.transform_ocr_request(model, document, params, headers)
+        MistralOcrConfig.transform_ocr_request(model, document, params, headers)
     }
 
     fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
-        MistralOCRConfig.get_supported_ocr_params(model)
+        MistralOcrConfig.get_supported_ocr_params(model)
     }
 
     fn map_ocr_params(
@@ -80,7 +80,7 @@ impl BaseOcrConfig for VertexAIOCRConfig {
         arguments: &CallArguments,
         model: &str,
     ) -> Result<OpaqueParams, crate::ocr::Error> {
-        MistralOCRConfig.map_ocr_params(arguments, model)
+        MistralOcrConfig.map_ocr_params(arguments, model)
     }
 
     async fn async_transform_ocr_request(
@@ -106,7 +106,7 @@ impl BaseOcrConfig for VertexAIOCRConfig {
         raw_response: &[u8],
         request_format: crate::ocr::types::OcrResponseFormat,
     ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        MistralOCRConfig.transform_ocr_response(model, raw_response, request_format)
+        MistralOcrConfig.transform_ocr_response(model, raw_response, request_format)
     }
 
     fn validate_request_body(&self, body: &Value) -> Result<(), crate::ocr::Error> {
@@ -320,7 +320,7 @@ mod tests {
         use std::time::Duration;
 
         use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
-        use crate::llms::mistral::ocr::transformation::MistralOCRConfig;
+        use crate::llms::mistral::ocr::transformation::MistralOcrConfig;
         use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
         use crate::ocr::test_support::ocr_client;
 
@@ -344,7 +344,7 @@ mod tests {
         let vertex = crate::ocr::prepare::prepare_request(
             crate::ocr::test_support::resolved_request(vertex),
         );
-        let direct_http = MistralOCRConfig
+        let direct_http = MistralOcrConfig
             .prepare_request(&direct, &client)
             .await
             .unwrap();
@@ -379,7 +379,7 @@ mod tests {
             &json!({"pages": [{"index": 0, "markdown": "hello"}], "extra": "preserved"}),
         )
         .unwrap();
-        let direct_response = MistralOCRConfig
+        let direct_response = MistralOcrConfig
             .transform_ocr_response(&direct.model, &payload, Default::default())
             .unwrap()
             .into_json();
