@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "models": 118,
+  "candidates": 1892,
+  "selected_profiles": 12,
+  "ablations": 40,
+  "exact_coefficient_and_selection_match": true,
+  "data_scope": "Frozen training and validation only; no final tasks loaded",
+  "selection_sha256": "1a7c9241c72c299c8b27fd8171881f94fda069fb7191ac6bc3a2eab9de811853"
+}

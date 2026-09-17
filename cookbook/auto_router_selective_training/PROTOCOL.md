@@ -108,3 +108,23 @@ SWE solver containers have a 45-minute configured lifetime in both the original 
 
 
 The final primary billing audit also found one earlier DNA-assembly review ConnectTimeout with no successful response ledger. This is separate from the two host-sleep solver interruptions. Research accounting now discovers transport-only ledgers as well as billed-response ledgers. Review-cascade cost comparisons therefore carry three unmetered requests, while Luna-only comparisons carry two
+
+
+## Lid-closed host sleep, September 16 UTC
+
+During the remaining Anthropic Terminal controls, the host entered Clamshell Sleep on AC power at full battery and repeatedly returned to Maintenance Sleep. The workers survived; no whole attempt was restarted and no power setting changed. At the 06:12 UTC inspection, fix-ocaml-gc and model-extraction-relu-logits Opus trials remained active. The latter had a pending gateway request whose billing remains unresolved until the response or transport ledger completes. Evidence is retained in infrastructure_interruptions/20260916-clamshell-sleep. Host wall durations include these pauses and are not used as routing features or latency comparisons
+
+
+## DNS recovery and exact Terminal image reuse, September 16 UTC
+
+After host sleep, two active Anthropic solver attempts ended with gateway DNS ConnectError and 29 queued controls failed to resolve Docker Hub during environment setup. The runner exited. All 31 failed trial records and exported partial attempts were archived in infrastructure_interruptions/20260916-dns-outage. The two interrupted attempts incurred $1.35120725 in known inference cost and 20 requests with unknown billing. These costs are research overhead, not policy inference cost. Connectivity probes verified host DNS, authenticated gateway access and Docker DNS before resuming
+
+Recovery validation found that eleven completed Anthropic controls had rebuilt different filesystem layers from the retained Luna/Sol images. Every mismatched control was archived and scheduled again, regardless of score. These controls cost $11.05990725, retained separately as research overhead. The 25 Luna/Sol image pairs match in filesystem layers and runtime image configuration. All retained primary attempts and fitted policies are unchanged
+
+The Terminal environment now supports an explicit map of the exact saved Sol image for each final task. It verifies local image identity and filesystem layers before startup and verifies the started container image before agent inference. This replaces rebuilds from mutable base tags with the already-cached peer image. The map is terminal_image_pins.json. Task files, solver prompts, budgets, network isolation, and grading rules remain unchanged. The recovery schedules exactly 42 missing controls and preserves 58 valid Terminal results. No live trial was interrupted for this correction
+
+The model-extraction-relu-logits Opus attempt completed normally after the model wrapper retried the previously pending ReadError. It is retained, with that request's unknown charge included in its cost bounds. The entire attempt was not rerun. Host wall durations remain unsuitable for latency comparisons
+
+## Final completion
+
+All 500 held-out model attempts and grades completed on September 17, 2026 UTC. The final audit checked 950 completed development/final attempts and 1,400 forecasts, including paired image identity, Git isolation, archived file hashes and recorded costs. Full reporting verified that primary Luna/Sol results and calibration diagnostics are identical to the earlier primary release. No fitting, policy selection or boundary change followed the final outcomes
