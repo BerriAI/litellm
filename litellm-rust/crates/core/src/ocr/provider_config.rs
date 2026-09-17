@@ -419,4 +419,18 @@ mod tests {
             model.split_once('/').unwrap().1
         );
     }
+
+    #[rstest]
+    #[case::prefix("not_a_provider/model", None)]
+    #[case::explicit("model", Some("not_a_provider"))]
+    fn ocr_contract_unknown_provider_is_bad_request(
+        #[case] model: &str,
+        #[case] provider: Option<&str>,
+    ) {
+        let error = resolve_provider_config(model, provider).unwrap_err();
+        assert!(
+            matches!(&error, crate::ocr::Error::InvalidProvider(provider) if provider == "not_a_provider")
+        );
+        assert_eq!(error.http_status_code(), Some(400));
+    }
 }
