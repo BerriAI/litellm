@@ -24,7 +24,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
-from litellm.utils import convert_to_model_response_object
+from litellm.utils import convert_to_model_response_object, supports_reasoning
 
 if TYPE_CHECKING:
     import tiktoken
@@ -87,7 +87,9 @@ class MistralConfig(OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        supported_params: Final = [
+        is_magistral: Final = "magistral" in model.lower()
+        accepts_reasoning_effort: Final = is_magistral or supports_reasoning(model=model, custom_llm_provider="mistral")
+        return [
             "stream",
             "temperature",
             "top_p",
@@ -99,13 +101,9 @@ class MistralConfig(OpenAIGPTConfig):
             "stop",
             "response_format",
             "parallel_tool_calls",
-            "reasoning_effort",
+            *(("thinking",) if is_magistral else ()),
+            *(("reasoning_effort",) if accepts_reasoning_effort else ()),
         ]
-
-        if "magistral" in model.lower():
-            supported_params.append("thinking")
-
-        return supported_params
 
     def _map_tool_choice(self, tool_choice: str) -> str:
         if tool_choice == "auto" or tool_choice == "none":

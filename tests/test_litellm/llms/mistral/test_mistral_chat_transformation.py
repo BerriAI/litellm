@@ -51,11 +51,18 @@ class TestMistralReasoningSupport:
         assert "reasoning_effort" in supported_params
         assert "thinking" in supported_params
 
-        # Non-magistral models accept reasoning_effort (forwarded verbatim) but not thinking
+        # Non-magistral reasoning models accept reasoning_effort (forwarded verbatim) but not thinking
+        supported_params_reasoning = mistral_config.get_supported_openai_params(
+            "mistral/mistral-medium-latest"
+        )
+        assert "reasoning_effort" in supported_params_reasoning
+        assert "thinking" not in supported_params_reasoning
+
+        # Models Mistral rejects reasoning_effort on keep it unsupported, so drop_params still drops it
         supported_params_normal = mistral_config.get_supported_openai_params(
             "mistral/mistral-large-latest"
         )
-        assert "reasoning_effort" in supported_params_normal
+        assert "reasoning_effort" not in supported_params_normal
         assert "thinking" not in supported_params_normal
 
     def test_map_openai_params_reasoning_effort(self):
@@ -78,23 +85,46 @@ class TestMistralReasoningSupport:
         result_normal = mistral_config.map_openai_params(
             non_default_params={"reasoning_effort": "low"},
             optional_params=optional_params_normal,
-            model="mistral/mistral-large-latest",
+            model="mistral/mistral-medium-latest",
             drop_params=False,
         )
 
         assert "_add_reasoning_prompt" not in result_normal
         assert result_normal["reasoning_effort"] == "low"
 
-    def test_reasoning_effort_not_unsupported_for_non_magistral(self):
-        """Codex sends reasoning_effort to every model; Mistral must not raise UnsupportedParamsError."""
+    @pytest.mark.parametrize(
+        ("model", "reasoning_effort"),
+        [("mistral-medium-latest", "high"), ("zai-glm-5-2", "xhigh")],
+    )
+    def test_reasoning_effort_forwarded_verbatim_for_reasoning_models(self, model, reasoning_effort):
+        """Codex sends reasoning_effort to every model; Mistral reasoning models forward it as-is."""
         import litellm
 
         optional_params = litellm.get_optional_params(
-            model="mistral-medium-latest",
+            model=model,
             custom_llm_provider="mistral",
-            reasoning_effort="medium",
+            reasoning_effort=reasoning_effort,
         )
-        assert optional_params["reasoning_effort"] == "medium"
+        assert optional_params["reasoning_effort"] == reasoning_effort
+
+    def test_reasoning_effort_stays_unsupported_for_non_reasoning_models(self):
+        """Mistral rejects reasoning_effort on codestral, so drop_params keeps dropping it there."""
+        import litellm
+
+        with pytest.raises(litellm.UnsupportedParamsError):
+            litellm.get_optional_params(
+                model="codestral-latest",
+                custom_llm_provider="mistral",
+                reasoning_effort="high",
+            )
+
+        dropped = litellm.get_optional_params(
+            model="codestral-latest",
+            custom_llm_provider="mistral",
+            reasoning_effort="high",
+            drop_params=True,
+        )
+        assert "reasoning_effort" not in dropped
 
     def test_client_metadata_stripped_from_request(self):
         """client_metadata passed by Codex must not reach Mistral, whose schema rejects unknown fields."""
