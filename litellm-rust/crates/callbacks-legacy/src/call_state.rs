@@ -250,6 +250,31 @@ impl PythonCallState {
         self.error = Some(error.into_value(py));
     }
 
+    pub fn record_failure(
+        &mut self,
+        py: Python<'_>,
+        error: PyErr,
+        cancelled: bool,
+        phase: Option<HostPhase>,
+    ) {
+        if self.error.is_none() || (cancelled && phase != Some(HostPhase::DeploymentFailure)) {
+            self.retain_error(py, error);
+        }
+        if self.end.is_none() {
+            self.end = now(py).ok();
+        }
+    }
+
+    pub fn take_response(&mut self) -> Option<Py<PyAny>> {
+        self.response.take()
+    }
+
+    pub fn take_error(&mut self, py: Python<'_>) -> Option<PyErr> {
+        self.error
+            .take()
+            .map(|value| PyErr::from_value(value.into_bound(py).into_any()))
+    }
+
     pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.args)?;
         visit.call(&self.kwargs)?;

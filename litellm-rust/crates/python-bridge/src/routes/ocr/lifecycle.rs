@@ -238,12 +238,8 @@ impl PythonHost for PythonOcrHost {
                 OcrHostResult::Lifecycle(Ok(()))
             }
             OcrHostOperation::MapFailure(error) => {
-                if self.state.error.is_none() {
-                    self.state.retain_error(py, ocr_error_to_pyerr(error));
-                }
-                if self.state.end.is_none() {
-                    self.state.end = Some(now(py)?);
-                }
+                self.state
+                    .record_failure(py, ocr_error_to_pyerr(error), false, None);
                 let error = self.state.error.as_ref().ok_or_else(missing_state)?;
                 let (request, provider) = match &self.data {
                     OcrHostData::Unprojected { request } => (request.bind(py), ""),

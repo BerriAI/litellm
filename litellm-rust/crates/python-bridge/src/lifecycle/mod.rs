@@ -155,13 +155,9 @@ impl<R: PythonHost> PythonLifecycle<R> {
         } else {
             HostFailure::Cancelled(native)
         };
-        let state = self.route.state_mut();
-        if state.error.is_none() || (cancelled && phase != Some(HostPhase::DeploymentFailure)) {
-            state.retain_error(py, error);
-        }
-        if state.end.is_none() {
-            state.end = now(py).ok();
-        }
+        self.route
+            .state_mut()
+            .record_failure(py, error, cancelled, phase);
         failure
     }
 
@@ -197,8 +193,7 @@ impl<R: PythonHost> PythonLifecycle<R> {
                     return self
                         .route
                         .state_mut()
-                        .response
-                        .take()
+                        .take_response()
                         .map(ExecutionStep::Return)
                         .ok_or_else(missing_state);
                 }
@@ -238,14 +233,7 @@ impl<R: PythonHost> ExecutionBody for PythonLifecycle<R> {
         match result {
             Ok(ExecutionStep::Await(value)) => Ok(ExecutionStep::Await(value)),
             result => result.map_err(|error| {
-                Python::attach(|py| {
-                    self.route
-                        .state_mut()
-                        .error
-                        .take()
-                        .map(|value| PyErr::from_value(value.into_bound(py).into_any()))
-                        .unwrap_or(error)
-                })
+                Python::attach(|py| self.route.state_mut().take_error(py).unwrap_or(error))
             }),
         }
     }
@@ -542,11 +530,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
 
     impl ExecutionBody for ErrorBody {
         fn resume(&mut self, _: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep> {
-            Python::attach(|py| {
-                Err(PyErr::from_value(
-                    self.0.error.take().unwrap().into_bound(py).into_any(),
-                ))
-            })
+            Python::attach(|py| Err(self.0.take_error(py).unwrap()))
         }
 
         fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
