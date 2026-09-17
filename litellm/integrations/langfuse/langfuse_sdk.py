@@ -559,8 +559,8 @@ def _build_span_exporter(*, public_key: object, secret_key: object, base_url: ob
     ca_bundle: Final = ssl_verify if isinstance(ssl_verify, str) and os.path.exists(ssl_verify) else None
     configured_certificate: Final = os.getenv("SSL_CERTIFICATE") or litellm.ssl_certificate
     client_certificate: Final = configured_certificate if isinstance(configured_certificate, str) else None
-    export_path: Final = os.getenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH")
-    endpoint: Final = f"{base_url}/{export_path}" if export_path else f"{base_url}/api/public/otel/v1/traces"
+    export_path: Final = os.getenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH") or "/api/public/otel/v1/traces"
+    endpoint: Final = f"{str(base_url).rstrip('/')}/{export_path.lstrip('/')}"
     encoded_auth: Final = b64encode(f"{public_key}:{secret_key}".encode()).decode("ascii")
     exporter: Final = OTLPSpanExporter(
         endpoint=endpoint,

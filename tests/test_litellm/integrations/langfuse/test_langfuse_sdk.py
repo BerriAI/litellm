@@ -1078,6 +1078,29 @@ def test_ssl_exporter_carries_litellm_tls_material(monkeypatch, tmp_path):
     assert exporter._headers["x-langfuse-sdk-version"] == installed_langfuse_version()
 
 
+@pytest.mark.parametrize(
+    ("base_url", "export_path", "expected"),
+    [
+        ("https://lf.internal.example/", None, "https://lf.internal.example/api/public/otel/v1/traces"),
+        ("https://lf.internal.example", "/otel/traces", "https://lf.internal.example/otel/traces"),
+        ("https://lf.internal.example/", "/otel/traces", "https://lf.internal.example/otel/traces"),
+        ("https://lf.internal.example", "otel/traces", "https://lf.internal.example/otel/traces"),
+    ],
+)
+def test_export_endpoint_never_doubles_the_slash(monkeypatch, base_url, export_path, expected):
+    """A trailing host slash or a leading export path slash must not produce `//` in the OTLP route."""
+    from litellm.integrations.langfuse.langfuse_sdk import _build_span_exporter
+
+    if export_path is None:
+        monkeypatch.delenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH", raising=False)
+    else:
+        monkeypatch.setenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH", export_path)
+
+    exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url=base_url).exporter
+
+    assert exporter._endpoint == expected
+
+
 def test_retrying_exporter_retries_a_raised_export_and_then_succeeds(monkeypatch):
     """A read timeout used to drop the batch outright; v2 backed off and re-sent it."""
     from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
