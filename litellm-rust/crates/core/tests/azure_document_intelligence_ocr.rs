@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use rstest::rstest;
 use serde_json::{Value, json};
 
 use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
@@ -48,33 +49,87 @@ async fn facade_maps_pages_features_and_url_document() {
     );
 }
 
+#[rstest]
+#[case(json!({"pages":[true]}), crate::ocr::Error::Pages("expected only integers or only strings".into()))]
+#[case(json!({"pages":[1,"2"]}), crate::ocr::Error::Pages("expected only integers or only strings".into()))]
+#[case(json!({"pages":[-1]}), crate::ocr::Error::Pages("negative page index".into()))]
+#[case(json!({"pages":"1&&features=bad"}), crate::ocr::Error::Pages("invalid native page range".into()))]
+#[case(json!({"features":"languages&pages=1"}), crate::ocr::Error::Features)]
+#[case(json!({"req_format":"azure"}), crate::ocr::Error::RequestFormat)]
 #[tokio::test]
-async fn rejects_invalid_pages_features_and_format() {
-    for options in [
-        json!({"pages":[true]}),
-        json!({"pages":[1,"2"]}),
-        json!({"pages":[-1]}),
-        json!({"pages":"1&&features=bad"}),
-        json!({"features":"languages&pages=1"}),
-        json!({"req_format":"azure"}),
-    ] {
-        let result = decode_request(OcrWireRequest {
-            model: "azure_ai/doc-intelligence/prebuilt-read".into(),
-            document: json!({"type":"document_url","document_url":"https://example.com/a.pdf"}),
-            api_key: Some("key".into()),
-            api_base: Some("http://127.0.0.1:1".into()),
-            custom_llm_provider: None,
-            extra_headers: None,
-            optional_params: options.as_object().unwrap().clone(),
-            input_sources: Default::default(),
-            timeout_seconds: None,
-        });
-        let rejected = match result {
-            Ok(request) => perform_ocr(request).await.is_err(),
-            Err(_) => true,
-        };
-        assert!(rejected, "accepted {options}");
+async fn rejects_invalid_pages_features_and_format(
+    #[case] options: Value,
+    #[case] expected: super::Error,
+) {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({}))]).await;
+    let result = decode_request(OcrWireRequest {
+        model: "azure_ai/doc-intelligence/prebuilt-read".into(),
+        document: json!({"type":"document_url","document_url":"https://example.com/a.pdf"}),
+        api_key: Some("key".into()),
+        api_base: Some(base),
+        custom_llm_provider: None,
+        extra_headers: None,
+        optional_params: options.as_object().unwrap().clone(),
+        input_sources: Default::default(),
+        timeout_seconds: Some(2.0),
+    });
+    let result = match result {
+        Ok(request) => perform_ocr(request).await,
+        Err(error) => Err(error),
+    };
+    server.abort();
+    let _ = server.await;
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "sent invalid options: {options}"
+    );
+    let error = result.unwrap_err();
+    assert_eq!(
+        std::mem::discriminant(&error),
+        std::mem::discriminant(&expected)
+    );
+    assert_eq!(error.http_status_code(), Some(400));
+    assert_eq!(error.to_string(), expected.to_string());
+}
+
+#[rstest]
+#[case(json!({}))]
+#[case(json!({"req_format":"litellm"}))]
+#[tokio::test]
+async fn missing_native_fields_keep_page_text_without_retaining_raw_response(
+    #[case] options: Value,
+) {
+    let operation = json!({
+        "status":"succeeded",
+        "analyzeResult":{"pages":[{"pageNumber":1,"lines":[{"content":"hello"}]}]}
+    });
+    let (base, seen, server) = mock_server(vec![MockResponse::json(operation)]).await;
+    let response = perform_ocr(wire_request(
+        "azure_ai/doc-intelligence/prebuilt-read",
+        &base,
+        options,
+    ))
+    .await
+    .unwrap();
+    server.await.unwrap();
+
+    assert_eq!(response.pages.len(), 1);
+    assert_eq!(response.pages[0].index, 0);
+    assert_eq!(response.pages[0].markdown, "hello");
+    assert_eq!(response.provider_native_response, None);
+    let serialized = response.into_json();
+    assert_eq!(serialized.get("content"), Some(&Value::Null));
+    assert_eq!(serialized.get("tables"), Some(&Value::Null));
+    assert_eq!(serialized.get("keyValuePairs"), Some(&Value::Null));
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let target = requests[0].split_whitespace().nth(1).unwrap();
+    let url = format!("{base}{target}");
+    for field in ["pages", "features", "req_format"] {
+        assert_eq!(query_value(&url, field), None);
     }
+    let body: Value = serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body, json!({"base64Source":"YWJj"}));
 }
 
 #[tokio::test]

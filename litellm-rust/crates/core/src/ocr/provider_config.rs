@@ -393,6 +393,13 @@ mod tests {
     #[rstest]
     #[case("reducto/parse-legacy", OcrConfigKind::ReductoLegacy)]
     #[case("reducto/future-parse-model", OcrConfigKind::ReductoV3)]
+    #[case("azure_ai/Cohere-parse-v5", OcrConfigKind::AzureCohere)]
+    #[case("azure_ai/cohere-parse-v5", OcrConfigKind::AzureCohere)]
+    #[case("azure_ai/cohere/parse-v5", OcrConfigKind::AzureCohere)]
+    #[case("azure_ai/invoice-parser", OcrConfigKind::AzureAi)]
+    #[case("azure_ai/parse-v5", OcrConfigKind::AzureAi)]
+    #[case("azure_ai/mistral-ocr-4-0", OcrConfigKind::AzureAi)]
+    #[case("azure_ai/mistral-document-ai-2512", OcrConfigKind::AzureAi)]
     #[case(
         "azure_ai/doc-intelligence/prebuilt-layout",
         OcrConfigKind::AzureDocumentIntelligence

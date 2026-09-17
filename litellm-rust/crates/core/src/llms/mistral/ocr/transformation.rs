@@ -425,7 +425,9 @@ mod tests {
 
     #[rstest]
     #[case("table_format", json!("html"))]
+    #[case("table_format", json!("markdown"))]
     #[case("confidence_scores_granularity", json!("word"))]
+    #[case("confidence_scores_granularity", json!("page"))]
     #[case("document_annotation_prompt", json!("extract"))]
     #[case("include_blocks", json!(true))]
     #[case("id", json!("req-123"))]
@@ -436,7 +438,9 @@ mod tests {
     #[rstest]
     #[case("pages", json!([0, 2]))]
     #[case("pages", json!("0,2-4"))]
+    #[case("pages", Value::Null)]
     #[case("include_image_base64", json!(true))]
+    #[case("include_image_base64", json!(false))]
     #[case("image_limit", json!(2))]
     #[case("image_min_size", json!(100))]
     #[case("bbox_annotation_format", json!({"type":"json_schema"}))]
@@ -445,19 +449,28 @@ mod tests {
     #[case("extract_header", json!(true))]
     #[case("extract_footer", json!(false))]
     #[case("table_format", json!("html"))]
+    #[case("table_format", json!("markdown"))]
     #[case("confidence_scores_granularity", json!("word"))]
+    #[case("confidence_scores_granularity", json!("page"))]
+    #[case("confidence_scores_granularity", json!("block"))]
     #[case("include_blocks", json!(true))]
+    #[case("include_blocks", json!(false))]
     #[case("id", json!("req-123"))]
-    fn request_mapping_matches_python(#[case] name: &str, #[case] value: Value) {
-        let params: OpaqueParams = serde_json::from_value(json!({name: value.clone()})).unwrap();
+    fn request_mapping_preserves_supplied_options(#[case] name: &str, #[case] value: Value) {
+        let arguments = serde_json::from_value(json!({name: value.clone()})).unwrap();
+        let params = MistralOCRConfig
+            .map_ocr_params(&arguments, "model")
+            .unwrap();
         let result = serde_json::to_value(
             MistralOCRConfig
                 .transform_ocr_request("model", document(), &params, &[])
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(result["model"], "model");
-        assert_eq!(result[name], value);
+        assert_eq!(
+            result,
+            json!({"model":"model", "document":document(), name:value})
+        );
     }
 
     #[rstest]
@@ -504,30 +517,25 @@ mod tests {
 
     #[rstest]
     fn transform_ocr_response_preserves_blocks_and_confidence_scores() {
-        let response: MistralOcrResponse = serde_json::from_value(json!({
-                "pages":[{
-                    "index":0,
-                    "markdown":"hello",
-                    "images":[{"id":"img-0","image_base64":"data:image/png;base64,AA=="}],
-                    "dimensions":{"width":612,"height":792,"dpi":72},
-                    "blocks":[{"type":"title","bbox":{"x":1},"confidence_scores":{"mean":0.98}}],
-                    "confidence_scores":{"average_page_confidence_score":0.99,"minimum_page_confidence_score":0.97}
-                }],
-                "model":"returned-model",
-                "document_annotation":"{\"language\":\"en\"}",
-                "usage_info":{"pages_processed":1}
-            }))
-            .unwrap();
+        let payload = json!({
+            "pages":[{
+                "index":0,
+                "markdown":"hello",
+                "images":[{"id":"img-0","image_base64":"data:image/png;base64,AA=="}],
+                "dimensions":{"width":612,"height":792,"dpi":72},
+                "blocks":[{"type":"title","bbox":{"x":1},"confidence_scores":{"mean":0.98}}],
+                "confidence_scores":{"average_page_confidence_score":0.99,"minimum_page_confidence_score":0.97}
+            }],
+            "model":"returned-model",
+            "document_annotation":"{\"language\":\"en\"}",
+            "usage_info":{"pages_processed":1}
+        });
+        let response: MistralOcrResponse = serde_json::from_value(payload.clone()).unwrap();
         let result = normalize_response("model", response).unwrap().into_json();
-        assert_eq!(result["pages"][0]["blocks"][0]["type"], "title");
-        assert_eq!(result["pages"][0]["blocks"][0]["bbox"]["x"], 1);
+        assert_eq!(result["pages"][0]["blocks"], payload["pages"][0]["blocks"]);
         assert_eq!(
-            result["pages"][0]["blocks"][0]["confidence_scores"]["mean"],
-            0.98
-        );
-        assert_eq!(
-            result["pages"][0]["confidence_scores"]["average_page_confidence_score"],
-            0.99
+            result["pages"][0]["confidence_scores"],
+            payload["pages"][0]["confidence_scores"]
         );
         assert_eq!(result["pages"][0]["images"][0]["id"], "img-0");
         assert_eq!(result["pages"][0]["dimensions"]["dpi"], 72);
