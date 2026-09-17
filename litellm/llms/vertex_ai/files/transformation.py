@@ -304,8 +304,7 @@ async def _peek_first_jsonl_line(
     buffered: bytes = b""  # rebind-ok: accumulates the prefix read while looking for the first newline
     async for chunk in chunks:
         buffered = buffered + chunk
-        *complete_lines, _partial = buffered.split(_JSONL_NEWLINE)
-        first_line = _first_non_empty_jsonl_line(complete_lines)
+        first_line = _first_non_empty_jsonl_line(buffered.split(_JSONL_NEWLINE)[:-1])
         if first_line is not None:
             return first_line, buffered
         if len(buffered) > peek_limit_bytes:

@@ -23,6 +23,7 @@ replaced by a list-based pipeline:
 
 import asyncio
 import gc
+import gzip
 import io
 import json
 import tempfile
@@ -724,6 +725,24 @@ class TestFileContentStreaming:
         assert first
         assert state["served"] < len(raw_chunks)
         assert state["closed"] is False
+
+    async def test_gzip_encoded_object_is_decoded_without_stale_transfer_headers(self):
+        raw = b'{"line": 1}\n{"line": 2}\n' * 200
+        encoded = gzip.compress(raw)
+        upstream = {
+            "content-type": "application/octet-stream",
+            "content-encoding": "gzip",
+            "content-length": str(len(encoded)),
+        }
+
+        result, state = await self._open([encoded[i : i + 64] for i in range(0, len(encoded), 64)], upstream)
+        streamed = b"".join([chunk async for chunk in result.stream_iterator])
+
+        assert streamed == raw
+        assert result.headers["content-type"] == "application/octet-stream"
+        assert "content-encoding" not in result.headers
+        assert "content-length" not in result.headers
+        assert state["closed"] is True
 
     async def test_vertex_batch_output_is_transformed_row_by_row(self):
         rows = [_vertex_batch_output_row(f"request-{i}", f"answer {i}") for i in range(30)]
