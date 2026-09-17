@@ -80,11 +80,12 @@ def _redact_structured_value(key: str | None, value: str) -> str:
 
 
 _REDACTED_RECORD_ATTR: Final = "litellm_redacted"
+_REDACTED_STAMP: Final = object()
 _UNREDACTED_SCALAR_TYPES: Final = (bool, int, float, type(None))
 
 
 def _is_redacted(record: logging.LogRecord) -> bool:
-    return getattr(record, _REDACTED_RECORD_ATTR, False) is True
+    return getattr(record, _REDACTED_RECORD_ATTR, None) is _REDACTED_STAMP
 
 
 def _scrubbing_changed_nothing(scrubbed: object, original: object) -> bool:
@@ -193,7 +194,7 @@ class SecretRedactionFilter(logging.Filter):
             elif not isinstance(value, _UNREDACTED_SCALAR_TYPES):
                 setattr(record, key, _redact_extra_value(key, value))
 
-        setattr(record, _REDACTED_RECORD_ATTR, True)
+        setattr(record, _REDACTED_RECORD_ATTR, _REDACTED_STAMP)
         return True
 
 
