@@ -1415,9 +1415,12 @@ async def test_raise_if_model_not_routable_allows_routable_requests(monkeypatch,
         # router_general_settings is shared across Router instances; monkeypatch restores it
         monkeypatch.setattr(router.router_general_settings, "pass_through_all_models", True)
 
-    await raise_if_model_not_routable(
-        data=data,
-        llm_router=router,
-        user_model=None,
-        route_type=route_type,
+    assert (
+        await raise_if_model_not_routable(
+            data=data,
+            llm_router=router,
+            user_model=None,
+            route_type=route_type,
+        )
+        is None
     )
