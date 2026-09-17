@@ -1108,8 +1108,9 @@ def provider_edge_api_base(
     (the deployment keeps its real provider api_base) and the process-wide edge
     server's mount URL in record and replay, booting the server on first use.
     With the shared cache configured, live mode answers with the cache edge's
-    mount URL scoped to ``test_key``, the test registering the deployment, and
-    None outside any test, since a call nobody can attribute is never cached."""
+    mount URL scoped to ``test_key``, the node that owns the deployment, and
+    None for a deployment no node owns, since a call nobody can attribute is
+    never cached."""
     mode: Final = parse_fixture_mode(mode_raw)
     match mode:
         case InvalidFixtureMode(value=value):
