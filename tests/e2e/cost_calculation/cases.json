@@ -62,7 +62,15 @@
       "name": "web_search",
       "usage": {"fresh_input_tokens": 100, "output_tokens": 30, "web_search_calls": 3},
       "requires_rates": ["search_context_cost_per_query"],
-      "requires_caps": ["web_search"]
+      "requires_caps": ["web_search"],
+      "wires": ["openai_responses", "anthropic_messages", "gemini_generate", "vertex_generate"]
+    },
+    {
+      "name": "web_search_single",
+      "usage": {"fresh_input_tokens": 100, "output_tokens": 30, "web_search_calls": 1},
+      "requires_rates": ["search_context_cost_per_query"],
+      "requires_caps": ["web_search"],
+      "wires": ["openai_chat", "together_chat", "fireworks_chat", "azure_chat"]
     },
     {
       "name": "stream",
