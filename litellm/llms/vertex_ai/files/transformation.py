@@ -354,9 +354,6 @@ class _VertexBatchOutputRowTransformContext:
 
 
 def _new_vertex_batch_output_row_transform_context() -> _VertexBatchOutputRowTransformContext:
-    # Use a fresh Logging object for the per-row transform so we never
-    # mutate the caller's (which already ran pre_call with its own
-    # model/start_time/optional_params).
     batch_transform_logging_obj: Final = Logging(
         model="",
         messages=[],
