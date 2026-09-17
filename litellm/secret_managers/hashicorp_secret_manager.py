@@ -39,7 +39,6 @@ class _VaultSecretTarget(TypedDict):
     url: ReadOnly[str]
     data_key: ReadOnly[str]
     secret_name: ReadOnly[str]
-    cache_key: ReadOnly[str]
 
 
 class _VaultSecretDataBlock(TypedDict, total=False):
@@ -369,7 +368,6 @@ class HashicorpSecretManager(BaseSecretManager):
             "url": url,
             "data_key": data_key,
             "secret_name": secret_name,
-            "cache_key": f"{url}#{data_key}",
         }
 
     def _get_request_headers(self) -> dict:
@@ -408,17 +406,16 @@ class HashicorpSecretManager(BaseSecretManager):
         )
         try:
             target: Final = self._build_secret_target(secret_name, optional_params)
-            cached_value: Final = self.cache.get_cache(target["cache_key"])
-            if cached_value is not None:
-                return cached_value
+            cached_body: Final = self.cache.get_cache(target["url"])
+            if cached_body is not None:
+                return self._get_secret_value_from_json_response(cached_body, target["data_key"])
 
             response: Final = await async_client.get(target["url"], headers=self._get_request_headers())
             response.raise_for_status()
 
             json_resp: Final = _json_object_body(response)
-            _value: Final = self._get_secret_value_from_json_response(json_resp, target["data_key"])
-            self.cache.set_cache(target["cache_key"], _value)
-            return _value
+            self.cache.set_cache(target["url"], json_resp)
+            return self._get_secret_value_from_json_response(json_resp, target["data_key"])
 
         except Exception as e:
             verbose_logger.exception("Error reading secret from Hashicorp Vault: %s", e)
@@ -438,17 +435,16 @@ class HashicorpSecretManager(BaseSecretManager):
         sync_client: Final = _get_httpx_client()
         try:
             target: Final = self._build_secret_target(secret_name, optional_params)
-            cached_value: Final = self.cache.get_cache(target["cache_key"])
-            if cached_value is not None:
-                return cached_value
+            cached_body: Final = self.cache.get_cache(target["url"])
+            if cached_body is not None:
+                return self._get_secret_value_from_json_response(cached_body, target["data_key"])
 
             response: Final = sync_client.get(target["url"], headers=self._get_request_headers())
             response.raise_for_status()
 
             json_resp: Final = _json_object_body(response)
-            _value: Final = self._get_secret_value_from_json_response(json_resp, target["data_key"])
-            self.cache.set_cache(target["cache_key"], _value)
-            return _value
+            self.cache.set_cache(target["url"], json_resp)
+            return self._get_secret_value_from_json_response(json_resp, target["data_key"])
 
         except Exception as e:
             verbose_logger.exception("Error reading secret from Hashicorp Vault: %s", e)
@@ -637,10 +633,10 @@ class HashicorpSecretManager(BaseSecretManager):
                     )
                 else:
                     # Clear cache for the old secret only if deletion was successful
-                    self.cache.delete_cache(current_target["cache_key"])
+                    self.cache.delete_cache(current_target["url"])
 
             # Clear cache for the new secret (or updated secret if names are the same)
-            self.cache.delete_cache(new_target["cache_key"])
+            self.cache.delete_cache(new_target["url"])
 
             return create_response
 
@@ -681,7 +677,7 @@ class HashicorpSecretManager(BaseSecretManager):
             response: Final = await async_client.delete(url=target["url"], headers=self._get_request_headers())
             response.raise_for_status()
 
-            self.cache.delete_cache(target["cache_key"])
+            self.cache.delete_cache(target["url"])
 
             return {
                 "status": "success",

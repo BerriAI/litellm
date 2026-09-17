@@ -134,6 +134,24 @@ def test_sync_read_caches_per_data_key_for_the_same_secret_path(monkeypatch: pyt
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_async_delete_evicts_every_cached_field_of_the_secret_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    manager: Final = _build_manager(monkeypatch, {"HCP_VAULT_SECRET_NAMESPACE": "teams/team-a"})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    secret_url: Final = f"{VAULT_ADDR}/v1/teams/team-a/secret/data/DB_CREDS"
+    read_route: Final = respx.get(secret_url).respond(json=SECRET_RESPONSE)
+    respx.delete(secret_url).respond(status_code=204)
+    password_params: Final = {"secret_manager_settings": {"data": "password"}}
+
+    assert await manager.async_read_secret("DB_CREDS", optional_params=password_params) == "pw-from-vault"
+    assert await manager.async_delete_secret("DB_CREDS")
+    assert await manager.async_read_secret("DB_CREDS", optional_params=password_params) == "pw-from-vault"
+
+    assert read_route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_async_read_uses_secret_namespace_and_login_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     manager: Final = _build_manager(
