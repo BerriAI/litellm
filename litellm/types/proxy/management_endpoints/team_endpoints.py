@@ -1,6 +1,6 @@
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from litellm.proxy._types import (
     KeyManagementRoutes,
@@ -10,6 +10,7 @@ from litellm.proxy._types import (
     Member,
     MemberDeleteRequest,
 )
+from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
 TeamIdSearchMatch = Literal["exact", "prefix"]
@@ -167,6 +168,14 @@ class TeamMemberBudgetPatch(TeamMemberRef):
     rpm_limit: int | None = None
     budget_duration: str | None = None
     allowed_models: tuple[str, ...] | None = None
+
+    @field_validator("budget_duration")
+    @classmethod
+    def persistable_budget_duration(cls, value: str | None) -> str | None:
+        error: Final = budget_duration_error(value)
+        if error is not None:
+            raise ValueError(error)
+        return value
 
 
 class BulkTeamMemberBudgetUpdateRequest(BaseModel):

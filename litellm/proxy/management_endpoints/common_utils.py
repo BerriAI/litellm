@@ -34,23 +34,11 @@ def validate_budget_duration(budget_duration: str | None, status_code: int = 400
     enough of them exist, they fill each batch and starve every other tenant's
     reset.
     """
-    if budget_duration is None:
-        return
+    from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 
-    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-    try:
-        if duration_in_seconds(budget_duration) <= 0:
-            raise ValueError("budget_duration must be positive")
-        get_budget_reset_time(budget_duration=budget_duration)
-    except (ValueError, OverflowError):
-        raise HTTPException(
-            status_code=status_code,
-            detail={
-                "error": f"Invalid budget_duration '{budget_duration}'. Use a format like '1h', '24h', '7d', or '30d'."
-            },
-        )
+    error: Final = budget_duration_error(budget_duration)
+    if error is not None:
+        raise HTTPException(status_code=status_code, detail={"error": error})
 
 
 from litellm._logging import verbose_proxy_logger

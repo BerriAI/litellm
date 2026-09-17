@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Final
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_update uses
     _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_update uses
@@ -115,7 +116,7 @@ async def bulk_update_team_member_budgets(
     user_api_key_cache: UserApiKeyCache,
 ) -> tuple[TeamMemberBudgetUpdateResult, ...]:
     """Apply one merge patch of per-member limits per requested member, in one transaction."""
-    team: Final = await TeamRepository(prisma_client).find_by_id(team_id)
+    team: Final = await TeamRepository(WriterPinnedClient(prisma_client.db)).find_by_id(team_id)
     if team is None:
         raise _team_not_found(team_id)
 

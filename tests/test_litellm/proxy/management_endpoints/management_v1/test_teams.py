@@ -25,6 +25,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     team_membership_auth_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.list_api.common import ManagementProblem, problem_response, request_validation_problem
 from litellm.proxy.management_endpoints.management_v1 import router
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
@@ -145,11 +146,22 @@ class _MembershipTable:
 
 
 class _TeamTable:
+    """`find_many` and `create` are what `RoutingPrismaWrapper` keys read routing off, so a fake
+    table without them would silently never route and pass a reader-staleness test on the writer."""
+
     def __init__(self, teams: Sequence[LiteLLM_TeamTable]) -> None:
         self.rows: dict[str, LiteLLM_TeamTable] = {t.team_id: t for t in teams}
 
     async def find_unique(self, where: Mapping[str, str]) -> LiteLLM_TeamTable | None:
         return self.rows.get(where["team_id"])
+
+    async def find_many(self, where: Mapping[str, object] | None = None) -> list[LiteLLM_TeamTable]:
+        return [t for t in self.rows.values() if where is None or _matches(t.model_dump(), where)]
+
+    async def create(self, data: Mapping[str, object]) -> LiteLLM_TeamTable:
+        row: Final = LiteLLM_TeamTable.model_validate(dict(data))
+        self.rows[row.team_id] = row
+        return row
 
 
 class _Db:
@@ -181,6 +193,29 @@ class _FakePrisma:
         except BaseException:
             self.db = snapshot
             raise
+
+
+class _ReplicatedPrisma:
+    """A client whose reads route to a lagging replica, as a proxy with `DATABASE_URL_READ_REPLICA` does."""
+
+    def __init__(self, writer: _FakePrisma, reader: _FakePrisma) -> None:
+        self._writer = writer
+        self.db = RoutingPrismaWrapper(writer=writer.db, reader=reader.db)  # pyright: ignore[reportArgumentType]  # fake dbs stand in for PrismaWrapper
+
+    def tx(self, *, timeout: object = None):
+        return self._writer.tx(timeout=timeout)
+
+
+class _UnreachableDb:
+    """A `.db` whose every table access fails, as one behind a dropped connection does."""
+
+    def __getattr__(self, name: str) -> object:
+        raise RuntimeError("connection reset by peer")
+
+
+class _UnreachablePrisma:
+    def __init__(self) -> None:
+        self.db = _UnreachableDb()
 
 
 def _team(
@@ -220,7 +255,7 @@ def _budget(
 
 
 async def _bulk_update(
-    prisma: _FakePrisma,
+    prisma: _FakePrisma | _ReplicatedPrisma,
     members: Sequence[Mapping[str, object]],
     team_id: str = TEAM_ID,
     caller: UserAPIKeyAuth = ADMIN,
@@ -575,6 +610,27 @@ async def test_a_row_that_names_nobody_on_the_team_reports_no_cap_and_no_source(
     ]
 
 
+@pytest.mark.asyncio
+async def test_the_roster_authz_read_runs_on_the_writer_so_a_lagging_replica_cannot_let_a_demoted_admin_write():
+    writer = _FakePrisma(
+        teams=[_team("lead", "m1")],
+        memberships=[_membership("m1", "priv-m1")],
+        budgets=[_budget("priv-m1", max_budget=1.0)],
+    )
+    replica = _FakePrisma(teams=[_team("lead", "m1", admins=("lead",))])
+    demoted = UserAPIKeyAuth(user_id="lead", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    with pytest.raises(ManagementProblem) as raised:
+        await _bulk_update(
+            _ReplicatedPrisma(writer=writer, reader=replica),
+            [{"user_id": "m1", "max_budget_in_team": 99}],
+            caller=demoted,
+        )
+
+    assert raised.value.problem.status == 403
+    assert writer.db.litellm_budgettable.rows["priv-m1"].max_budget == 1.0
+
+
 app = FastAPI()
 
 
@@ -673,3 +729,44 @@ def test_a_team_admin_may_bulk_update_their_own_teams_members(prisma, monkeypatc
 
     assert response.status_code == 200
     assert [(r["user_id"], r["success"], r["max_budget"]) for r in response.json()["data"]] == [("m1", True, 10.0)]
+
+
+@pytest.mark.parametrize("duration", ("0d", "nonsense"))
+def test_a_budget_duration_no_reset_can_be_scheduled_from_is_a_422_naming_its_row_and_writes_nothing(
+    prisma, as_proxy_admin, duration
+):
+    response = _post(
+        {
+            "members": [
+                {"user_id": "m1", "max_budget_in_team": 10},
+                {"user_id": "m2", "budget_duration": duration},
+            ]
+        }
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["type"] == "urn:litellm:error:invalid-request-body"
+    assert "members.1.budget_duration" in response.json()["detail"]
+    assert prisma.db.litellm_budgettable.rows["priv-m1"].max_budget == 1.0
+
+
+def test_an_unconnected_database_is_a_503_problem_document(monkeypatch, as_proxy_admin):
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    response = _post({"members": [{"user_id": "m1", "max_budget_in_team": 10}]})
+
+    assert response.status_code == 503
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["type"] == "urn:litellm:error:database-not-connected"
+
+
+def test_a_driver_error_answers_as_a_problem_document_without_leaking_the_exception(monkeypatch, as_proxy_admin):
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _UnreachablePrisma())
+
+    response = _post({"members": [{"user_id": "m1", "max_budget_in_team": 10}]})
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["type"] == "urn:litellm:error:internal-server-error"
+    assert "connection reset by peer" not in response.text
