@@ -537,16 +537,6 @@ async def typesafe_proxy_route(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)"""
-    if request.method == "POST":
-        try:
-            request_body: Final = await _json_request_body(request)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        if not isinstance(request_body, dict):
-            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
-        if "stream" in request_body:
-            raise HTTPException(status_code=400, detail="'stream' is not a TypeSafe request member")
-
     base_target_url: Final = get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
     encoded_endpoint: Final = httpx.URL(endpoint).path
     normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
