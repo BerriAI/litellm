@@ -34,6 +34,6 @@ Costs use recorded gateway bills. A ≥ cost and ≤ savings mark unmetered tran
 
 Costs include the classifier. These are task-pinned replays of fresh independent attempts, with one attempt per model per task. No guarantee of quality retention follows from a 125-task sample. The aggregate combines different benchmarks; inspect each benchmark before using a profile
 
-The per-model control is an exploratory comparison among forty prespecified variants. No validation-selected profile combines preservation of all Sol successes and lower cost across all 125 tasks. See PRIMARY_FINDINGS.md for the interpretation
+The per-model control is an exploratory comparison among forty prespecified variants. None of the main selected profiles combines preservation of all Sol successes and lower cost across all 125 tasks. See PRIMARY_FINDINGS.md for the interpretation
 
 ![Observed quality and known inference cost](quality_cost.png)
