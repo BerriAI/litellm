@@ -219,6 +219,30 @@ async def test_create_seeds_reset_at_and_links(mock_tx, fake_user):
     )
 
 
+# TEST: with no existing budget, a patch carrying only the temporary increase
+# pair must still create a budget row and link it, so the fields the 200
+# response echoes are actually stored.
+@pytest.mark.asyncio
+async def test_create_from_temp_budget_pair_only(mock_tx, fake_user):
+    expiry = datetime(2100, 1, 1, tzinfo=timezone.utc)
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-new",
+        user_id="user-new",
+        existing_budget_id=None,
+        user_api_key_dict=fake_user,
+        budget_patch={"temp_budget_increase": 5.0, "temp_budget_expiry": expiry},
+    )
+
+    mock_tx.litellm_budgettable.create.assert_awaited_once()
+    data = mock_tx.litellm_budgettable.create.await_args.kwargs["data"]
+    assert data["temp_budget_increase"] == 5.0
+    assert data["temp_budget_expiry"] == expiry
+    assert "max_budget" not in data
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once()
+    mock_tx.litellm_teammembership.update.assert_not_called()
+
+
 # TEST: clone-on-write when the membership still points at the team's shared
 # default budget. Editing this member must fork a private budget instead of
 # mutating the shared row, and cloning a duration must seed a fresh reset time.

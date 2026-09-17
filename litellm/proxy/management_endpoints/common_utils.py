@@ -487,6 +487,8 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
     "model_max_budget",
     "budget_duration",
     "allowed_models",
+    "temp_budget_increase",
+    "temp_budget_expiry",
 )
 
 
