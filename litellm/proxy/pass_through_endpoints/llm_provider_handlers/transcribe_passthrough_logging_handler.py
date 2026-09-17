@@ -7,7 +7,7 @@ from datetime import datetime
 from functools import lru_cache, partial
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Protocol, TypeAlias
+from typing import IO, Final, Protocol, TypeAlias
 from urllib.parse import quote
 
 import httpx
@@ -19,8 +19,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     TRANSCRIBE_JOB_MAX_POLLING_ATTEMPTS,
     TRANSCRIBE_JOB_POLLING_INTERVAL_SECONDS,
+    TRANSCRIBE_MAX_MEDIA_BYTES,
     TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS,
     TRANSCRIBE_MEASURABLE_MEDIA_FORMATS,
+    TRANSCRIBE_MEDIA_DOWNLOAD_CONCURRENCY,
     TRANSCRIBE_MEDIA_FETCH_ATTEMPTS,
 )
 from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
@@ -298,7 +300,17 @@ def s3_media_url(media_uri: str, aws_region_name: str) -> str | None:
     return f"https://{bucket}.s3.{aws_region_name}.{dns_suffix}/{quote(key)}"
 
 
-def transcribe_media_duration_probe(aws_region_name: str) -> MediaDurationProbe:
+async def write_media_within_limit(response: httpx.Response, media_file: IO[bytes], max_bytes: int) -> bool:
+    if int(response.headers.get("content-length", "0")) > max_bytes:
+        return False
+    async for chunk in response.aiter_bytes():
+        _ = media_file.write(chunk)
+        if media_file.tell() > max_bytes:
+            return False
+    return True
+
+
+def transcribe_media_duration_probe(aws_region_name: str, download_slots: asyncio.Semaphore) -> MediaDurationProbe:
     from botocore.auth import S3SigV4Auth
     from botocore.awsrequest import AWSRequest
 
@@ -316,24 +328,30 @@ def transcribe_media_duration_probe(aws_region_name: str) -> MediaDurationProbe:
             return None
         headers: Final = await run_aws_signing(sign_s3_get, url)
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint).client
-        with tempfile.NamedTemporaryFile() as media_file:
-            async with client.stream("GET", url, headers=headers) as response:
-                _ = response.raise_for_status()
-                async for chunk in response.aiter_bytes():
-                    _ = media_file.write(chunk)
-            media_file.flush()
-            return await asyncio.to_thread(calculate_request_duration, Path(media_file.name))
+        async with download_slots:
+            with tempfile.NamedTemporaryFile() as media_file:
+                async with client.stream("GET", url, headers=headers) as response:
+                    _ = response.raise_for_status()
+                    if not await write_media_within_limit(response, media_file, TRANSCRIBE_MAX_MEDIA_BYTES):
+                        verbose_proxy_logger.warning(
+                            "Transcribe media %s exceeds the size cap, charging maximum", media_uri
+                        )
+                        return None
+                media_file.flush()
+                return await asyncio.to_thread(calculate_request_duration, Path(media_file.name))
 
     return media_seconds
 
 
-async def price_transcription_job_live(job_name: str, aws_region_name: str, cost_per_second: float) -> float:
+async def price_transcription_job_live(
+    job_name: str, aws_region_name: str, cost_per_second: float, download_slots: asyncio.Semaphore
+) -> float:
     try:
         return await price_transcription_job(
             job_name,
             cost_per_second,
             get_job=transcribe_job_lookup(aws_region_name),
-            media_seconds=transcribe_media_duration_probe(aws_region_name),
+            media_seconds=transcribe_media_duration_probe(aws_region_name, download_slots),
         )
     except Exception as e:  # noqa: BLE001  # an unreadable job must still be charged, so fail closed at the maximum
         verbose_proxy_logger.exception("Pricing Transcribe job %s failed, charging maximum: %s", job_name, e)
@@ -341,8 +359,15 @@ async def price_transcription_job_live(job_name: str, aws_region_name: str, cost
 
 
 class TranscribePassthroughLoggingHandler:
-    def __init__(self, job_pricer: JobPricer = price_transcription_job_live) -> None:
-        self._job_pricer: Final = job_pricer
+    def __init__(self, job_pricer: JobPricer | None = None) -> None:
+        self._job_pricer: Final = (
+            job_pricer
+            if job_pricer is not None
+            else partial(
+                price_transcription_job_live,
+                download_slots=asyncio.Semaphore(TRANSCRIBE_MEDIA_DOWNLOAD_CONCURRENCY),
+            )
+        )
         self._pricing_tasks: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio holds tasks weakly
 
     @staticmethod

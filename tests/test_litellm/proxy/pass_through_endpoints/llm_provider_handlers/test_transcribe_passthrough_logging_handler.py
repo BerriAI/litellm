@@ -1,4 +1,5 @@
 import asyncio
+import io
 from datetime import datetime
 from unittest.mock import MagicMock
 
@@ -15,6 +16,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.transcribe_passt
     transcribe_cost_per_second,
     transcribe_supported_operations,
     transcribe_unpriceable_request_reason,
+    write_media_within_limit,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
@@ -211,6 +213,41 @@ class TestS3MediaUrl:
             s3_media_url("https://my-bucket.s3.eu-west-1.amazonaws.com/a.wav", "us-west-2")
             == "https://my-bucket.s3.eu-west-1.amazonaws.com/a.wav"
         )
+
+
+class _ChunkedStream(httpx.AsyncByteStream):
+    def __init__(self, *chunks: bytes) -> None:
+        self._chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+def _media_response(*chunks: bytes, content_length: int | None) -> httpx.Response:
+    headers = {"content-length": str(content_length)} if content_length is not None else {}
+    return httpx.Response(200, headers=headers, stream=_ChunkedStream(*chunks))
+
+
+class TestWriteMediaWithinLimit:
+    @pytest.mark.asyncio
+    async def test_media_within_the_cap_is_written_whole(self):
+        media_file = io.BytesIO()
+        assert await write_media_within_limit(_media_response(b"abc", b"def", content_length=6), media_file, 6) is True
+        assert media_file.getvalue() == b"abcdef"
+
+    @pytest.mark.asyncio
+    async def test_advertised_size_over_the_cap_is_refused_before_downloading(self):
+        media_file = io.BytesIO()
+        assert await write_media_within_limit(_media_response(b"abcdef", content_length=7), media_file, 6) is False
+        assert media_file.getvalue() == b""
+
+    @pytest.mark.asyncio
+    async def test_stream_growing_past_the_cap_is_cut_off(self):
+        media_file = io.BytesIO()
+        response = _media_response(b"abc", b"def", b"ghi", content_length=None)
+        assert await write_media_within_limit(response, media_file, 5) is False
+        assert media_file.getvalue() == b"abcdef"
 
 
 class TestPriceTranscriptionJob:
