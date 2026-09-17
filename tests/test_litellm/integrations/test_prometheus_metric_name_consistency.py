@@ -25,7 +25,7 @@ from litellm.caching.redis_cache import _breaker_metrics
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.prometheus_services import PrometheusServicesLogger
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import SpendLogCleanupMetrics
-from litellm.proxy.middleware.admission_control_middleware import create_prometheus_admission_metrics
+from litellm.proxy.middleware.admission_control_middleware import admission_control_state
 from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
 
 _GRAFANA_DIR: Final = Path(__file__).parents[3] / "cookbook" / "litellm_proxy_server" / "grafana_dashboard"
@@ -47,6 +47,18 @@ def _clear_default_registry_and_lazy_owners() -> None:
     InFlightRequestsMiddleware._gauge_init_attempted = False
     InFlightRequestsMiddleware._gauge = None
     _breaker_metrics.cache_clear()
+    admission_control_state._metrics_init_attempted = False
+    admission_control_state._metrics = None
+
+
+def _lazy_owner_collectors() -> tuple[Collector, ...]:
+    SpendLogCleanupMetrics._ensure_initialized()
+    assert SpendLogCleanupMetrics.runs is not None
+    in_flight: Final = InFlightRequestsMiddleware._get_gauge()
+    assert in_flight is not None
+    admission: Final = admission_control_state._get_metrics()
+    assert admission is not None
+    return (SpendLogCleanupMetrics.runs, in_flight, _breaker_metrics()._state_gauge, admission.admitted_gauge)
 
 
 @contextmanager
@@ -57,11 +69,7 @@ def _isolated_litellm_metric_families(monkeypatch: pytest.MonkeyPatch) -> Iterat
     PrometheusLogger()
     PrometheusServicesLogger()
     logger_collectors: Final = frozenset(REGISTRY._collector_to_names)
-    SpendLogCleanupMetrics._ensure_initialized()
-    assert SpendLogCleanupMetrics.runs is not None
-    assert InFlightRequestsMiddleware._get_gauge() is not None
-    assert _breaker_metrics()._state_gauge is not None
-    assert create_prometheus_admission_metrics() is not None
+    _lazy_owner_collectors()
     lazy_owner_names: Final = frozenset(
         name
         for collector, names in _registered_collectors().items()
@@ -94,12 +102,13 @@ def unrelated_gauge() -> Iterator[Gauge]:
 def test_isolated_metric_families_restore_unrelated_collectors_and_lazy_owners(
     monkeypatch: pytest.MonkeyPatch, unrelated_gauge: Gauge
 ):
+    stale: Final = _lazy_owner_collectors()
     with _isolated_litellm_metric_families(monkeypatch) as families:
         assert "litellm_unrelated_sentinel" not in families
         assert unrelated_gauge not in REGISTRY._collector_to_names
     assert unrelated_gauge in REGISTRY._collector_to_names
-    assert InFlightRequestsMiddleware._get_gauge() is not None
-    assert _breaker_metrics()._state_gauge is not None
+    assert all(collector not in REGISTRY._collector_to_names for collector in stale)
+    assert all(collector in REGISTRY._collector_to_names for collector in _lazy_owner_collectors())
 
 
 def _dashboard_expressions(path: Path) -> tuple[str, ...]:
