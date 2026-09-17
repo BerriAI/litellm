@@ -706,17 +706,11 @@ class DBSpendUpdateWriter:
                 traceback.format_exc(),
             )
 
-        try:
-            await self._update_project_db(
-                response_cost=response_cost,
-                project_id=project_id,
-                prisma_client=prisma_client,
-            )
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: _update_project_db failed: %s",
-                traceback.format_exc(),
-            )
+        await self._update_project_db(
+            response_cost=response_cost,
+            project_id=project_id,
+            prisma_client=prisma_client,
+        )
 
         try:
             await self._update_tag_db(
@@ -985,27 +979,16 @@ class DBSpendUpdateWriter:
         response_cost: float | None,
         project_id: str | None,
         prisma_client: PrismaClient | None,
-    ):
-        try:
-            if project_id is None or prisma_client is None:
-                return
-
-            await self.spend_update_queue.add_update(
-                update=SpendUpdateQueueItem(
-                    entity_type=Litellm_EntityType.PROJECT,
-                    entity_id=project_id,
-                    response_cost=response_cost,
-                )
+    ) -> None:
+        if project_id is None or prisma_client is None:
+            return
+        await self.spend_update_queue.add_update(
+            update=SpendUpdateQueueItem(
+                entity_type=Litellm_EntityType.PROJECT,
+                entity_id=project_id,
+                response_cost=response_cost,
             )
-        except Exception as e:
-            spend_log_error(
-                "Spend tracking - failed to enqueue project spend update. project_id=%s, response_cost=%s - %s",
-                project_id,
-                response_cost,
-                str(e),
-                exc=e,
-            )
-            raise e
+        )
 
     async def _update_agent_db(
         self,
@@ -1246,17 +1229,17 @@ class DBSpendUpdateWriter:
                         "Spend tracking - committing spend updates from Redis to DB: "
                         "keys=%d, users=%d, teams=%d, orgs=%d, end_users=%d, team_members=%d, org_members=%d, "
                         "projects=%d, tags=%d, agents=%d, model_access_groups=%d",
-                        len(db_spend_update_transactions.get("key_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("user_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("team_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("org_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("end_user_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("team_member_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("org_member_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("project_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("tag_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("agent_list_transactions") or {}),
-                        len(db_spend_update_transactions.get("model_access_group_list_transactions") or {}),
+                        len(db_spend_update_transactions.get("key_list_transactions") or ()),
+                        len(db_spend_update_transactions.get("user_list_transactions") or ()),
+                        len(db_spend_update_transactions.get("team_list_transactions") or ()),
+                        len(db_spend_update_transactions.get("org_list_transactions") or ()),
+                        len(db_spend_update_transactions.get("end_user_list_transactions") or ()),
+                        len(db_spend_update_transactions.get("team_member_list_transactions") or ()),
+                        len(db_spend_update_transactions.get("org_member_list_transactions") or ()),
+                        len(db_spend_update_transactions.get("project_list_transactions") or ()),
+                        len(db_spend_update_transactions.get("tag_list_transactions") or ()),
+                        len(db_spend_update_transactions.get("agent_list_transactions") or ()),
+                        len(db_spend_update_transactions.get("model_access_group_list_transactions") or ()),
                     )
                     await self._commit_spend_updates_to_db(
                         prisma_client=prisma_client,
