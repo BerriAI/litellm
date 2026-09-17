@@ -1839,6 +1839,7 @@ export interface paths {
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
          *     - max_budget: Optional[float] - The max budget for the budget.
+         *     - rollover_max_budget: Optional[float] - Absolute ceiling on the allowance the budget can accumulate across resets. Unused budget carries forward as credit, up to this cap.
          *     - soft_budget: Optional[float] - The soft budget for the budget.
          *     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
          *     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
@@ -1896,6 +1897,7 @@ export interface paths {
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
          *     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
          *     - max_budget: Optional[float] - The max budget for the budget.
+         *     - rollover_max_budget: Optional[float] - Absolute ceiling on the allowance the budget can accumulate across resets. Unused budget carries forward as credit, up to this cap.
          *     - soft_budget: Optional[float] - The soft budget for the budget.
          *     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
          *     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
@@ -3975,6 +3977,7 @@ export interface paths {
          *     - alias: Optional[str] - A human-friendly alias for the user.
          *     - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
          *     - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+         *     - rollover_max_budget: Optional[float] - Absolute ceiling on the allowance a customer can accumulate across resets. Unused budget carries forward as credit, up to this cap.
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
@@ -4510,6 +4513,7 @@ export interface paths {
          *     - alias: Optional[str] - A human-friendly alias for the user.
          *     - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
          *     - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+         *     - rollover_max_budget: Optional[float] - Absolute ceiling on the allowance a customer can accumulate across resets. Unused budget carries forward as credit, up to this cap.
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
@@ -10685,6 +10689,7 @@ export interface paths {
          *     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
          *     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
          *     - max_budget: *Optional[float]* - Max budget for org
+         *     - rollover_max_budget: *Optional[float]* - Absolute ceiling on the allowance the org can accumulate across resets. Unused budget carries forward as credit, up to this cap
          *     - tpm_limit: *Optional[int]* - Max tpm limit for org
          *     - rpm_limit: *Optional[int]* - Max rpm limit for org
          *     - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
@@ -15678,6 +15683,7 @@ export interface paths {
          *     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
          *     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+         *     - rollover_max_budget: Optional[float] - Absolute ceiling on the allowance the team can accumulate across resets. Unused budget carries forward as credit, up to this cap.
          *     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set, soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
          *     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
          *     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -15694,6 +15700,7 @@ export interface paths {
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+         *     - team_member_rollover_max_budget: Optional[float] - Absolute ceiling on the allowance each team member can accumulate across resets. Unused member budget carries forward as credit, up to this cap.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
@@ -15906,6 +15913,7 @@ export interface paths {
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
          *     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+         *     - rollover_max_budget: Optional[float] - Absolute ceiling on the allowance the team can accumulate across resets. Unused budget carries forward as credit, up to this cap.
          *     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
          *     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
          *     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -15921,6 +15929,7 @@ export interface paths {
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+         *     - team_member_rollover_max_budget: Optional[float] - Absolute ceiling on the allowance each team member can accumulate across resets. Unused member budget carries forward as credit, up to this cap.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
@@ -16772,7 +16781,8 @@ export interface paths {
          *     Reads daily spend records that only ever accumulate and are never affected by budget
          *     resets. Their total can legitimately exceed the `spend` field returned by
          *     `/v2/user/info`, which is a running budget counter that every budget reset sets back
-         *     to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
+         *     to zero (or to the overage above `max_budget` when `budget_rollover` is enabled, or
+         *     to a negative credit for the unused allowance when `rollover_max_budget` is set).
          *
          *     Returns:
          *     (by date)
@@ -16809,7 +16819,8 @@ export interface paths {
          *     Reads daily spend records that only ever accumulate and are never affected by budget
          *     resets. Their total can legitimately exceed the `spend` field returned by
          *     `/v2/user/info`, which is a running budget counter that every budget reset sets back
-         *     to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
+         *     to zero (or to the overage above `max_budget` when `budget_rollover` is enabled, or
+         *     to a negative credit for the unused allowance when `rollover_max_budget` is set).
          */
         get: operations["get_user_daily_activity_aggregated_user_daily_activity_aggregated_get"];
         put?: never;
@@ -16982,6 +16993,7 @@ export interface paths {
          *     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
          *     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
          *     - max_budget: Optional[float] - Specify max budget for a given user.
+         *     - rollover_max_budget: Optional[float] - Absolute ceiling on the allowance the user can accumulate across resets. Unused budget carries forward as credit, up to this cap.
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models). Set to ['no-default-models'] to block all model access. Restricting user to only team-based model access.
          *     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -17087,6 +17099,7 @@ export interface paths {
          *         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
          *         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
          *         - max_budget: Optional[float] - Specify max budget for a given user.
+         *         - rollover_max_budget: Optional[float] - Absolute ceiling on the allowance the user can accumulate across resets. Unused budget carries forward as credit, up to this cap.
          *         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -21634,7 +21647,8 @@ export interface paths {
          *
          *     Note on `spend`: this is the user's running budget counter, which the budget reset job
          *     resets whenever `budget_reset_at` elapses (see `budget_duration`): to zero by default,
-         *     or to the overage above `max_budget` when `budget_rollover` is enabled. It is NOT
+         *     to the overage above `max_budget` when `budget_rollover` is enabled, or to a negative
+         *     credit for the unused allowance when `rollover_max_budget` is set. It is NOT
          *     lifetime or per-period historical spend. For historical spend over a date range, use
          *     `/user/daily/activity` or `/user/daily/activity/aggregated`, which read daily spend
          *     records that only ever accumulate and are never reset. The two values are expected to
@@ -24700,6 +24714,11 @@ export interface components {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
             /**
+             * Rollover Max Budget
+             * @description Ceiling (in USD) on the accumulated budget a reset can carry as credit. Requires max_budget; unset disables unused-budget rollover.
+             */
+            rollover_max_budget?: number | null;
+            /**
              * Rpm Limit
              * @description Max requests per minute, allowed for this budget id.
              */
@@ -24838,6 +24857,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Send Invite Email */
@@ -29375,6 +29396,8 @@ export interface components {
             model_max_budget?: {
                 [key: string]: unknown;
             } | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -29410,6 +29433,8 @@ export interface components {
             model_max_budget?: {
                 [key: string]: unknown;
             } | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -29508,6 +29533,8 @@ export interface components {
             organization_id?: string | null;
             /** Policies */
             policies?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Router Settings */
             router_settings?: {
                 [key: string]: unknown;
@@ -30879,6 +30906,8 @@ export interface components {
             organization_id?: string | null;
             /** Policies */
             policies?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Router Settings */
             router_settings?: {
                 [key: string]: unknown;
@@ -31002,6 +31031,8 @@ export interface components {
              * @default []
              */
             policies: string[];
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -31095,6 +31126,8 @@ export interface components {
              * @default []
              */
             policies: string[];
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -32948,6 +32981,11 @@ export interface components {
             } | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /**
+             * Rollover Max Budget
+             * @description Ceiling (in USD) on the accumulated budget a reset can carry as credit. Requires max_budget; unset disables unused-budget rollover.
+             */
+            rollover_max_budget?: number | null;
+            /**
              * Rpm Limit
              * @description Max requests per minute, allowed for this budget id.
              */
@@ -33175,6 +33213,8 @@ export interface components {
             organization_alias: string;
             /** Organization Id */
             organization_id?: string | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -33294,6 +33334,8 @@ export interface components {
             project_alias?: string | null;
             /** Project Id */
             project_id?: string | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -33465,6 +33507,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Router Settings */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
@@ -33491,6 +33535,8 @@ export interface components {
             team_member_key_duration?: string | null;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -33595,6 +33641,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Send Invite Email */
@@ -34227,6 +34275,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Router Settings */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
@@ -34249,6 +34299,8 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -37667,6 +37719,8 @@ export interface components {
             organization_id?: string | null;
             /** Policies */
             policies?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Router Settings */
             router_settings?: {
                 [key: string]: unknown;
@@ -37809,6 +37863,8 @@ export interface components {
             organization_id?: string | null;
             /** Policies */
             policies?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Router Settings */
             router_settings?: {
                 [key: string]: unknown;
@@ -39193,6 +39249,8 @@ export interface components {
             project_alias?: string | null;
             /** Project Id */
             project_id: string;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -39383,6 +39441,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Router Settings */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
@@ -39405,6 +39465,8 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -39514,6 +39576,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Spend */
@@ -39620,6 +39684,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Spend */
