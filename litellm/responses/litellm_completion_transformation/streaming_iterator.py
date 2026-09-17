@@ -602,6 +602,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self._cached_reasoning_item_id is not None:
             self._message_output_index = self._next_tool_output_index
             self._next_tool_output_index += 1
+        else:
+            self._message_output_index = 0
         self._sequence_number += 1
         event: Final = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
