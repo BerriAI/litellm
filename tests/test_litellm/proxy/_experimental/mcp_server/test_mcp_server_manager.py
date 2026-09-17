@@ -13891,3 +13891,51 @@ class TestProtectedCredentialPreparation:
         client: Final = await MCPServerManager()._create_mcp_client(server)
         request: Final = await client.prepare_request_auth()
         assert request.headers["Authorization"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected", [False, True])
+async def test_request_selected_during_guardrail_runs_concurrently_with_tool(monkeypatch, selected):
+    from litellm.responses.mcp.request_context import MCPRequestContext
+    from litellm.proxy._experimental.mcp_server import tool_registry
+
+    tool_started = asyncio.Event()
+    guardrail_started = asyncio.Event()
+
+    class ObserveDuring(CustomGuardrail):
+        async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+            if not self.should_run_guardrail(data, GuardrailEventHooks.during_mcp_call):
+                return data
+            assert data["mcp_tool_name"] == "execute"
+            assert data["mcp_arguments"] == {"text": "hello"}
+            guardrail_started.set()
+            await tool_started.wait()
+            return data
+
+    async def upstream(text):
+        assert text == "hello"
+        tool_started.set()
+        if selected:
+            await guardrail_started.wait()
+        return "executed"
+
+    guardrail = ObserveDuring(guardrail_name="observe", event_hook="during_mcp_call", default_on=False)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    registry = tool_registry.MCPToolRegistry()
+    registry.register_tool("observer-execute", "Execute", {"type": "object"}, upstream)
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    manager = MCPServerManager()
+    manager.registry = {"observer": MCPServer(
+        server_id="observer", name="observer", server_name="observer", transport="http",
+        url="https://observer.example/mcp", spec_path="observer.json", auth_type="none",
+    )}
+    manager.tool_name_to_mcp_server_name_mapping = {"observer-execute": "observer"}
+    result = await asyncio.wait_for(manager.call_tool(
+        server_name="observer", name="execute", arguments={"text": "hello"},
+        user_api_key_auth=UserAPIKeyAuth(), proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        guardrail_context=MCPRequestContext.resolve_guardrail_context({"metadata": {"guardrails": ["observe"] if selected else []}}),
+    ), timeout=5)
+    assert tool_started.is_set()
+    assert guardrail_started.is_set() is selected
+    assert result.isError is False
+    assert result.content[0].text == "executed"

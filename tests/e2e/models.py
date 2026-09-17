@@ -136,6 +136,7 @@ class LiteLLMBudgetTable(BaseModel):
 
 class KeyInfo(BaseModel):
     key_alias: str | None = None
+    status: str | None = None
     metadata: KeyMetadata | None = None
     models: list[str] = []
     tpm_limit: int | None = None

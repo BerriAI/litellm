@@ -1049,6 +1049,27 @@ def test_get_logging_payload_replaces_rejected_or_prompt_shaped_models_with_the_
     assert payload["model"] == expected_model
 
 
+@pytest.mark.parametrize("requested_model", [{"bad": "value"}, ["gpt-5.2"], 1])
+def test_get_logging_payload_replaces_a_non_string_model_with_the_placeholder(
+    requested_model: dict[str, str] | list[str] | int,
+):
+    kwargs: Final = {
+        "model": requested_model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test", "status": "failure"}},
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=ValueError("model must be a string"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model"] == UNKNOWN_MODEL_SPEND_LOG_MODEL
+
+
 @pytest.mark.parametrize(
     ("metadata", "response_obj"),
     [
