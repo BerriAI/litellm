@@ -465,8 +465,8 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.client_allowlist import (
         MCP_ALLOWED_CLIENTS_SETTING,
+        allowed_mcp_clients_from_general_settings,
         check_mcp_client_allowed,
-        parse_allowed_mcp_clients,
     )
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
         SERVER_OUTCOMES_META_KEY,
@@ -3824,7 +3824,7 @@ if MCP_AVAILABLE:
     def _load_allowed_mcp_clients() -> frozenset[str] | None:
         from litellm.proxy.proxy_server import general_settings
 
-        return parse_allowed_mcp_clients(general_settings.get(MCP_ALLOWED_CLIENTS_SETTING))
+        return allowed_mcp_clients_from_general_settings(general_settings)
 
     async def _reject_initialize_from_disallowed_client(
         scope: Scope,
