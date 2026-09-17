@@ -13,6 +13,7 @@ from tests.test_litellm_rust.support.recording_server import RecordingServer, Re
 from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
+    call_native,
     call_native_aocr,
     call_native_ocr,
 )
@@ -43,10 +44,7 @@ async def test_ocr_contract_upstream_status(
         "num_retries": 0,
     }
     with pytest.raises(litellm.BadRequestError) as caught:
-        if asynchronous:
-            await call_native_aocr(ocr_server, **arguments)
-        else:
-            call_native_ocr(ocr_server, **arguments)
+        await call_native(ocr_server, asynchronous, **arguments)
     assert caught.value.status_code == upstream.status
     assert caught.value.response.status_code == upstream.status
 
@@ -64,10 +62,7 @@ async def test_ocr_contract_provider_error_details(
     headers: Final = {"Retry-After": "17", "X-Request-ID": "ocr-request-123", "X-Future-Header": "retained"}
     ocr_server.enqueue(ResponseSpec(body=payload, status=429, headers=headers))
     with pytest.raises(litellm.RateLimitError) as caught:
-        if asynchronous:
-            await call_native_aocr(ocr_server, num_retries=0)
-        else:
-            call_native_ocr(ocr_server, num_retries=0)
+        await call_native(ocr_server, asynchronous, num_retries=0)
     response: Final = caught.value.response
     assert isinstance(response, httpx.Response)
     if preserved == "body":
@@ -87,10 +82,7 @@ async def test_ocr_contract_invalid_response_format(
 ) -> None:
     ocr_server.expected_requests = 0
     with pytest.raises(litellm.UnsupportedParamsError) as caught:
-        if asynchronous:
-            await call_native_aocr(ocr_server, req_format="bogus", num_retries=0)
-        else:
-            call_native_ocr(ocr_server, req_format="bogus", num_retries=0)
+        await call_native(ocr_server, asynchronous, req_format="bogus", num_retries=0)
     assert caught.value.status_code == 400
     for value in ("req_format", "bogus", "native", "litellm"):
         assert value in str(caught.value)
@@ -116,10 +108,7 @@ async def test_ocr_contract_malformed_document_is_actionable(
 ) -> None:
     ocr_server.expected_requests = None
     with pytest.raises(litellm.BadRequestError) as caught:
-        if asynchronous:
-            await call_native_aocr(ocr_server, document=document, num_retries=0)
-        else:
-            call_native_ocr(ocr_server, document=document, num_retries=0)
+        await call_native(ocr_server, asynchronous, document=document, num_retries=0)
     assert caught.value.status_code == 400
     assert field.lower() in str(caught.value).lower()
     assert "NoneType: None" not in str(caught.value)
@@ -141,10 +130,7 @@ async def test_ocr_contract_azure_invalid_options_are_bad_requests(
     ocr_server.expected_requests = 0
     arguments: Final = {"model": "azure_ai/doc-intelligence/prebuilt-read", option: value, "num_retries": 0}
     with pytest.raises(litellm.BadRequestError) as caught:
-        if asynchronous:
-            await call_native_aocr(ocr_server, **arguments)
-        else:
-            call_native_ocr(ocr_server, **arguments)
+        await call_native(ocr_server, asynchronous, **arguments)
     assert caught.value.status_code == 400
     assert field in str(caught.value)
     assert ocr_server.requests == []
