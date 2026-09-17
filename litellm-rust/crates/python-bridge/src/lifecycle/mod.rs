@@ -314,6 +314,9 @@ impl PythonCallState {
         match phase {
             HostPhase::Setup => self.setup(py)?,
             HostPhase::DeploymentPreCall => {
+                if !DeploymentHooks::needed(py)? {
+                    return Ok(HostStep::Ready(self.kwargs.clone_ref(py).into_any()));
+                }
                 return Ok(HostStep::Suspend(DeploymentHooks::before_call(
                     py,
                     &self.kwargs,
@@ -322,6 +325,13 @@ impl PythonCallState {
             }
             HostPhase::Prepare => self.prepare(py)?,
             HostPhase::DeploymentPostCall => {
+                if !DeploymentHooks::needed(py)? {
+                    return self
+                        .response
+                        .as_ref()
+                        .map(|value| HostStep::Ready(value.clone_ref(py)))
+                        .ok_or_else(missing_state);
+                }
                 return Ok(HostStep::Suspend(DeploymentHooks::after_success(
                     py,
                     &self.kwargs,
@@ -332,7 +342,9 @@ impl PythonCallState {
             HostPhase::Finalize => self.finalize(py)?,
             HostPhase::Success => self.dispatch_success(py)?,
             HostPhase::DeploymentFailure => {
-                if let Some(error) = &self.error {
+                if let Some(error) = &self.error
+                    && DeploymentHooks::needed(py)?
+                {
                     return Ok(HostStep::Suspend(DeploymentHooks::after_failure(
                         py,
                         &self.kwargs,
@@ -445,6 +457,15 @@ impl PythonCallState {
             end: self.end.as_ref().map(|value| value.clone_ref(py)),
         };
         if !self.asynchronous {
+            if !logger.callbacks_needed(py, "sync_success")? {
+                return logger.success_bookkeeping(
+                    py,
+                    &self.response,
+                    &self.start,
+                    &self.end,
+                    false,
+                );
+            }
             pending().sync(py)
         } else {
             if !self.internal
@@ -454,7 +475,9 @@ impl PythonCallState {
                     .get_item("fallbacks")?
                     .is_none_or(|value| value.is_none())
             {
-                if logger.defers_async_logging(py) {
+                if !logger.callbacks_needed(py, "async_success")? {
+                    logger.success_bookkeeping(py, &self.response, &self.start, &self.end, true)?;
+                } else if logger.defers_async_logging(py) {
                     logger.defer_success(
                         py,
                         Py::new(

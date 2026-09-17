@@ -19,6 +19,34 @@ impl PythonLogger {
         visit.call(&self.0)
     }
 
+    pub(crate) fn callbacks_needed(&self, py: Python<'_>, phase: &str) -> PyResult<bool> {
+        if !self
+            .object(py)
+            .getattr("_native_callback_fast_path")
+            .is_ok_and(|value| value.is_truthy().unwrap_or(false))
+        {
+            return Ok(true);
+        }
+        py.import("litellm.rust_bridge.lifecycle")?
+            .getattr("callbacks_needed")?
+            .call1((self.object(py), phase))?
+            .extract()
+    }
+
+    pub(super) fn success_bookkeeping(
+        &self,
+        py: Python<'_>,
+        response: &Option<Py<PyAny>>,
+        start: &Py<PyAny>,
+        end: &Option<Py<PyAny>>,
+        asynchronous: bool,
+    ) -> PyResult<()> {
+        py.import("litellm.rust_bridge.lifecycle")?
+            .getattr("success_bookkeeping")?
+            .call1((self.object(py), response, start, end, asynchronous))?;
+        Ok(())
+    }
+
     pub(super) fn defers_async_logging(&self, py: Python<'_>) -> bool {
         self.object(py)
             .getattr("_defer_async_logging")
@@ -40,6 +68,9 @@ impl PythonLogger {
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
     ) -> PyResult<()> {
+        if !self.callbacks_needed(py, "sync_success_async")? {
+            return Ok(());
+        }
         self.object(py).call_method1(
             "handle_sync_success_callbacks_for_async_calls",
             (response, start, end),
@@ -55,6 +86,19 @@ impl PythonLogger {
         end: &Option<Py<PyAny>>,
         asynchronous: bool,
     ) -> PyResult<Option<Py<PyAny>>> {
+        if !self.callbacks_needed(
+            py,
+            if asynchronous {
+                "async_failure"
+            } else {
+                "sync_failure"
+            },
+        )? {
+            py.import("litellm.rust_bridge.lifecycle")?
+                .getattr("failure_bookkeeping")?
+                .call1((self.object(py), error, start, end, asynchronous))?;
+            return Ok(None);
+        }
         let trace = py
             .import("traceback")?
             .getattr("format_exception")?
@@ -85,6 +129,9 @@ impl PythonLogger {
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
     ) -> PyResult<()> {
+        if !self.callbacks_needed(py, "sync_success")? {
+            return self.success_bookkeeping(py, response, start, end, false);
+        }
         let context = py.import("contextvars")?.call_method0("copy_context")?;
         py.import("litellm.litellm_core_utils.litellm_logging")?
             .getattr("executor")?
@@ -108,6 +155,9 @@ impl PythonLogger {
         start: &Py<PyAny>,
         end: &Option<Py<PyAny>>,
     ) -> PyResult<()> {
+        if !self.callbacks_needed(py, "async_success")? {
+            return self.success_bookkeeping(py, response, start, end, true);
+        }
         let context = py.import("contextvars")?.call_method0("copy_context")?;
         let worker = py
             .import("litellm.litellm_core_utils.logging_worker")?
@@ -176,6 +226,13 @@ pub(super) fn is_internal_call(py: Python<'_>) -> PyResult<bool> {
 pub(super) struct DeploymentHooks;
 
 impl DeploymentHooks {
+    pub(super) fn needed(py: Python<'_>) -> PyResult<bool> {
+        py.import("litellm.rust_bridge.lifecycle")?
+            .getattr("deployment_callbacks_needed")?
+            .call0()?
+            .extract()
+    }
+
     pub(super) fn before_call(
         py: Python<'_>,
         kwargs: &Py<PyDict>,

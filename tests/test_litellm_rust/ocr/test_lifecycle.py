@@ -79,7 +79,7 @@ async def test_native_bindings_run_callbacks_and_send_their_mutations(
     class Observe(Logging):
         def pre_call(self, input, api_key, additional_args):
             body: Final = additional_args["complete_input_dict"]
-            assert body["pages"] == pages and body["pages"] is not pages
+            assert body["pages"] is pages
             observed.append(self.model_call_details["litellm_params"]["metadata"]["marker"])
             body["pages"].append(2)
             additional_args["headers"]["x-callback"] = "native"
@@ -98,7 +98,6 @@ async def test_native_bindings_run_callbacks_and_send_their_mutations(
 
     assert response.pages[0].markdown == "native OCR response"
     assert observed == [marker] and observed[0] is marker
-    assert pages == [0]
     assert len(ocr_server.requests) == 1
     assert ocr_server.requests[0].body["pages"] == [0, 2]
     assert ocr_server.requests[0].headers["x-callback"] == "native"
@@ -264,6 +263,7 @@ async def test_deployment_hook_replaces_complete_routing_request(ocr_server: Rec
 
     assert response.pages[0].markdown == "native OCR response"
     assert observed == [(replacement, "replacement-key")]
+    assert observed[0][0] is replacement
     assert replacement == original
     assert replacement is not original
     assert original == {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
@@ -621,7 +621,7 @@ def test_sync_pre_call_can_make_nested_native_request(ocr_server: RecordingServe
 
 
 @pytest.mark.asyncio
-async def test_callback_body_roots_survive_envelope_replacement(
+async def test_retained_argument_aliases_and_body_roots_survive_envelope_replacement(
     ocr_server: RecordingServer,
 ) -> None:
     pages: Final = [0]
@@ -633,8 +633,8 @@ async def test_callback_body_roots_survive_envelope_replacement(
         def pre_call(self, input, api_key, additional_args):
             body: Final = additional_args["complete_input_dict"]
             headers: Final = additional_args["headers"]
-            observed.append((body["document"] == document, body["pages"] == pages))
-            body["pages"].append(2)
+            observed.append((body["document"] is document, body["pages"] is pages))
+            pages.append(2)
             headers["x-retained"] = "yes"
             additional_args["complete_input_dict"] = {"discarded": True}
             additional_args["headers"] = {}
@@ -672,7 +672,6 @@ async def test_callback_body_roots_survive_envelope_replacement(
     assert observed[0] == (False, False, True)
     assert observed[1] == (True, True)
     assert observed[3] == (True, True)
-    assert pages == [0]
     assert ocr_server.requests[0].body["pages"] == [0, 2]
     assert ocr_server.requests[0].headers["x-retained"] == "yes"
 
@@ -935,6 +934,72 @@ async def test_response_limit_is_enforced_at_the_public_boundary(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("failure", [False, True])
+async def test_empty_callbacks_keep_bookkeeping_without_optional_dispatch(
+    ocr_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    asynchronous: bool,
+    failure: bool,
+    created_loggers: list[Logging],
+) -> None:
+    from litellm import utils
+    from litellm.litellm_core_utils import litellm_logging, logging_worker
+
+    class DispatchProbe:
+        deployments = 0
+        submissions = 0
+        enqueues = 0
+
+        def deployment(self, *args: object, **kwargs: object) -> None:
+            self.deployments += 1
+
+        def submit(self, *args: object, **kwargs: object) -> None:
+            self.submissions += 1
+
+        def ensure_initialized_and_enqueue(self, coroutine: Coroutine[object, object, object]) -> None:
+            self.enqueues += 1
+            coroutine.close()
+
+    probe: Final = DispatchProbe()
+    for name in (
+        "async_pre_call_deployment_hook",
+        "async_post_call_success_deployment_hook",
+        "async_post_call_failure_deployment_hook",
+    ):
+        monkeypatch.setattr(utils, name, probe.deployment)
+    monkeypatch.setattr(litellm_logging, "executor", probe)
+    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", probe)
+    if failure:
+        ocr_server.enqueue(ResponseSpec(body={"message": "provider failed"}, status=500))
+    trace_id_var.set("callback-free-parent")
+    arguments: Final = {"litellm_trace_id": "callback-free-call", "litellm_call_id": "callback-free-id"}
+    if failure:
+        with pytest.raises(litellm.InternalServerError):
+            await call_aocr(ocr_server, **arguments) if asynchronous else call_ocr(ocr_server, **arguments)
+    else:
+        response: Final = (
+            await call_aocr(ocr_server, **arguments) if asynchronous else call_ocr(ocr_server, **arguments)
+        )
+        assert response.pages[0].markdown == "native OCR response"
+        assert response._hidden_params["litellm_call_id"] == "callback-free-id"
+        assert response._hidden_params["response_cost"] is not None
+        assert response._hidden_params["_response_ms"] > 0
+    assert trace_id_var.get() == "callback-free-parent"
+    assert probe.deployments == probe.submissions == probe.enqueues == 0
+    assert len(created_loggers) == 1
+    logger: Final = created_loggers[0]
+    assert not hasattr(logger, "_native_pending_logging")
+    assert logger.model_call_details["first_api_call_start_time"] <= logger.model_call_details["end_time"]
+    assert "standard_logging_object" not in logger.model_call_details
+    assert (
+        "original_response" not in logger.model_call_details or logger.model_call_details["original_response"] is None
+    )
+    assert "complete_input_dict" not in logger.model_call_details.get("additional_args", {})
+    assert logger.model_call_details["response_cost"] == (0 if failure else response._hidden_params["response_cost"])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "registration", ["success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"]
 )
@@ -1011,3 +1076,30 @@ async def test_explicit_logging_consumers_keep_request_and_response_payloads(
         assert details["raw_request_typed_dict"]["raw_request_body"]["model"] == "mistral-ocr-latest"
     if consumer == "logger_fn":
         assert [item["log_event_type"] for item in snapshots] == ["pre_api_call", "post_api_call"]
+
+
+@pytest.mark.asyncio
+async def test_registration_removed_before_deferred_release_skips_queue(
+    ocr_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, created_loggers: list[Logging]
+) -> None:
+    from litellm.litellm_core_utils import logging_worker
+
+    class QueueProbe:
+        enqueues = 0
+
+        def ensure_initialized_and_enqueue(self, coroutine: Coroutine[object, object, object]) -> None:
+            self.enqueues += 1
+            coroutine.close()
+
+    observer: Final = RecordingLogger()
+    litellm._async_success_callback.append(observer)
+    await call_aocr(ocr_server)
+    logger: Final = created_loggers[0]
+    assert hasattr(logger, "_native_pending_logging")
+    litellm._async_success_callback.clear()
+    probe: Final = QueueProbe()
+    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", probe)
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, False)
+    assert probe.enqueues == 0
+    assert not observer.names
+    assert logger.model_call_details["response_cost"] is not None
