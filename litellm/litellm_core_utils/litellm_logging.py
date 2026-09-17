@@ -6270,6 +6270,14 @@ def get_standard_logging_object_payload(
                 getattr(logging_obj, "response_timing_metrics", None) or {}  # mutable-ok: empty fallback
             )
             clean_hidden_params["litellm_overhead_time_ms"] = timing_metrics.get("litellm_overhead_time_ms")
+        if clean_hidden_params["litellm_model_name"] is None:
+            clean_hidden_params["litellm_model_name"] = (
+                getattr(logging_obj, "model", None)
+                or litellm_params.get("model")
+                or metadata.get("deployment")
+                or kwargs.get("model")
+            )
+
 
         model_cost_information: Final = StandardLoggingPayloadSetup.get_model_cost_information(
             base_model=base_model,
