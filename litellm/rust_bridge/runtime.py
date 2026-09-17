@@ -10,6 +10,7 @@ from litellm.exceptions import APIError
 from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
 from litellm.rust_bridge.catalog import RULES, Context, Rules, decision
 from litellm.rust_bridge.configuration import Decision
+from litellm.rust_bridge.response_metadata import mark_rust_response
 
 NativeT = TypeVar("NativeT")
 ResultT = TypeVar("ResultT")
@@ -60,7 +61,7 @@ def run(
                 context=_error_context(context),
             )
             if isinstance(result, RustHandled):
-                return result.value
+                return mark_rust_response(result.value)
             if selected is Decision.RUST_REQUIRED:
                 _raise_required(result, _error_context(context))
             return python()
@@ -88,7 +89,7 @@ async def arun(
                 context=_error_context(context),
             )
             if isinstance(result, RustHandled):
-                return result.value
+                return mark_rust_response(result.value)
             if selected is Decision.RUST_REQUIRED:
                 _raise_required(result, _error_context(context))
             return await python()
