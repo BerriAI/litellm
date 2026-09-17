@@ -121,6 +121,62 @@ def test_nested_anyof_conversion():
     assert schema == expected
 
 
+def test_anyof_conversion_with_multiple_null_branches():
+    """Adjacent null branches must all be removed.
+
+    Regression test: the removal loop mutated the list it was iterating, so the
+    element following each removed null was skipped, leaving ``{"type": "null"}``
+    in the emitted schema. Vertex's Schema has no null type.
+    """
+    schema = {
+        "type": "object",
+        "properties": {
+            "example": {
+                "anyOf": [
+                    {"type": "null"},
+                    {"type": "null"},
+                    {"type": "string"},
+                ]
+            }
+        },
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "string", "nullable": True}]}},
+    }
+    assert schema == expected
+
+
+def test_anyof_conversion_with_null_before_empty_object():
+    """An empty-object branch following a null branch still gets a type."""
+    schema = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "null"}, {}]}},
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "object", "nullable": True}]}},
+    }
+    assert schema == expected
+
+
+def test_anyof_conversion_with_only_null_branches_raises():
+    """Several null branches and nothing else is still an invalid schema."""
+    schema = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "null"}, {"type": "null"}]}},
+    }
+
+    with pytest.raises(ValueError, match="only null type is not supported"):
+        convert_anyof_null_to_nullable(schema)
+
+
 def test_anyof_with_excessive_nesting():
     """Test conversion with excessive nesting > max levels +1 deep."""
     # generate a schema with excessive nesting
