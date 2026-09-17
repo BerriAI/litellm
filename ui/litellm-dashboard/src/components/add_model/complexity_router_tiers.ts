@@ -1,6 +1,6 @@
 import type { ComplexityTier } from "./KeywordTierRules";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
-import { TIER_ORDER } from "./tier_rows";
+import { ALL_BUILT_IN_TIERS, TIER_ORDER } from "./tier_rows";
 
 export type TierModelParams = Record<string, unknown>;
 
@@ -145,13 +145,14 @@ export const pruneTierModelParams = (
 };
 
 export const DEFAULT_TIER_LABELS: Record<ComplexityTier, string> = {
+  NON_REASONING: "Non-reasoning",
   SIMPLE: "Simple",
   MEDIUM: "Medium",
   COMPLEX: "Complex",
   REASONING: "Reasoning",
 };
 
-const isBuiltInTier = (tier: string): tier is ComplexityTier => (TIER_ORDER as string[]).includes(tier);
+const isBuiltInTier = (tier: string): tier is ComplexityTier => (ALL_BUILT_IN_TIERS as string[]).includes(tier);
 
 const builtInTierLabel = (
   tierLabels: Partial<Record<ComplexityTier, string>> | undefined,
@@ -164,7 +165,7 @@ export const tierRowLabel = (
   row: { id: string; name: string },
   tierLabels?: Partial<Record<ComplexityTier, string>>,
 ): string => {
-  const builtIn = TIER_ORDER.find((tier) => tier === row.id);
+  const builtIn = ALL_BUILT_IN_TIERS.find((tier) => tier === row.id);
   const named = row.name.trim();
   if (!builtIn || named !== builtIn) return named || "New";
   return builtInTierLabel(tierLabels, builtIn);

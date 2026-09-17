@@ -74,7 +74,7 @@ const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels,
               name={name}
               disabled={disabled}
               value={typeof value === "string" && value !== "" ? value : null}
-              onValueChange={(selected: string | null) => onChange(selected ?? "")}
+              onValueChange={onChange}
             >
               <SelectTrigger
                 id={id}
@@ -101,7 +101,7 @@ const CacheFormField: React.FC<CacheFormFieldProps> = ({ field, embeddingModels,
             <Combobox
               items={embeddingModels}
               value={selected}
-              onValueChange={(model: EmbeddingModelOption | null) => onChange(model?.value ?? "")}
+              onValueChange={(model: EmbeddingModelOption | null) => onChange(model?.value ?? null)}
               itemToStringLabel={(model: EmbeddingModelOption) => model.label}
               isItemEqualToValue={(model: EmbeddingModelOption, other: EmbeddingModelOption) =>
                 model.value === other.value

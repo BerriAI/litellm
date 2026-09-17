@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 AUTO_ROUTER_LICENSE_FEATURE: Final = "auto_router"
-HEURISTIC_V2_LICENSE_REMEDY: Final = "A LiteLLM license with the 'auto_router' feature lifts the limit."
+AUTO_ROUTER_LICENSE_REMEDY: Final = "A LiteLLM license with the 'auto_router' feature lifts the limit."
 
 
 class LicenseCheck:
@@ -153,11 +153,12 @@ class LicenseCheck:
             return False
         return team_count > _max_teams_in_license
 
-    def heuristic_v2_router_limit(self) -> int | None:
+    def auto_router_capability_limit(self) -> int | None:
         """
-        How many heuristic_v2 auto-routers this proxy may hold: unlimited (None) only when the
-        signed license lists the auto_router feature, otherwise one. A license verified through
-        the API carries no feature list, so it does not lift the limit either.
+        How many auto-routers may claim each licensed capability (heuristic_v2, operator-defined
+        tier_definitions): unlimited (None) only when the signed license lists the auto_router
+        feature, otherwise one per capability. A license verified through the API carries no
+        feature list, so it does not lift the limit either.
         """
         if self.airgapped_license_data is None:
             return 1

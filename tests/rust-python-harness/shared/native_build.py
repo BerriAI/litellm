@@ -73,6 +73,15 @@ def _rebuild(repo_root: Path) -> tuple[bool, str]:
     return completed.returncode == 0, "\n".join(lines[-_FAILURE_OUTPUT_LINES:])
 
 
+def trace_bridge_error() -> str | None:
+    bridge: Final = get_native_bridge()
+    if bridge is None:
+        return "native Rust bridge is not importable"
+    if getattr(bridge, "_trace", None) is None:
+        return f"native Rust bridge does not expose _trace; it must be built with the {BRIDGE_FEATURE} feature"
+    return None
+
+
 def ensure_trace_bridge(repo_root: Path) -> str | None:
     native_path: Final = _native_module_path()
     native_mtime: Final = native_path.stat().st_mtime if native_path is not None and native_path.exists() else None
@@ -84,9 +93,4 @@ def ensure_trace_bridge(repo_root: Path) -> str | None:
         if not succeeded:
             return f"native Rust bridge rebuild failed:\n{output}"
         _drop_imported_bridge()
-    bridge: Final = get_native_bridge()
-    if bridge is None:
-        return "native Rust bridge is not importable"
-    if getattr(bridge, "_trace", None) is None:
-        return f"native Rust bridge does not expose _trace; it must be built with the {BRIDGE_FEATURE} feature"
-    return None
+    return trace_bridge_error()

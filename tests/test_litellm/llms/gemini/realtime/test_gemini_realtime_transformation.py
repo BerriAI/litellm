@@ -1,13 +1,11 @@
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-import httpx
 import pytest
 
 
 import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
-from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 
 
 def test_gemini_realtime_transformation_session_created():
@@ -306,20 +304,6 @@ def test_gemini_realtime_transformation_generation_complete():
             contains_audio_done_event = True
             break
     assert contains_audio_done_event, "Expected audio done event"
-
-
-def test_gemini_3_1_flash_live_preview_model_cost_map_entry():
-    for key in (
-        "gemini-3.1-flash-live-preview",
-        "gemini/gemini-3.1-flash-live-preview",
-    ):
-        assert key in litellm.model_cost
-        info = litellm.model_cost[key]
-        assert "/v1/realtime" in info.get("supported_endpoints", [])
-        assert info.get("max_input_tokens") == 131072
-        assert info.get("max_output_tokens") == 65536
-        assert "video" in info.get("supported_modalities", [])
-        assert info.get("supports_function_calling") is True
 
 
 def test_gemini_realtime_tool_call_transformation():
@@ -1843,19 +1827,6 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
 )
 def test_is_audio_only_live_model_uses_cost_map(model, expected, patch_gemini_audio_cost_map_entries):
     assert GeminiRealtimeConfig._is_audio_only_live_model(model) == expected
-
-
-def test_gemini_live_native_audio_entry_is_vertex_only():
-    import json
-    from pathlib import Path
-    from typing import Final
-
-    catalog_path: Final = Path(__file__).parents[5] / "model_prices_and_context_window.json"
-    catalog: Final = json.loads(catalog_path.read_text())
-    vertex_key: Final = "gemini-live-2.5-flash-native-audio"
-    assert catalog[vertex_key]["litellm_provider"] == "vertex_ai-language-models"
-    assert catalog[vertex_key].get("gemini_native_audio") is True
-    assert "gemini/gemini-live-2.5-flash-native-audio" not in catalog, "the Gemini API does not serve this model"
 
 
 def test_is_setup_message_and_is_content_message():

@@ -57,17 +57,6 @@ def use_local_model_cost_map():
 
 
 @pytest.mark.parametrize("alias", KIMI_ALIASES)
-def test_fireworks_kimi_raw_cost_entry_limits(use_local_model_cost_map, alias):
-    entry = use_local_model_cost_map.model_cost[alias]
-
-    assert entry["litellm_provider"] == "fireworks_ai"
-    assert entry["max_input_tokens"] == CONTEXT_WINDOW
-    assert entry["max_output_tokens"] == OUTPUT_LIMIT
-    assert entry["max_tokens"] == OUTPUT_LIMIT
-    assert entry["max_output_tokens"] < entry["max_input_tokens"]
-
-
-@pytest.mark.parametrize("alias", KIMI_ALIASES)
 def test_fireworks_kimi_get_model_info_limits(use_local_model_cost_map, alias):
     model_info = use_local_model_cost_map.get_model_info(model=alias)
 

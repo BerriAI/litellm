@@ -2,15 +2,20 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import HTTPException, status
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.spend_tracking.key_metadata_recovery import (
+    attach_user_emails,
+    recover_double_hashed_key_metadata,
+    recover_key_metadata_from_spend_logs,
+)
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
@@ -111,8 +116,20 @@ class DailySpendRecord(Protocol):
 
 
 class _KeyMetadataDict(TypedDict, total=False):
-    key_alias: str | None
-    team_id: str | None
+    key_alias: ReadOnly[str | None]
+    team_id: ReadOnly[str | None]
+    user_id: ReadOnly[str | None]
+    user_email: ReadOnly[str | None]
+
+
+def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str) -> KeyMetadata:
+    meta: Final = api_key_metadata.get(api_key, {})
+    return KeyMetadata(
+        key_alias=meta.get("key_alias"),
+        team_id=meta.get("team_id"),
+        user_id=meta.get("user_id"),
+        user_email=meta.get("user_email"),
+    )
 
 
 _WhereValue = str | dict[str, object]
@@ -283,10 +300,7 @@ def update_breakdown_metrics(
             if record.api_key not in breakdown.models[model_key].api_key_breakdown:
                 breakdown.models[model_key].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
-                    metadata=KeyMetadata(
-                        key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                        team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                    ),
+                    metadata=_key_metadata(api_key_metadata, record.api_key),
                 )
             breakdown.models[model_key].api_key_breakdown[record.api_key].metrics = update_metrics(
                 breakdown.models[model_key].api_key_breakdown[record.api_key].metrics,
@@ -310,10 +324,7 @@ def update_breakdown_metrics(
             if record.api_key not in breakdown.model_groups[model_group_key].api_key_breakdown:
                 breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
-                    metadata=KeyMetadata(
-                        key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                        team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                    ),
+                    metadata=_key_metadata(api_key_metadata, record.api_key),
                 )
             breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key].metrics = update_metrics(
                 breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key].metrics,
@@ -335,10 +346,7 @@ def update_breakdown_metrics(
             breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[record.api_key] = (
                 KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
-                    metadata=KeyMetadata(
-                        key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                        team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                    ),
+                    metadata=_key_metadata(api_key_metadata, record.api_key),
                 )
             )
 
@@ -363,10 +371,7 @@ def update_breakdown_metrics(
         if record.api_key not in breakdown.providers[provider].api_key_breakdown:
             breakdown.providers[provider].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
-                metadata=KeyMetadata(
-                    key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                    team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                ),
+                metadata=_key_metadata(api_key_metadata, record.api_key),
             )
         breakdown.providers[provider].api_key_breakdown[record.api_key].metrics = update_metrics(
             breakdown.providers[provider].api_key_breakdown[record.api_key].metrics,
@@ -388,10 +393,7 @@ def update_breakdown_metrics(
         if record.api_key not in breakdown.endpoints[record.endpoint].api_key_breakdown:
             breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
-                metadata=KeyMetadata(
-                    key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                    team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                ),
+                metadata=_key_metadata(api_key_metadata, record.api_key),
             )
         breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key].metrics = update_metrics(
             breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key].metrics,
@@ -403,10 +405,7 @@ def update_breakdown_metrics(
         if record.api_key not in breakdown.api_keys:
             breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
-                metadata=KeyMetadata(
-                    key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                    team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                ),  # Add any api_key-specific metadata here
+                metadata=_key_metadata(api_key_metadata, record.api_key),
             )
         breakdown.api_keys[record.api_key].metrics = update_metrics(breakdown.api_keys[record.api_key].metrics, record)
 
@@ -426,10 +425,7 @@ def update_breakdown_metrics(
             if record.api_key not in breakdown.entities[entity_value].api_key_breakdown:
                 breakdown.entities[entity_value].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
-                    metadata=KeyMetadata(
-                        key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                        team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                    ),
+                    metadata=_key_metadata(api_key_metadata, record.api_key),
                 )
             breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics = update_metrics(
                 breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics,
@@ -439,20 +435,46 @@ def update_breakdown_metrics(
     return breakdown
 
 
+def _spend_logs_window(dates: AbstractSet[str | None]) -> tuple[datetime, datetime] | None:
+    parsed: Final = sorted(day for day in (_parse_spend_date(raw) for raw in dates) if day is not None)
+    if not parsed:
+        return None
+    return (parsed[0] - timedelta(days=1), parsed[-1] + timedelta(days=2))
+
+
+def _parse_spend_date(raw: str | None) -> datetime | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+_EMPTY_KEY_METADATA: Final[Mapping[str, _KeyMetadataDict]] = MappingProxyType({})
+
+
 async def get_api_key_metadata(
     prisma_client: PrismaClient,
     api_keys: AbstractSet[str],
-) -> dict[str, _KeyMetadataDict]:
+    spend_logs_window: tuple[datetime, datetime] | None = None,
+) -> Mapping[str, _KeyMetadataDict]:
     """Get api key metadata, falling back to deleted keys table for keys not found in active table.
 
     This ensures that key_alias and team_id are preserved in historical activity logs
-    even after a key is deleted or regenerated.
+    even after a key is deleted or regenerated. Also recovers aliases for api_key
+    values that were double-hashed by the v1.99 spend-log provenance gate.
     """
     key_records: Sequence[PrismaVerificationToken] = await VerificationTokenRepository(prisma_client).table.find_many(
         where={"token": {"in": list(api_keys)}}
     )
     result: Final[dict[str, _KeyMetadataDict]] = {
-        k.token: {"key_alias": k.key_alias, "team_id": k.team_id} for k in key_records
+        k.token: {
+            "key_alias": k.key_alias,
+            "team_id": k.team_id,
+            "user_id": getattr(k, "user_id", None),
+        }
+        for k in key_records
     }
 
     # For any keys not found in the active table, check the deleted keys table
@@ -471,6 +493,7 @@ async def get_api_key_metadata(
                     result[k.token] = {
                         "key_alias": k.key_alias,
                         "team_id": k.team_id,
+                        "user_id": getattr(k, "user_id", None),
                     }
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -479,7 +502,19 @@ async def get_api_key_metadata(
                 e,
             )
 
-    return result
+    still_missing: Final = api_keys - frozenset(result)
+    from_reverse_hash: Final = (
+        await recover_double_hashed_key_metadata(prisma_client, still_missing) if still_missing else _EMPTY_KEY_METADATA
+    )
+    after_token_recovery: Final = MappingProxyType({**result, **from_reverse_hash})
+    unresolved: Final = api_keys - frozenset(after_token_recovery)
+    from_spend_logs: Final = (
+        await recover_key_metadata_from_spend_logs(prisma_client, unresolved, spend_logs_window)
+        if unresolved and spend_logs_window is not None
+        else _EMPTY_KEY_METADATA
+    )
+    combined: Final = MappingProxyType({**after_token_recovery, **from_spend_logs})
+    return await attach_user_emails(prisma_client, combined)
 
 
 def _adjust_dates_for_timezone(
@@ -891,7 +926,9 @@ async def _aggregate_spend_records(
 
     api_key_metadata: dict[str, _KeyMetadataDict] = {}
     if api_keys:
-        api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
+        api_key_metadata = await get_api_key_metadata(
+            prisma_client, api_keys, _spend_logs_window(frozenset(record.date for record in records))
+        )
 
     return await asyncio.to_thread(
         _aggregate_spend_records_sync,
@@ -949,11 +986,6 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
         successful_requests=record.successful_requests or 0,
         failed_requests=record.failed_requests or 0,
     )
-
-
-def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str) -> KeyMetadata:
-    meta: Final = api_key_metadata.get(api_key, {})
-    return KeyMetadata(key_alias=meta.get("key_alias"), team_id=meta.get("team_id"))
 
 
 def _aggregate_grouping_sets_records_sync(
@@ -1092,7 +1124,9 @@ async def _aggregate_grouping_sets_records(
 
     api_key_metadata: dict[str, _KeyMetadataDict] = {}
     if api_keys:
-        api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
+        api_key_metadata = await get_api_key_metadata(
+            prisma_client, api_keys, _spend_logs_window(frozenset(r.date for r in records))
+        )
 
     return await asyncio.to_thread(
         _aggregate_grouping_sets_records_sync,
@@ -1355,7 +1389,9 @@ async def get_daily_activity_aggregated(
                 r.api_key for r in entity_records if r.api_key and r.api_key != PTU_SENTINEL_API_KEY
             )
             entity_key_metadata: Final = (
-                await get_api_key_metadata(prisma_client, entity_api_keys)
+                await get_api_key_metadata(
+                    prisma_client, entity_api_keys, _spend_logs_window(frozenset(r.date for r in entity_records))
+                )
                 if entity_api_keys
                 else {}  # mutable-ok: matches the helper's dict return
             )

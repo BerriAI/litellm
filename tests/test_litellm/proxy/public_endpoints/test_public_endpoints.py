@@ -1,5 +1,6 @@
 import re
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -325,6 +326,85 @@ def test_cognition_provider_fields():
 
     assert fields_by_key["api_base"]["field_type"] == "text"
     assert fields_by_key["api_base"]["required"] is False
+
+
+def test_chatgpt_provider_fields():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    chatgpt = next((p for p in providers if p["provider"] == "CHATGPT"), None)
+    assert chatgpt is not None, "ChatGPT provider entry not found"
+
+    assert chatgpt["provider_display_name"] == "ChatGPT Subscription"
+    assert chatgpt["litellm_provider"] == LlmProviders.CHATGPT.value
+    assert chatgpt["default_model_placeholder"].startswith("chatgpt/")
+    assert chatgpt["credential_fields"] == []
+
+
+ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
+    {
+        "a2a",
+        "a2a_agent",
+        "amazon_nova",
+        "apertis",
+        "aws_polly",
+        "black_forest_labs",
+        "charity_engine",
+        "chutes",
+        "darkbloom",
+        "gdc",
+        "helicone",
+        "inception",
+        "langflow",
+        "langgraph",
+        "libertai",
+        "litellm_agent",
+        "manus",
+        "meta",
+        "modelscope",
+        "mongodb",
+        "nano-gpt",
+        "neosantara",
+        "parasail",
+        "pinstripes",
+        "poe",
+        "publicai",
+        "ragflow",
+        "reducto",
+        "s3_vectors",
+        "sagemaker_nova",
+        "scaleway",
+        "stability",
+        "synthetic",
+        "tencent",
+        "tensormesh",
+        "text-completion-inception",
+        "valkey",
+        "xiaomi_mimo",
+        "zai",
+    }
+)
+
+
+def test_every_backend_provider_is_listed_in_add_model_or_frozen_as_unlisted():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    listed = {p["litellm_provider"] for p in response.json()}
+
+    unlisted = {provider.value for provider in LlmProviders} - listed
+    assert unlisted == ADD_MODEL_UNLISTED_PROVIDERS, (
+        "Add Model dropdown drift: give the new provider an entry in provider_create_fields.json "
+        "rather than adding it to ADD_MODEL_UNLISTED_PROVIDERS"
+    )
 
 
 def test_google_ai_studio_provider_fields_expose_api_base():
@@ -1108,7 +1188,7 @@ def test_get_autorouter_presets_local_mode_serves_bundled_catalog(
     assert payload["1m_context"]["complexity_router_config"]["tiers"] == {
         "SIMPLE": ["gpt-5.6-luna"],
         "MEDIUM": ["gpt-5.6-terra"],
-        "COMPLEX": ["claude-opus-5"],
+        "COMPLEX": ["gpt-5.6-sol"],
         "REASONING": ["claude-opus-5"],
     }
     assert payload["1m_context"]["complexity_router_config"]["tier_model_configs"] == {

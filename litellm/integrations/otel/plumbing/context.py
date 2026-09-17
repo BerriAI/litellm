@@ -1,11 +1,13 @@
 """Trace-context + Baggage helpers."""
 
+import os
 from collections.abc import Mapping
 from contextvars import ContextVar, Token
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
+from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import (
     Link,
     NonRecordingSpan,
@@ -17,6 +19,11 @@ from opentelemetry.trace import (
 from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
+
+from litellm.integrations.otel.model.semconv import HTTP
+
+if TYPE_CHECKING:
+    from litellm.integrations.otel.model.destination import OtelDestination
 
 _PROPAGATOR: Final = TraceContextTextMapPropagator()
 
@@ -53,6 +60,25 @@ def request_root_span() -> "Span | None":
     """The anchored request root span, or ``None`` outside a proxy request."""
     span: Final = _request_root_span.get()
     return span if is_recordable_span(span) else None
+
+
+def request_root_http_route() -> str | None:
+    """``http.route`` exactly as the request's root SERVER span reports it.
+
+    Read off the span rather than re-derived, so the LLM call span cannot disagree
+    with its own parent about which endpoint served the request: the template the
+    instrumentation matched, or the literal path where
+    ``mount._passthrough_span_name_hook`` rewrote it, are already in the attribute.
+    An MCP call anchors that same server span, so it reports the ``/mcp`` mount
+    point the instrumentation matched. Attributes stay readable after a span ends,
+    so this answers just as well from the async logging callback.
+
+    None when no server span is anchored, which is the SDK path and any deployment
+    where the FastAPI instrumentation did not mount.
+    """
+    span: Final = request_root_span()
+    route: Final = span.attributes.get(HTTP.ROUTE) if isinstance(span, ReadableSpan) and span.attributes else None
+    return route if isinstance(route, str) and route else None
 
 
 # The W3C trace-context carrier (``traceparent``/``tracestate``/``baggage``) the
@@ -282,3 +308,65 @@ def extract_traceparent(headers: Mapping[str, str]) -> Context | None:
         return None
     carrier: Final = {str(key).lower(): value for key, value in headers.items()}
     return _PROPAGATOR.extract(carrier)
+
+
+# The OTLP destinations this request's key or team pointed its traces at, resolved
+# once during auth. A ``ContextVar`` for the same reason the root span above is one:
+# it rides the request task's context into the ``asyncio.create_task`` children that
+# close the LLM span, and it is visible to every ``SpanProcessor.on_end`` that fires
+# on the request task. Stateful MCP handlers set and reset it per message; the
+# request-task value otherwise dies with that task.
+_request_destinations: Final['ContextVar[tuple["OtelDestination", ...]]'] = ContextVar(
+    "litellm_otel_request_destinations", default=()
+)
+
+
+def set_request_destinations(destinations: 'tuple["OtelDestination", ...]') -> "Token[tuple[OtelDestination, ...]]":
+    """Anchor the destinations this request exports to and return a reset token."""
+    return _request_destinations.set(destinations)
+
+
+def reset_request_destinations(token: "Token[tuple[OtelDestination, ...]]") -> None:
+    _request_destinations.reset(token)
+
+
+def request_destinations() -> 'tuple["OtelDestination", ...]':
+    """The destinations resolved for this request, empty outside a proxy request."""
+    return _request_destinations.get()
+
+
+#: ``litellm_settings: otel_tenant_destination_mode`` and its env equivalent.
+ADDITIVE_DESTINATION_MODE: Final = "additive"
+OTEL_TENANT_DESTINATION_MODE_ENV: Final = "LITELLM_OTEL_TENANT_DESTINATION_MODE"
+
+
+def tenant_destinations_are_additive() -> bool:
+    """Whether a tenant destination exports alongside the operator's own exporter.
+
+    Override is the default: the tenant's traffic reaches the tenant's account and
+    nowhere else. Operators running one org-wide backend across every team set this
+    to ``additive`` so the same trace lands in both places.
+    """
+    import litellm
+
+    configured: Final = litellm.otel_tenant_destination_mode or os.environ.get(OTEL_TENANT_DESTINATION_MODE_ENV)
+    return isinstance(configured, str) and configured.strip().lower() == ADDITIVE_DESTINATION_MODE
+
+
+def destination_backends() -> frozenset[str]:
+    """Backends this request resolved a tenant destination for.
+
+    The fan-out already carries the whole trace to those destinations, so the
+    per-request tracer route must never send a second copy, in either mode.
+    """
+    return frozenset(d.callback_name for d in _request_destinations.get() if d.callback_name)
+
+
+def suppressed_backends() -> frozenset[str]:
+    """Backends whose operator-level exporters this request must NOT reach.
+
+    Empty under ``additive``, where the operator keeps its copy of every span.
+    """
+    if tenant_destinations_are_additive():
+        return frozenset()
+    return destination_backends()

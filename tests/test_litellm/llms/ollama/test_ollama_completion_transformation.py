@@ -4,13 +4,15 @@ from litellm._uuid import uuid
 from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
-
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _emit_ollama_default_template_warning,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
     OllamaTextCompletionResponseIterator,
@@ -567,3 +569,43 @@ class TestOllamaTextCompletionResponseIterator:
         assert result["usage"]["prompt_tokens"] == 10
         assert result["usage"]["completion_tokens"] == 5
         assert result["usage"]["total_tokens"] == 15
+
+
+async def test_ollama_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):
+    image_url = f"https://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "model": "llava",
+                "response": "Green",
+                "done": True,
+                "prompt_eval_count": 1,
+                "eval_count": 1,
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="ollama/llava",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ],
+        api_base="http://ollama.example:11434",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [image_url]
+    assert captured["body"]["images"] == [async_only_image_fetch.base64_png]

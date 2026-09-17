@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 import urllib.parse as urlparse
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -18,6 +18,12 @@ from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.proxy.db.pgbouncer import (
+    PgBouncerError,
+    PgBouncerSettings,
+    export_pooled_database_url,
+    start_in_container_pgbouncer,
+)
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
 
 if TYPE_CHECKING:
@@ -611,47 +617,48 @@ class ProxyInitializationHelpers:
         return "uvloop"
 
     @staticmethod
+    def _prometheus_callback_configured(litellm_settings: Mapping[str, object] | None) -> bool:
+        if litellm_settings is None:
+            return False
+        configured: Final = tuple(
+            litellm_settings.get(key) for key in ("callbacks", "success_callback", "failure_callback")
+        )
+        return any(
+            setting == "prometheus"
+            if isinstance(setting, str)
+            else isinstance(setting, Sequence) and "prometheus" in setting
+            for setting in configured
+        )
+
+    @staticmethod
     def _maybe_setup_prometheus_multiproc_dir(
         num_workers: int,
         litellm_settings: dict | None,
-    ) -> None:
+        prometheus_metrics_port: int | None = None,
+    ) -> str | None:
         """
-        Auto-create PROMETHEUS_MULTIPROC_DIR when running with multiple workers
-        and prometheus is configured as a callback.
+        Auto-create PROMETHEUS_MULTIPROC_DIR when another process needs to read the samples: extra workers
+        with prometheus configured as a callback in config.yaml, or the separate metrics server (always, since
+        callbacks may also be enabled from the DB after startup).
         """
         import tempfile
 
-        if num_workers <= 1 or litellm_settings is None:
-            return
-
-        # Check if prometheus is in any callback list
-        # Each setting can be a list or a single string; normalize to list
-        callbacks = litellm_settings.get("callbacks") or []
-        success_callbacks = litellm_settings.get("success_callback") or []
-        failure_callbacks = litellm_settings.get("failure_callback") or []
-        if isinstance(callbacks, str):
-            callbacks = [callbacks]
-        if isinstance(success_callbacks, str):
-            success_callbacks = [success_callbacks]
-        if isinstance(failure_callbacks, str):
-            failure_callbacks = [failure_callbacks]
-        all_callbacks: Final = callbacks + success_callbacks + failure_callbacks
-        if "prometheus" not in all_callbacks:
-            return
+        if prometheus_metrics_port is None and (
+            num_workers <= 1 or not ProxyInitializationHelpers._prometheus_callback_configured(litellm_settings)
+        ):
+            return None
 
         from litellm.proxy.prometheus_cleanup import wipe_directory
 
-        multiproc_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get("prometheus_multiproc_dir")
-
-        auto_created: Final = not multiproc_dir
-        if not multiproc_dir:
-            multiproc_dir = os.path.join(tempfile.gettempdir(), "litellm_prometheus_multiproc")
-            os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
+        configured_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get("prometheus_multiproc_dir")
+        multiproc_dir: Final = configured_dir or os.path.join(tempfile.gettempdir(), "litellm_prometheus_multiproc")
+        os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
 
         os.makedirs(multiproc_dir, exist_ok=True)
         wipe_directory(multiproc_dir)
-        action: Final = "Auto-created" if auto_created else "Using existing"
+        action: Final = "Using existing" if configured_dir else "Auto-created"
         print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")
+        return multiproc_dir
 
 
 @click.command()
@@ -930,6 +937,19 @@ class ProxyInitializationHelpers:
     default=False,
     help="Enable uvicorn hot reload (dev only). Also reloads when the --config YAML file changes. Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
 )
+@click.option(
+    "--prometheus_metrics_port",
+    default=None,
+    type=click.IntRange(min=1, max=65535),
+    help=(
+        "Serve Prometheus /metrics from a separate process on this port (bound to --host) so scraping and "
+        "multi-worker aggregation never run on an inference worker's event loop. Samples appear once the "
+        "`prometheus` callback is enabled (config.yaml or DB). /metrics stays mounted on the main port as well; "
+        "the separate port has no virtual-key auth, so keep it off public ingress. Startup fails if the metrics "
+        "server cannot bind."
+    ),
+    envvar="PROMETHEUS_METRICS_PORT",
+)
 def run_server(
     cli_args,
     host,
@@ -980,6 +1000,7 @@ def run_server(
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
     reload: bool,
+    prometheus_metrics_port: int | None,
 ):
     if cli_args:
         if cli_args == ("xai-oauth", "login"):
@@ -1093,6 +1114,7 @@ def run_server(
         from litellm.proxy.db.token_auth import (
             AZURE_POSTGRESQL_AUTH_ENV_VAR,
             IAM_TOKEN_DB_AUTH_ENV_VAR,
+            resolve_database_token_auth,
             token_auth_flag_enabled,
         )
 
@@ -1245,73 +1267,69 @@ def run_server(
                         flush=True,
                     )
                     sys.exit(1)
-            try:
-                from litellm.secret_managers.main import get_secret
+            from litellm.secret_managers.main import get_secret
 
-                connection_url_params: Final = _build_db_connection_url_params(
-                    connection_limit=db_connection_pool_limit,
-                    pool_timeout=db_connection_timeout,
-                    connect_timeout=db_connect_timeout,
-                    socket_timeout=db_socket_timeout,
-                    disable_prepared_statements=db_disable_prepared_statements,
-                    extra_params=db_extra_connection_params,
+            connection_url_params: Final = _build_db_connection_url_params(
+                connection_limit=db_connection_pool_limit,
+                pool_timeout=db_connection_timeout,
+                connect_timeout=db_connect_timeout,
+                socket_timeout=db_socket_timeout,
+                disable_prepared_statements=db_disable_prepared_statements,
+                extra_params=db_extra_connection_params,
+            )
+            lifetime_params: Final = idle_lifetime_params(general_settings.get("database_max_idle_connection_lifetime"))
+            if os.getenv("DATABASE_URL", None) is not None:
+                database_url = get_secret("DATABASE_URL", default_value=None)
+                resolved_url: Final[str | None] = str(database_url) if database_url else None
+                pg_options: Final[str] = _pg_options_with_timeouts(
+                    _url_query_value(resolved_url, "options"),
+                    db_statement_timeout,
+                    db_lock_timeout,
                 )
-                lifetime_params: Final = idle_lifetime_params(
-                    general_settings.get("database_max_idle_connection_lifetime")
+                writer_url: Final = (
+                    _with_query_value(resolved_url, "options", pg_options)
+                    if resolved_url and pg_options
+                    else resolved_url
                 )
-                if os.getenv("DATABASE_URL", None) is not None:
-                    database_url = get_secret("DATABASE_URL", default_value=None)
-                    resolved_url: Final[str | None] = str(database_url) if database_url else None
-                    pg_options: Final[str] = _pg_options_with_timeouts(
-                        _url_query_value(resolved_url, "options"),
-                        db_statement_timeout,
-                        db_lock_timeout,
-                    )
-                    writer_url: Final = (
-                        _with_query_value(resolved_url, "options", pg_options)
-                        if resolved_url and pg_options
-                        else resolved_url
-                    )
-                    modified_url = append_query_params(
-                        writer_url,
-                        connection_url_params,
-                    )
-                    os.environ["DATABASE_URL"] = translate_libpq_ssl_params(
-                        add_missing_query_params(modified_url, lifetime_params)
-                    )
-                if os.getenv("DIRECT_URL", None) is not None:
-                    database_url = os.getenv("DIRECT_URL")
-                    modified_url = append_query_params(database_url, connection_url_params)
-                    os.environ["DIRECT_URL"] = translate_libpq_ssl_params(
-                        add_missing_query_params(modified_url, lifetime_params)
-                    )
-                # The reader pool is a real pool against the same configured cap, so it
-                # gets the allowlisted pool params. Schema-affecting ones, including any
-                # the operator smuggled in through database_extra_connection_params, stay
-                # on the writer. Anything pinned on the replica URL wins, unlike the
-                # writer where the config is applied on top.
-                read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
-                if read_replica_url:
-                    reader_options: Final[str] = _pg_options_with_timeouts(
-                        _url_query_value(read_replica_url, "options"),
-                        db_statement_timeout,
-                        db_lock_timeout,
-                    )
-                    os.environ["DATABASE_URL_READ_REPLICA"] = translate_libpq_ssl_params(
+                modified_url = append_query_params(
+                    writer_url,
+                    connection_url_params,
+                )
+                os.environ["DATABASE_URL"] = translate_libpq_ssl_params(
+                    add_missing_query_params(modified_url, lifetime_params)
+                )
+            if os.getenv("DIRECT_URL", None) is not None:
+                database_url = os.getenv("DIRECT_URL")
+                modified_url = append_query_params(database_url, connection_url_params)
+                os.environ["DIRECT_URL"] = translate_libpq_ssl_params(
+                    add_missing_query_params(modified_url, lifetime_params)
+                )
+            # The reader pool is a real pool against the same configured cap, so it
+            # gets the allowlisted pool params. Schema-affecting ones, including any
+            # the operator smuggled in through database_extra_connection_params, stay
+            # on the writer. Anything pinned on the replica URL wins, unlike the
+            # writer where the config is applied on top.
+            read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
+            if read_replica_url:
+                reader_options: Final[str] = _pg_options_with_timeouts(
+                    _url_query_value(read_replica_url, "options"),
+                    db_statement_timeout,
+                    db_lock_timeout,
+                )
+                os.environ["DATABASE_URL_READ_REPLICA"] = translate_libpq_ssl_params(
+                    add_missing_query_params(
                         add_missing_query_params(
-                            add_missing_query_params(
-                                _with_query_value(read_replica_url, "options", reader_options)
-                                if reader_options
-                                else read_replica_url,
-                                reader_shareable_params(connection_url_params),
-                            ),
-                            lifetime_params,
-                        )
+                            _with_query_value(read_replica_url, "options", reader_options)
+                            if reader_options
+                            else read_replica_url,
+                            reader_shareable_params(connection_url_params),
+                        ),
+                        lifetime_params,
                     )
-                subprocess.run(["prisma"], capture_output=True)
-                is_prisma_runnable = True
-            except FileNotFoundError:
-                is_prisma_runnable = False
+                )
+            from litellm_proxy_extras.prisma_toolchain import prisma_cli_available
+
+            is_prisma_runnable: Final = prisma_cli_available()
 
             if is_prisma_runnable:
                 from litellm.proxy.db.check_migration import check_prisma_schema_diff
@@ -1360,10 +1378,28 @@ def run_server(
                             )
             else:
                 print(
-                    f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa: F541
+                    "Unable to connect to DB. DATABASE_URL found in environment, but the prisma CLI is neither on "
+                    "PATH nor importable as a package."
                 )
+        pgbouncer_settings: Final = PgBouncerSettings()
+        upstream_database_url: Final = os.getenv("DATABASE_URL")
+        if pgbouncer_settings.enabled and upstream_database_url is not None:
+            pooled_database_url: Final = start_in_container_pgbouncer(
+                pgbouncer_settings, upstream_database_url, token_auth=resolve_database_token_auth()
+            )
+            if isinstance(pooled_database_url, PgBouncerError):
+                print(
+                    f"\033[1;31mLiteLLM Proxy: LITELLM_PGBOUNCER_ENABLED is set but the in-container pgbouncer "
+                    f"could not start: {pooled_database_url.reason}\033[0m",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                sys.exit(1)
+            export_pooled_database_url(pooled_database_url)
         if port == 4000 and ProxyInitializationHelpers._is_port_in_use(port):
             port = random.randint(1024, 49152)
+        if prometheus_metrics_port == port:
+            raise click.UsageError("--prometheus_metrics_port must differ from --port")
 
         import litellm
 
@@ -1374,15 +1410,30 @@ def run_server(
         from litellm.proxy.proxy_server import app
 
         # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
-        ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+        prometheus_multiproc_dir: Final = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
             num_workers=num_workers,
             litellm_settings=litellm_settings if config else None,
+            prometheus_metrics_port=prometheus_metrics_port,
         )
 
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
             print("LiteLLM: Setup complete. Skipping server startup as requested.")
             return
+
+        if prometheus_metrics_port is not None and prometheus_multiproc_dir is not None:
+            from litellm.proxy.prometheus_metrics_server import MetricsServerStartupError, start_metrics_server_process
+
+            try:
+                metrics_process: Final = start_metrics_server_process(
+                    host=host, port=prometheus_metrics_port, multiproc_dir=prometheus_multiproc_dir
+                )
+            except MetricsServerStartupError as error:
+                raise click.ClickException(str(error)) from error
+            print(
+                f"\033[1;32mLiteLLM: Serving Prometheus metrics on {host}:{prometheus_metrics_port}/metrics "
+                f"(pid {metrics_process.pid})\033[0m"
+            )
 
         running_uvicorn: Final = run_gunicorn is False and run_hypercorn is False
         uvicorn_args: Final = ProxyInitializationHelpers._get_default_unvicorn_init_args(

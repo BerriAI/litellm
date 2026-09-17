@@ -165,9 +165,10 @@ def run_trace_cases(
 ) -> tuple[int, HarnessRun]:
     selected_scenarios: Final = frozenset(runner_args)
     run: Final = HarnessRun.from_cases(cases)
-    bridge_error: Final = ensure_trace_bridge(repo_root)
+    runnable_cases: Final = tuple(case for case in cases if isinstance(case.spec, ModuleCaseSpec))
+    bridge_error: Final = ensure_trace_bridge(repo_root) if runnable_cases else None
     if bridge_error is not None:
-        for harness_case in cases:
+        for harness_case in runnable_cases:
             _record_setup_failure(run, harness_case, bridge_error, "bridge")
         run.finished_at = monotonic()
         on_update(run)

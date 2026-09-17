@@ -1,5 +1,6 @@
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
@@ -19,6 +20,8 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
 )
 from litellm.types.router import GenericLiteLLMParams
+
+_ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 
 
 class TestOpenAIResponsesAPIConfig:
@@ -299,6 +302,89 @@ class TestOpenAIResponsesAPIConfig:
         )
 
         assert result["input"][0]["id"] == "toolu_01Foreign"
+
+    @pytest.mark.parametrize(
+        "raw_parameters",
+        [
+            '{"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}',
+            '{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}',
+        ],
+    )
+    def test_transform_decodes_json_string_tool_parameters(self, raw_parameters: str):
+        """A JSON-encoded schema must reach the provider as an object."""
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="weather in Paris",
+            response_api_optional_request_params={
+                "tools": [{"type": "function", "name": "get_weather", "parameters": raw_parameters}]
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0]["parameters"] == {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        }
+
+    def test_transform_decodes_json_string_tool_parameters_on_compact_request(self):
+        """The compact request path builds the same wire body, so it must decode too."""
+        _url, data = self.config.transform_compact_response_api_request(
+            model=self.model,
+            input="weather in Paris",
+            response_api_optional_request_params={
+                "tools": [{"type": "function", "name": "get_weather", "parameters": '{"type": "object"}'}]
+            },
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert data["tools"][0]["parameters"] == {"type": "object"}
+
+    @pytest.mark.parametrize("raw_parameters", ['"just a string"', "not json at all", "[1, 2, 3]", 42])
+    def test_transform_rejects_tool_parameters_that_are_not_an_object(self, raw_parameters: object):
+        """Neither an object nor a string encoding one is a client error naming the tool index."""
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            self.config.transform_responses_api_request(
+                model=self.model,
+                input="weather in Paris",
+                response_api_optional_request_params={
+                    "tools": [
+                        {"type": "web_search_preview"},
+                        {"type": "function", "name": "get_weather", "parameters": raw_parameters},
+                    ]
+                },
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+
+        assert "tools[1].parameters" in str(exc_info.value)
+
+    def test_transform_leaves_object_null_and_absent_tool_parameters_untouched(self):
+        """The API accepts an object schema, an explicit null, an omitted schema and a built-in
+        tool, so decoding must forward all four unchanged rather than raising."""
+        schema = {"type": "object", "properties": {"city": {"type": "string"}}}
+        tools = [
+            {"type": "function", "name": "get_weather", "parameters": schema},
+            {"type": "function", "name": "null_args", "parameters": None},
+            {"type": "function", "name": "no_args"},
+            {"type": "web_search_preview"},
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="weather in Paris",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0]["parameters"] == schema
+        assert result["tools"][1]["parameters"] is None
+        assert "parameters" not in result["tools"][2]
+        assert result["tools"][3] == {"type": "web_search_preview"}
 
     def test_transform_compact_drops_foreign_tool_call_item_ids(self):
         """The compact request path replays input the same way, so it must
@@ -863,6 +949,20 @@ class TestAzureResponsesAPIConfig:
         self.config = AzureOpenAIResponsesAPIConfig()
         self.model = "gpt-4o"
         self.logging_obj = MagicMock()
+
+    def test_azure_decodes_json_string_tool_parameters(self):
+        """Azure reaches the same wire through `super()`, after un-nesting a chat-shaped tool."""
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="weather in Paris",
+            response_api_optional_request_params={
+                "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": '{"type":"object"}'}}]
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0]["parameters"] == {"type": "object"}
 
     def test_azure_get_complete_url_with_version_types(self):
         """Test Azure get_complete_url with different API version types"""
@@ -1923,3 +2023,188 @@ class TestFlattenToolSchemaCombinatorsWiring:
 
         assert result["tools"][0] is opaque_tool
         assert "anyOf" not in result["tools"][1]["parameters"]
+
+
+class TestToolSchemaRegexPatternWiring:
+    """Claude Code's Artifact tool reaches /v1/responses (the /v1/messages bridge) with an
+    ECMA-262 ``pattern``; OpenAI compiles patterns with Python ``re`` and 400s
+    "'...' is not a 'regex'" for every model family, so the keyword is dropped.
+    """
+
+    def _artifact_tool(self):
+        return {
+            "type": "function",
+            "name": "Artifact",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "field": {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN},
+                    "doc_id": {"type": "string", "pattern": r"^(?!\.\.?(?:/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"},
+                },
+                "required": ["field"],
+            },
+        }
+
+    @pytest.mark.parametrize("model", ["gpt-5.6", "gpt-4o", "o3"])
+    def test_openai_drops_only_the_pattern_python_re_rejects_for_every_family(self, model):
+        tool = self._artifact_tool()
+
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model=model,
+            input="hi",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        properties = result["tools"][0]["parameters"]["properties"]
+        assert properties["field"] == {"type": "string"}
+        assert properties["doc_id"] == tool["parameters"]["properties"]["doc_id"]
+        assert result["tools"][0]["parameters"]["required"] == ["field"]
+        assert tool["parameters"]["properties"]["field"]["pattern"] == _ARTIFACT_FIELD_PATTERN
+        assert json.loads(json.dumps(result["tools"])) == result["tools"]
+
+    def test_openai_drops_patterns_inside_codex_namespace_tools(self):
+        namespace = {"type": "namespace", "name": "mcp__claude", "tools": [self._artifact_tool()]}
+
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input="hi",
+            response_api_optional_request_params={"tools": [namespace]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0]["tools"][0]["parameters"]["properties"]["field"] == {"type": "string"}
+
+    def test_openai_compact_request_drops_patterns(self):
+        _, data = OpenAIResponsesAPIConfig().transform_compact_response_api_request(
+            model="gpt-5.6",
+            input="hi",
+            response_api_optional_request_params={"tools": [self._artifact_tool()]},
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert data["tools"][0]["parameters"]["properties"]["field"] == {"type": "string"}
+
+    def test_non_openai_subclass_keeps_patterns(self):
+        from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
+
+        tool = self._artifact_tool()
+
+        result = HostedVLLMResponsesAPIConfig().transform_responses_api_request(
+            model="hosted_vllm/qwen",
+            input="hi",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0] is tool
+
+
+class TestReasoningFollowsModelSupport:
+    """Responses API clients like Codex send `reasoning` on every request, and OpenAI 400s it
+    on non-reasoning models like gpt-4o. drop_params must strip it there, the same way the
+    chat completions surface already strips reasoning_effort for those models.
+    """
+
+    @pytest.mark.parametrize(
+        "model, reasoning_survives",
+        [
+            ("gpt-4o", False),
+            ("gpt-4.1", False),
+            ("gpt-4o-mini", False),
+            ("ft:gpt-4o-2024-08-06:my-org::abc123", False),
+            ("chat-latest", True),
+            ("gpt-5.6", True),
+            ("o3", True),
+            ("o3-deep-research", True),
+            ("o4-mini-deep-research", True),
+            ("codex-mini-latest", True),
+            ("ft:o4-mini-2025-04-16:my-org::abc123", True),
+            ("computer-use-preview", True),
+        ],
+    )
+    def test_drop_params_strips_reasoning_by_model(self, local_model_cost_map, model, reasoning_survives):
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": "auto"}},
+            model=model,
+            drop_params=True,
+        )
+        assert ("reasoning" in mapped) is reasoning_survives
+
+    @pytest.mark.parametrize(
+        "model, reasoning_survives",
+        [
+            ("gpt-4o", False),
+            ("chat-latest", True),
+            ("o3", True),
+            ("o3-deep-research", True),
+        ],
+    )
+    def test_a_cost_map_older_than_this_release_never_strips_a_known_reasoning_model(
+        self, local_model_cost_map, monkeypatch, model, reasoning_survives
+    ):
+        lagging = {
+            name: {field: value for field, value in entry.items() if field != "supports_reasoning"}
+            for name, entry in litellm.model_cost.items()
+        }
+        monkeypatch.setattr(litellm, "model_cost", lagging)
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium"}},
+            model=model,
+            drop_params=True,
+        )
+        assert ("reasoning" in mapped) is reasoning_survives
+
+    def test_without_drop_params_the_error_is_litellms_400(self, local_model_cost_map, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+            OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium"}},
+                model="gpt-4o",
+                drop_params=False,
+            )
+        assert excinfo.value.status_code == 400
+        assert "reasoning.effort" in str(excinfo.value)
+        assert "cost map" in str(excinfo.value)
+
+    @pytest.mark.parametrize("drop_params", [True, False])
+    @pytest.mark.parametrize(
+        "reasoning",
+        [{"summary": "auto"}, {"effort": None, "summary": "auto"}, {}],
+    )
+    def test_reasoning_without_an_effort_passes_through_on_non_reasoning_models(
+        self, local_model_cost_map, monkeypatch, drop_params, reasoning
+    ):
+        monkeypatch.setattr(litellm, "drop_params", drop_params)
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": dict(reasoning)},
+            model="gpt-4o",
+            drop_params=drop_params,
+        )
+        assert mapped["reasoning"] == reasoning
+
+    def test_an_explicit_supports_reasoning_false_beats_the_bundled_floor(self, local_model_cost_map, monkeypatch):
+        overridden = {
+            name: ({**entry, "supports_reasoning": False} if name == "o3" else entry)
+            for name, entry in litellm.model_cost.items()
+        }
+        monkeypatch.setattr(litellm, "model_cost", overridden)
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium"}},
+            model="o3",
+            drop_params=True,
+        )
+        assert "reasoning" not in mapped
+
+    def test_azure_deployments_keep_reasoning_even_on_a_non_reasoning_model_name(self, local_model_cost_map):
+        mapped = AzureOpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium"}},
+            model="gpt-4o",
+            drop_params=True,
+        )
+        assert mapped["reasoning"] == {"effort": "medium"}
