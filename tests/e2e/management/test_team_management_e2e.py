@@ -609,10 +609,14 @@ class TestTeamAdminWithRpmLimitAndMaxBudgetEnabled:
     lower the team's budget. Raising or removing the budget stays with the proxy admin."""
 
     @pytest.mark.covers("mgmt.team.update.team_admin_limited_to_enabled_fields")
-    def test_team_admin_saves_a_new_rpm_limit_and_a_lower_budget(
-        self, client: ManagementClient, resources: ResourceManager
+    @pytest.mark.parametrize(
+        "current_budget",
+        [pytest.param(_TEAM_MAX_BUDGET, id="lower"), pytest.param(None, id="first-budget")],
+    )
+    def test_team_admin_saves_a_new_rpm_limit_and_a_tighter_budget(
+        self, client: ManagementClient, resources: ResourceManager, current_budget: float | None
     ) -> None:
-        team_id, admin_key = _team_with_admin(client, resources, max_budget=_TEAM_MAX_BUDGET)
+        team_id, admin_key = _team_with_admin(client, resources, max_budget=current_budget)
         access = _read_team(client, team_id, admin_key).team_info.caller_edit_access
         assert access == CallerEditAccess(kind="team_admin", editable_fields=["max_budget", "rpm_limit"]), (
             f"/team/info should list max_budget and rpm_limit as the team admin's editable fields, got {access}"
@@ -624,8 +628,8 @@ class TestTeamAdminWithRpmLimitAndMaxBudgetEnabled:
         )
 
         assert outcome.status_code == 200, (
-            f"a team admin setting an RPM limit and lowering the budget must succeed, got {outcome.status_code}: "
-            f"{outcome.body[:300]}"
+            f"a team admin setting an RPM limit and tightening the budget from {current_budget} must succeed, "
+            f"got {outcome.status_code}: {outcome.body[:300]}"
         )
         after = _poll_team(
             client,
