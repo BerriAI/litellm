@@ -7711,6 +7711,7 @@ export interface paths {
          *     - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
          *     - project_id: Optional[str] - The project id of the key. When set, models and max_budget are validated against the project's limits.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+         *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Takes precedence over `litellm_settings.max_end_user_budget_id`.
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
          *     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
@@ -8035,6 +8036,7 @@ export interface paths {
          *     - team_id: Optional[str] - The team id of the key
          *     - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+         *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
          *     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
@@ -8172,6 +8174,7 @@ export interface paths {
          *     - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
          *     - organization_id: Optional[str] - The organization id of the key.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+         *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
          *     - models: Optional[list] - Model_name's a user is allowed to call
          *     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
