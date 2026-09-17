@@ -526,6 +526,53 @@ async def mistral_proxy_route(
 
 
 @router.api_route(
+    "/typesafe/{endpoint:path}",
+    methods=["GET", "POST"],
+    tags=["TypeSafe AI Pass-through", "pass-through"],
+)
+async def typesafe_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)"""
+    if request.method == "POST":
+        try:
+            request_body: Final = await _json_request_body(request)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if not isinstance(request_body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+        if "stream" in request_body:
+            raise HTTPException(status_code=400, detail="'stream' is not a TypeSafe request member")
+
+    base_target_url: Final = get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+    encoded_endpoint: Final = httpx.URL(endpoint).path
+    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
+    base_url: Final = httpx.URL(base_target_url)
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
+        params=request.query_params,
+    )
+    typesafe_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="typesafe",
+        region_name=None,
+    )
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={
+            "Authorization": f"Bearer {typesafe_api_key}",
+            "Content-Type": "application/json",
+        },
+        custom_llm_provider="typesafe",
+        is_streaming_request=False,
+    )
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+@router.api_route(
     "/milvus/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Milvus Pass-through", "pass-through"],
