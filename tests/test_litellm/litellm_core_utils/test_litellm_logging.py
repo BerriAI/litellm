@@ -3,15 +3,14 @@ import contextlib
 import datetime
 import os
 import sys
+import time
 from collections.abc import Callable
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
-import time
-
 import httpx
+import pytest
+from mcp.types import CallToolResult, TextContent
 from openai._legacy_response import HttpxBinaryResponseContent
 
 import litellm
@@ -43,6 +42,36 @@ def logging_obj():
         litellm_call_id="12345",
         function_id="1245",
     )
+
+
+@pytest.mark.asyncio
+async def test_async_post_mcp_tool_call_hook_preserves_and_returns_content(logging_obj):
+    from litellm.types.mcp import MCPPostCallResponseObject
+
+    class RedactingLogger(CustomLogger):
+        async def async_post_mcp_tool_call_hook(
+            self,
+            kwargs: dict[str, object],
+            response_obj: MCPPostCallResponseObject,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> MCPPostCallResponseObject:
+            assert isinstance(response_obj.mcp_tool_call_response, list)
+            assert isinstance(response_obj.mcp_tool_call_response[0], TextContent)
+            response_obj.mcp_tool_call_response = [TextContent(type="text", text="[REDACTED]")]
+            return response_obj
+
+    logging_obj.dynamic_success_callbacks = [RedactingLogger()]
+    result = CallToolResult(content=[TextContent(type="text", text="SECRET-1234")], isError=False)
+
+    hooked_content = await logging_obj.async_post_mcp_tool_call_hook(
+        kwargs=logging_obj.model_call_details,
+        response_obj=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+    )
+
+    assert list(hooked_content) == [TextContent(type="text", text="[REDACTED]")]
 
 
 def test_get_combined_callback_list_preserves_insertion_order(logging_obj):

@@ -3303,17 +3303,18 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         logging_obj.post_call(original_response=result)
-        await logging_obj.async_post_mcp_tool_call_hook(
+        hook_content: Final = await logging_obj.async_post_mcp_tool_call_hook(
             kwargs=logging_obj.model_call_details,
             response_obj=result,
             start_time=start_time,
             end_time=end_time,
         )
+        hooked_result: Final = result.model_copy(update={"content": list(hook_content)})
         logging_obj.call_type = CallTypes.call_mcp_tool.value
-        error_message: Final = extract_mcp_tool_result_error_message(result)
+        error_message: Final = extract_mcp_tool_result_error_message(hooked_result)
         if error_message is None:
-            await logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
-            return result
+            await logging_obj.async_success_handler(result=hooked_result, start_time=start_time, end_time=end_time)
+            return hooked_result
 
         logging_obj.has_run_logging(event_type="sync_success")
         logging_obj.has_run_logging(event_type="async_success")
@@ -3322,7 +3323,7 @@ if MCP_AVAILABLE:
         await logging_obj.async_failure_handler(tool_error, "", start_time, end_time)
 
         if user_api_key_auth is None:
-            return result
+            return hooked_result
 
         if proxy_logging_obj:
             sanitized_request_data: Final = {
@@ -3334,7 +3335,7 @@ if MCP_AVAILABLE:
                 user_api_key_dict=user_api_key_auth,
                 route="/mcp/call_tool",
             )
-        return result
+        return hooked_result
 
     async def fire_mcp_tool_call_failure_logging(
         logging_obj: LiteLLMLoggingObj | None,

@@ -843,7 +843,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     litellm_logging_obj.model = f"MCP: {tool_name}"
                     litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
 
-                result = await global_mcp_server_manager.call_tool(
+                result: Final = await global_mcp_server_manager.call_tool(
                     server_name=server_name,
                     name=sanitized_tool_name,
                     arguments=parsed_arguments,
@@ -856,8 +856,8 @@ class LiteLLM_Proxy_MCP_Handler:
                     litellm_logging_obj=litellm_logging_obj,
                 )
 
-                if proxy_logging_obj:
-                    result = await proxy_logging_obj.post_mcp_call_hook(
+                proxy_hooked_result: Final = (
+                    await proxy_logging_obj.post_mcp_call_hook(
                         response=result,
                         request_data=(
                             litellm_logging_obj.model_call_details
@@ -866,21 +866,31 @@ class LiteLLM_Proxy_MCP_Handler:
                         ),
                         user_api_key_dict=typed_user_api_key_auth,
                     )
+                    if proxy_logging_obj
+                    else result
+                )
 
-                if litellm_logging_obj:
+                async def _get_hooked_result() -> "CallToolResult":
+                    if litellm_logging_obj is None:
+                        return proxy_hooked_result
                     try:
-                        litellm_logging_obj.post_call(original_response=result)
-                        await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                        litellm_logging_obj.post_call(original_response=proxy_hooked_result)
+                        hook_content: Final = await litellm_logging_obj.async_post_mcp_tool_call_hook(
                             kwargs=litellm_logging_obj.model_call_details,
-                            response_obj=result,
+                            response_obj=proxy_hooked_result,
                             start_time=start_time,
                             end_time=datetime.now(),
                         )
+                        return proxy_hooked_result.model_copy(update={"content": list(hook_content)})
                     except Exception:
                         verbose_logger.exception("Failed to run post-call logging for MCP tool call %s", tool_name)
+                        return proxy_hooked_result
+
+                hooked_result: Final = await _get_hooked_result()
+                if litellm_logging_obj:
                     try:
                         await litellm_logging_obj.async_success_handler(
-                            result=result,
+                            result=hooked_result,
                             start_time=start_time,
                             end_time=datetime.now(),
                         )
@@ -888,7 +898,7 @@ class LiteLLM_Proxy_MCP_Handler:
                         verbose_logger.exception("Failed to log MCP tool call success for %s", tool_name)
 
                 # Format result for inclusion in response
-                result_text = LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
+                result_text = LiteLLM_Proxy_MCP_Handler._parse_mcp_result(hooked_result)
                 tool_results.append(
                     {
                         "tool_call_id": tool_call_id,

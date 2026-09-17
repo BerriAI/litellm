@@ -7825,7 +7825,7 @@ def _call_tool_result(is_error: bool, text: str) -> CallToolResult:
 def _mock_mcp_logging_obj() -> MagicMock:
     logging_obj = MagicMock()
     logging_obj.model_call_details = {}
-    logging_obj.async_post_mcp_tool_call_hook = AsyncMock()
+    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["response_obj"].content)
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.async_failure_handler = AsyncMock()
     return logging_obj
@@ -7921,10 +7921,59 @@ async def test_fire_mcp_tool_call_logging_success_path_unchanged():
         )
 
     logging_obj.async_success_handler.assert_awaited_once()
-    assert logging_obj.async_success_handler.await_args.kwargs["result"] is result
+    assert logging_obj.async_success_handler.await_args.kwargs["result"] == result
     logging_obj.async_failure_handler.assert_not_awaited()
     logging_obj.failure_handler.assert_not_called()
     proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fire_mcp_tool_call_logging_applies_hook_content():
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._experimental.mcp_server.server import (
+        _fire_mcp_tool_call_logging,
+    )
+    from litellm.types.mcp import MCPPostCallResponseObject
+
+    class RedactingLogger(CustomLogger):
+        async def async_post_mcp_tool_call_hook(
+            self,
+            kwargs: dict[str, object],
+            response_obj: MCPPostCallResponseObject,
+            start_time: datetime,
+            end_time: datetime,
+        ) -> MCPPostCallResponseObject:
+            assert isinstance(response_obj.mcp_tool_call_response, list)
+            assert isinstance(response_obj.mcp_tool_call_response[0], TextContent)
+            response_obj.mcp_tool_call_response = [TextContent(type="text", text="[REDACTED]")]
+            return response_obj
+
+    logging_obj = Logging(
+        model="MCP: weather/get_forecast",
+        messages=[{"role": "user", "content": "tool call"}],
+        stream=False,
+        call_type="call_mcp_tool",
+        start_time=datetime.now(),
+        litellm_call_id="test-mcp-hook-content",
+        function_id="test-fn",
+        dynamic_success_callbacks=[RedactingLogger()],
+    )
+    proxy_logging_mock = _mock_mcp_proxy_logging()
+    result = CallToolResult(content=[TextContent(type="text", text="SECRET-1234")], isError=False)
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
+        hooked_result = await _fire_mcp_tool_call_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            user_api_key_auth=UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            request_data={},
+        )
+
+    assert isinstance(hooked_result.content[0], TextContent)
+    assert hooked_result.content[0].text == "[REDACTED]"
 
 
 @pytest.mark.asyncio
@@ -7941,7 +7990,7 @@ async def test_fire_mcp_tool_call_logging_iserror_without_auth_skips_failure_hoo
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
         await _fire_mcp_tool_call_logging(
             logging_obj=logging_obj,
-            result={"isError": True, "content": [{"type": "text", "text": "denied"}]},
+            result=_call_tool_result(True, "denied"),
             start_time=datetime.now(),
             end_time=datetime.now(),
         )

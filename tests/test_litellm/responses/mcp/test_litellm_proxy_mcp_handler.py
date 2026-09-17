@@ -1,13 +1,15 @@
+import importlib
 import subprocess
 import sys
 import textwrap
 import types
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from mcp.types import CallToolResult, TextContent
 from openai.types.responses.tool_param import Mcp
-import importlib
 
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.responses import main as responses_main
@@ -15,10 +17,9 @@ from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_modul
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
-from typing import Any, cast
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import ModelResponse
 from litellm.types.responses.main import OutputFunctionToolCall
+from litellm.types.utils import ModelResponse
 
 
 class _DummyMCPResult:
@@ -490,6 +491,41 @@ async def test_execute_tool_calls_threads_logging_obj_into_call_tool(monkeypatch
     assert call_tool_mock.await_count == 1
     assert call_tool_mock.await_args is not None
     assert call_tool_mock.await_args.kwargs["litellm_logging_obj"] is sentinel_logging_obj
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=None)
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
+
+    result = CallToolResult(content=[TextContent(type="text", text="SECRET-1234")], isError=False)
+    fake_manager = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
+        call_tool=AsyncMock(return_value=result),
+        _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.async_post_mcp_tool_call_hook = AsyncMock(return_value=[TextContent(type="text", text="[REDACTED]")])
+    logging_obj.async_success_handler = AsyncMock()
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
+
+    tool_name = "deepwiki-read_wiki_structure"
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=None,
+    )
+
+    assert results == [{"tool_call_id": "call-1", "result": "[REDACTED]", "name": tool_name}]
+    assert logging_obj.async_success_handler.await_args.kwargs["result"].content[0].text == "[REDACTED]"
 
 
 @pytest.mark.asyncio

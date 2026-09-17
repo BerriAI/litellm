@@ -205,7 +205,7 @@ from .initialize_dynamic_callback_params import (
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 if TYPE_CHECKING:
-    from mcp.types import EmbeddedResource, ImageContent, TextContent
+    from mcp.types import CallToolResult, EmbeddedResource, ImageContent, TextContent
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
@@ -1562,10 +1562,10 @@ class Logging(LiteLLMLoggingBaseClass):
     async def async_post_mcp_tool_call_hook(
         self,
         kwargs: dict,
-        response_obj: Any,
+        response_obj: "CallToolResult",
         start_time: datetime.datetime,
         end_time: datetime.datetime,
-    ):
+    ) -> "Sequence[TextContent | ImageContent | EmbeddedResource]":
         """
         Post MCP Tool Call Hook
 
@@ -1579,12 +1579,12 @@ class Logging(LiteLLMLoggingBaseClass):
             global_callbacks=litellm.success_callback,
         )
         post_mcp_tool_call_response_obj: Final[MCPPostCallResponseObject] = MCPPostCallResponseObject(
-            mcp_tool_call_response=response_obj, hidden_params=HiddenParams()
+            mcp_tool_call_response=list(response_obj.content), hidden_params=HiddenParams()
         )
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):
-                    response: MCPPostCallResponseObject | None = await callback.async_post_mcp_tool_call_hook(
+                    response: Final[MCPPostCallResponseObject | None] = await callback.async_post_mcp_tool_call_hook(
                         kwargs=kwargs,
                         response_obj=post_mcp_tool_call_response_obj,
                         start_time=start_time,
@@ -1594,11 +1594,12 @@ class Logging(LiteLLMLoggingBaseClass):
                     # if any of the callbacks modify the response, use the modified response
                     # current implementation returns the first modified response
                     ######################################################################
-                    if response is not None:
-                        response_obj = self._parse_post_mcp_call_hook_response(response=response)
+                    hook_content: Final = self._parse_post_mcp_call_hook_response(response=response)
+                    if hook_content is not None:
+                        return hook_content
             except Exception as e:
                 verbose_logger.exception("LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e)
-        return response_obj
+        return response_obj.content
 
     def _parse_post_mcp_call_hook_response(
         self, response: MCPPostCallResponseObject | None
