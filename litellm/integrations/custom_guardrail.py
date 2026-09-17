@@ -102,11 +102,9 @@ def is_guardrail_intervention(e: Exception) -> bool:
         ),
     ):
         return True
-    try:
-        from fastapi.exceptions import HTTPException
-    except ImportError:
-        return False
-    return isinstance(e, HTTPException) and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES
+    from litellm.proxy.guardrails.exception_utils import is_fastapi_http_exception
+
+    return is_fastapi_http_exception(e, _GUARDRAIL_BLOCK_STATUS_CODES)
 
 
 def _strict_guardrail_modes_enabled() -> bool:
