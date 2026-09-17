@@ -4,6 +4,8 @@ import type { GitHubApi } from "./auto-close-duplicates";
 import {
   BODY_CAP_CHARS,
   BUG_SECTIONS,
+  FORM_HEADINGS,
+  SECTION_CAP_CHARS,
   FEATURE_SECTIONS,
   MIN_SECTION_CHARS,
   buildRequest,
@@ -95,7 +97,7 @@ describe("the schema and the manifest agree", () => {
 });
 
 describe("sections", () => {
-  test("splits an issue form body on its headings and trims each block", () => {
+  test("splits an issue form body on its field headings and trims each block", () => {
     const found = sections("preamble\n### Description\n\nIt broke.\n\n### Config\n\n_No response_\n");
     expect([...found.entries()]).toEqual([
       ["Description", "It broke."],
@@ -103,8 +105,35 @@ describe("sections", () => {
     ]);
   });
 
+  test("a heading the reporter typed inside a field stays inside that field", () => {
+    const found = sections(
+      "### Steps to Repro\n\n### Actual response\n\n500 from the proxy\n\n### Expected\n\n200\n\n### LiteLLM Version\n\nv1.100.0\n",
+    );
+    expect(found.get("Steps to Repro")).toBe("### Actual response\n\n500 from the proxy\n\n### Expected\n\n200");
+    expect(found.get("LiteLLM Version")).toBe("v1.100.0");
+  });
+
+  test("a repeated field heading does not overwrite the first value", () => {
+    const found = sections("### Description\n\nreal text\n\n### Config\n\n### Description\n\nnot a field\n");
+    expect(found.get("Description")).toBe("real text");
+    expect(found.get("Config")).toBe("### Description\n\nnot a field");
+  });
+
   test("a body with no headings has no sections", () => {
     expect(sections("just some prose with ### inside a line").size).toBe(0);
+    expect(sections("### Open question for OWNER\n\nnot a form field").size).toBe(0);
+  });
+
+  test("the known headings are exactly the field labels of the two issue forms", async () => {
+    const labels = await Promise.all(
+      ["bug_report.yml", "feature_request.yml"].map(async (file) => {
+        const form = Bun.YAML.parse(await Bun.file(`${import.meta.dir}/../.github/ISSUE_TEMPLATE/${file}`).text()) as {
+          readonly body: readonly { readonly attributes?: { readonly label?: string } }[];
+        };
+        return form.body.flatMap((field) => (field.attributes?.label === undefined ? [] : [field.attributes.label.trim()]));
+      }),
+    );
+    expect(new Set(labels.flat())).toEqual(new Set(FORM_HEADINGS));
   });
 });
 
@@ -213,8 +242,21 @@ describe("buildRequest", () => {
     expect(message).toContain("### Steps to Repro");
   });
 
-  test("a long body is capped and the version survives the cap", () => {
-    const body = `${bugBody()}${"x".repeat(BODY_CAP_CHARS * 2)}`;
+  test("each field is capped on its own, so a huge config cannot push the repro out of the message", () => {
+    const message = userMessage(issue({ body: bugBody({ Config: "y".repeat(SECTION_CAP_CHARS * 3) }) }), passed);
+    expect(message).toContain(`[section truncated at ${SECTION_CAP_CHARS} characters]`);
+    expect(message).toContain("### Steps to Repro\n\n1. curl -X POST http://localhost:4000/v1/chat/completions");
+    expect(message.length).toBeLessThan(SECTION_CAP_CHARS + 1500);
+  });
+
+  test("the hiring, contact and duplicate-check fields are left out of the message", () => {
+    const message = userMessage(issue({ title: "[Feature]: scope guardrails", body: featureBody() }), passed);
+    expect(message).toContain("### The Feature");
+    expect(message).not.toContain("Check for existing issues");
+  });
+
+  test("a body without form fields is sent whole, capped, and the version survives the cap", () => {
+    const body = "x".repeat(BODY_CAP_CHARS * 2);
     const message = userMessage(issue({ body }), passed);
     expect(message.length).toBeLessThan(BODY_CAP_CHARS + 500);
     expect(message).toContain(`[body truncated at ${BODY_CAP_CHARS} characters]`);
