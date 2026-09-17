@@ -19,6 +19,10 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
+    CeilingResolver,
+    resolve_agent_access_group_ceiling,
+)
 from litellm.repositories.table_repositories import AgentsRepository
 from litellm.types.agents import AgentResponse
 
@@ -61,6 +65,7 @@ class AgentRequestHandler:
     @staticmethod
     async def resolve_agent_access(
         user_api_key_auth: UserAPIKeyAuth | None = None,
+        resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
     ) -> AgentAccess:
         """
         Resolve the agents the given user/key may reach.
@@ -71,7 +76,7 @@ class AgentRequestHandler:
         never widen what it reaches.
         """
         key_team_access: Final = await AgentRequestHandler._resolve_key_team_agent_access(user_api_key_auth)
-        agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(user_api_key_auth)
+        agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(user_api_key_auth, resolve_ceiling)
         if agent_ceiling is None:
             return key_team_access
         match key_team_access:
@@ -104,13 +109,12 @@ class AgentRequestHandler:
     @staticmethod
     async def _agent_access_group_ceiling(
         user_api_key_auth: UserAPIKeyAuth | None,
+        resolve_ceiling: CeilingResolver,
     ) -> frozenset[str] | None:
         """Stable IDs of the agents the calling agent's attached access groups allow; None when none attached."""
-        from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_agent_access_group_ceiling
-
         if user_api_key_auth is None or not user_api_key_auth.agent_id:
             return None
-        ceiling: Final = await resolve_agent_access_group_ceiling(user_api_key_auth.agent_id)
+        ceiling: Final = await resolve_ceiling(user_api_key_auth.agent_id)
         if ceiling is None:
             return None
         return _to_stable_ids(ceiling.agent_ids)
@@ -119,6 +123,7 @@ class AgentRequestHandler:
     async def is_agent_allowed(
         agent_id: str,
         user_api_key_auth: UserAPIKeyAuth | None = None,
+        resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
     ) -> bool:
         """
         Check if a specific agent is allowed for the given user/key.
@@ -132,7 +137,7 @@ class AgentRequestHandler:
         """
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
-        match await AgentRequestHandler.resolve_agent_access(user_api_key_auth):
+        match await AgentRequestHandler.resolve_agent_access(user_api_key_auth, resolve_ceiling):
             case UnrestrictedAgentAccess():
                 return True
             case RestrictedAgentAccess(allowed_agent_ids):

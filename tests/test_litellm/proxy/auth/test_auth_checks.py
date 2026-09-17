@@ -32,11 +32,13 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling, CeilingResolver
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _cache_management_object,
     _can_object_call_model,
     _can_object_call_vector_stores,
+    _check_agent_access_group_model_access,
     _check_end_user_budget,
     _check_team_member_budget,
     _fetch_key_object_from_db_with_reconnect,
@@ -8466,89 +8468,64 @@ def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() 
 # Agent access group model ceiling
 
 
-def _agent_model_ceiling(models: frozenset[str]):
-    from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling
+def _agent_model_ceiling_resolver(
+    models: frozenset[str] | None,
+) -> tuple[CeilingResolver, list[str]]:
+    """Resolver that records the agent ids it was asked about and answers with a fixed model
+    ceiling, or None when the agent has no access groups attached."""
+    asked: Final[list[str]] = []
 
-    return AgentAccessGroupCeiling(
-        access_group_ids=("ag-1",), models=models, mcp_server_ids=frozenset(), agent_ids=frozenset()
-    )
+    async def resolve(agent_id: str) -> AgentAccessGroupCeiling | None:
+        asked.append(agent_id)
+        if models is None:
+            return None
+        return AgentAccessGroupCeiling(
+            access_group_ids=("ag-1",), models=models, mcp_server_ids=frozenset(), agent_ids=frozenset()
+        )
 
-
-async def _run_common_checks_for_agent_key(model: str, valid_token: UserAPIKeyAuth):
-    from fastapi import Request
-
-    from litellm.proxy.auth.auth_checks import common_checks
-
-    return await common_checks(
-        request_body={"model": model, "messages": [{"role": "user", "content": "hi"}]},
-        team_object=None,
-        user_object=None,
-        end_user_object=None,
-        global_proxy_spend=None,
-        general_settings={},
-        route="/chat/completions",
-        llm_router=None,
-        proxy_logging_obj=MagicMock(),
-        valid_token=valid_token,
-        request=MagicMock(spec=Request),
-    )
+    return resolve, asked
 
 
 @pytest.mark.asyncio
-async def test_common_checks_agent_access_groups_cap_models_even_when_key_allows_them():
+async def test_agent_access_groups_cap_models_even_when_key_allows_them():
     agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"gpt-5"}))
 
-    with patch(
-        "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
-        new=AsyncMock(return_value=_agent_model_ceiling(frozenset({"gpt-5"}))),
-    ):
-        assert await _run_common_checks_for_agent_key("gpt-5", agent_key) is True
+    assert await _check_agent_access_group_model_access("gpt-5", agent_key, None, resolve) is True
 
-        with pytest.raises(ProxyException) as exc_info:
-            await _run_common_checks_for_agent_key("claude-sonnet", agent_key)
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_agent_access_group_model_access("claude-sonnet", agent_key, None, resolve)
 
     assert exc_info.value.type == ProxyErrorTypes.agent_model_access_denied
     assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+    assert asked == ["agent-1", "agent-1"]
 
 
 @pytest.mark.asyncio
-async def test_common_checks_agent_access_groups_naming_no_model_deny_every_model():
+async def test_agent_access_groups_naming_no_model_deny_every_model():
     agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=[])
+    resolve, _ = _agent_model_ceiling_resolver(frozenset())
 
-    with (
-        patch(
-            "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
-            new=AsyncMock(return_value=_agent_model_ceiling(frozenset())),
-        ),
-        pytest.raises(ProxyException) as exc_info,
-    ):
-        await _run_common_checks_for_agent_key("gpt-5", agent_key)
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_agent_access_group_model_access("gpt-5", agent_key, None, resolve)
 
     assert exc_info.value.type == ProxyErrorTypes.agent_model_access_denied
 
 
 @pytest.mark.asyncio
-async def test_common_checks_agent_without_access_groups_adds_no_model_ceiling():
+async def test_agent_without_access_groups_adds_no_model_ceiling():
     agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
+    resolve, asked = _agent_model_ceiling_resolver(None)
 
-    with patch(
-        "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
-        new=AsyncMock(return_value=None),
-    ) as mock_ceiling:
-        assert await _run_common_checks_for_agent_key("gpt-5", agent_key) is True
-        assert await _run_common_checks_for_agent_key("claude-sonnet", agent_key) is True
-
-    mock_ceiling.assert_called_with("agent-1")
+    assert await _check_agent_access_group_model_access("gpt-5", agent_key, None, resolve) is True
+    assert await _check_agent_access_group_model_access("claude-sonnet", agent_key, None, resolve) is True
+    assert asked == ["agent-1", "agent-1"]
 
 
 @pytest.mark.asyncio
-async def test_common_checks_key_without_agent_never_consults_agent_access_groups():
+async def test_key_without_agent_never_consults_agent_access_groups():
     plain_key: Final = UserAPIKeyAuth(token="plain-token", models=["gpt-5"])
+    resolve, asked = _agent_model_ceiling_resolver(frozenset())
 
-    with patch(
-        "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
-        new=AsyncMock(return_value=_agent_model_ceiling(frozenset())),
-    ) as mock_ceiling:
-        assert await _run_common_checks_for_agent_key("gpt-5", plain_key) is True
-
-    mock_ceiling.assert_not_called()
+    assert await _check_agent_access_group_model_access("gpt-5", plain_key, None, resolve) is True
+    assert asked == []
