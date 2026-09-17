@@ -5357,7 +5357,7 @@ def test_model_routed_file_ops_reject_key_without_model_grant(
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
     assert response.status_code == 403, response.text
-    assert "not allowed to access model" in response.text
+    assert response.json()["error"]["type"] == "key_model_access_denied"
     upstream.assert_not_called()
 
 
