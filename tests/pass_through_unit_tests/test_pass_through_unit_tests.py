@@ -420,9 +420,7 @@ def test_pass_through_routes_support_all_methods():
     """
     A pass-through route fronts a whole provider API, so narrowing its method
     set turns a request the upstream would have accepted into a 405. The
-    exceptions are providers whose wire protocol admits only one method: Amazon
-    Comprehend Medical and Amazon Transcribe speak AWS JSON 1.1, which is
-    POST-only, so there is no other method to forward.
+    exceptions are the POST-only protocol routes listed above.
     """
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         router as llm_router,
