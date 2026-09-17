@@ -543,7 +543,6 @@ async def typesafe_proxy_route(
     base_url: Final = httpx.URL(base_target_url)
     updated_url: Final = base_url.copy_with(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
-        params=request.query_params,
     )
     typesafe_api_key: Final = passthrough_endpoint_router.get_credentials(
         custom_llm_provider="typesafe",

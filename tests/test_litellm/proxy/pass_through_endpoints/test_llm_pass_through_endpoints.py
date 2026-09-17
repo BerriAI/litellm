@@ -9,6 +9,7 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -6152,7 +6153,13 @@ class TestTypeSafePassthroughRoute:
     async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch):
         monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
         monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
-        endpoint_func = AsyncMock(return_value={"ok": True})
+
+        async def fake_upstream(request, *_args):
+            target: Final = create_route.call_args.kwargs["target"]
+            upstream_url: Final = httpx.URL(target).copy_merge_params(request.query_params)
+            return {"upstream_query": parse_qs(upstream_url.query.decode())}
+
+        endpoint_func = AsyncMock(side_effect=fake_upstream)
         create_route = Mock(return_value=endpoint_func)
         monkeypatch.setattr(
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
@@ -6167,11 +6174,11 @@ class TestTypeSafePassthroughRoute:
             user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
         )
 
-        assert result == {"ok": True}
+        assert result == {"upstream_query": {"trace": ["yes"]}}
         endpoint_func.assert_awaited_once()
         create_route.assert_called_once_with(
             endpoint="v1/systemone",
-            target="https://typesafe.example/base/v1/systemone?trace=yes",
+            target="https://typesafe.example/base/v1/systemone",
             custom_headers={
                 "Authorization": "Bearer typesafe-test-key",
                 "Content-Type": "application/json",
