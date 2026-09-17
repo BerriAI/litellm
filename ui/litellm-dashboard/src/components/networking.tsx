@@ -2061,6 +2061,7 @@ export const userFilterUICall = async (accessToken: string, params: URLSearchPar
         user_email: params.get("user_email") || undefined,
         user_id: params.get("user_id") || undefined,
         team_id: params.get("team_id") || undefined,
+        search: params.get("search") || undefined,
       },
     });
   } catch (error) {
