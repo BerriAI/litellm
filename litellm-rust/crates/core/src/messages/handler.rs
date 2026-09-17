@@ -1,11 +1,10 @@
 use super::Error;
-use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
-use crate::http_utils::http_request;
-
 use super::client::http_client;
 use super::common_utils::truncate_error_body;
 use super::prepare::prepare_provider_request;
 use super::types::{AnthropicMessagesResponse, MessagesRequest};
+use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
+use crate::http_utils::http_request;
 
 pub(super) async fn execute_messages_provider_call(
     request: MessagesRequest<'_>,
@@ -38,7 +37,10 @@ pub(super) async fn execute_messages_provider_call(
 
     let response = serde_json::from_str(&text)
         .map_err(|err| Error::InvalidResponse(format!("invalid messages response JSON: {err}")))?;
-    request.config.transform_response(&request.model, response)
+    request
+        .config
+        .transform_anthropic_messages_response(&request.model, response)
+        .map_err(Error::from)
 }
 
 pub(super) async fn execute_messages_provider_stream(
