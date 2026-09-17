@@ -2952,6 +2952,8 @@ export interface Member {
   rpm_limit?: number | null;
   budget_duration?: string | null;
   allowed_models?: string[] | null;
+  temp_budget_increase?: number | null;
+  temp_budget_expiry?: string | null;
 }
 
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
@@ -3085,6 +3087,12 @@ export const teamMemberUpdateCall = async (
     }
     if (formValues.allowed_models !== undefined) {
       requestBody.allowed_models = formValues.allowed_models;
+    }
+    if ("temp_budget_increase" in formValues) {
+      requestBody.temp_budget_increase = orNull(formValues.temp_budget_increase);
+    }
+    if ("temp_budget_expiry" in formValues) {
+      requestBody.temp_budget_expiry = orNull(formValues.temp_budget_expiry);
     }
 
     const response = await fetch(url, {

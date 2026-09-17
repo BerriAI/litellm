@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final
 
@@ -9,10 +10,20 @@ import pytest
 
 import litellm
 from litellm.caching import DualCache
+from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.proxy import proxy_server
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy._types import (
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    team_membership_reservation_cache_key,
+)
 from litellm.proxy.spend_tracking.budget_reservation import (
+    _get_team_member_budget_counter,
     count_request_input_tokens,
     estimate_request_max_cost,
     reserve_budget_for_request,
@@ -445,3 +456,44 @@ async def test_models_without_a_rust_tokenizer_stay_in_python(
     assert factory.calls == []
     assert dict(counts) == dict(python_counts)
     assert counts[model] not in RUST_INPUT_TOKENS_BY_TOKENIZER.values()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expiry_offset, expected_max_budget",
+    [
+        (timedelta(days=1), 3.0),
+        (timedelta(days=-1), 2.0),
+    ],
+)
+async def test_team_member_reservation_counter_honours_temp_budget_increase(
+    expiry_offset: timedelta, expected_max_budget: float
+) -> None:
+    user_id: Final = "member-temp"
+    team_id: Final = "team-temp"
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            spend=0.5,
+            budget_id="budget-temp",
+            litellm_budget_table=LiteLLM_BudgetTable(
+                max_budget=2.0,
+                temp_budget_increase=1.0,
+                temp_budget_expiry=datetime.now(timezone.utc) + expiry_offset,
+            ),
+        ),
+    )
+
+    counter: Final = await _get_team_member_budget_counter(
+        valid_token=UserAPIKeyAuth(token="hashed", user_id=user_id, team_id=team_id),
+        team_object=LiteLLM_TeamTable(team_id=team_id),
+        user_object=LiteLLM_UserTable(user_id=user_id),
+        user_api_key_cache=cache,
+    )
+
+    assert counter is not None
+    assert counter.max_budget == expected_max_budget
+    assert counter.fallback_spend == 0.5
