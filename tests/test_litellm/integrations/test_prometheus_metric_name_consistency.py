@@ -16,10 +16,9 @@ from typing import Final, get_args
 
 import pytest
 from prometheus_client import REGISTRY
-from prometheus_client.registry import Collector
 
 import litellm
-from litellm.caching.redis_cache import _BreakerMetrics
+from litellm.caching.redis_cache import _breaker_metrics
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.prometheus_services import PrometheusServicesLogger
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import SpendLogCleanupMetrics
@@ -34,35 +33,28 @@ _BY_CLAUSE_RE: Final = re.compile(r"\bby\s*\([^)]*\)")
 _EXPOSITION_SUFFIXES: Final = ("", "_total", "_bucket", "_sum", "_count", "_created")
 
 
-def _lazily_registered_collectors() -> tuple[Collector, ...]:
-    SpendLogCleanupMetrics._ensure_initialized()
-    collectors: Final = (
-        InFlightRequestsMiddleware._get_gauge(),
-        SpendLogCleanupMetrics.rows_deleted,
-        SpendLogCleanupMetrics.batch_duration,
-        SpendLogCleanupMetrics.rows_remaining,
-        SpendLogCleanupMetrics.batch_failures,
-        SpendLogCleanupMetrics.runs,
-    )
-    assert all(collector is not None for collector in collectors)
-    return tuple(collector for collector in collectors if collector is not None)
+def _reset_default_registry() -> None:
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        REGISTRY.unregister(collector)
+    SpendLogCleanupMetrics._initialized = False
+    InFlightRequestsMiddleware._gauge_init_attempted = False
+    InFlightRequestsMiddleware._gauge = None
+    _breaker_metrics.cache_clear()
 
 
 @pytest.fixture
 def emitted_metric_families(monkeypatch: pytest.MonkeyPatch) -> Iterator[frozenset[str]]:
-    for collector in list(REGISTRY._collector_to_names.keys()):
-        REGISTRY.unregister(collector)
+    _reset_default_registry()
     monkeypatch.setattr(litellm, "prometheus_metrics_config", None)
     PrometheusLogger()
     PrometheusServicesLogger()
-    _BreakerMetrics()
+    SpendLogCleanupMetrics._ensure_initialized()
+    assert SpendLogCleanupMetrics.runs is not None
+    assert InFlightRequestsMiddleware._get_gauge() is not None
+    assert _breaker_metrics()._state_gauge is not None
     assert create_prometheus_admission_metrics() is not None
-    families: Final = frozenset(
-        metric.name for collector in (REGISTRY, *_lazily_registered_collectors()) for metric in collector.collect()
-    )
-    yield families
-    for collector in list(REGISTRY._collector_to_names.keys()):
-        REGISTRY.unregister(collector)
+    yield frozenset(metric.name for metric in REGISTRY.collect())
+    _reset_default_registry()
 
 
 def _dashboard_expressions(path: Path) -> tuple[str, ...]:
