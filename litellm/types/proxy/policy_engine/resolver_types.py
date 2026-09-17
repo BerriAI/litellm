@@ -305,6 +305,10 @@ class PolicyAttachmentCreateRequest(BaseModel):
         default=None,
         description="Tag patterns this attachment applies to. Supports wildcards (e.g., health-*).",
     )
+    priority: int | None = Field(
+        default=None,
+        description="Explicit execution order. Attachments with a priority run before those without, lower first; ties fall back to scope specificity.",
+    )
 
 
 class PolicyAttachmentDBResponse(BaseModel):
@@ -317,6 +321,10 @@ class PolicyAttachmentDBResponse(BaseModel):
     keys: list[str] = Field(default_factory=list, description="Key patterns.")
     models: list[str] = Field(default_factory=list, description="Model patterns.")
     tags: list[str] = Field(default_factory=list, description="Tag patterns.")
+    priority: int | None = Field(
+        default=None,
+        description="Explicit execution order. Attachments with a priority run before those without, lower first; ties fall back to scope specificity.",
+    )
     created_at: datetime | None = Field(default=None, description="When the attachment was created.")
     updated_at: datetime | None = Field(default=None, description="When the attachment was last updated.")
     created_by: str | None = Field(default=None, description="Who created the attachment.")
