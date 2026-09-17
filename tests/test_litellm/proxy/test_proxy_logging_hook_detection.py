@@ -1,4 +1,5 @@
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.caching import DualCache
@@ -601,6 +602,57 @@ async def test_during_call_hook_keeps_native_moderation_hook_when_opted_out(monk
 
     assert opted_out.native_hooks_ran == ["during_call"]
     assert routed.native_hooks_ran == []
+
+
+class _RejectsInModeration(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.moderated: list[str] = []
+
+    async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+        self.moderated.append(call_type)
+        raise HTTPException(status_code=400, detail={"error": "rejected"})
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_runs_custom_logger_moderation_override(monkeypatch):
+    moderator = _RejectsInModeration()
+    monkeypatch.setattr(litellm, "callbacks", [CustomLogger(), moderator])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+            data={"messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            call_type="acompletion",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert moderator.moderated == ["acompletion"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_skips_custom_logger_moderation_without_auth(monkeypatch):
+    moderator = _RejectsInModeration()
+    monkeypatch.setattr(litellm, "callbacks", [moderator])
+    data = {"messages": [{"role": "user", "content": "hi"}]}
+
+    result = await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+        data=data,
+        user_api_key_dict=None,
+        call_type="acompletion",
+    )
+
+    assert result == data
+    assert moderator.moderated == []
+
+
+def test_callback_capabilities_detects_custom_logger_moderation_override(monkeypatch):
+    ProxyLogging._callback_capabilities_cache.clear()
+    monkeypatch.setattr(litellm, "callbacks", [CustomLogger(), CustomGuardrail()])
+    assert ProxyLogging._callback_capabilities().has_moderation_override is False
+
+    monkeypatch.setattr(litellm, "callbacks", [_RejectsInModeration()])
+    assert ProxyLogging._callback_capabilities().has_moderation_override is True
 
 
 @pytest.mark.asyncio

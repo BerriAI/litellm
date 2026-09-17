@@ -7,6 +7,7 @@
 ## Reject a call if it contains a prompt injection attack.
 
 
+import asyncio
 from difflib import SequenceMatcher
 from typing import Final, Literal
 
@@ -167,7 +168,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             if self.prompt_injection_params is not None:
                 # 1. check if heuristics check turned on
                 if self.prompt_injection_params.heuristics_check is True:
-                    is_prompt_attack = self.check_user_input_similarity(user_input=formatted_prompt)
+                    is_prompt_attack = await asyncio.to_thread(self.check_user_input_similarity, formatted_prompt)
                     if is_prompt_attack is True:
                         raise HTTPException(
                             status_code=400,
@@ -177,7 +178,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                 if self.prompt_injection_params.vector_db_check is True:
                     pass
             else:
-                is_prompt_attack = self.check_user_input_similarity(user_input=formatted_prompt)
+                is_prompt_attack = await asyncio.to_thread(self.check_user_input_similarity, formatted_prompt)
 
             if is_prompt_attack is True:
                 raise HTTPException(
@@ -221,6 +222,8 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             return None
 
         formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)
+        if not formatted_prompt:
+            return None
         is_prompt_attack = False
 
         prompt_injection_system_prompt: Final = getattr(
