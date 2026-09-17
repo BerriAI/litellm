@@ -6418,8 +6418,8 @@ def _azure_speech_real_auth_attrs() -> dict[str, object]:
 class TestAzureSpeechRawBodyThroughRealAuth:
     """user_api_key_auth reads the body before the route runs; raw audio must not be parsed as JSON."""
 
-    def _post_wav(
-        self, monkeypatch: pytest.MonkeyPatch, path: str, api_key: str, body: bytes = AZURE_SPEECH_WAV_BYTES
+    def _post(
+        self, monkeypatch: pytest.MonkeyPatch, path: str, api_key: str, content_type: str, body: bytes
     ) -> httpx.Response:
         from litellm.proxy.proxy_server import app
 
@@ -6437,8 +6437,13 @@ class TestAzureSpeechRawBodyThroughRealAuth:
                 path,
                 params={"language": "en-US"},
                 content=body,
-                headers={"Content-Type": "audio/wav", "Authorization": f"Bearer {api_key}"},
+                headers={"Content-Type": content_type, "Authorization": f"Bearer {api_key}"},
             )
+
+    def _post_wav(
+        self, monkeypatch: pytest.MonkeyPatch, path: str, api_key: str, body: bytes = AZURE_SPEECH_WAV_BYTES
+    ) -> httpx.Response:
+        return self._post(monkeypatch, path, api_key, "audio/wav", body)
 
     @pytest.mark.parametrize("body", [AZURE_SPEECH_WAV_BYTES, AZURE_SPEECH_NON_UTF8_WAV_BYTES], ids=["ascii", "binary"])
     def test_master_key_with_raw_wav_body_reaches_azure_without_a_parse_attempt(
@@ -6466,11 +6471,55 @@ class TestAzureSpeechRawBodyThroughRealAuth:
         assert response.status_code in (400, 401), response.text
         assert not catch_all.called
 
-    @pytest.mark.parametrize("path", ["/v1/chat/completions", f"/azure_speech{AZURE_SPEECH_BATCH_ENDPOINT}"])
-    def test_audio_content_type_off_the_short_audio_route_is_still_parsed_as_json(
-        self, monkeypatch: pytest.MonkeyPatch, path: str
+    def test_master_key_with_multipart_batch_upload_is_forwarded_byte_for_byte(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        response = self._post_wav(monkeypatch, path, "sk-master-key", body=b'{}{"model": "gpt-4o"}')
+        boundary: Final = "lit7939boundary"
+        multipart_body: Final = (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"definition\"\r\n\r\n".encode()
+            + json.dumps({"locales": ["en-US"]}).encode()
+            + f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"eagle.wav\"\r\n"
+            "Content-Type: audio/wav\r\n\r\n".encode()
+            + AZURE_SPEECH_NON_UTF8_WAV_BYTES
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_BATCH_ENDPOINT}").mock(
+                return_value=httpx.Response(201, json={"status": "NotStarted"})
+            )
+
+            response = self._post(
+                monkeypatch,
+                f"/azure_speech{AZURE_SPEECH_BATCH_ENDPOINT}",
+                "sk-master-key",
+                f"multipart/form-data; boundary={boundary}",
+                multipart_body,
+            )
+
+        assert (response.status_code, response.json()) == (201, {"status": "NotStarted"})
+        sent = route.calls.last.request
+        assert sent.content == multipart_body
+        assert sent.headers["content-type"] == f"multipart/form-data; boundary={boundary}"
+        assert sent.headers["ocp-apim-subscription-key"] == "server-subscription-key"
+
+    @pytest.mark.parametrize("content_type", ["audio/wav", "multipart/form-data; boundary=x"])
+    def test_wrong_litellm_key_with_multipart_batch_upload_is_rejected(
+        self, monkeypatch: pytest.MonkeyPatch, content_type: str
+    ) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(return_value=httpx.Response(200))
+
+            response = self._post(
+                monkeypatch, f"/azure_speech{AZURE_SPEECH_BATCH_ENDPOINT}", "sk-wrong", content_type, b"--x--\r\n"
+            )
+
+        assert response.status_code in (400, 401), response.text
+        assert not catch_all.called
+
+    def test_audio_content_type_off_the_azure_speech_route_is_still_parsed_as_json(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        response = self._post_wav(monkeypatch, "/v1/chat/completions", "sk-master-key", body=b'{}{"model": "gpt-4o"}')
 
         assert response.status_code == 400
         assert "Invalid JSON payload" in response.text
