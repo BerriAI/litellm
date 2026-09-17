@@ -15424,8 +15424,8 @@ async def test_team_info_reports_what_the_caller_may_edit(caller, org_admin, ena
     assert response["team_info"].caller_edit_access.model_dump(mode="json") == expected
 
 
-def test_build_member_budget_patch_maps_temp_budget_fields() -> None:
-    from litellm.proxy.management_endpoints.team_endpoints import _build_member_budget_patch
+def test_member_budget_patch_maps_temp_budget_fields() -> None:
+    from litellm.proxy.management_endpoints.common_utils import member_budget_patch
 
     expiry: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
     request: Final = TeamMemberUpdateRequest(
@@ -15434,7 +15434,7 @@ def test_build_member_budget_patch_maps_temp_budget_fields() -> None:
         temp_budget_increase=50.0,
         temp_budget_expiry=expiry,
     )
-    assert _build_member_budget_patch(request) == {
+    assert member_budget_patch(request) == {
         "temp_budget_increase": 50.0,
         "temp_budget_expiry": expiry,
     }
