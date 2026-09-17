@@ -22,10 +22,10 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
 
-def test_empty_tool_call_id_is_skipped():
+def test_empty_tool_call_id_is_synthesized():
     """
-    Test that tool messages with empty tool_call_id are skipped
-    when transforming function_call_output to chat completion messages.
+    Test that tool output with an empty tool_call_id is preserved as a tool message
+    instead of being silently dropped by the Responses -> Chat Completions bridge.
     """
     # Simulate a function_call_output with empty call_id (the bug scenario)
     tool_call_output_empty = {
@@ -34,15 +34,14 @@ def test_empty_tool_call_id_is_skipped():
         "output": '{"output":"test output","metadata":{"exit_code":0}}',
     }
 
-    # Transform should return empty list (skip the message)
     result = LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
         tool_call_output_empty
     )
 
-    assert (
-        result == []
-    ), "Tool messages with empty call_id should be skipped, not created"
-    print("[OK] Empty call_id messages are correctly skipped")
+    assert len(result) == 1
+    assert result[0]["role"] == "tool"
+    assert result[0]["tool_call_id"].startswith("call_synthetic_")
+    print("[OK] Empty call_id messages get a synthetic tool_call_id")
 
 
 def test_empty_tool_call_id_in_messages_list_is_removed():

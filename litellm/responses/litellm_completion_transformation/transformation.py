@@ -1558,10 +1558,10 @@ class LiteLLMCompletionResponsesConfig:
         ChatCompletionToolMessage is used to indicate the output from a tool call
         """
         call_id: Final = tool_call_output.get("call_id")
-        # If call_id is missing or empty, skip this message
-        # Empty call_id means we can't create a valid tool message
         if not call_id:
-            return []
+            # Some clients send tool output without the Responses correlation key.
+            # Preserve the result with a synthetic ID rather than dropping the turn.
+            call_id = f"call_synthetic_{uuid.uuid4().hex[:12]}"
 
         def _normalize_function_call_output_to_tool_content(
             output: object,
@@ -1640,9 +1640,7 @@ class LiteLLMCompletionResponsesConfig:
             tool_call_id=str(call_id),
         )
 
-        _tool_use_definition: Final = TOOL_CALLS_CACHE.get_cache(
-            key=tool_call_output.get("call_id") or "",
-        )
+        _tool_use_definition: Final = TOOL_CALLS_CACHE.get_cache(key=call_id)
         if _tool_use_definition:
             """
             Append the tool use definition to the list of messages
@@ -2025,7 +2023,7 @@ class LiteLLMCompletionResponsesConfig:
         if tool_type == "custom":
             converted: Final = convert_custom_tool_to_function_tool(tool)
             return ResponsesToolChatForm(chat_tools=() if converted is None else (converted,), web_search_options=None)
-        if tool_type in ("computer_use", "image_generation", "shell"):
+        if tool_type in ("computer_use", "image_generation", "shell", "tool_search", "local_shell"):
             verbose_logger.warning(
                 "Dropping Responses API tool of type '%s': it has no Chat Completions "
                 "equivalent and the target provider would reject the request.",
