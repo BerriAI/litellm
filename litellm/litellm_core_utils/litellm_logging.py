@@ -3027,6 +3027,18 @@ class Logging(LiteLLMLoggingBaseClass):
                     cost_for_built_in_tools_cost_usd_dollar=0.0,
                 )
 
+            if litellm.store_batch_line_items_in_callbacks:
+                from litellm.batches.batch_line_item_logging import log_batch_line_items
+
+                await log_batch_line_items(
+                    batch=result,
+                    custom_llm_provider=self.custom_llm_provider,
+                    parent=self,
+                    model_name=self.get_deployment_model_for_cost(),
+                    litellm_params=self.litellm_params,
+                    model_info=self.get_router_deployment_model_info(),
+                )
+
         self.truncated_messages_for_logging = await truncate_base64_in_messages_async(
             StandardLoggingPayloadSetup.append_system_prompt_messages(
                 kwargs=self.model_call_details, messages=self.model_call_details.get("messages")
@@ -6102,8 +6114,10 @@ def _extract_response_obj_and_hidden_params(
         response_obj = {}
 
     if original_exception is not None and hidden_params is None:
-        response_headers: Final = _get_response_headers(original_exception)
-        if response_headers is not None:
+        exception_hidden_params: Final = getattr(original_exception, "_hidden_params", None)
+        if isinstance(exception_hidden_params, dict) and exception_hidden_params:
+            hidden_params = dict(exception_hidden_params)  # mutable-ok: hidden_params downstream expects a plain dict
+        elif (response_headers := _get_response_headers(original_exception)) is not None:
             hidden_params = dict(
                 StandardLoggingHiddenParams(
                     additional_headers=StandardLoggingPayloadSetup.get_additional_headers(dict(response_headers)),

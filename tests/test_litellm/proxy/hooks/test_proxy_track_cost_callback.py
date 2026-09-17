@@ -2536,3 +2536,21 @@ async def test_async_post_call_failure_hook_persists_no_raw_model_on_an_unknown_
         == "/chat/completions: Invalid model name passed in. Call `/v1/models` to view available models for your key."
     )
     assert error_information["error_class"] == "ProxyModelNotFoundError"
+
+
+@pytest.mark.asyncio
+async def test_batch_line_item_event_never_updates_spend():  # test-quality-ok: the observable contract is exactly that the spend path is never invoked
+    logger: Final = _ProxyDBLogger()
+    kwargs: Final = {
+        "litellm_params": {"batch_parent_id": "batch_1", "metadata": {}},
+        "model": "gpt-4o",
+        "call_type": "acompletion",
+    }
+    with patch.object(logger, "_PROXY_track_cost_callback", new_callable=AsyncMock) as mock_track:  # test-quality-ok: asserts the callback's own method is skipped; the DB writer is never reached
+        await logger.async_log_success_event(
+            kwargs=kwargs,
+            response_obj=ModelResponse(),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+    mock_track.assert_not_awaited()

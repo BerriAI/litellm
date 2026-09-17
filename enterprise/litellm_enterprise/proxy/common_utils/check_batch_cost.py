@@ -856,6 +856,7 @@ class CheckBatchCost:
                     }
                 },
                 **({"api_base": mask_api_base_credentials(deployment_api_base)} if deployment_api_base else {}),
+                "_litellm_internal_model_credentials": MappingProxyType({**credentials}),
                 "metadata": {
                     **(await self._build_creator_attribution_metadata(job, batch_id)),
                     # spend logs read the deployment identity off these metadata keys, so
