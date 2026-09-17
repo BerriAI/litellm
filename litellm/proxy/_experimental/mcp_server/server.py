@@ -3826,14 +3826,18 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_clients_from_general_settings(general_settings)
 
+    def _routing_peek_limit(allowed_clients: frozenset[str] | None) -> int | None:
+        return _MCP_ROUTING_PEEK_MAX_BYTES if allowed_clients is None else None
+
     async def _reject_initialize_from_disallowed_client(
         scope: Scope,
         receive: Receive,
         send: Send,
         body: bytes,
         client_ip: str | None,
+        allowed_clients: frozenset[str] | None,
     ) -> bool:
-        rejection: Final = check_mcp_client_allowed(body, _load_allowed_mcp_clients())
+        rejection: Final = check_mcp_client_allowed(body, allowed_clients)
         if rejection is None:
             return False
         verbose_logger.warning(
@@ -3860,19 +3864,24 @@ if MCP_AVAILABLE:
 
     async def _read_request_body_for_routing(
         receive: Receive,
+        peek_max_bytes: int | None = _MCP_ROUTING_PEEK_MAX_BYTES,
     ) -> tuple[list[Message], bytes]:
         """
         Read just enough of the request body to decide whether this is a
         JSON-RPC ``initialize`` call. Returns the consumed ASGI messages so
         the caller can replay them faithfully to the downstream handler, and
-        the peeked body bytes (capped at ``_MCP_ROUTING_PEEK_MAX_BYTES``).
+        the peeked body bytes (capped at ``peek_max_bytes``).
 
         Stops reading from the wire as soon as either (a) we have peeked
-        ``_MCP_ROUTING_PEEK_MAX_BYTES`` of body, or (b) the body is complete.
+        ``peek_max_bytes`` of body, or (b) the body is complete.
         The remainder of an oversized body is streamed lazily through
         ``wrapped_receive`` in the caller — so an authenticated client cannot
         force the proxy to buffer an arbitrarily large payload just to make a
         routing decision.
+
+        ``peek_max_bytes=None`` reads the whole body. The client allowlist
+        needs that: a truncated initialize body parses as non-initialize and
+        would otherwise skip the allowlist check entirely.
         """
         consumed_messages: Final[list[Message]] = []
         body_chunks: Final[list[bytes]] = []
@@ -3893,7 +3902,7 @@ if MCP_AVAILABLE:
                 # handler via ``consumed_messages``, but ``body_chunks`` is
                 # purely for the JSON-RPC method check — there is no reason
                 # to copy a large body frame into a second buffer.
-                remaining = _MCP_ROUTING_PEEK_MAX_BYTES - peeked_bytes
+                remaining = len(body) if peek_max_bytes is None else peek_max_bytes - peeked_bytes
                 if remaining > 0:
                     body_chunks.append(body[:remaining])
                     peeked_bytes += min(len(body), remaining)
@@ -3901,7 +3910,7 @@ if MCP_AVAILABLE:
             if not message.get("more_body", False):
                 break
 
-            if peeked_bytes >= _MCP_ROUTING_PEEK_MAX_BYTES:
+            if peek_max_bytes is not None and peeked_bytes >= peek_max_bytes:
                 # Stop draining; downstream replay will pull remaining chunks
                 # directly from the original `receive` via wrapped_receive.
                 break
@@ -4556,10 +4565,13 @@ if MCP_AVAILABLE:
 
             body = b""
             if scope.get("method") == "POST":
-                consumed_messages, body = await _read_request_body_for_routing(receive)
+                allowed_clients: Final = _load_allowed_mcp_clients()
+                consumed_messages, body = await _read_request_body_for_routing(
+                    receive, _routing_peek_limit(allowed_clients)
+                )
                 is_initialize = _is_initialize_request(body)
                 if is_initialize and await _reject_initialize_from_disallowed_client(
-                    scope, receive, send, body, _client_ip
+                    scope, receive, send, body, _client_ip, allowed_clients
                 ):
                     return
 
@@ -4830,11 +4842,14 @@ if MCP_AVAILABLE:
                 await initialize_session_managers()
                 await asyncio.sleep(0.1)
 
+            sse_allowed_clients: Final = _load_allowed_mcp_clients()
             sse_consumed_messages, sse_body = (
-                await _read_request_body_for_routing(receive) if scope.get("method") == "POST" else ((), b"")
+                await _read_request_body_for_routing(receive, _routing_peek_limit(sse_allowed_clients))
+                if scope.get("method") == "POST"
+                else ((), b"")
             )
             if _is_initialize_request(sse_body) and await _reject_initialize_from_disallowed_client(
-                scope, receive, send, sse_body, _sse_client_ip
+                scope, receive, send, sse_body, _sse_client_ip, sse_allowed_clients
             ):
                 return
             sse_receive: Final = (

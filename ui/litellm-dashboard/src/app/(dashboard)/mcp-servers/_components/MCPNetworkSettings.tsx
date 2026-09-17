@@ -29,13 +29,16 @@ function ipToSlash24(ip: string): string {
 
 const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((value, i) => value === b[i]);
 
+const unchangedSinceLoad = (value: string[], stored: string[] | null) =>
+  stored === null ? value.length === 0 : value.length > 0 && sameList(value, stored);
+
 const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [privateRanges, setPrivateRanges] = useState<string[]>([]);
   const [allowedClients, setAllowedClients] = useState<string[]>([]);
-  const [storedRanges, setStoredRanges] = useState<string[]>([]);
-  const [storedClients, setStoredClients] = useState<string[]>([]);
+  const [storedRanges, setStoredRanges] = useState<string[] | null>(null);
+  const [storedClients, setStoredClients] = useState<string[] | null>(null);
   const [currentIp, setCurrentIp] = useState<string | null>(null);
   const [rangeDraft, setRangeDraft] = useState("");
   const [clientDraft, setClientDraft] = useState("");
@@ -51,11 +54,11 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     try {
       const settings = await getGeneralSettingsCall(accessToken);
       for (const field of settings) {
-        if (field.field_name === "mcp_internal_ip_ranges" && field.field_value) {
+        if (field.field_name === "mcp_internal_ip_ranges" && Array.isArray(field.field_value)) {
           setPrivateRanges(field.field_value);
           setStoredRanges(field.field_value);
         }
-        if (field.field_name === "mcp_allowed_clients" && field.field_value) {
+        if (field.field_name === "mcp_allowed_clients" && Array.isArray(field.field_value)) {
           setAllowedClients(field.field_value);
           setStoredClients(field.field_value);
         }
@@ -78,15 +81,20 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   const persistList = async (
     token: string,
     fieldName: "mcp_internal_ip_ranges" | "mcp_allowed_clients",
-    { value, stored, setStored }: { value: string[]; stored: string[]; setStored: (value: string[]) => void },
+    {
+      value,
+      stored,
+      setStored,
+    }: { value: string[]; stored: string[] | null; setStored: (value: string[] | null) => void },
   ) => {
-    if (sameList(value, stored)) return;
+    if (unchangedSinceLoad(value, stored)) return;
     if (value.length > 0) {
       await updateConfigFieldSetting(token, fieldName, value);
-    } else {
-      await deleteConfigFieldSetting(token, fieldName);
+      setStored(value);
+      return;
     }
-    setStored(value);
+    await deleteConfigFieldSetting(token, fieldName);
+    setStored(null);
   };
 
   const handleSave = async () => {
@@ -155,6 +163,7 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   }
 
   const suggestedRange = currentIp ? ipToSlash24(currentIp) : null;
+  const storedAllowlistDeniesEveryone = storedClients !== null && storedClients.length === 0;
 
   return (
     <div className="space-y-6 p-4">
@@ -241,6 +250,12 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
         <div className="mb-2 flex items-center">
           <p className="text-sm font-medium">Allowed Client Names</p>
         </div>
+        {storedAllowlistDeniesEveryone && (
+          <p className="mb-2 text-sm text-destructive">
+            An empty allowlist is currently stored, so every client is denied. Save with the list empty to remove it and
+            allow every client again.
+          </p>
+        )}
         {allowedClients.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-1.5">
             {allowedClients.map((client) => (

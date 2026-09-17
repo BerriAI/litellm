@@ -176,6 +176,29 @@ describe("MCPNetworkSettings", () => {
     expect(updateConfigFieldSetting).not.toHaveBeenCalledWith("tok", "mcp_allowed_clients", expect.anything());
   });
 
+  it("warns that a stored empty allowlist denies every client and lets Save remove it", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([{ field_name: "mcp_allowed_clients", field_value: [] }]);
+
+    renderSettings();
+
+    expect(await screen.findByText(/An empty allowlist is currently stored, so every client is denied/)).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(deleteConfigFieldSetting).toHaveBeenCalledWith("tok", "mcp_allowed_clients"));
+    expect(updateConfigFieldSetting).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText(/An empty allowlist is currently stored/)).not.toBeInTheDocument());
+  });
+
+  it("does not show the deny-all warning when no allowlist is stored", async () => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([{ field_name: "mcp_allowed_clients", field_value: null }]);
+
+    renderSettings();
+
+    await screen.findByText("Allowed Client Applications");
+    expect(screen.queryByText(/every client is denied/)).not.toBeInTheDocument();
+  });
+
   it("keeps the private ranges and the allowed clients as independent settings on save", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
       { field_name: "mcp_internal_ip_ranges", field_value: ["10.0.0.0/8"] },
