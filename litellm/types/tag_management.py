@@ -12,6 +12,7 @@ class TagConfig(TagBase):
     created_at: str
     updated_at: str
     created_by: str | None = None
+    spend: float | None = None
 
 
 class TagNewRequest(TagBase):
@@ -36,6 +37,8 @@ class TagUpdateRequest(TagBase):
     rpm_limit: int | None = None
     model_max_budget: dict | None = None
     budget_duration: str | None = None
+    # Set to reset the tag's accumulated spend (e.g. 0 to clear it). None leaves it unchanged.
+    spend: float | None = None
 
 
 class TagDeleteRequest(BaseModel):
