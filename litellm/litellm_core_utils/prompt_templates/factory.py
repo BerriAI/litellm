@@ -5149,7 +5149,7 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
     return tool_block_list
 
 
-def _with_function_prompt(message: Any, function_prompt: str) -> Any:
+def _with_function_prompt(message: AllMessageValues, function_prompt: str) -> AllMessageValues:
     if "system" not in message["role"]:
         return message
     content: Final = message["content"]
