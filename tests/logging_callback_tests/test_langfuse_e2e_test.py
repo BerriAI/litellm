@@ -27,15 +27,16 @@ import pytest_asyncio
 LANGFUSE_EXPORT_POST: Final = "requests.Session.post"
 LANGFUSE_EXPORT_PATH: Final = "/api/public/otel/v1/traces"
 
-_LITELLM_OWNED_ATTRIBUTES: Final = frozenset(
+_PER_RUN_ATTRIBUTES: Final = frozenset(
     {
-        "langfuse.internal.is_app_root",
         "langfuse.observation.completion_start_time",
         "langfuse.observation.metadata.applied_guardrails",
         "langfuse.observation.metadata.cache_hit",
         "langfuse.observation.metadata.hidden_params",
+        "langfuse.observation.metadata.litellm_call_id",
         "langfuse.observation.metadata.litellm_response_cost",
         "langfuse.observation.metadata.requester_metadata",
+        "langfuse.observation.metadata.response_id",
         "langfuse.observation.metadata.usage_object",
     }
 )
@@ -87,8 +88,8 @@ def _comparable(span: Mapping[str, object]) -> dict[str, object]:
     assert isinstance(attributes, dict)
     return {
         "name": span["name"],
-        "parent_span_id": None if attributes.get("langfuse.internal.as_root") else span["parent_span_id"],
-        "attributes": {key: value for key, value in sorted(attributes.items()) if key not in _LITELLM_OWNED_ATTRIBUTES},
+        "parent_span_id": span["parent_span_id"],
+        "attributes": {key: value for key, value in sorted(attributes.items()) if key not in _PER_RUN_ATTRIBUTES},
     }
 
 

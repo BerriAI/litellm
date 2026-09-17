@@ -50,29 +50,22 @@ class TestLangfuseInMemoryCache:
             assert litellm.initialized_langfuse_clients == initial_count - 1
 
     @patch("litellm.initialized_langfuse_clients", 3)
-    def test_langfuse_client_shutdown_called_on_eviction(self):
-        """Test that langfuse client shutdown is called to close the thread."""
+    def test_evicted_logger_keeps_its_client_alive(self):
+        """The SDK keeps one resource bundle per public key, shared by every logger on that key.
 
-        # Create a mock LangFuseLogger class
-        class MockLangFuseLogger:
-            def __init__(self):
-                self.Langfuse = MagicMock()
-                self.Langfuse.flush = MagicMock()
-                self.Langfuse.shutdown = MagicMock()
+        Shutting it down on eviction would stop prompt fetches and the exit flush for the
+        loggers still using it, so eviction only releases the initialized-client slot.
+        """
+        from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
-        mock_logger = MockLangFuseLogger()
+        logger = LangFuseLogger.__new__(LangFuseLogger)
+        logger.Langfuse = MagicMock()
+        logger.Langfuse.get_prompt.return_value = "prompt-after-eviction"
+        self.cache.cache_dict["test_key"] = logger
+        self.cache.ttl_dict["test_key"] = time.time() + 100
 
-        # Patch the LangFuseLogger import to return our mock class
-        with patch(
-            "litellm.integrations.langfuse.langfuse.LangFuseLogger", MockLangFuseLogger
-        ):
-            # Add the mock logger to cache
-            self.cache.cache_dict["test_key"] = mock_logger
-            self.cache.ttl_dict["test_key"] = time.time() + 100
+        self.cache._remove_key("test_key")
 
-            # Remove the key (this should trigger cleanup)
-            self.cache._remove_key("test_key")
-
-            # Verify flush and shutdown were called
-            mock_logger.Langfuse.flush.assert_called_once()
-            mock_logger.Langfuse.shutdown.assert_called_once()
+        assert litellm.initialized_langfuse_clients == 2
+        assert logger.Langfuse.get_prompt("greeting") == "prompt-after-eviction"
+        logger.Langfuse.shutdown.assert_not_called()

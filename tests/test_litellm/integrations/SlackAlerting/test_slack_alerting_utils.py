@@ -31,32 +31,35 @@ async def test_langfuse_not_initialized_returns_none_early():
 
 
 @pytest.mark.asyncio
-async def test_langfuse_trace_url_uses_logger_host(monkeypatch):
-    from litellm.integrations.langfuse.langfuse import LangFuseLogger
+async def test_langfuse_trace_url_uses_the_request_host_without_building_a_logger(monkeypatch):
+    """Key-scoped callbacks point at their own Langfuse host; the alert link follows it.
 
+    The lookup must not construct a LangFuseLogger per alert, or an alert storm
+    exhausts the initialized-client ceiling and takes the callback down with it.
+    """
     monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
-    logger = LangFuseLogger(
-        langfuse_public_key="pk-slack-test",
-        langfuse_secret="sk-slack-test",
-        langfuse_host="http://127.0.0.1:1",
-    )
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
     logging_obj = MagicMock()
     logging_obj._get_trace_id.return_value = "abc123"
-    logging_obj._get_callback_object.return_value = logger
+    logging_obj.standard_callback_dynamic_params = {"langfuse_host": "http://127.0.0.1:1"}
 
     result = await _add_langfuse_trace_id_to_alert({"litellm_logging_obj": logging_obj})
 
     assert result == "http://127.0.0.1:1/trace/abc123"
+    assert litellm.initialized_langfuse_clients == 0
 
 
 @pytest.mark.asyncio
-async def test_langfuse_trace_url_skips_non_langfuse_callback(monkeypatch):
+async def test_langfuse_trace_url_falls_back_to_the_env_host(monkeypatch):
     monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    monkeypatch.setenv("LANGFUSE_HOST", "langfuse.internal:3000")
     logging_obj = MagicMock()
     logging_obj._get_trace_id.return_value = "abc123"
-    logging_obj._get_callback_object.return_value = object()
+    logging_obj.standard_callback_dynamic_params = {}
 
-    assert await _add_langfuse_trace_id_to_alert({"litellm_logging_obj": logging_obj}) is None
+    assert await _add_langfuse_trace_id_to_alert({"litellm_logging_obj": logging_obj}) == (
+        "http://langfuse.internal:3000/trace/abc123"
+    )
 
 
 @pytest.mark.asyncio
@@ -75,7 +78,7 @@ async def test_langfuse_trace_url_when_callback_registered_as_logger_instance(mo
     monkeypatch.setattr(litellm, "callbacks", [])
     logging_obj = MagicMock()
     logging_obj._get_trace_id.return_value = "trace-from-instance"
-    logging_obj._get_callback_object.return_value = logger
+    logging_obj.standard_callback_dynamic_params = {"langfuse_host": "http://127.0.0.1:1"}
 
     result = await _add_langfuse_trace_id_to_alert({"litellm_logging_obj": logging_obj})
 
@@ -84,16 +87,10 @@ async def test_langfuse_trace_url_when_callback_registered_as_logger_instance(mo
 
 @pytest.mark.asyncio
 async def test_langfuse_trace_url_absent_when_trace_id_never_arrives(monkeypatch):
-    from litellm.integrations.langfuse.langfuse import LangFuseLogger
-
     monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
     monkeypatch.setattr("litellm.integrations.SlackAlerting.utils.asyncio.sleep", AsyncMock())
     logging_obj = MagicMock()
     logging_obj._get_trace_id.return_value = None
-    logging_obj._get_callback_object.return_value = LangFuseLogger(
-        langfuse_public_key="pk-slack-none",
-        langfuse_secret="sk-slack-none",
-        langfuse_host="http://127.0.0.1:1",
-    )
+    logging_obj.standard_callback_dynamic_params = {"langfuse_host": "http://127.0.0.1:1"}
 
     assert await _add_langfuse_trace_id_to_alert({"litellm_logging_obj": logging_obj}) is None

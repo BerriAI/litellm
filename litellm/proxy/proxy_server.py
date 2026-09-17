@@ -1033,7 +1033,7 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
             from litellm.utils import langFuseLogger
 
             if langFuseLogger is not None:
-                langFuseLogger.Langfuse.flush()
+                langFuseLogger.flush()
         except Exception:
             # [DO NOT BLOCK shutdown events for this]
             pass

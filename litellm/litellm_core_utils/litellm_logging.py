@@ -3683,40 +3683,6 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return trace_id
 
-    def _get_callback_object(self, service_name: Literal["langfuse"]) -> Any | None:
-        """
-        Return dynamic callback object.
-
-        Meant to solve issue when doing key-based/team-based logging
-        """
-        global langFuseLogger
-
-        if service_name == "langfuse":
-            if langFuseLogger is None or (
-                (
-                    self.standard_callback_dynamic_params.get("langfuse_public_key") is not None
-                    and self.standard_callback_dynamic_params.get("langfuse_public_key") != langFuseLogger.public_key
-                )
-                or (
-                    self.standard_callback_dynamic_params.get("langfuse_public_key") is not None
-                    and self.standard_callback_dynamic_params.get("langfuse_public_key") != langFuseLogger.public_key
-                )
-                or (
-                    self.standard_callback_dynamic_params.get("langfuse_host") is not None
-                    and self.standard_callback_dynamic_params.get("langfuse_host") != langFuseLogger.langfuse_host
-                )
-            ):
-                return LangFuseLogger(
-                    langfuse_public_key=self.standard_callback_dynamic_params.get("langfuse_public_key"),
-                    langfuse_secret=self.standard_callback_dynamic_params.get("langfuse_secret")
-                    or self.standard_callback_dynamic_params.get("langfuse_secret_key"),
-                    langfuse_host=self.standard_callback_dynamic_params.get("langfuse_host"),
-                    allow_env_credentials=self.standard_callback_dynamic_params.get("langfuse_host") is None,
-                )
-            return langFuseLogger
-
-        return None
-
     def handle_sync_success_callbacks_for_async_calls(
         self,
         result: Any,

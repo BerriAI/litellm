@@ -1,10 +1,8 @@
 """
 This is a cache for LangfuseLoggers.
 
-Langfuse Python SDK initializes a thread for each client.
-
 This ensures we do
-1. Proper cleanup of Langfuse initialized clients.
+1. Release the initialized-client slot a LangfuseLogger holds when it expires.
 2. Re-use created langfuse clients.
 """
 
@@ -21,34 +19,17 @@ from ...caching import InMemoryCache
 
 class LangfuseInMemoryCache(InMemoryCache):
     """
-    Ensures we do proper cleanup of Langfuse initialized clients.
+    Releases the initialized-client slot of a LangfuseLogger when it expires.
 
-    Langfuse Python SDK initializes a thread for each client, we need to call Langfuse.shutdown() to properly cleanup.
-
-    This ensures we do proper cleanup of Langfuse initialized clients.
+    Export channels are shared per credential set and outlive the logger, so
+    nothing else needs tearing down (https://github.com/BerriAI/litellm/issues/11169).
     """
 
     def _remove_key(self, key: str) -> None:
-        """
-        Override _remove_key in InMemoryCache to ensure we do proper cleanup of Langfuse initialized clients.
-
-        LangfuseLoggers consume threads when initalized, this shuts them down when they are expired
-
-        Relevant Issue: https://github.com/BerriAI/litellm/issues/11169
-        """
         from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
         if isinstance(self.cache_dict[key], LangFuseLogger):
-            _created_langfuse_logger: Final[LangFuseLogger] = self.cache_dict[key]
-            #########################################################
-            # Clean up Langfuse initialized clients
-            #########################################################
-            from litellm.integrations.langfuse.langfuse_sdk import (
-                shutdown_langfuse_client,
-            )
-
             litellm.initialized_langfuse_clients -= 1
-            shutdown_langfuse_client(_created_langfuse_logger.Langfuse)
 
         # Loggers with a periodic flush task (e.g. NewRelicMetricsLogger) expose
         # stop() so eviction actually ends the task instead of leaking it.

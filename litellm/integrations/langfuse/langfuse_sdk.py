@@ -4,8 +4,7 @@ import os
 import re
 import threading
 from base64 import b64encode
-from collections.abc import Callable, Generator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,52 +13,49 @@ from importlib.metadata import version
 from itertools import chain
 from time import sleep
 from types import MappingProxyType
-from typing import Final
-from weakref import WeakKeyDictionary, WeakSet
+from typing import Final, Literal
 
+import httpx
 import opentelemetry.trace as otel_trace
-from langfuse import Langfuse, LangfuseGeneration, LangfuseSpan, propagate_attributes
-from langfuse._client.resource_manager import LangfuseResourceManager
+from langfuse import Langfuse, LangfuseOtelSpanAttributes
+from langfuse.api import LangfuseAPI
+from langfuse.model import BasePromptClient
 from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 from opentelemetry.sdk.trace.sampling import Decision, Sampler, SamplingResult
-from opentelemetry.trace import Link, SpanKind, TraceState
-from opentelemetry.util.types import Attributes
-from requests import RequestException
+from opentelemetry.trace import Link, NonRecordingSpan, Span, SpanContext, SpanKind, TraceFlags, Tracer, TraceState
+from opentelemetry.util.types import Attributes, AttributeValue
+from requests import PreparedRequest, RequestException, Response, Session
+from requests.adapters import HTTPAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 __all__ = (
-    "AS_ROOT_ATTRIBUTE",
-    "PUBLIC_ATTRIBUTE",
-    "RELEASE_ATTRIBUTE",
     "DiscardingSpanExporter",
+    "LangfuseObservation",
+    "LangfuseTracing",
     "RetryingSpanExporter",
     "TraceIdHashSampler",
-    "acquire_langfuse_client",
-    "build_isolated_tracer_provider",
+    "acquire_langfuse_tracing",
+    "build_langfuse_client",
+    "build_langfuse_tracing",
     "configured_sample_rate",
-    "evict_stale_langfuse_resources",
-    "lease_langfuse_client",
-    "open_trace_context",
-    "propagate_attributes",
-    "register_langfuse_client",
+    "observation_attributes",
     "resolve_observation_id",
     "resolve_trace_id",
-    "shutdown_langfuse_client",
     "start_child_span",
     "start_generation",
     "to_unix_nanos",
+    "trace_attributes",
 )
 
-AS_ROOT_ATTRIBUTE: Final = "langfuse.internal.as_root"
-PUBLIC_ATTRIBUTE: Final = "langfuse.trace.public"
-RELEASE_ATTRIBUTE: Final = "langfuse.release"
 _TRACE_ID_PATTERN: Final = re.compile(r"^(?=.*[1-9a-f])[0-9a-f]{32}$")
 _OBSERVATION_ID_PATTERN: Final = re.compile(r"^(?=.*[1-9a-f])[0-9a-f]{16}$")
+_TRACER_NAME: Final = "litellm.langfuse"
 
 
 def to_unix_nanos(value: datetime | float | None) -> int | None:
@@ -94,125 +90,268 @@ def resolve_observation_id(observation_id: object | None) -> str | None:
     return sha256(serialized.encode("utf-8")).digest()[:8].hex()
 
 
-def open_trace_context(
-    *,
-    client: Langfuse,
-    trace_id: str,
-    parent_observation_id: str | None,
-    existing_trace: bool = False,
-) -> tuple[Context, bool]:
-    """Build the OTel context that places new observations inside ``trace_id``.
+def _serialize(value: object) -> str | None:
+    return value if value is None or isinstance(value, str) else safe_dumps(value)
 
-    Returns the context plus whether the caller must claim trace root. Langfuse
-    fabricates a random parent span id when no real parent is supplied, so the
-    observation is a child of something that will never be exported; the public
-    SDK path compensates by marking the span as root and this path must do the
-    same.
 
-    ``existing_trace`` is the v2 ``existing_trace_id`` contract: the trace is
-    appended to, never rewritten. The server takes a root observation's name and
-    I/O as the trace's, so a continuation must not claim root; trace fields it
-    does want changed travel as explicit ``langfuse.trace.*`` attributes.
-    """
-    remote_parent: Final = client._create_remote_parent_span(  # pyright: ignore[reportPrivateUsage]  # no public equivalent in v4
-        trace_id=trace_id, parent_span_id=parent_observation_id
+def _string_or_none(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
+def _serialize_datetime(value: object) -> str | None:
+    """A datetime the way the SDK's ``EventSerializer`` sends one: a JSON string, naive values read as local time."""
+    if isinstance(value, datetime):
+        return safe_dumps(value.astimezone().isoformat())
+    return _serialize(value)
+
+
+def _strings(items: Iterable[object]) -> tuple[str, ...]:
+    return tuple(str(item) for item in items)
+
+
+def _string_sequence(value: object) -> Sequence[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return _strings(value) or None
+    return (str(value),)
+
+
+def _present(entries: Iterable[tuple[str, AttributeValue | None]]) -> Mapping[str, AttributeValue]:
+    return MappingProxyType({key: value for key, value in entries if value is not None})
+
+
+def _flattened_metadata(prefix: str, metadata: object) -> Mapping[str, AttributeValue]:
+    """Mirror the SDK's wire shape: one ``<prefix>.<key>`` attribute per key, or ``<prefix>`` for a non-dict."""
+    if metadata is None:
+        return _present(())
+    if not isinstance(metadata, Mapping):
+        return _present(((prefix, _serialize(metadata)),))
+    return _present(
+        (f"{prefix}.{key}", value if isinstance(value, (str, int)) else _serialize(value))
+        for key, value in metadata.items()
     )
-    return otel_trace.set_span_in_context(remote_parent), parent_observation_id is None and not existing_trace
 
 
-def start_generation(
+def trace_attributes(
     *,
-    client: Langfuse,
-    context: Context,
-    name: str,
-    start_time: datetime | float | None,
-    claim_trace_root: bool,
-    release: str | None = None,
+    name: object = None,
+    user_id: object = None,
+    session_id: object = None,
+    version: object = None,
+    release: object = None,
+    tags: object = None,
+    metadata: object = None,
     public: bool | None = None,
-    observation_id: str | None = None,
-    attributes: Mapping[str, object],
-) -> LangfuseGeneration:
-    """Create a generation whose start time is when the model call began.
+    input: object = None,
+    output: object = None,
+) -> Mapping[str, AttributeValue]:
+    """Trace-level fields ride on an observation's span as ``langfuse.trace.*`` style attributes in v4.
 
-    No public v4 API accepts a historical start time, so this drives the SDK's
-    own OTel tracer, which does. Langfuse documents this route for backdated
-    ingestion.
-
-    ``public`` is the v2 ``trace(public=...)`` flag; v4 reads it off the root
-    observation's ``langfuse.trace.public`` attribute instead.
-
-    ``observation_id`` is the v2 ``generation(id=...)`` argument. v4 derives the
-    observation id from the OTel span id, so it is honoured through the
-    isolated provider's id generator; a provider adopted from user code keeps
-    its own generator and the returned generation's ``id`` is the truth.
+    On the root observation they define the trace; on a continuation they update it, which is
+    how v2's ``trace(...)`` and ``update_trace_keys`` contracts map onto the OTLP ingestion.
     """
-    requested: Final = _requested_span_id.set(int(observation_id, 16) if observation_id is not None else None)
-    try:
-        otel_span: Final = client._otel_tracer.start_span(  # pyright: ignore[reportPrivateUsage]  # only route to a historical start time
-            name=name, context=context, start_time=to_unix_nanos(start_time)
-        )
-    finally:
-        _requested_span_id.reset(requested)
-    if claim_trace_root:
-        otel_span.set_attribute(AS_ROOT_ATTRIBUTE, True)
-    if public is not None:
-        otel_span.set_attribute(PUBLIC_ATTRIBUTE, public)
-    generation: Final = LangfuseGeneration(otel_span=otel_span, langfuse_client=client, **attributes)  # pyright: ignore[reportArgumentType]  # kwargs-ok: callback-built params, v2 accepted the same shapes
-    if release is not None:
-        # after the wrapper, which stamps the client-wide release and would otherwise
-        # overwrite the release this request asked for
-        otel_span.set_attribute(RELEASE_ATTRIBUTE, release)
-    return generation
+    scalar: Final[tuple[tuple[str, str | bool | None], ...]] = (
+        (LangfuseOtelSpanAttributes.TRACE_NAME, _string_or_none(name)),
+        (LangfuseOtelSpanAttributes.TRACE_USER_ID, _string_or_none(user_id)),
+        (LangfuseOtelSpanAttributes.TRACE_SESSION_ID, _string_or_none(session_id)),
+        (LangfuseOtelSpanAttributes.VERSION, _string_or_none(version)),
+        (LangfuseOtelSpanAttributes.RELEASE, _string_or_none(release)),
+        (LangfuseOtelSpanAttributes.TRACE_PUBLIC, public),
+        (LangfuseOtelSpanAttributes.TRACE_INPUT, _serialize(input)),
+        (LangfuseOtelSpanAttributes.TRACE_OUTPUT, _serialize(output)),
+    )
+    tags_entry: Final[tuple[str, Sequence[str] | None]] = (
+        LangfuseOtelSpanAttributes.TRACE_TAGS,
+        _string_sequence(tags),
+    )
+    return _present(
+        chain(scalar, (tags_entry,), _flattened_metadata(LangfuseOtelSpanAttributes.TRACE_METADATA, metadata).items())
+    )
 
 
-def start_child_span(
+def observation_attributes(
     *,
-    client: Langfuse,
-    parent: LangfuseGeneration,
-    name: str,
-    start_time: datetime | float | None,
-    attributes: Mapping[str, object],
-) -> LangfuseSpan:
-    """Create an observation under the generation, keeping its own time window.
+    observation_type: Literal["generation", "span"],
+    input: object = None,
+    output: object = None,
+    metadata: object = None,
+    level: object = None,
+    status_message: object = None,
+    version: object = None,
+    model: object = None,
+    model_parameters: object = None,
+    usage_details: object = None,
+    cost_details: object = None,
+    completion_start_time: object = None,
+    prompt: object = None,
+) -> Mapping[str, AttributeValue]:
+    """The observation's own fields, serialized the way the SDK's ``create_generation_attributes`` does.
 
-    The server derives the trace's name and I/O from every observation marked
-    root, last start time wins, so only the generation may claim root. Nesting
-    the rest under it keeps a post-call guardrail from rewriting the trace.
-
-    The trace's ``public`` flag is folded the same way, with a missing attribute
-    read as ``False``, so the child repeats the generation's value.
+    ``prompt`` links the generation to a managed prompt only when it is a real prompt client;
+    v2 dropped anything else, and a fallback prompt has no server-side version to link.
     """
-    parent_span: Final = parent._otel_span  # pyright: ignore[reportPrivateUsage]  # the wrapper exposes no public span handle
-    otel_span: Final = client._otel_tracer.start_span(  # pyright: ignore[reportPrivateUsage]  # only route to a historical start time
-        name=name,
-        context=otel_trace.set_span_in_context(parent_span),
-        start_time=to_unix_nanos(start_time),
+    linked_prompt: Final = prompt if isinstance(prompt, BasePromptClient) and not prompt.is_fallback else None
+    scalar: Final[tuple[tuple[str, str | int | None], ...]] = (
+        (LangfuseOtelSpanAttributes.OBSERVATION_TYPE, observation_type),
+        (LangfuseOtelSpanAttributes.OBSERVATION_LEVEL, _string_or_none(level)),
+        (LangfuseOtelSpanAttributes.OBSERVATION_STATUS_MESSAGE, _string_or_none(status_message)),
+        (LangfuseOtelSpanAttributes.VERSION, _string_or_none(version)),
+        (LangfuseOtelSpanAttributes.OBSERVATION_INPUT, _serialize(input)),
+        (LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT, _serialize(output)),
+        (LangfuseOtelSpanAttributes.OBSERVATION_MODEL, _string_or_none(model)),
+        (LangfuseOtelSpanAttributes.OBSERVATION_MODEL_PARAMETERS, _serialize(model_parameters)),
+        (LangfuseOtelSpanAttributes.OBSERVATION_USAGE_DETAILS, _serialize(usage_details)),
+        (LangfuseOtelSpanAttributes.OBSERVATION_COST_DETAILS, _serialize(cost_details)),
+        (LangfuseOtelSpanAttributes.OBSERVATION_COMPLETION_START_TIME, _serialize_datetime(completion_start_time)),
+        (LangfuseOtelSpanAttributes.OBSERVATION_PROMPT_NAME, linked_prompt.name if linked_prompt else None),
+        (LangfuseOtelSpanAttributes.OBSERVATION_PROMPT_VERSION, linked_prompt.version if linked_prompt else None),
     )
-    public: Final = (
-        parent_span.attributes.get(PUBLIC_ATTRIBUTE)
-        if isinstance(parent_span, ReadableSpan) and parent_span.attributes is not None
-        else None
+    return _present(
+        chain(scalar, _flattened_metadata(LangfuseOtelSpanAttributes.OBSERVATION_METADATA, metadata).items())
     )
-    if public is not None:
-        otel_span.set_attribute(PUBLIC_ATTRIBUTE, public)
-    return LangfuseSpan(otel_span=otel_span, langfuse_client=client, **attributes)  # pyright: ignore[reportArgumentType]  # kwargs-ok: callback-built params, v2 accepted the same shapes
 
 
-_ENVIRONMENT_ATTRIBUTE: Final = "langfuse.environment"
+@dataclass(frozen=True, slots=True)
+class LangfuseObservation:
+    """A Langfuse observation as the OTel span litellm exports for it."""
+
+    span: Span
+    public: bool | None
+
+    @property
+    def id(self) -> str:
+        return format(self.span.get_span_context().span_id, "016x")
+
+    @property
+    def trace_id(self) -> str:
+        return format(self.span.get_span_context().trace_id, "032x")
+
+    def end(self, end_time: datetime | float | None = None) -> None:
+        self.span.end(end_time=to_unix_nanos(end_time))
+
+
+_requested_trace_id: Final[ContextVar[int | None]] = ContextVar("litellm_langfuse_requested_trace_id", default=None)
 _requested_span_id: Final[ContextVar[int | None]] = ContextVar("litellm_langfuse_requested_span_id", default=None)
 
 
-class _RequestedSpanIdGenerator(RandomIdGenerator):
-    """Hand out the span id the calling context asked for, random otherwise."""
+class _RequestedIdGenerator(RandomIdGenerator):
+    """Hand out the ids the calling context asked for, random otherwise.
+
+    v2 took caller trace and generation ids as plain fields; OTel derives both from
+    the tracer's id generator, so the request rides on a context variable instead.
+    """
+
+    def generate_trace_id(self) -> int:
+        requested: Final = _requested_trace_id.get()
+        return super().generate_trace_id() if requested is None else requested
 
     def generate_span_id(self) -> int:
         requested: Final = _requested_span_id.get()
         return super().generate_span_id() if requested is None else requested
 
 
-# providers litellm itself constructed; a bundle adopted from user code may hold the
-# process-global provider, which litellm must never shut down.
-_litellm_built_providers: Final[WeakSet] = WeakSet()
+def _parent_context(*, trace_id: str, parent_observation_id: str | None, existing_trace: bool) -> Context:
+    """Where a new observation hangs: nowhere for a fresh trace, under a remote parent when continuing one.
+
+    ``existing_trace`` is the v2 ``existing_trace_id`` contract: the trace is appended to, never
+    rewritten. The server takes a root observation's name and I/O as the trace's, so a continuation
+    without a known parent hangs under a parent id that is never exported instead of claiming root.
+    An explicitly empty context also keeps the caller's own active span out of the picture.
+    """
+    if parent_observation_id is None and not existing_trace:
+        return Context()
+    parent_span_id: Final = (
+        int(parent_observation_id, 16) if parent_observation_id is not None else RandomIdGenerator().generate_span_id()
+    )
+    remote_parent: Final = NonRecordingSpan(
+        SpanContext(
+            trace_id=int(trace_id, 16),
+            span_id=parent_span_id,
+            is_remote=True,
+            trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        )
+    )
+    return otel_trace.set_span_in_context(remote_parent)
+
+
+def _start_span(
+    tracer: Tracer,
+    *,
+    name: str,
+    context: Context,
+    start_time: datetime | float | None,
+    trace_id: str | None,
+    observation_id: str | None,
+    attributes: Mapping[str, AttributeValue],
+) -> Span:
+    trace_token: Final = _requested_trace_id.set(int(trace_id, 16) if trace_id is not None else None)
+    span_token: Final = _requested_span_id.set(int(observation_id, 16) if observation_id is not None else None)
+    try:
+        return tracer.start_span(
+            name=name, context=context, start_time=to_unix_nanos(start_time), attributes=attributes
+        )
+    finally:
+        _requested_span_id.reset(span_token)
+        _requested_trace_id.reset(trace_token)
+
+
+def start_generation(
+    *,
+    tracing: LangfuseTracing,
+    trace_id: str,
+    parent_observation_id: str | None,
+    existing_trace: bool,
+    observation_id: str | None,
+    name: str,
+    start_time: datetime | float | None,
+    public: bool | None,
+    attributes: Mapping[str, AttributeValue],
+) -> LangfuseObservation:
+    """Create the generation for one model call, timed from when that call began.
+
+    ``trace_id``, ``parent_observation_id`` and ``observation_id`` are the v2 ``trace(id=...)``,
+    ``generation(parent_observation_id=...)`` and ``generation(id=...)`` arguments, already
+    normalized by ``resolve_trace_id`` and ``resolve_observation_id``.
+    """
+    span: Final = _start_span(
+        tracing.tracer,
+        name=name,
+        context=_parent_context(
+            trace_id=trace_id, parent_observation_id=parent_observation_id, existing_trace=existing_trace
+        ),
+        start_time=start_time,
+        trace_id=trace_id,
+        observation_id=observation_id,
+        attributes=attributes,
+    )
+    return LangfuseObservation(span=span, public=public)
+
+
+def start_child_span(
+    *,
+    tracing: LangfuseTracing,
+    parent: LangfuseObservation,
+    name: str,
+    start_time: datetime | float | None,
+    attributes: Mapping[str, AttributeValue],
+) -> LangfuseObservation:
+    """Create an observation under the generation, keeping its own time window.
+
+    The server folds the trace's ``public`` flag across every observation, with a missing
+    attribute read as ``False``, so the child repeats the generation's value.
+    """
+    public_entry: Final[tuple[str, bool | None]] = (LangfuseOtelSpanAttributes.TRACE_PUBLIC, parent.public)
+    span: Final = _start_span(
+        tracing.tracer,
+        name=name,
+        context=otel_trace.set_span_in_context(parent.span),
+        start_time=start_time,
+        trace_id=None,
+        observation_id=None,
+        attributes=_present(chain((public_entry,), attributes.items())),
+    )
+    return LangfuseObservation(span=span, public=parent.public)
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,44 +409,12 @@ def configured_sample_rate() -> float:
     return parsed
 
 
-def build_isolated_tracer_provider(
-    *, environment: str | None, release: str | None, sample_rate: float = 1.0
-) -> TracerProvider:
-    """Give the langfuse client a provider of its own instead of the process-wide one.
-
-    v4 is built on OpenTelemetry and otherwise either claims the global tracer
-    provider, which silently disables litellm's own exporters, or attaches its
-    processor to litellm's, which sends litellm spans to every langfuse project
-    and langfuse spans to every other litellm destination.
-
-    The resource is rebuilt here because langfuse only applies ``environment``
-    and ``release`` when it constructs the provider itself, and the sampler is
-    installed for the same reason: ``sample_rate`` is otherwise silently
-    ignored and every trace exports.
-    """
-    attributes: Final = MappingProxyType(
-        {
-            key: value
-            for key, value in ((_ENVIRONMENT_ATTRIBUTE, environment), (RELEASE_ATTRIBUTE, release))
-            if value is not None
-        }
-    )
-    provider: Final = TracerProvider(
-        resource=Resource.create(attributes),
-        sampler=TraceIdHashSampler(sample_rate) if sample_rate < 1 else None,
-        id_generator=_RequestedSpanIdGenerator(),
-    )
-    with _LIVE_CLIENTS_LOCK:
-        _litellm_built_providers.add(provider)
-    return provider
-
-
 class DiscardingSpanExporter(SpanExporter):
     """Accept and drop every span, for mock mode.
 
-    The mock intercepts the httpx client langfuse used to take, but v4 ships
-    observations through its own OTLP exporter, so without this the "no network
-    calls" contract silently sends real traces to the configured host.
+    The mock intercepts the httpx client the SDK uses for its API, but observations
+    travel over OTLP, so without this the "no network calls" contract silently sends
+    real traces to the configured host.
     """
 
     def export(self, spans: object) -> SpanExportResult:
@@ -352,227 +459,27 @@ class RetryingSpanExporter(SpanExporter):
         return self.exporter.force_flush(timeout_millis)
 
 
-_LIVE_CLIENTS_LOCK: Final = threading.Lock()
-# litellm clients still using each SDK resource bundle; the bundle is torn down with the last one.
-# Both sides are weak so a throwaway client (a health probe, an alerting lookup) that is simply
-# garbage-collected stops holding the bundle open rather than inflating a counter forever.
-_live_clients: Final[WeakKeyDictionary[LangfuseResourceManager, WeakSet]] = WeakKeyDictionary()
+class _UnverifiedTlsAdapter(HTTPAdapter):
+    """Honour ``ssl_verify=False``: the exporter passes ``verify`` per request, which outranks ``Session.verify``."""
+
+    def send(  # pyright: ignore[reportIncompatibleMethodOverride]  # the stub types verify as bool | str, the base accepts both
+        self,
+        request: PreparedRequest,
+        stream: bool = False,
+        timeout: float | tuple[float, float] | tuple[float, None] | None = None,
+        verify: bool | str = True,
+        cert: str | tuple[str, str] | None = None,
+        proxies: Mapping[str, str] | None = None,
+    ) -> Response:
+        return super().send(request, stream=stream, timeout=timeout, verify=False, cert=cert, proxies=proxies)
 
 
-class _LangfuseLifecycleState:
-    """How many callbacks are leasing one SDK resource bundle, and what eviction has queued behind them.
-
-    ``lock`` is never held across a teardown, which takes the SDK's own registry lock.
-    """
-
-    def __init__(self) -> None:
-        self.lock = threading.Lock()
-        self.active_leases = 0
-        self.teardown_in_progress = False
-        self.teardown_owner: int | None = None
-        self.pending_clients: set[Langfuse] = set()  # mutable-ok: eviction and callback threads queue into it
-        self.retired: WeakSet[Langfuse] = WeakSet()  # mutable-ok: eviction marks its clients here from its own thread
-
-    def open_lease(self, client: Langfuse) -> bool:
-        """Take a lease on ``client``; False when eviction already reached it, so a lease would guard a dead client."""
-        with self.lock:
-            if client in self.retired:
-                return False
-            self.active_leases += 1
-            return True
-
-    def claim_for_teardown(self, client: Langfuse) -> bool:
-        """Whether this thread owns ``client``'s teardown; a lease or another teardown in flight queues it instead."""
-        with self.lock:
-            self.retired.add(client)
-            if self.active_leases > 0 or self.teardown_in_progress:
-                self.pending_clients.add(client)
-                return False
-            self.teardown_in_progress = True
-            self.teardown_owner = threading.get_ident()
-            return True
-
-    def release_lease(self) -> tuple[Langfuse, ...]:
-        """Drop this lease and take ownership of the teardowns it was holding up, if it was the last one."""
-        with self.lock:
-            self.active_leases -= 1
-            if self.active_leases > 0 or self.teardown_in_progress or not self.pending_clients:
-                return ()
-            claimed: Final = tuple(self.pending_clients)
-            self.pending_clients.clear()
-            self.teardown_in_progress = True
-            self.teardown_owner = threading.get_ident()
-            return claimed
-
-    def next_teardown_batch(self) -> tuple[Langfuse, ...]:
-        """Whatever eviction queued while the last batch was draining, handing the ownership flag back when empty."""
-        with self.lock:
-            if self.active_leases == 0 and self.pending_clients:
-                claimed: Final = tuple(self.pending_clients)
-                self.pending_clients.clear()
-                return claimed
-            self.teardown_in_progress = False
-            self.teardown_owner = None
-            return ()
-
-    def requeue(self, clients: tuple[Langfuse, ...]) -> None:
-        with self.lock:
-            self.pending_clients.update(clients)
-
-    def end_teardown(self) -> None:
-        with self.lock:
-            if self.teardown_owner == threading.get_ident():
-                self.teardown_in_progress = False
-                self.teardown_owner = None
-
-
-_LIFECYCLE_STATES_LOCK: Final = threading.Lock()
-_LIFECYCLE_STATES: Final[WeakKeyDictionary[object, _LangfuseLifecycleState]] = WeakKeyDictionary()
-
-
-def _lifecycle_state(client: Langfuse) -> _LangfuseLifecycleState:
-    """One state per resource bundle, since teardown closes the provider every client on that bundle exports through."""
-    resources: Final = getattr(client, "_resources", None)
-    key: Final = client if resources is None else resources
-    with _LIFECYCLE_STATES_LOCK:
-        existing: Final = _LIFECYCLE_STATES.get(key)
-        if existing is not None:
-            return existing
-        created: Final = _LangfuseLifecycleState()
-        _LIFECYCLE_STATES[key] = created
-        return created
-
-
-@contextmanager
-def lease_langfuse_client(client: Langfuse, renew: Callable[[], Langfuse]) -> Generator[Langfuse]:
-    """Hold off cache eviction's teardown of ``client`` while the export inside is in flight.
-
-    Eviction reaches a client the cache handed a callback moments earlier, so closing the SDK client
-    and its tracer provider there drops the spans that callback is still writing. The lease protects
-    exactly the window it wraps: an eviction arriving inside it is deferred to the last lease exit.
-    Taking a lease never blocks. When eviction already claimed ``client`` between the cache lookup
-    and this call, the lease is taken on ``renew()``'s fresh client instead and that client is what
-    the caller must export through: the registry hands it the live bundle when one remains, where
-    it registers as a holder and the reference count degrades the queued teardown to a flush, or a
-    fresh bundle once the old one is gone.
-    """
-    leased, state = _open_lease(client, renew)
-    try:
-        yield leased
-    finally:
-        _run_teardowns(state, state.release_lease())
-
-
-def _open_lease(client: Langfuse, renew: Callable[[], Langfuse]) -> tuple[Langfuse, _LangfuseLifecycleState]:
-    """The first of ``client`` then ``renew()``'s clients that is not already retired, with its lease taken."""
-    return next(
-        (candidate, state)
-        for candidate in chain((client,), iter(renew, None))
-        if (state := _lifecycle_state(candidate)).open_lease(candidate)
-    )
-
-
-def _run_teardowns(state: _LangfuseLifecycleState, clients: tuple[Langfuse, ...]) -> None:
-    """Tear down ``clients``, then whatever eviction queued meanwhile, and hand the flag back.
-
-    A failing ordinary teardown is logged and skipped rather than raised: the thread here is usually a
-    request callback that merely held the last lease, and its request must not fail on eviction's behalf.
-    An interrupt requeues the unfinished batch for the next eviction or lease exit and propagates.
-    """
-    batch = clients  # rebind-ok: drains each batch queued while the previous one was being torn down
-    try:
-        from litellm._logging import verbose_logger
-
-        while batch:
-            for index, client in enumerate(batch):
-                try:
-                    _teardown_langfuse_client(client)
-                except Exception:  # noqa: BLE001  # SDK shutdown can raise anything; the request holding the lease must survive it
-                    verbose_logger.exception("Langfuse client teardown failed during cache eviction")
-                except BaseException:
-                    state.requeue(batch[index:])
-                    raise
-            batch = state.next_teardown_batch()
-    finally:
-        state.end_teardown()
-
-
-def _evict_if_stale_locked(
-    *,
-    public_key: object,
-    secret_key: object,
-    base_url: object,
-    mock_mode: bool | None = None,
-    sample_rate: float | None = None,
-) -> LangfuseResourceManager | None:
-    """Assumes ``LangfuseResourceManager._lock`` is held; returns the still-valid bundle, evicting a stale one."""
-    if not public_key:
-        return None
-    cached: Final = LangfuseResourceManager._instances.get(public_key)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-    if cached is None:
-        return None
-    same_exporter_kind: Final = mock_mode is None or (
-        isinstance(getattr(cached, "span_exporter", None), DiscardingSpanExporter) == mock_mode
-    )
-    same_sample_rate: Final = sample_rate is None or getattr(cached, "sample_rate", None) == sample_rate
-    if (
-        getattr(cached, "secret_key", None) == secret_key
-        and getattr(cached, "base_url", None) == base_url
-        and same_exporter_kind
-        and same_sample_rate
-    ):
-        return cached
-    LangfuseResourceManager._instances.pop(public_key, None)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-    return None
-
-
-def _retire_orphaned_providers() -> None:
-    """Shut down every provider litellm built whose bundle nothing uses any more.
-
-    A rotated-out bundle whose last client is simply garbage collected, which is how the
-    prompt-management LRU drops clients, never reaches ``shutdown_langfuse_client``, and the
-    provider's own atexit hook would keep its export thread alive for the rest of the process.
-
-    Holders are snapshotted last: a client is registered in the same registry-locked block
-    that builds its provider, so once the registry snapshot's lock has been acquired, the
-    client of any provider from the first snapshot is visible to the final one even when a
-    concurrent rotation already evicted its bundle again. Runs outside both locks because
-    provider shutdown flushes and joins the export thread.
-    """
-    with _LIVE_CLIENTS_LOCK:
-        candidates: Final = tuple(_litellm_built_providers)
-    with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-        registered: Final = tuple(
-            getattr(resources, "tracer_provider", None)
-            for resources in LangfuseResourceManager._instances.values()  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-        )
-    with _LIVE_CLIENTS_LOCK:
-        held: Final = tuple(
-            getattr(resources, "tracer_provider", None)
-            for resources, holders in _live_clients.items()
-            if len(holders) > 0
-        )
-    orphaned: Final = tuple(provider for provider in candidates if provider not in registered and provider not in held)
-    for provider in orphaned:
-        _litellm_built_providers.discard(provider)
-        provider.shutdown()
-
-
-def evict_stale_langfuse_resources(*, public_key: str | None, secret_key: str | None, base_url: str | None) -> None:
-    """Drop a cached client whose credentials no longer match the ones being requested."""
-    with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-        _evict_if_stale_locked(public_key=public_key, secret_key=secret_key, base_url=base_url)
-    _retire_orphaned_providers()
-
-
-def _build_span_exporter(*, public_key: object, secret_key: object, base_url: object) -> RetryingSpanExporter:
+def _build_span_exporter(*, public_key: str, secret_key: str, base_url: str) -> RetryingSpanExporter:
     """Build the OTLP export channel with litellm's TLS material and v2's retry behaviour.
 
     v2 ingested through the injected httpx client, which carried litellm's CA
-    bundle and client certificate; v4 ships every observation through its own
-    OTLP exporter, so a private-CA deployment would fail TLS on every export in
-    a background thread while ``auth_check`` (still on the httpx client) stays
-    green. Endpoint, headers and timeout mirror ``langfuse._client.span_processor``.
+    bundle and client certificate. Endpoint, headers and timeout mirror the SDK's
+    own span processor so the server treats the spans as v4 SDK traffic.
     """
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
@@ -584,150 +491,173 @@ def _build_span_exporter(*, public_key: object, secret_key: object, base_url: ob
     configured_certificate: Final = os.getenv("SSL_CERTIFICATE") or litellm.ssl_certificate
     client_certificate: Final = configured_certificate if isinstance(configured_certificate, str) else None
     export_path: Final = os.getenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH") or "/api/public/otel/v1/traces"
-    endpoint: Final = f"{str(base_url).rstrip('/')}/{export_path.lstrip('/')}"
+    endpoint: Final = f"{base_url.rstrip('/')}/{export_path.lstrip('/')}"
     encoded_auth: Final = b64encode(f"{public_key}:{secret_key}".encode()).decode("ascii")
+    session: Final = Session()
+    if ssl_verify is False:
+        session.mount("https://", _UnverifiedTlsAdapter())
     exporter: Final = OTLPSpanExporter(
+        session=session,
         endpoint=endpoint,
         headers={  # mutable-ok: the exporter copies these into its session headers
             "Authorization": "Basic " + encoded_auth,
             "x-langfuse-sdk-name": "python",
             "x-langfuse-sdk-version": version("langfuse"),
-            "x-langfuse-public-key": str(public_key),
+            "x-langfuse-public-key": public_key,
         },
         timeout=int(os.getenv("LANGFUSE_TIMEOUT", "5")),
         certificate_file=ca_bundle,
         client_certificate_file=client_certificate,
     )
-    if ssl_verify is False:
-        exporter._certificate_file = False  # pyright: ignore[reportPrivateUsage]  # the ctor coerces a False certificate_file back to True
     return RetryingSpanExporter(exporter)
 
 
-def acquire_langfuse_client(
+def _resource(*, environment: str | None, release: str | None) -> Resource:
+    return Resource.create(
+        _present(
+            (
+                (LangfuseOtelSpanAttributes.ENVIRONMENT, environment),
+                (LangfuseOtelSpanAttributes.RELEASE, release),
+            )
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class LangfuseTracing:
+    """litellm's own export channel to one Langfuse project: a provider, its tracer and the exporter behind them.
+
+    The channel is litellm's rather than the SDK's so that the process-global OTel provider stays
+    untouched, historical timestamps and caller ids are honoured, and no SDK internals are needed.
+    """
+
+    provider: TracerProvider
+    tracer: Tracer
+
+    def flush(self, timeout_millis: int = 30_000) -> bool:
+        return self.provider.force_flush(timeout_millis)
+
+
+@dataclass(frozen=True, slots=True)
+class _TracingKey:
+    public_key: str
+    secret_key: str
+    base_url: str
+    environment: str | None
+    release: str | None
+    sample_rate: float
+    flush_interval_millis: int
+    mock_mode: bool
+
+
+_TRACING_LOCK: Final = threading.Lock()
+_TRACING: Final[
+    dict[_TracingKey, LangfuseTracing]
+] = {}  # mutable-ok: process-wide channel cache, guarded by _TRACING_LOCK
+
+
+def acquire_langfuse_tracing(
+    *,
+    public_key: str,
+    secret_key: str,
+    base_url: str,
+    environment: str | None,
+    release: str | None,
+    flush_interval: float,
+    mock_mode: bool,
+) -> LangfuseTracing:
+    """One export channel per credential set, shared by every logger built for it.
+
+    Channels live for the process: a provider owns a batch export thread, and tearing one down
+    while another logger for the same credentials still exports through it would drop its spans.
+    """
+    key: Final = _TracingKey(
+        public_key=public_key,
+        secret_key=secret_key,
+        base_url=base_url,
+        environment=environment,
+        release=release,
+        sample_rate=configured_sample_rate(),
+        flush_interval_millis=int(flush_interval * 1000),
+        mock_mode=mock_mode,
+    )
+    with _TRACING_LOCK:
+        cached: Final = _TRACING.get(key)
+        if cached is not None:
+            return cached
+        created: Final = build_langfuse_tracing(
+            exporter=DiscardingSpanExporter()
+            if mock_mode
+            else _build_span_exporter(public_key=public_key, secret_key=secret_key, base_url=base_url),
+            environment=environment,
+            release=release,
+            sample_rate=key.sample_rate,
+            flush_interval_millis=key.flush_interval_millis,
+        )
+        _TRACING[key] = created
+        return created
+
+
+def build_langfuse_tracing(
+    *,
+    exporter: SpanExporter,
+    environment: str | None,
+    release: str | None,
+    sample_rate: float,
+    flush_interval_millis: int,
+) -> LangfuseTracing:
+    provider: Final = TracerProvider(
+        resource=_resource(environment=environment, release=release),
+        sampler=TraceIdHashSampler(sample_rate) if sample_rate < 1 else None,
+        id_generator=_RequestedIdGenerator(),
+    )
+    provider.add_span_processor(BatchSpanProcessor(exporter, schedule_delay_millis=flush_interval_millis))
+    return LangfuseTracing(provider=provider, tracer=provider.get_tracer(_TRACER_NAME))
+
+
+def build_langfuse_client(
     *,
     parameters: Mapping[str, object],
     environment: str | None,
     release: str | None,
     mock_mode: bool,
 ) -> Langfuse:
-    """Evict-check, construct, and register a client as one atomic step.
+    """The SDK client litellm keeps for prompt management and ``auth_check``.
 
-    The SDK registry lock is held across the whole sequence: released between
-    eviction and construction, two concurrent inits for the same public key
-    with different secrets can bind one tenant's logger to the other tenant's
-    exporter. The isolated provider is only built when the registry does not
-    already hold the key — a discarded ``TracerProvider`` stays pinned forever
-    by its atexit hook, so building one per health probe or alerting lookup
-    would leak a provider each time.
+    Observations never go through it, but the SDK still builds a tracer for it and, given no
+    provider, claims the process-global one, which disables litellm's other OTel exporters.
+    It gets a provider of its own instead. The SDK caches one resource bundle per public key,
+    so a user application constructing ``Langfuse`` for the same key afterwards shares this
+    bundle; the exporter it carries is litellm's so that application's spans still reach Langfuse.
+
+    That same cache keeps the first secret and host it saw for a public key, so the REST client
+    behind ``get_prompt`` and ``auth_check`` is rebuilt from the credentials actually supplied.
+    Without both keys the SDK disables the client, which has no REST client to rebuild.
     """
     public_key: Final = parameters.get("public_key")
-    span_exporter: Final = (
-        DiscardingSpanExporter()
-        if mock_mode
-        else _build_span_exporter(
-            public_key=public_key,
-            secret_key=parameters.get("secret_key"),
-            base_url=parameters.get("base_url"),
-        )
+    secret_key: Final = parameters.get("secret_key")
+    base_url: Final = str(parameters.get("base_url"))
+    httpx_client: Final = parameters.get("httpx_client")
+    credentialed: Final = isinstance(public_key, str) and isinstance(secret_key, str)
+    client: Final = Langfuse(
+        **parameters,  # pyright: ignore[reportArgumentType]  # kwargs-ok: dict mirrors the typed ctor, values resolved by the callers
+        tracer_provider=TracerProvider(
+            resource=_resource(environment=environment, release=release), shutdown_on_exit=False
+        ),
+        span_exporter=_build_span_exporter(public_key=str(public_key), secret_key=str(secret_key), base_url=base_url)
+        if credentialed and not mock_mode
+        else DiscardingSpanExporter(),
     )
-    sample_rate: Final = configured_sample_rate()
-    with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-        cached: Final = _evict_if_stale_locked(
-            public_key=public_key,
-            secret_key=parameters.get("secret_key"),
-            base_url=parameters.get("base_url"),
-            mock_mode=mock_mode,
-            sample_rate=sample_rate,
-        )
-        client: Final = Langfuse(
-            **parameters,  # pyright: ignore[reportArgumentType]  # kwargs-ok: dict mirrors the typed ctor, values resolved by the callers
-            sample_rate=sample_rate,
-            tracer_provider=None
-            if cached is not None
-            else build_isolated_tracer_provider(environment=environment, release=release, sample_rate=sample_rate),
-            span_exporter=span_exporter,
-        )
-        register_langfuse_client(client)
-    _retire_orphaned_providers()
+    if not isinstance(public_key, str) or not isinstance(secret_key, str):
+        return client
+    client.api = LangfuseAPI(
+        base_url=base_url,
+        username=public_key,
+        password=secret_key,
+        x_langfuse_sdk_name="python",
+        x_langfuse_sdk_version=version("langfuse"),
+        x_langfuse_public_key=public_key,
+        httpx_client=httpx_client if isinstance(httpx_client, httpx.Client) else None,
+        timeout=int(os.getenv("LANGFUSE_TIMEOUT", "5")),
+    )
     return client
-
-
-def register_langfuse_client(client: Langfuse) -> None:
-    """Track the client against the SDK resources it ended up with.
-
-    langfuse keys its resources on the public key alone, so a second client for
-    the same key (a per-key ``langfuse_environment`` override, a team whose
-    callback_vars repeat the global credentials) is handed the first client's
-    tracer provider and export thread rather than its own. Only the last live
-    client may shut those down; see ``shutdown_langfuse_client``.
-    """
-    resources: Final = getattr(client, "_resources", None)
-    if resources is None:
-        return
-    with _LIVE_CLIENTS_LOCK:
-        holders = _live_clients.get(resources)
-        if holders is None:
-            holders = WeakSet()
-            _live_clients[resources] = holders
-        holders.add(client)
-
-
-def _release_langfuse_resources(resources: LangfuseResourceManager, client: Langfuse) -> bool:
-    """Drop the client's claim; True when no other live client still uses ``resources``."""
-    with _LIVE_CLIENTS_LOCK:
-        holders: Final = _live_clients.get(resources)
-        if holders is None:
-            return True
-        holders.discard(client)
-        if len(holders) > 0:
-            return False
-        _live_clients.pop(resources, None)
-        return True
-
-
-def shutdown_langfuse_client(client: Langfuse) -> None:
-    """Release everything the client owns, which the SDK's own shutdown does not.
-
-    ``Langfuse.shutdown`` joins the score and media consumers but leaves the
-    tracer provider's export thread running and leaves the client in the
-    registry, so a later request for the same key gets a dead client back.
-
-    A callback holding a lease on the client's bundle postpones all of this to
-    the moment that lease ends, so eviction cannot close the provider out from
-    under an export the lease is wrapping. See ``lease_langfuse_client``.
-    """
-    state: Final = _lifecycle_state(client)
-    if not state.claim_for_teardown(client):
-        return
-    _run_teardowns(state, (client,))
-
-
-def _teardown_langfuse_client(client: Langfuse) -> None:
-    """The blocking teardown behind ``shutdown_langfuse_client``.
-
-    A client that shares its resources with another live client only flushes:
-    shutting the shared provider down here would silence the other client for
-    the rest of its life, as it did before the reference count existed.
-
-    The registry entry is removed before the blocking shutdown so a concurrent
-    construct builds a fresh bundle instead of adopting a dying one, and the
-    provider is only shut down when litellm built it: a bundle adopted from
-    user code may share the process-global provider.
-    """
-    resources: Final = getattr(client, "_resources", None)
-    client.flush()
-    if resources is None:
-        client.shutdown()
-        return
-    public_key: Final = getattr(resources, "public_key", None)
-    with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-        if not _release_langfuse_resources(resources, client):
-            return
-        if public_key is not None and LangfuseResourceManager._instances.get(public_key) is resources:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-            LangfuseResourceManager._instances.pop(public_key, None)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-    client.shutdown()
-    provider: Final = getattr(resources, "tracer_provider", None)
-    if provider is not None and provider in _litellm_built_providers:
-        _litellm_built_providers.discard(provider)
-        provider.shutdown()
-    _retire_orphaned_providers()

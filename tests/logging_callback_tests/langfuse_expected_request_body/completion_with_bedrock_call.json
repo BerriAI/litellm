@@ -2,7 +2,6 @@
     "name": "litellm-acompletion",
     "parent_span_id": null,
     "attributes": {
-        "langfuse.internal.as_root": true,
         "langfuse.observation.cost_details": {
             "total": 6e-05
         },

@@ -83,7 +83,7 @@ class TestLangfusePromptManagement:
             ),
             patch(
                 "litellm.integrations.langfuse.langfuse_sdk.Langfuse", mock_langfuse_class
-            ),  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
+            ),  # test-quality-ok: the ctor must be intercepted where build_langfuse_client resolves it; a real client spawns export threads
             patch(
                 "litellm.llms.custom_httpx.http_handler.get_ssl_configuration",
                 return_value=False,
@@ -127,7 +127,7 @@ def test_langfuse_client_init_resolves_deployment_environment(monkeypatch, env_v
     monkeypatch.setattr(_RecordingLangfuseForEnv, "last_environment", None)
     with patch(
         "litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuseForEnv
-    ):  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
+    ):  # test-quality-ok: the ctor must be intercepted where build_langfuse_client resolves it; a real client spawns export threads
         langfuse_client_init.cache_clear()
         langfuse_client_init()
     langfuse_client_init.cache_clear()
@@ -145,7 +145,7 @@ def test_langfuse_client_init_warns_that_upstream_langfuse_is_ignored(monkeypatc
     with (
         patch(
             "litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuseForEnv
-        ),  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
+        ),  # test-quality-ok: the ctor must be intercepted where build_langfuse_client resolves it; a real client spawns export threads
         caplog.at_level("WARNING", logger="LiteLLM"),
     ):
         langfuse_client_init.cache_clear()
@@ -158,20 +158,13 @@ def test_langfuse_client_init_mock_mode_makes_no_network_calls(monkeypatch):
     """LANGFUSE_MOCK promises full execution without egress.
 
     The registry maps the "langfuse" callback to LangfusePromptManagement, so
-    this client is the one the standard proxy path emits observations through;
-    v4 ships them over its own OTLP exporter, which the httpx mock cannot see.
+    this logger is the one the standard proxy path emits observations through;
+    they travel over litellm's own OTLP exporter, which the httpx mock cannot see.
     """
     import threading
-    import time
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
-    from langfuse._client.resource_manager import LangfuseResourceManager
-
-    from litellm.integrations.langfuse.langfuse_sdk import (
-        open_trace_context,
-        start_generation,
-        to_unix_nanos,
-    )
+    import litellm
 
     received = []
 
@@ -192,35 +185,34 @@ def test_langfuse_client_init_mock_mode_makes_no_network_calls(monkeypatch):
     monkeypatch.setenv("LANGFUSE_HOST", f"http://127.0.0.1:{server.server_port}")
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-pm-mock-egress")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-pm-mock-egress")
-    LangfuseResourceManager._instances.pop("pk-pm-mock-egress", None)
     langfuse_client_init.cache_clear()
+    now: Final = datetime.now(timezone.utc)
 
     try:
-        client = langfuse_client_init()
-        context, claim_root = open_trace_context(client=client, trace_id="a" * 32, parent_observation_id=None)
-        now = datetime.now(timezone.utc)
-        start_generation(
-            client=client,
-            context=context,
-            name="pm-mock-gen",
+        logger = LangfusePromptManagement()
+        logged = logger.log_event_on_langfuse(
+            kwargs={
+                "litellm_call_id": "call-pm-mock-egress",
+                "call_type": "completion",
+                "litellm_params": {"metadata": {"trace_id": "a" * 32}},
+                "messages": [{"role": "user", "content": "hi"}],
+                "optional_params": {},
+            },
+            response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}]),
             start_time=now,
-            claim_trace_root=claim_root,
-            attributes={},
-        ).end(end_time=to_unix_nanos(now))
-        client.flush()
-        time.sleep(1)
+            end_time=now,
+        )
+        logger.flush()
     finally:
         server.shutdown()
         langfuse_client_init.cache_clear()
-        LangfuseResourceManager._instances.pop("pk-pm-mock-egress", None)
 
+    assert logged["trace_id"] == "a" * 32
     assert received == [], f"LANGFUSE_MOCK still sent spans to the configured host: {received}"
 
 
 @pytest.mark.asyncio
 async def test_async_log_failure_event_records_trace_id_for_alerting(monkeypatch):
-    from langfuse._client.resource_manager import LangfuseResourceManager
-
     from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
     from litellm.litellm_core_utils.specialty_caches.service_trace_id_cache import in_memory_trace_id_cache
 
@@ -228,7 +220,6 @@ async def test_async_log_failure_event_records_trace_id_for_alerting(monkeypatch
     monkeypatch.setenv("LANGFUSE_HOST", "http://127.0.0.1:1")
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-pm-trace-cache")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-pm-trace-cache")
-    LangfuseResourceManager._instances.pop("pk-pm-trace-cache", None)
     langfuse_client_init.cache_clear()
     call_id: Final = "call-trace-cache-1"
     now: Final = datetime.now(timezone.utc)
@@ -248,7 +239,6 @@ async def test_async_log_failure_event_records_trace_id_for_alerting(monkeypatch
         )
     finally:
         langfuse_client_init.cache_clear()
-        LangfuseResourceManager._instances.pop("pk-pm-trace-cache", None)
 
     assert in_memory_trace_id_cache.get_cache(litellm_call_id=call_id, service_name="langfuse") == resolve_trace_id(
         "alert-trace-1"

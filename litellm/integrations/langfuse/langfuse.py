@@ -3,7 +3,7 @@
 import os
 import re
 import traceback
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from functools import lru_cache
 from importlib.metadata import version
@@ -45,13 +45,15 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from langfuse import Langfuse, LangfuseGeneration
+    from langfuse import Langfuse
 
+    from litellm.integrations.langfuse.langfuse_sdk import LangfuseObservation, LangfuseTracing
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 else:
     DynamicLoggingCache = Any
     Langfuse = Any
-    LangfuseGeneration = Any
+    LangfuseObservation = Any
+    LangfuseTracing = Any
 
 
 _DENIED_STEERING_KEYS: Final = frozenset({"headers", "endpoint", "caching_groups", "previous_models"})
@@ -190,8 +192,8 @@ def raise_if_unsupported_langfuse_version(installed_version: str) -> None:
     """Fail at logger construction rather than dropping every event at request time.
 
     v4 moved the callback onto OpenTelemetry, so on an older SDK the import of
-    `propagate_attributes` raises inside the per-request handler and the broad
-    except there turns it into silent total data loss.
+    `LangfuseOtelSpanAttributes` raises inside the per-request handler and the
+    broad except there turns it into silent total data loss.
     """
     installed: Final = Version(installed_version)
     # compare majors, not versions: "5.0.0rc1" sorts below "5" but is just as unsupported
@@ -205,52 +207,6 @@ def raise_if_unsupported_langfuse_version(installed_version: str) -> None:
     )
 
 
-_PROPAGATED_TRACE_KEYS: Final = MappingProxyType(
-    {"name": "trace_name", "user_id": "user_id", "session_id": "session_id", "version": "version", "tags": "tags"}
-)
-_GENERATION_ONLY_KEYS: Final = frozenset(
-    {"id", "start_time", "end_time", "parent_observation_id", "usage", "name", "version"}
-)
-
-
-_PROPAGATED_VALUE_MAX_CHARS: Final = 200
-
-
-def _coerce_propagated_value(value: object) -> str | Sequence[str]:
-    """v4 silently drops non-string or >200-char propagated values; v2's pydantic coerced them."""
-    if isinstance(value, (list, tuple)):
-        return [str(item)[:_PROPAGATED_VALUE_MAX_CHARS] for item in value]
-    return str(value)[:_PROPAGATED_VALUE_MAX_CHARS]
-
-
-def _propagated_trace_metadata(value: object) -> Mapping[str, str] | None:
-    """v2's ``trace(metadata=...)`` took any JSON; v4 propagates one flat string per key."""
-    entries: Final = _object_mapping(value)
-    if not entries:
-        return None
-    return MappingProxyType({str(key): str(item)[:_PROPAGATED_VALUE_MAX_CHARS] for key, item in entries.items()})
-
-
-def _trace_attributes_for_propagation(trace_params: Mapping[str, object]) -> Mapping[str, object]:
-    """Trace-level fields in v4 are propagated onto the observations, not set on a trace object.
-
-    Values are coerced and capped up front: the SDK drops offenders with only a
-    warning, and a dropped ``version`` would vanish from the generation too,
-    because ``_generation_attributes`` already stripped it as propagated.
-    """
-    trace_metadata: Final = _propagated_trace_metadata(trace_params.get("metadata"))
-    return MappingProxyType(
-        {
-            **{
-                propagated: _coerce_propagated_value(trace_params[key])
-                for key, propagated in _PROPAGATED_TRACE_KEYS.items()
-                if trace_params.get(key) is not None
-            },
-            **({"metadata": trace_metadata} if trace_metadata is not None else {}),
-        }
-    )
-
-
 def _optional_str(value: object) -> str | None:
     """v4 sets attribute values raw; a non-string version would be dropped by the server."""
     return str(value) if value is not None else None
@@ -261,28 +217,6 @@ def _trace_public_flag(value: object) -> bool | None:
     if value is None:
         return None
     return _as_steering_flag(value)
-
-
-def _generation_attributes(
-    generation_params: Mapping[str, object], *, propagated: Mapping[str, object]
-) -> Mapping[str, object]:
-    """Drop what the v4 wrapper cannot take: ids it generates, and timings set on the span itself.
-
-    ``usage`` is the v2 shape that v4 replaced with ``usage_details``, which the
-    caller already builds alongside it.
-
-    v4 has one ``version`` for a trace and its observations, so the trace's
-    propagated value covers the generation; a continued trace propagates none
-    and the generation keeps its own, as it did in v2.
-    """
-    keep_version: Final = "version" not in propagated and generation_params.get("version") is not None
-    return MappingProxyType(
-        {
-            key: value
-            for key, value in generation_params.items()
-            if key not in _GENERATION_ONLY_KEYS or (key == "version" and keep_version)
-        }
-    )
 
 
 def resolve_langfuse_credentials(
@@ -299,11 +233,15 @@ def resolve_langfuse_credentials(
         secret_key = langfuse_secret or langfuse_secret_key or os.getenv("LANGFUSE_SECRET_KEY")
         public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
 
-    resolved_host: Final = (
+    return public_key, secret_key, resolve_langfuse_host(langfuse_host)
+
+
+def resolve_langfuse_host(langfuse_host: object = None) -> str:
+    """The Langfuse base URL for ``langfuse_host`` with the env fallbacks, always carrying a scheme."""
+    resolved: Final = str(
         langfuse_host or os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "https://cloud.langfuse.com"
     )
-
-    return public_key, secret_key, resolved_host
+    return resolved if resolved.startswith(("http://", "https://")) else f"http://{resolved}"
 
 
 def warn_if_upstream_langfuse_configured() -> None:
@@ -356,9 +294,6 @@ class LangFuseLogger:
             langfuse_host=langfuse_host,
             allow_env_credentials=allow_env_credentials,
         )
-        if not (self.langfuse_host.startswith("http://") or self.langfuse_host.startswith("https://")):
-            # add http:// if unset, assume communicating over private network - e.g. render
-            self.langfuse_host = "http://" + self.langfuse_host
         _env_override: Final = str(langfuse_environment).strip() if langfuse_environment is not None else None
         if _env_override:
             validate_langfuse_environment_value(_env_override)
@@ -388,6 +323,17 @@ class LangFuseLogger:
             "environment": self.langfuse_environment,
         }
         self.Langfuse: Langfuse = self.safe_init_langfuse_client(self.langfuse_client_parameters)
+        from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_tracing
+
+        self.tracing: LangfuseTracing = acquire_langfuse_tracing(
+            public_key=str(self.public_key),
+            secret_key=str(self.secret_key),
+            base_url=self.langfuse_host,
+            environment=self.langfuse_environment,
+            release=self.langfuse_release,
+            flush_interval=self.langfuse_flush_interval,
+            mock_mode=self.is_mock_mode,
+        )
 
         # set the current langfuse project id in the environ
         # this is used by Alerting to link to the correct project
@@ -421,11 +367,11 @@ class LangFuseLogger:
             raise Exception(
                 f"Max langfuse clients reached: {litellm.initialized_langfuse_clients} is greater than {MAX_LANGFUSE_INITIALIZED_CLIENTS}"
             )
-        from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_client
+        from litellm.integrations.langfuse.langfuse_sdk import build_langfuse_client
 
         environment_param: Final = cast(str | None, parameters.get("environment"))  # cast-ok: untyped dict
         release_param: Final = cast(str | None, parameters.get("release"))  # cast-ok: untyped dict
-        langfuse_client: Final = acquire_langfuse_client(
+        langfuse_client: Final = build_langfuse_client(
             parameters=parameters,
             environment=environment_param,
             release=release_param,
@@ -435,20 +381,10 @@ class LangFuseLogger:
         verbose_logger.debug("Created langfuse client number %s", litellm.initialized_langfuse_clients)
         return langfuse_client
 
-    def _renew_langfuse_client(self) -> Langfuse:
-        """Replace a client the cache evicted after handing this logger to the callback.
-
-        Bypasses the initialized-client ceiling: eviction already released this logger's slot, and the
-        replacement is never evicted itself, so its provider is retired with the logger instead.
-        """
-        from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_client
-
-        return acquire_langfuse_client(
-            parameters=self.langfuse_client_parameters,
-            environment=self.langfuse_environment,
-            release=self.langfuse_release,
-            mock_mode=self.is_mock_mode,
-        )
+    def flush(self) -> None:
+        """Push every queued observation to Langfuse before the process goes away."""
+        self.tracing.flush()
+        self.Langfuse.flush()
 
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict[str, object]:
@@ -544,24 +480,20 @@ class LangFuseLogger:
                 status_message=status_message,
             )
             verbose_logger.debug("OUTPUT IN LANGFUSE: %s; original: %s", output, response_obj)
-            from litellm.integrations.langfuse.langfuse_sdk import lease_langfuse_client
-
-            with lease_langfuse_client(self.Langfuse, self._renew_langfuse_client) as leased:
-                self.Langfuse = leased
-                trace_id, generation_id = self._log_langfuse_v2(
-                    user_id=user_id,
-                    metadata=metadata,
-                    litellm_params=litellm_params,
-                    output=output,
-                    start_time=start_time,
-                    end_time=end_time,
-                    kwargs=kwargs,
-                    optional_params=optional_params,
-                    input=input,
-                    response_obj=response_obj,
-                    level=level,
-                    litellm_call_id=litellm_call_id,
-                )
+            trace_id, generation_id = self._log_langfuse_v2(
+                user_id=user_id,
+                metadata=metadata,
+                litellm_params=litellm_params,
+                output=output,
+                start_time=start_time,
+                end_time=end_time,
+                kwargs=kwargs,
+                optional_params=optional_params,
+                input=input,
+                response_obj=response_obj,
+                level=level,
+                litellm_call_id=litellm_call_id,
+            )
             verbose_logger.debug("Langfuse Layer Logging - final response object: %s", response_obj)
             verbose_logger.info("Langfuse Layer Logging - logging success")
 
@@ -939,7 +871,7 @@ class LangFuseLogger:
                 if usage is not None and isinstance(cost, (int, float))
                 else None,
                 "metadata": {  # mutable-ok: langfuse serializes this payload, a proxy is not json-encodable
-                    **(trace_params.get("metadata") or {}),
+                    **(_object_mapping(trace_params.get("metadata")) or _NO_METADATA),
                     **log_requester_metadata(redact_user_api_key_info(metadata=allowlisted_metadata)),  # pyright: ignore[reportArgumentType]  # TypedDict in, plain metadata dict out
                     **enrichments,
                     **_lookup_ids(litellm_call_id, response_obj),
@@ -961,57 +893,66 @@ class LangFuseLogger:
             if masked_output is not None and isinstance(masked_output, str) and level == "ERROR":
                 generation_params["status_message"] = masked_output
 
-            generation_params["completion_start_time"] = kwargs.get("completion_start_time", None)
-
             # langfuse ships in the proxy-runtime extra, so this module must import cleanly without it
             from litellm.integrations.langfuse.langfuse_sdk import (
-                open_trace_context,
-                propagate_attributes,
+                observation_attributes,
                 resolve_observation_id,
                 resolve_trace_id,
                 start_generation,
-                to_unix_nanos,
+                trace_attributes,
             )
 
             resolved_trace_id: Final = resolve_trace_id(call_trace_id)  # pyright: ignore[reportArgumentType]  # metadata value, str or None at runtime
-
-            propagated_trace_attributes: Final = _trace_attributes_for_propagation(trace_params)
-            with propagate_attributes(**propagated_trace_attributes):  # pyright: ignore[reportArgumentType]  # kwargs-ok: keys fixed by _PROPAGATED_TRACE_KEYS, values are the SDK's own trace fields
-                trace_context, claim_trace_root = open_trace_context(
-                    client=self.Langfuse,
-                    trace_id=resolved_trace_id,
-                    parent_observation_id=resolve_observation_id(parent_observation_id),  # pyright: ignore[reportArgumentType]  # metadata value, str or None at runtime
-                    existing_trace=existing_trace_id is not None,
-                )
-                generation: Final = start_generation(
-                    client=self.Langfuse,
-                    context=trace_context,
-                    name=generation_params["name"],  # pyright: ignore[reportArgumentType]  # always the str set a few lines up
-                    start_time=start_time,
-                    claim_trace_root=claim_trace_root,
-                    release=trace_params.get("release"),
-                    public=_trace_public_flag(trace_params.get("public")),
-                    observation_id=resolve_observation_id(generation_params["id"]),
-                    attributes=_generation_attributes(generation_params, propagated=propagated_trace_attributes),
-                )
-                if existing_trace_id is not None and ("input" in update_trace_keys or "output" in update_trace_keys):
-                    # with a real parent the generation is not the trace root, so trace-level
-                    # I/O has to be stamped explicitly; v2 updated the trace object directly
-                    generation.set_trace_io(  # pyright: ignore[reportDeprecated]  # the SDK keeps it exactly for this legacy trace-level contract
-                        input=trace_params.get("input") if "input" in update_trace_keys else None,
-                        output=trace_params.get("output") if "output" in update_trace_keys else None,
-                    )
-                log_provider_specific_information_as_span(
-                    client=self.Langfuse, parent=generation, enrichments=enrichments
-                )
-                self._log_guardrail_information_as_span(
-                    client=self.Langfuse, parent=generation, standard_logging_object=standard_logging_object
-                )
-                generation.end(end_time=to_unix_nanos(end_time))
+            continued_trace: Final = existing_trace_id is not None
+            trace_public: Final = _trace_public_flag(trace_params.get("public"))
+            trace_input: Final = trace_params.get("input")
+            trace_output: Final = trace_params.get("output")
+            trace_level_attributes: Final = trace_attributes(
+                name=trace_params.get("name"),
+                user_id=trace_params.get("user_id"),
+                session_id=trace_params.get("session_id"),
+                version=trace_params.get("version"),
+                release=trace_params.get("release"),
+                tags=trace_params.get("tags"),
+                metadata=trace_params.get("metadata"),
+                public=trace_public,
+                input=trace_input if continued_trace or trace_input != generation_params["input"] else None,
+                output=trace_output if continued_trace or trace_output != generation_params["output"] else None,
+            )
+            generation_attributes: Final = observation_attributes(
+                observation_type="generation",
+                input=generation_params["input"],
+                output=generation_params["output"],
+                metadata=generation_params["metadata"],
+                level=level,
+                status_message=generation_params.get("status_message"),
+                version=generation_params["version"],
+                model=model_name,
+                model_parameters=optional_params,
+                usage_details=usage_details,
+                cost_details=generation_params["cost_details"],
+                completion_start_time=kwargs.get("completion_start_time", None),
+                prompt=generation_params.get("prompt"),
+            )
+            generation: Final = start_generation(
+                tracing=self.tracing,
+                trace_id=resolved_trace_id,
+                parent_observation_id=resolve_observation_id(parent_observation_id),  # pyright: ignore[reportArgumentType]  # metadata value, str or None at runtime
+                existing_trace=continued_trace,
+                observation_id=resolve_observation_id(generation_params["id"]),
+                name=generation_params["name"],  # pyright: ignore[reportArgumentType]  # always the str set a few lines up
+                start_time=start_time,
+                public=trace_public,
+                attributes=MappingProxyType({**generation_attributes, **trace_level_attributes}),
+            )
+            log_provider_specific_information_as_span(tracing=self.tracing, parent=generation, enrichments=enrichments)
+            self._log_guardrail_information_as_span(
+                tracing=self.tracing, parent=generation, standard_logging_object=standard_logging_object
+            )
+            generation.end(end_time)
 
             # log_event_on_langfuse tuple-unpacks this and re-wraps it in the dict callers cache.
-            # The wrapper's id is the exported observation id: the requested generation_id after
-            # resolve_observation_id, unless the provider was adopted from user code.
+            # The observation id is the requested generation_id after resolve_observation_id.
             return resolved_trace_id, generation.id
         except Exception:
             verbose_logger.error("Langfuse Layer Error - %s", traceback.format_exc())
@@ -1150,8 +1091,8 @@ class LangFuseLogger:
 
     def _log_guardrail_information_as_span(
         self,
-        client: "Langfuse",
-        parent: "LangfuseGeneration",
+        tracing: "LangfuseTracing",
+        parent: "LangfuseObservation",
         standard_logging_object: StandardLoggingPayload | None,
     ):
         """
@@ -1173,7 +1114,7 @@ class LangFuseLogger:
             )
             return
 
-        from litellm.integrations.langfuse.langfuse_sdk import start_child_span, to_unix_nanos
+        from litellm.integrations.langfuse.langfuse_sdk import observation_attributes, start_child_span
 
         for guardrail_entry in guardrail_information:
             if not isinstance(guardrail_entry, dict):
@@ -1184,23 +1125,26 @@ class LangFuseLogger:
                 continue
 
             span = start_child_span(
-                client=client,
+                tracing=tracing,
                 parent=parent,
                 name="guardrail",
                 start_time=guardrail_entry.get("start_time", None),
-                attributes={  # mutable-ok: langfuse serializes this payload, a proxy is not json-encodable
-                    "input": guardrail_entry.get("guardrail_request", None),
-                    "output": guardrail_entry.get("guardrail_response", None),
-                    "metadata": {
-                        "guardrail_name": guardrail_entry.get("guardrail_name", None),
-                        "guardrail_mode": guardrail_entry.get("guardrail_mode", None),
-                        "guardrail_masked_entity_count": guardrail_entry.get("masked_entity_count", None),
-                    },
-                },
+                attributes=observation_attributes(
+                    observation_type="span",
+                    input=guardrail_entry.get("guardrail_request", None),
+                    output=guardrail_entry.get("guardrail_response", None),
+                    metadata=MappingProxyType(
+                        {
+                            "guardrail_name": guardrail_entry.get("guardrail_name", None),
+                            "guardrail_mode": guardrail_entry.get("guardrail_mode", None),
+                            "guardrail_masked_entity_count": guardrail_entry.get("masked_entity_count", None),
+                        }
+                    ),
+                ),
             )
 
             verbose_logger.debug("Logged guardrail information as span: %s", span)
-            span.end(end_time=to_unix_nanos(guardrail_entry.get("end_time", None)))
+            span.end(guardrail_entry.get("end_time", None))
 
 
 def _add_prompt_to_generation_params(
@@ -1278,8 +1222,8 @@ def _add_prompt_to_generation_params(
 
 def log_provider_specific_information_as_span(
     *,
-    client: "Langfuse",
-    parent: "LangfuseGeneration",
+    tracing: "LangfuseTracing",
+    parent: "LangfuseObservation",
     enrichments: Mapping[str, Any],
 ):
     """Logs provider-specific information as spans under the generation."""
@@ -1295,24 +1239,24 @@ def log_provider_specific_information_as_span(
             for elem in vertex_ai_grounding_metadata:
                 if isinstance(elem, dict):
                     for key, value in elem.items():
-                        _end_grounding_span(client=client, parent=parent, name=key, value=value)
+                        _end_grounding_span(tracing=tracing, parent=parent, name=key, value=value)
                 else:
-                    _end_grounding_span(client=client, parent=parent, name="vertex_ai_grounding_metadata", value=elem)
+                    _end_grounding_span(tracing=tracing, parent=parent, name="vertex_ai_grounding_metadata", value=elem)
         else:
             _end_grounding_span(
-                client=client, parent=parent, name="vertex_ai_grounding_metadata", value=vertex_ai_grounding_metadata
+                tracing=tracing, parent=parent, name="vertex_ai_grounding_metadata", value=vertex_ai_grounding_metadata
             )
 
 
-def _end_grounding_span(*, client: "Langfuse", parent: "LangfuseGeneration", name: str, value: object) -> None:
-    from litellm.integrations.langfuse.langfuse_sdk import start_child_span
+def _end_grounding_span(*, tracing: "LangfuseTracing", parent: "LangfuseObservation", name: str, value: object) -> None:
+    from litellm.integrations.langfuse.langfuse_sdk import observation_attributes, start_child_span
 
     start_child_span(
-        client=client,
+        tracing=tracing,
         parent=parent,
         name=name,
         start_time=None,
-        attributes={"input": value},  # mutable-ok: langfuse serializes this payload
+        attributes=observation_attributes(observation_type="span", input=value),
     ).end()
 
 

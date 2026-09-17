@@ -66,26 +66,20 @@ async def _add_langfuse_trace_id_to_alert(
     -> trace_id
     -> litellm_call_id
     """
-    from litellm.integrations.langfuse.langfuse import LangFuseLogger
+    from litellm.integrations.langfuse.langfuse import LangFuseLogger, resolve_langfuse_host
 
     callbacks: Final = litellm.logging_callback_manager._get_all_callbacks()
     if not any(callback == "langfuse" or isinstance(callback, LangFuseLogger) for callback in callbacks):
         return None
 
-    if request_data is not None and request_data.get("litellm_logging_obj", None) is not None:
-        trace_id: str | None = None
-        litellm_logging_obj: Final[Logging] = request_data["litellm_logging_obj"]
+    if request_data is None or request_data.get("litellm_logging_obj", None) is None:
+        return None
 
-        for _ in range(3):
-            trace_id = litellm_logging_obj._get_trace_id(service_name="langfuse")
-            if trace_id is not None:
-                break
-            await asyncio.sleep(3)  # wait 3s before retrying for trace id
-        if trace_id is None:
-            return None
-
-        langfuse_object: Final = litellm_logging_obj._get_callback_object(service_name="langfuse")
-        if isinstance(langfuse_object, LangFuseLogger):
-            return f"{langfuse_object.langfuse_host}/trace/{trace_id}"
+    litellm_logging_obj: Final[Logging] = request_data["litellm_logging_obj"]
+    host: Final = resolve_langfuse_host(litellm_logging_obj.standard_callback_dynamic_params.get("langfuse_host"))
+    for _ in range(3):
+        if (trace_id := litellm_logging_obj._get_trace_id(service_name="langfuse")) is not None:
+            return f"{host}/trace/{trace_id}"
+        await asyncio.sleep(3)  # wait 3s before retrying for trace id
 
     return None

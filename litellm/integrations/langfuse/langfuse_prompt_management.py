@@ -72,7 +72,7 @@ def langfuse_client_init(
     """
     try:
         from langfuse import (
-            Langfuse,  # noqa: F401  # the import is the install probe; construction moved to acquire_langfuse_client
+            Langfuse,  # noqa: F401  # the import is the install probe; construction happens in build_langfuse_client
         )
     except Exception as e:
         raise Exception(
@@ -124,9 +124,9 @@ def langfuse_client_init(
 
     parameters["environment"] = LangFuseLogger.resolve_deployment_environment()
 
-    from .langfuse_sdk import acquire_langfuse_client
+    from .langfuse_sdk import build_langfuse_client
 
-    client: Final = acquire_langfuse_client(
+    client: Final = build_langfuse_client(
         parameters=parameters,
         environment=parameters["environment"],
         release=langfuse_release,
@@ -152,12 +152,28 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         flush_interval=1,
     ):
 
+        from .langfuse_sdk import acquire_langfuse_tracing
+
         self.langfuse_sdk_version = installed_langfuse_version()
         self.Langfuse = langfuse_client_init(
             langfuse_public_key=langfuse_public_key,
             langfuse_secret=langfuse_secret,
             langfuse_host=langfuse_host,
             flush_interval=flush_interval,
+        )
+        public_key, secret_key, host = resolve_langfuse_credentials(
+            langfuse_public_key=langfuse_public_key,
+            langfuse_secret=langfuse_secret,
+            langfuse_host=langfuse_host,
+        )
+        self.tracing = acquire_langfuse_tracing(
+            public_key=str(public_key),
+            secret_key=str(secret_key),
+            base_url=host,
+            environment=LangFuseLogger.resolve_deployment_environment(),
+            release=os.getenv("LANGFUSE_RELEASE"),
+            flush_interval=LangFuseLogger._get_langfuse_flush_interval(flush_interval),  # pyright: ignore[reportPrivateUsage]  # shared env-fallback helper, not part of the logger's API
+            mock_mode=should_use_langfuse_mock(),
         )
 
     @property
