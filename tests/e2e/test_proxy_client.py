@@ -40,6 +40,7 @@ from models import (
     KeyInfoResponse,
     KeyUpdateBody,
     LiteLLMParamsBody,
+    ModelNewBody,
     McpServerCreateBody,
     McpServerUpdateBody,
     ModelListEntry,
@@ -609,9 +610,10 @@ def test_registration_binds_the_deployment_to_this_test_unless_it_is_provider_li
                 )
     finally:
         configured_cache.cache_clear()
-    params: Final = json.loads(bodies.get_nowait())["litellm_params"]
+    sent: Final = ModelNewBody.model_validate_json(bodies.get_nowait())
     assert bodies.empty()
     if provider_live:
-        assert params.get("api_base") is None
+        assert sent.litellm_params.api_base is None
         return
-    assert params["api_base"].endswith(f"/openai/t/{slug_for_test(current_test_key())}/v1")
+    assert sent.litellm_params.api_base is not None
+    assert sent.litellm_params.api_base.endswith(f"/openai/t/{slug_for_test(current_test_key())}/v1")
