@@ -3,12 +3,12 @@ use std::task::Poll;
 
 use futures_util::future::{AbortHandle, Abortable};
 #[cfg(test)]
-use litellm_bridge::protocol::NativeCallFuture;
-use litellm_bridge::protocol::{HostFailure, HostPhase, HostStep, NativeCall, NativeCallStep};
-use litellm_python_api as python_api;
-use litellm_python_api::DeploymentHooks;
-pub(crate) use litellm_python_api::PythonLogger;
-use litellm_python_api::legacy::logger::LegacyCallbacks;
+use litellm_callbacks::protocol::NativeCallFuture;
+use litellm_callbacks::protocol::{HostFailure, HostPhase, HostStep, NativeCall, NativeCallStep};
+use litellm_callbacks_legacy as python_api;
+use litellm_callbacks_legacy::DeploymentHooks;
+pub(crate) use litellm_callbacks_legacy::PythonLogger;
+use litellm_callbacks_legacy::legacy::logger::LegacyCallbacks;
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;

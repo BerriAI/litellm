@@ -16,7 +16,7 @@ use super::types::{OcrDocumentInput, OcrFileContent};
 use super::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
 use crate::ocr::Error;
-use litellm_bridge::protocol::{
+use litellm_callbacks::protocol::{
     HostFailure, HostLifecycle, HostPhase, NativeCall, NativeCallFuture, NativeCallStep,
 };
 

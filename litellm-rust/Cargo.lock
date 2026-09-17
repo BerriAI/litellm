@@ -1970,13 +1970,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-bridge"
-version = "0.1.0"
-dependencies = [
- "tokio",
-]
-
-[[package]]
 name = "litellm-cache"
 version = "0.1.0"
 dependencies = [
@@ -2009,6 +2002,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
+name = "litellm-callbacks-legacy"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth",
+ "litellm-callbacks",
+ "litellm-python-interop",
+ "pyo3",
+]
+
+[[package]]
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
@@ -2022,7 +2032,7 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-auth-azure",
  "litellm-auth-gcp",
- "litellm-bridge",
+ "litellm-callbacks",
  "litellm-framing",
  "mime_guess",
  "moka",
@@ -2061,16 +2071,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-python-api"
-version = "0.1.0"
-dependencies = [
- "litellm-auth",
- "litellm-bridge",
- "litellm-python-interop",
- "pyo3",
-]
-
-[[package]]
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
@@ -2078,9 +2078,9 @@ dependencies = [
  "criterion",
  "futures-util",
  "litellm-auth",
- "litellm-bridge",
+ "litellm-callbacks",
+ "litellm-callbacks-legacy",
  "litellm-core",
- "litellm-python-api",
  "litellm-python-interop",
  "litellm-token-counter",
  "pyo3",

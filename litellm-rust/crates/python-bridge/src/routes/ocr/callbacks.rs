@@ -7,7 +7,7 @@ use litellm_core::ocr::LiteLLMOcrResponse;
 use litellm_core::ocr::hooks::OcrPreCallRequest;
 use litellm_python_interop::to_py_preserving_errors as to_py;
 
-use litellm_python_api::legacy::logger::LegacyCallbacks;
+use litellm_callbacks_legacy::legacy::logger::LegacyCallbacks;
 
 use crate::lifecycle::PythonLogger;
 

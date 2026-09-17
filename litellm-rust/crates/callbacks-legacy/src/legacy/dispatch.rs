@@ -8,7 +8,7 @@ use super::vocabulary::{
     CallbackId, CallbackInvocation, CallbackMethod, Delivery, InvocationOutcome, LoggedMarker,
 };
 
-use litellm_bridge::protocol::HostPhase;
+use litellm_callbacks::protocol::HostPhase;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CallbackCapabilities {
