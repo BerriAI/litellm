@@ -1,22 +1,24 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use tokio::sync::{mpsc, oneshot};
+use litellm_auth::Error as AuthError;
+use litellm_auth::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
+use tokio::sync::{Notify, mpsc, oneshot};
 
 use super::handler::perform_ocr_request;
 use super::hooks::{
     OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrLogFuture, OcrPostCallRequest,
     OcrPreCallRequest,
 };
+use super::types::{OcrDocumentInput, OcrFileContent};
 use super::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrClient};
-use crate::AuthError;
-use crate::Error;
-use crate::auth::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
 use crate::call_lifecycle::host::{
     HostCall, HostCallFuture, HostCallStep, HostFailure, HostLifecycle, HostPhase,
 };
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
+use crate::ocr::Error;
 
 pub type NativeResult<T> = Result<NativeOutcome<T>, Error>;
 
@@ -52,6 +54,7 @@ impl OcrAdmission {
 #[derive(Clone, Debug)]
 pub enum OcrHostOperation {
     ProjectRequest,
+    ReadDocument,
     Lifecycle(HostPhase),
     ConstructResponse(Arc<LiteLLMOcrResponse>),
     MapFailure(Error),
@@ -83,8 +86,9 @@ impl OcrHostOperation {
 }
 
 pub enum OcrHostResult {
-    Request(Result<(Box<LiteLLMOcrRequest>, bool), Error>),
-    Lifecycle(Result<(), HostFailure>),
+    Request(Result<(Box<LiteLLMOcrRequest<OcrDocumentInput>>, bool), Error>),
+    Document(Result<OcrFileContent, Error>),
+    Lifecycle(Result<(), HostFailure<Error>>),
     AzureAdToken(Result<ResolvedCredential, AuthError>),
     PreCall(Result<OcrPreCallRequest, Error>),
     DuringCall(Result<OcrDuringCallRequest, Error>),
@@ -256,7 +260,7 @@ impl OcrCall {
         Ok(self.host_step(operation))
     }
 
-    fn accept(&mut self, result: Result<(), HostFailure>) {
+    fn accept(&mut self, result: Result<(), HostFailure<Error>>) {
         let cancelled = matches!(&result, Err(HostFailure::Cancelled(_)));
         if let Some(error) = self.lifecycle.accept(result) {
             if cancelled {
@@ -268,7 +272,7 @@ impl OcrCall {
         }
     }
 
-    pub async fn interrupt(&mut self, failure: HostFailure) -> Result<OcrCallStep, Error> {
+    pub async fn interrupt(&mut self, failure: HostFailure<Error>) -> Result<OcrCallStep, Error> {
         if self.completed {
             return Err(Error::InvalidRequest(
                 "OCR call cannot be interrupted after completion".into(),
@@ -286,6 +290,7 @@ impl OcrCall {
 }
 
 impl HostCall for OcrCall {
+    type Error = crate::ocr::Error;
     type Operation = OcrHostOperation;
     type Result = OcrHostResult;
     type Complete = LiteLLMOcrResponse;
@@ -293,14 +298,14 @@ impl HostCall for OcrCall {
     fn resume(
         &mut self,
         result: Option<Self::Result>,
-    ) -> HostCallFuture<'_, Self::Operation, Self::Complete> {
+    ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
         Box::pin(OcrCall::resume(self, result))
     }
 
     fn interrupt(
         &mut self,
-        failure: HostFailure,
-    ) -> HostCallFuture<'_, Self::Operation, Self::Complete> {
+        failure: HostFailure<Self::Error>,
+    ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error> {
         Box::pin(OcrCall::interrupt(self, failure))
     }
 }
@@ -312,11 +317,12 @@ struct PendingOperation {
 
 struct OcrExecution {
     client: Option<OcrClient>,
-    request: Option<LiteLLMOcrRequest>,
+    request: Option<LiteLLMOcrRequest<OcrDocumentInput>>,
     operations_tx: mpsc::UnboundedSender<PendingOperation>,
     operations_rx: mpsc::UnboundedReceiver<PendingOperation>,
     pending_result: Option<oneshot::Sender<OcrHostResult>>,
     execution: Option<tokio::task::JoinHandle<Result<LiteLLMOcrResponse, Error>>>,
+    blocking_preparation: Arc<BlockingPreparation>,
     completed: bool,
     azure_ad_token_provider: bool,
     terminal: Arc<std::sync::Mutex<Option<(CallLifecycleContext, CallLifecycleTiming)>>>,
@@ -332,6 +338,7 @@ impl OcrExecution {
             operations_rx,
             pending_result: None,
             execution: None,
+            blocking_preparation: Arc::new(BlockingPreparation::default()),
             completed: false,
             azure_ad_token_provider: false,
             terminal: Arc::default(),
@@ -376,7 +383,7 @@ impl OcrExecution {
                 self.execution = None;
                 self.completed = true;
                 result
-                    .map_err(|error| Error::Network(format!("OCR execution task failed: {error}")))?
+                    .map_err(|error| Error::Transport(crate::transport::Error::Network(format!("OCR execution task failed: {error}"))))?
                     .map(OcrCallStep::Complete)
             }
         }
@@ -396,12 +403,15 @@ impl OcrExecution {
                 },
             )));
         }
-        request.hooks = Arc::new(ProtocolHooks {
+        let hooks = Arc::new(ProtocolHooks {
             operations: self.operations_tx.clone(),
             intercepts_requests,
             terminal: self.terminal.clone(),
         });
+        request.hooks = hooks.clone();
+        let blocking_preparation = self.blocking_preparation.clone();
         self.execution = Some(tokio::spawn(async move {
+            let request = prepare_request_document(request, &hooks, blocking_preparation).await?;
             perform_ocr_request(&client, request).await
         }));
     }
@@ -418,8 +428,79 @@ impl OcrExecution {
         if let Some(execution) = self.execution.as_mut() {
             let _ = execution.await;
         }
+        self.blocking_preparation.wait().await;
         self.execution = None;
     }
+}
+
+#[derive(Default)]
+struct BlockingPreparation {
+    running: AtomicBool,
+    finished: Notify,
+}
+
+impl BlockingPreparation {
+    fn start(self: &Arc<Self>) -> BlockingPreparationGuard {
+        self.running.store(true, Ordering::Release);
+        BlockingPreparationGuard(self.clone())
+    }
+
+    async fn wait(&self) {
+        loop {
+            let finished = self.finished.notified();
+            if !self.running.load(Ordering::Acquire) {
+                return;
+            }
+            finished.await;
+        }
+    }
+}
+
+struct BlockingPreparationGuard(Arc<BlockingPreparation>);
+
+impl Drop for BlockingPreparationGuard {
+    fn drop(&mut self) {
+        self.0.running.store(false, Ordering::Release);
+        self.0.finished.notify_waiters();
+    }
+}
+
+async fn prepare_request_document(
+    request: LiteLLMOcrRequest<OcrDocumentInput>,
+    hooks: &ProtocolHooks,
+    blocking_preparation: Arc<BlockingPreparation>,
+) -> Result<super::types::ResolvedOcrRequest, Error> {
+    let request = match &request.document {
+        OcrDocumentInput::HostReader { mime_type } => {
+            let mime_type = mime_type.clone();
+            let content = match hooks.invoke(OcrHostOperation::ReadDocument).await? {
+                OcrHostResult::Document(result) => result?,
+                _ => {
+                    return Err(Error::InvalidRequest(
+                        "invalid OCR document read host result".into(),
+                    ));
+                }
+            };
+            request.with_document(OcrDocumentInput::Bytes {
+                bytes: content.bytes,
+                file_name: content.file_name,
+                mime_type,
+            })
+        }
+        _ => request,
+    };
+    if let OcrDocumentInput::Document(_) = &request.document {
+        return request.map_document(super::document::prepare_document);
+    }
+    let guard = blocking_preparation.start();
+    tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        request.map_document(super::document::prepare_document)
+    })
+    .await
+    .map_err(|error| {
+        Error::InvalidRequest(format!("OCR document preparation task failed: {error}"))
+    })?
 }
 
 impl Drop for OcrExecution {
@@ -566,6 +647,9 @@ impl OcrHost for NoopOcrHost {
                 OcrHostOperation::ProjectRequest => OcrHostResult::Request(Err(
                     Error::InvalidRequest("OCR host has no request projection".into()),
                 )),
+                OcrHostOperation::ReadDocument => OcrHostResult::Document(Err(
+                    Error::InvalidRequest("OCR host has no document reader".into()),
+                )),
                 OcrHostOperation::Lifecycle(_)
                 | OcrHostOperation::ConstructResponse(_)
                 | OcrHostOperation::MapFailure(_)
@@ -600,6 +684,9 @@ impl OcrHost for OcrHookHost {
             match operation {
                 OcrHostOperation::ProjectRequest => OcrHostResult::Request(Err(
                     Error::InvalidRequest("OCR hook host has no request projection".into()),
+                )),
+                OcrHostOperation::ReadDocument => OcrHostResult::Document(Err(
+                    Error::InvalidRequest("OCR hook host has no document reader".into()),
                 )),
                 OcrHostOperation::Success {
                     context,

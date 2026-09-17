@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
-use litellm_core::auth::ResolvedCredential;
+use litellm_auth::ResolvedCredential;
 use litellm_core::ocr::hooks::{OcrDuringCallRequest, OcrPostCallRequest, OcrPreCallRequest};
 use litellm_core::ocr::{OcrAdmission, OcrCall, OcrClient, OcrHostOperation, OcrHostResult};
 use litellm_python_interop::{
@@ -66,11 +66,25 @@ impl PythonOcrHost {
                 retained_fields.set_item(name, value)?;
             }
         }
-        retained_fields.set_item("document", &self.projected()?.fields.document)?;
         let projected = self.projected_mut()?;
+        let document = match &projected.fields.document {
+            Some(document) => document.clone_ref(py),
+            None => to_py(py, &request.document)?,
+        };
+        retained_fields.set_item("document", &document)?;
+        projected.fields.document = Some(document);
         projected.retained_fields = Some(retained_fields.unbind());
         projected.pre_call = Some((&request).into());
         Ok(request)
+    }
+
+    fn read_document(&self, py: Python<'_>) -> PyResult<litellm_core::ocr::OcrFileContent> {
+        self.projected()?
+            .fields
+            .reader
+            .as_ref()
+            .ok_or_else(missing_state)?
+            .read(py)
     }
 
     fn acquire_azure_ad_token(&self, py: Python<'_>) -> PyResult<ResolvedCredential> {
@@ -179,8 +193,12 @@ impl PythonRoute for PythonOcrHost {
         OcrHostResult::Lifecycle(Ok(()))
     }
 
-    fn map_error(error: litellm_core::Error) -> PyErr {
+    fn map_error(error: litellm_core::ocr::Error) -> PyErr {
         ocr_error_to_pyerr(error)
+    }
+
+    fn host_error(message: String) -> litellm_core::ocr::Error {
+        litellm_core::ocr::Error::InvalidRequest(message)
     }
 
     fn invoke(&mut self, py: Python<'_>, operation: OcrHostOperation) -> PyResult<OcrHostResult> {
@@ -189,7 +207,7 @@ impl PythonRoute for PythonOcrHost {
                 let OcrHostData::Unprojected { request } = &self.data else {
                     return Err(missing_state());
                 };
-                let projected = project_request(py, request.bind(py), self.state.kwargs.bind(py))?;
+                let projected = project_request(request.bind(py), self.state.kwargs.bind(py))?;
                 let has_token_provider = projected.fields.azure_ad_token_provider.is_some();
                 let request = projected.request;
                 self.data = OcrHostData::Projected(Box::new(ProjectedOcrHost {
@@ -201,6 +219,7 @@ impl PythonRoute for PythonOcrHost {
                 }));
                 OcrHostResult::Request(Ok((Box::new(request), has_token_provider)))
             }
+            OcrHostOperation::ReadDocument => OcrHostResult::Document(Ok(self.read_document(py)?)),
             OcrHostOperation::AcquireAzureAdToken => {
                 OcrHostResult::AzureAdToken(Ok(self.acquire_azure_ad_token(py)?))
             }
@@ -254,6 +273,9 @@ impl PythonRoute for PythonOcrHost {
             OcrHostData::Projected(projected) => {
                 visit.call(&projected.fields.boundary_request)?;
                 visit.call(&projected.fields.document)?;
+                if let Some(reader) = &projected.fields.reader {
+                    reader.traverse(visit)?;
+                }
                 visit.call(&projected.fields.api_key)?;
                 if let Some(provider) = &projected.fields.azure_ad_token_provider {
                     provider.traverse(visit)?;
@@ -275,8 +297,7 @@ impl litellm_core::ocr::hooks::OcrHooks for BridgeOcrHooks {
     }
 }
 
-#[pyfunction]
-fn _ocr_lifecycle(
+fn run_ocr(
     py: Python<'_>,
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
@@ -306,6 +327,27 @@ fn _ocr_lifecycle(
     run_call(py, call, host)
 }
 
+#[pyfunction]
+fn ocr(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_ocr(py, request, args, kwargs, false)
+}
+
+#[pyfunction]
+fn aocr(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_ocr(py, request, args, kwargs, true)
+}
+
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(_ocr_lifecycle, module)?)
+    module.add_function(wrap_pyfunction!(ocr, module)?)?;
+    module.add_function(wrap_pyfunction!(aocr, module)?)
 }

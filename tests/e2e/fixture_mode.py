@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Generator
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Final, Literal, assert_never
 
+import pytest
 from fixture_bundle import (
     FreshBundle,
     StaleBundle,
@@ -57,6 +60,31 @@ def current_test_key() -> str:
     if not raw:
         return SESSION_TEST_KEY
     return raw.rsplit(" (", 1)[0]
+
+
+REGISTRATION_OWNER: Final[ContextVar[str | None]] = ContextVar("registration_owner", default=None)
+
+
+def registration_owner() -> str:
+    """The pytest node that owns a deployment registered right now. While a
+    fixture is being set up that is the node the fixture is scoped to: the module
+    or class for a fixture its tests share, and ``session`` for a session- or
+    package-scoped one, which every xdist worker sets up and no node can own.
+    Anywhere else it is the running test."""
+    owner = REGISTRATION_OWNER.get()
+    return current_test_key() if owner is None else owner
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_fixture_setup(request: pytest.FixtureRequest) -> Generator[None, object, object]:
+    node: Final = request.node  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # pytest: untyped
+    assert isinstance(node, pytest.Item | pytest.Collector)
+    owner: Final = SESSION_TEST_KEY if request.scope in ("session", "package") else node.nodeid
+    token: Final = REGISTRATION_OWNER.set(owner)
+    try:
+        return (yield)
+    finally:
+        REGISTRATION_OWNER.reset(token)
 
 
 class ReplayMiss(AssertionError):
