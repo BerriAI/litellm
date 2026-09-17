@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Final, NamedTuple
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _get_cost_per_unit,
     calculate_prompt_caching_savings,
@@ -64,7 +65,9 @@ def _resolve_model(model: str | None, custom_llm_provider: str | None) -> _Model
     if not model:
         return None
     try:
-        resolved_model, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        resolved_model, provider = resolve_model_and_provider_for_metadata(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
     except Exception as e:  # noqa: BLE001  # get_llm_provider raises for unroutable names; degrade to zero savings
         verbose_proxy_logger.debug(
             "savings: cannot resolve provider for model=%s custom_llm_provider=%s (%s)", model, custom_llm_provider, e

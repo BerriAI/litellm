@@ -833,3 +833,39 @@ class TestResponsesInputToChatMessages:
         assert ResponsesAPIRequestUtils.responses_input_to_chat_messages(
             [reasoning_item, user_message, "stray"]
         ) == [user_message]
+
+
+class TestMergeProviderSpecificHeaders:
+    def test_scoped_headers_merge_only_for_matching_provider(self):
+        scoped = {"custom_llm_provider": "chatgpt", "extra_headers": {"Authorization": "Bearer client-token"}}
+
+        merged = ResponsesAPIRequestUtils.merge_provider_specific_headers(
+            extra_headers={"originator": "codex_cli_rs"},
+            provider_specific_header=scoped,
+            custom_llm_provider="chatgpt",
+        )
+        untouched = ResponsesAPIRequestUtils.merge_provider_specific_headers(
+            extra_headers={"originator": "codex_cli_rs"},
+            provider_specific_header=scoped,
+            custom_llm_provider="openai",
+        )
+
+        assert merged == {"originator": "codex_cli_rs", "Authorization": "Bearer client-token"}
+        assert untouched == {"originator": "codex_cli_rs"}
+
+    def test_sequence_of_scoped_entries_each_keep_their_own_scope(self):
+        entries = [
+            {"custom_llm_provider": "anthropic", "extra_headers": {"Authorization": "Bearer anthropic-token"}},
+            {"custom_llm_provider": "chatgpt", "extra_headers": {"Authorization": "Bearer chatgpt-token"}},
+        ]
+
+        merged = ResponsesAPIRequestUtils.merge_provider_specific_headers(
+            extra_headers=None, provider_specific_header=entries, custom_llm_provider="chatgpt"
+        )
+
+        assert merged == {"Authorization": "Bearer chatgpt-token"}
+
+    def test_no_scoped_headers_returns_extra_headers_unchanged(self):
+        assert ResponsesAPIRequestUtils.merge_provider_specific_headers(
+            extra_headers=None, provider_specific_header=None, custom_llm_provider="chatgpt"
+        ) is None

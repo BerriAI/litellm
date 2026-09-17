@@ -163,6 +163,28 @@ from litellm.utils import (
 )
 
 
+def _merge_headers_case_insensitive(
+    headers: dict[str, str], extra_headers: Mapping[str, object] | None
+) -> dict[str, str]:
+    if not extra_headers:
+        return headers
+    overridden: Final = frozenset(name.lower() for name in extra_headers)
+    return {  # mutable-ok: httpx request headers are a plain dict
+        **{name: value for name, value in headers.items() if name.lower() not in overridden},
+        **{name: str(value) for name, value in extra_headers.items()},
+    }
+
+
+def _client_request_headers(
+    response_api_optional_request_params: ResponsesAPIOptionalRequestParams,
+    extra_headers: Mapping[str, object] | None,
+) -> dict:
+    return {  # mutable-ok: validate_environment takes the request header dict
+        **(response_api_optional_request_params.get("extra_headers", {}) or {}),
+        **(extra_headers or {}),
+    }
+
+
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
 ) -> bool:
@@ -2690,14 +2712,14 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers = responses_api_provider_config.validate_environment(
-            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
-            model=model,
-            litellm_params=litellm_params,
+        headers = _merge_headers_case_insensitive(
+            responses_api_provider_config.validate_environment(
+                headers=_client_request_headers(response_api_optional_request_params, extra_headers),
+                model=model,
+                litellm_params=litellm_params,
+            ),
+            extra_headers,
         )
-
-        if extra_headers:
-            headers.update(extra_headers)
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
@@ -2878,14 +2900,14 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers = responses_api_provider_config.validate_environment(
-            headers=response_api_optional_request_params.get("extra_headers", {}) or {},
-            model=model,
-            litellm_params=litellm_params,
+        headers = _merge_headers_case_insensitive(
+            responses_api_provider_config.validate_environment(
+                headers=_client_request_headers(response_api_optional_request_params, extra_headers),
+                model=model,
+                litellm_params=litellm_params,
+            ),
+            extra_headers,
         )
-
-        if extra_headers:
-            headers.update(extra_headers)
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)

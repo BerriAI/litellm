@@ -3,11 +3,12 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire payloads without a runtime conversion
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -23,10 +24,13 @@ from litellm.types.responses.main import DecodedResponseId
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     PromptTokensDetailsWrapper,
+    ProviderSpecificHeader,
     SpecialEnums,
     Usage,
     text_tokens_without_nested_reasoning,
 )
+
+_PROVIDER_SPECIFIC_HEADER_ADAPTER: Final = TypeAdapter(ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None)
 
 
 def _output_token_detail(details: object, field: str) -> int | None:
@@ -164,6 +168,22 @@ class ResponsesAPIRequestUtils:
             **{name: value for name, value in client_headers.items() if name.lower() not in explicit_names},
             **extra_headers,
         }
+
+    @staticmethod
+    def merge_provider_specific_headers(
+        extra_headers: dict[str, object] | None,
+        provider_specific_header: object,
+        custom_llm_provider: str | None,
+    ) -> dict[str, object] | None:
+        scoped_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=_PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(provider_specific_header),
+            custom_llm_provider=custom_llm_provider,
+        )
+        if not scoped_headers:
+            return extra_headers
+        if not extra_headers:
+            return scoped_headers
+        return {**extra_headers, **scoped_headers}  # mutable-ok: extra_headers is the request's mutable header dict
 
     @staticmethod
     def _check_valid_arg(

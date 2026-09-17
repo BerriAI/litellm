@@ -1,9 +1,7 @@
-import base64
 import json
 import os
 import time
-from collections.abc import Mapping
-from typing import Final, TypeAlias
+from typing import Final
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -21,17 +19,16 @@ from .common_utils import (
     CHATGPT_OAUTH_TOKEN_URL,
     GetAccessTokenError,
     GetDeviceCodeError,
+    JsonObject,
     RefreshAccessTokenError,
+    decode_jwt_claims,
+    extract_chatgpt_account_id,
 )
 
 TOKEN_EXPIRY_SKEW_SECONDS: Final = 60
 DEVICE_CODE_TIMEOUT_SECONDS: Final = 15 * 60
 DEVICE_CODE_COOLDOWN_SECONDS: Final = 5 * 60
 DEVICE_CODE_POLL_SLEEP_SECONDS: Final = 5
-
-OPENAI_AUTH_CLAIM_KEY: Final = "https://api.openai.com/auth"
-
-JsonObject: TypeAlias = Mapping[str, JsonValue]
 
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(JsonObject)
 
@@ -84,7 +81,7 @@ class Authenticator:
             return account_id
         id_token: Final = auth_data.get("id_token")
         access_token: Final = auth_data.get("access_token")
-        derived: Final = self._extract_account_id(_optional_str(id_token or access_token))
+        derived: Final = extract_chatgpt_account_id(_optional_str(id_token or access_token))
         if derived:
             self._write_auth_file({**auth_data, "account_id": derived})
         return derived
@@ -122,32 +119,9 @@ class Authenticator:
         return time.time() >= float(derived_expires_at) - TOKEN_EXPIRY_SKEW_SECONDS
 
     def _get_expires_at(self, token: str) -> int | None:
-        claims: Final = self._decode_jwt_claims(token)
-        exp: Final = claims.get("exp")
+        exp: Final = decode_jwt_claims(token).get("exp")
         if isinstance(exp, (int, float)):
             return int(exp)
-        return None
-
-    def _decode_jwt_claims(self, token: str) -> JsonObject:
-        try:
-            parts: Final = token.split(".")
-            if len(parts) < 2:
-                return {}
-            payload_b64: Final = parts[1] + "=" * (-len(parts[1]) % 4)
-            payload_bytes: Final = base64.urlsafe_b64decode(payload_b64)
-            return _JSON_OBJECT_ADAPTER.validate_python(json.loads(payload_bytes.decode("utf-8")))
-        except Exception:
-            return {}
-
-    def _extract_account_id(self, token: str | None) -> str | None:
-        if not token:
-            return None
-        claims: Final = self._decode_jwt_claims(token)
-        auth_claims: Final = claims.get(OPENAI_AUTH_CLAIM_KEY)
-        if isinstance(auth_claims, dict):
-            account_id: Final = auth_claims.get("chatgpt_account_id")
-            if isinstance(account_id, str) and account_id:
-                return account_id
         return None
 
     def _login_device_code(self) -> dict[str, str]:
@@ -344,7 +318,7 @@ class Authenticator:
         access_token: Final = tokens.get("access_token")
         id_token: Final = tokens.get("id_token")
         expires_at: Final = self._get_expires_at(access_token) if access_token else None
-        account_id: Final = self._extract_account_id(id_token or access_token)
+        account_id: Final = extract_chatgpt_account_id(id_token or access_token)
         return {
             "access_token": access_token,
             "refresh_token": tokens.get("refresh_token"),

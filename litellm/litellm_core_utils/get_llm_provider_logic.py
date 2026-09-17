@@ -139,6 +139,14 @@ def declared_authenticating_provider(model: str | None, custom_llm_provider: str
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
 
 
+def resolve_model_and_provider_for_metadata(model: str, custom_llm_provider: str | None = None) -> tuple[str, str]:
+    declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+    if declared is not None:
+        return model.removeprefix(f"{declared}/"), declared
+    resolved_model, resolved_provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    return resolved_model, resolved_provider
+
+
 def get_llm_provider(
     model: str,
     custom_llm_provider: str | None = None,

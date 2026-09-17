@@ -2,12 +2,18 @@
 Constants and helpers for ChatGPT subscription OAuth.
 """
 
+import base64
+import json
 import os
 import platform
-from typing import Any, Final
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any, Final, TypeAlias
 from uuid import uuid4
 
 import httpx
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -19,6 +25,12 @@ CHATGPT_OAUTH_TOKEN_URL: Final = f"{CHATGPT_AUTH_BASE}/oauth/token"
 CHATGPT_DEVICE_VERIFY_URL: Final = f"{CHATGPT_AUTH_BASE}/codex/device"
 CHATGPT_API_BASE: Final = "https://chatgpt.com/backend-api/codex"
 CHATGPT_CLIENT_ID: Final = "app_EMoamEEZ73f0CkXaXp7hrann"
+CHATGPT_ACCOUNT_ID_HEADER: Final = "ChatGPT-Account-Id"
+OPENAI_AUTH_CLAIM_KEY: Final = "https://api.openai.com/auth"
+
+JsonObject: TypeAlias = Mapping[str, JsonValue]
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(JsonObject)
+_EMPTY_CLAIMS: Final[JsonObject] = MappingProxyType({})
 
 DEFAULT_ORIGINATOR: Final = "codex_cli_rs"
 DEFAULT_USER_AGENT: Final = "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown"
@@ -242,8 +254,67 @@ def get_chatgpt_default_headers(
     if session_id:
         headers["session_id"] = session_id
     if account_id:
-        headers["ChatGPT-Account-Id"] = account_id
+        headers[CHATGPT_ACCOUNT_ID_HEADER] = account_id
     return headers
+
+
+def decode_jwt_claims(token: str) -> JsonObject:
+    try:
+        parts: Final = token.split(".")
+        if len(parts) < 2:
+            return _EMPTY_CLAIMS
+        payload_b64: Final = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload_bytes: Final = base64.urlsafe_b64decode(payload_b64)
+        return _JSON_OBJECT_ADAPTER.validate_python(json.loads(payload_bytes.decode("utf-8")))
+    except Exception:
+        return _EMPTY_CLAIMS
+
+
+def extract_chatgpt_account_id(token: str | None) -> str | None:
+    if not token:
+        return None
+    auth_claims: Final = decode_jwt_claims(token).get(OPENAI_AUTH_CLAIM_KEY)
+    if not isinstance(auth_claims, dict):
+        return None
+    account_id: Final = auth_claims.get("chatgpt_account_id")
+    return account_id if isinstance(account_id, str) and account_id else None
+
+
+def is_chatgpt_oauth_key(value: str | None) -> bool:
+    if value is None:
+        return False
+    return OPENAI_AUTH_CLAIM_KEY in decode_jwt_claims(value.removeprefix("Bearer "))
+
+
+@dataclass(frozen=True, slots=True)
+class ChatGPTClientCredential:
+    access_token: str
+    account_id: str | None
+
+
+def _header_value(headers: Mapping[str, str], name: str) -> str | None:
+    return next((value for key, value in headers.items() if key.lower() == name), None)
+
+
+def get_chatgpt_client_credential(headers: Mapping[str, str]) -> ChatGPTClientCredential | None:
+    auth_header: Final = _header_value(headers, "authorization")
+    if auth_header is None or not is_chatgpt_oauth_key(auth_header):
+        return None
+    access_token: Final = auth_header.removeprefix("Bearer ")
+    account_id: Final = _header_value(headers, CHATGPT_ACCOUNT_ID_HEADER.lower()) or extract_chatgpt_account_id(
+        access_token
+    )
+    return ChatGPTClientCredential(access_token=access_token, account_id=account_id)
+
+
+def strip_chatgpt_client_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in headers.items()
+            if key.lower() not in ("authorization", CHATGPT_ACCOUNT_ID_HEADER.lower())
+        }
+    )
 
 
 def get_chatgpt_default_instructions() -> str:

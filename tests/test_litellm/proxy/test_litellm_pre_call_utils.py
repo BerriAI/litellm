@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 import json
 import os
@@ -8146,3 +8147,94 @@ def test_default_team_settings_bool_turn_off_message_logging_redacts():
         )
         is True
     )
+
+
+def _fake_chatgpt_oauth_token(account_id: str) -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(
+            json.dumps({"https://api.openai.com/auth": {"chatgpt_account_id": account_id}, "exp": 4102444800}).encode()
+        )
+        .rstrip(b"=")
+        .decode()
+    )
+    return f"{header}.{payload}.fake-signature"
+
+
+CHATGPT_OAUTH_TOKEN = f"Bearer {_fake_chatgpt_oauth_token('acct-alice')}"
+CHATGPT_ACCOUNT_ID_HEADER_NAME = "ChatGPT-Account-Id"
+PLATFORM_API_KEY_BEARER = "Bearer sk-proj-fake-platform-key-0123456789"
+CHATGPT_LEAK_TARGET_PROVIDERS = ["openai", "azure", "anthropic", "bedrock", "vertex_ai"]
+
+
+def _codex_client_headers(
+    authorization_header_name: str = "authorization", account_id: str | None = "acct-alice"
+) -> dict:
+    return {
+        "content-type": "application/json",
+        "originator": "codex_cli_rs",
+        authorization_header_name: CHATGPT_OAUTH_TOKEN,
+        **({CHATGPT_ACCOUNT_ID_HEADER_NAME: account_id} if account_id is not None else {}),
+    }
+
+
+def test_clean_headers_keeps_chatgpt_oauth_bearer_when_gateway_key_is_separate():
+    result = clean_headers(
+        headers=Headers({**_codex_client_headers(), "x-litellm-api-key": "sk-proxy-virtual-key"}),
+        litellm_key_header_name="x-litellm-api-key",
+        forward_llm_provider_auth_headers=False,
+        authenticated_with_header="x-litellm-api-key",
+    )
+
+    assert result["authorization"] == CHATGPT_OAUTH_TOKEN
+    assert "x-litellm-api-key" not in result
+
+
+def test_clean_headers_drops_bearer_that_authenticated_to_the_gateway():
+    result = clean_headers(
+        headers=Headers({"authorization": CHATGPT_OAUTH_TOKEN, "content-type": "application/json"}),
+        litellm_key_header_name=None,
+        forward_llm_provider_auth_headers=False,
+        authenticated_with_header="authorization",
+    )
+
+    assert _authorization_values(result) == []
+
+
+@pytest.mark.parametrize("bearer", [PLATFORM_API_KEY_BEARER, "Bearer not.a-jwt", "Bearer a.bm90LWpzb24.c"])
+def test_clean_headers_drops_non_chatgpt_bearers(bearer):
+    result = clean_headers(
+        headers=Headers({"authorization": bearer, "x-litellm-api-key": "sk-proxy-virtual-key"}),
+        litellm_key_header_name="x-litellm-api-key",
+        forward_llm_provider_auth_headers=False,
+        authenticated_with_header="x-litellm-api-key",
+    )
+
+    assert _authorization_values(result) == []
+
+
+@pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)
+def test_chatgpt_oauth_credential_and_account_reach_chatgpt_provider(authorization_header_name):
+    forwarded = _headers_forwarded_to(_codex_client_headers(authorization_header_name), "chatgpt")
+
+    assert _authorization_values(forwarded) == [CHATGPT_OAUTH_TOKEN]
+    assert forwarded[CHATGPT_ACCOUNT_ID_HEADER_NAME] == "acct-alice"
+
+
+@pytest.mark.parametrize("custom_llm_provider", CHATGPT_LEAK_TARGET_PROVIDERS)
+def test_chatgpt_oauth_credential_is_never_forwarded_to_other_providers(custom_llm_provider):
+    forwarded = _headers_forwarded_to(_codex_client_headers(), custom_llm_provider)
+
+    assert _authorization_values(forwarded) == []
+    assert CHATGPT_OAUTH_TOKEN not in forwarded.values()
+    assert CHATGPT_ACCOUNT_ID_HEADER_NAME not in forwarded
+
+
+def test_chatgpt_account_header_is_not_forwarded_without_chatgpt_oauth_bearer():
+    headers = {**_codex_client_headers(), "authorization": PLATFORM_API_KEY_BEARER}
+
+    assert _headers_forwarded_to(headers, "chatgpt") == {}
+
+
+def test_anthropic_oauth_bearer_does_not_reach_chatgpt_provider():
+    assert _authorization_values(_headers_forwarded_to(_client_headers(), "chatgpt")) == []

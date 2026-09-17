@@ -4,6 +4,7 @@ Tests for ChatGPT subscription Responses API transformation
 Source: litellm/llms/chatgpt/responses/transformation.py
 """
 
+import base64
 import json
 from unittest.mock import MagicMock, patch
 
@@ -374,3 +375,103 @@ class TestChatGPTResponsesAPITransformation:
 
         assert "ChatGPT upstream failed" in str(exc_info.value)
         assert exc_info.value.status_code == 502
+
+
+def _fake_chatgpt_oauth_token(account_id: str) -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"https://api.openai.com/auth": {"chatgpt_account_id": account_id}}).encode()
+    ).rstrip(b"=").decode()
+    return f"{header}.{payload}.fake-signature"
+
+
+def _gateway_authenticator() -> MagicMock:
+    authenticator = MagicMock()
+    authenticator.get_access_token.return_value = "gateway-access-token"
+    authenticator.get_account_id.return_value = "acct-gateway"
+    return authenticator
+
+
+def _config_with(authenticator: MagicMock) -> ChatGPTResponsesAPIConfig:
+    return ChatGPTResponsesAPIConfig(authenticator=authenticator)
+
+
+class TestChatGPTClientCredentialForwarding:
+    def test_client_chatgpt_oauth_wins_over_configured_key_and_gateway_login(self):
+        authenticator = _gateway_authenticator()
+        token = _fake_chatgpt_oauth_token("acct-alice")
+
+        headers = _config_with(authenticator).validate_environment(
+            headers={"Authorization": f"Bearer {token}", "originator": "codex_cli_rs"},
+            model="gpt-5.4",
+            litellm_params=GenericLiteLLMParams(api_key="configured-gateway-key", litellm_session_id="session-1"),
+        )
+
+        assert headers["Authorization"] == f"Bearer {token}"
+        assert headers["ChatGPT-Account-Id"] == "acct-alice"
+        assert headers["originator"] == "codex_cli_rs"
+        assert headers["accept"] == "text/event-stream"
+        assert [name for name in headers if name.lower() == "authorization"] == ["Authorization"]
+        authenticator.get_access_token.assert_not_called()
+
+    def test_explicit_account_header_wins_over_jwt_claim(self):
+        token = _fake_chatgpt_oauth_token("acct-from-jwt")
+
+        headers = _config_with(_gateway_authenticator()).validate_environment(
+            headers={"authorization": f"Bearer {token}", "chatgpt-account-id": "acct-from-header"},
+            model="gpt-5.4",
+            litellm_params=GenericLiteLLMParams(),
+        )
+
+        assert headers["ChatGPT-Account-Id"] == "acct-from-header"
+        assert [name for name in headers if name.lower() == "chatgpt-account-id"] == ["ChatGPT-Account-Id"]
+
+    @pytest.mark.parametrize("bearer", ["Bearer sk-proj-fake-platform-key", "Bearer not-a-jwt", "Bearer a.bm90LWpzb24.c"])
+    def test_non_chatgpt_bearer_falls_back_to_configured_key(self, bearer):
+        authenticator = _gateway_authenticator()
+
+        headers = _config_with(authenticator).validate_environment(
+            headers={"Authorization": bearer},
+            model="gpt-5.4",
+            litellm_params=GenericLiteLLMParams(api_key="configured-gateway-key"),
+        )
+
+        assert "ChatGPT-Account-Id" not in headers
+        authenticator.get_access_token.assert_not_called()
+
+    def test_configured_key_is_used_without_client_credential(self):
+        authenticator = _gateway_authenticator()
+
+        headers = _config_with(authenticator).validate_environment(
+            headers={},
+            model="gpt-5.4",
+            litellm_params=GenericLiteLLMParams(api_key="configured-gateway-key"),
+        )
+
+        assert headers["Authorization"] == "Bearer configured-gateway-key"
+        authenticator.get_access_token.assert_not_called()
+
+    def test_gateway_login_is_used_without_client_credential_or_configured_key(self):
+        headers = _config_with(_gateway_authenticator()).validate_environment(
+            headers={},
+            model="gpt-5.4",
+            litellm_params=GenericLiteLLMParams(),
+        )
+
+        assert headers["Authorization"] == "Bearer gateway-access-token"
+        assert headers["ChatGPT-Account-Id"] == "acct-gateway"
+
+    def test_two_clients_never_share_a_credential(self):
+        config = _config_with(_gateway_authenticator())
+        alice = _fake_chatgpt_oauth_token("acct-alice")
+        bob = _fake_chatgpt_oauth_token("acct-bob")
+
+        forwarded = [
+            config.validate_environment(
+                headers={"Authorization": f"Bearer {token}"}, model="gpt-5.4", litellm_params=GenericLiteLLMParams()
+            )
+            for token in (alice, bob, alice)
+        ]
+
+        assert [h["Authorization"] for h in forwarded] == [f"Bearer {alice}", f"Bearer {bob}", f"Bearer {alice}"]
+        assert [h["ChatGPT-Account-Id"] for h in forwarded] == ["acct-alice", "acct-bob", "acct-alice"]
