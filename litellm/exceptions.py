@@ -500,6 +500,7 @@ class RateLimitError(openai.RateLimitError):
         self.response = httpx.Response(
             status_code=429,
             headers=_response_headers,
+            content=response.content if response is not None else None,
             request=httpx.Request(
                 method="POST",
                 url=" https://cloud.google.com/vertex-ai/",

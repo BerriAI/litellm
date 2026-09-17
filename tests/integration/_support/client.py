@@ -3,16 +3,15 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from hashlib import sha256
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Final, TypeVar
 
 import httpx
-from pydantic import JsonValue, TypeAdapter
-
 from integration._support.database import read_rows
+from pydantic import JsonValue, TypeAdapter
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 T = TypeVar("T")
@@ -123,6 +122,16 @@ class Scenario:
         response: Final = self.gateway.request("DELETE", "/project/delete", {"project_ids": [identity]})
         assert response.status_code == 200, response.text
         assert read_rows('SELECT project_id FROM "LiteLLM_ProjectTable" WHERE project_id = %s', (identity,)) == []
+
+    def budget(self, **fields: JsonValue) -> str:
+        created: Final = self.gateway.post("/budget/new", fields)
+        identity: Final = string_value(created["budget_id"])
+        self.cleanups.callback(self.delete_budget, identity)
+        return identity
+
+    def delete_budget(self, identity: str) -> None:
+        self.gateway.post("/budget/delete", {"id": identity})
+        assert read_rows('SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (identity,)) == []
 
     def user(self, **fields: JsonValue) -> str:
         created: Final = self.gateway.post(

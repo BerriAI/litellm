@@ -15,6 +15,7 @@ litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-gcp.workspace = true
+litellm-framing.workspace = true
 moka.workspace = true
 mime_guess = "2.0.5"
 rand.workspace = true
@@ -22,16 +23,20 @@ reqwest.workspace = true
 rustls.workspace = true
 rustls-native-certs.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+serde_with.workspace = true
 serde_path_to_error = "0.1"
 strum.workspace = true
 subtle.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tokio-tungstenite.workspace = true
 thiserror.workspace = true
+time.workspace = true
 sha2.workspace = true
 url.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+aws-smithy-eventstream = "=0.61.1"
+aws-smithy-types = "1.6.1"
 rstest.workspace = true
