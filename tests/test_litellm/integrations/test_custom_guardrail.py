@@ -2700,6 +2700,22 @@ class TestLoggingOnlyApplyGuardrail:
         ]
 
     @pytest.mark.asyncio
+    async def test_anthropic_messages_response_scan_keeps_reply_when_scoping_empties_request(self):
+        class _ContextObserver(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                self.calls.append((input_type, inputs.get("structured_messages"), inputs.get("tools")))
+                return inputs
+
+        guardrail = _ContextObserver()
+        guardrail.scan_only_tool_results = True
+        kwargs, response = _logged_call([{"role": "user", "content": "What is the capital of France?"}])
+
+        await guardrail.async_logging_hook(kwargs, response, CallTypes.anthropic_messages.value)
+
+        assert guardrail.calls == [("response", [{"role": "assistant", "content": "general kenobi"}], None)]
+
+    @pytest.mark.asyncio
     async def test_async_success_handler_records_verdict_in_standard_logging_object(self):
         import datetime as dt
 
