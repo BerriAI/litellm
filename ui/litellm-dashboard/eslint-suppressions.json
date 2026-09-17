@@ -1066,7 +1066,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
@@ -1804,16 +1804,16 @@
       "count": 1
     },
     "max-params": {
-      "count": 23
+      "count": 21
     },
     "no-nested-ternary": {
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 150
+      "count": 147
     },
     "prefer-const": {
-      "count": 32
+      "count": 31
     }
   },
   "src/components/object_permissions_view.tsx": {

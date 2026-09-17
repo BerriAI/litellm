@@ -384,5 +384,3 @@ export const parseKeywords = (keywordsString: string): string[] => {
     .map((kw) => kw.trim())
     .filter((kw) => kw !== "");
 };
-
-
