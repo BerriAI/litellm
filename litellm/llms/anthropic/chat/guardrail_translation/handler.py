@@ -1584,10 +1584,12 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         stream_ended: Final = self._check_streaming_has_ended(responses_so_far)
+        tool_use_fingerprints: Final = self._streamed_tool_use_fingerprints(responses_so_far)
         return StreamingScanKey(
             texts=(self.get_streaming_string_so_far(responses_so_far),),
-            tool_calls=self._streamed_tool_use_fingerprints(responses_so_far) if stream_ended else (),
+            tool_calls=tool_use_fingerprints if stream_ended else (),
             stream_ended=stream_ended,
+            tool_calls_in_flight=bool(tool_use_fingerprints) and not stream_ended,
         )
 
     @classmethod

@@ -846,6 +846,39 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
     return isinstance(result, CustomStreamWrapper)
 
 
+def _is_converted_stream_result(result: object) -> bool:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    return isinstance(result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator))
+
+
+async def _run_success_deployment_hook_on_converted_chat_stream(
+    result: object, request_data: dict[str, object], call_type: str
+) -> None:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+
+    if not isinstance(result, CustomStreamWrapper):
+        return
+    completion_stream: Final = result.completion_stream
+    if not isinstance(completion_stream, MockResponseIterator):
+        return
+    call_type_enum: Final = _CALL_TYPE_ENUM_MAP.get(call_type)
+    if call_type_enum is None:
+        return
+    hooked: Final = await async_post_call_success_deployment_hook(
+        request_data=request_data,
+        response=completion_stream.model_response,
+        call_type=call_type_enum,
+    )
+    if not isinstance(hooked, ModelResponse) or hooked is completion_stream.model_response:
+        return
+    result.completion_stream = MockResponseIterator(  # rebind-ok: a new wrapper would drop headers and fire __del__
+        model_response=hooked, json_mode=completion_stream.json_mode
+    )
+
+
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 def function_setup(
     original_function: str,
@@ -1889,6 +1922,9 @@ def client(original_function):
                     _caching_handler_response.cached_result is not None
                     and _caching_handler_response.final_embedding_cached_response is None
                 ):
+                    if _is_converted_stream_result(_caching_handler_response.cached_result):
+                        logging_obj.stream = True
+                        logging_obj.model_call_details["stream"] = True
                     return _caching_handler_response.cached_result
 
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
@@ -1946,10 +1982,14 @@ def client(original_function):
                 raise
             end_time = datetime.datetime.now()
 
-            if _is_streaming_request(
-                kwargs=kwargs,
-                call_type=call_type,
-            ):
+            streaming_requested: Final = _is_streaming_request(kwargs=kwargs, call_type=call_type)
+            if streaming_requested or _is_converted_stream_result(result):
+                logging_obj.stream = True
+                logging_obj.model_call_details["stream"] = True
+                if not streaming_requested:
+                    await _run_success_deployment_hook_on_converted_chat_stream(
+                        result=result, request_data=kwargs, call_type=call_type
+                    )
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
                     chunks: Final = []
                     for idx, chunk in enumerate(result):
@@ -2202,13 +2242,18 @@ def _is_streaming_request(
 
 def _select_tokenizer(model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None = None):
     if custom_tokenizer is not None:
-        _tokenizer: Final = create_pretrained_tokenizer(
+        return _select_custom_tokenizer_helper(
             identifier=custom_tokenizer["identifier"],
             revision=custom_tokenizer["revision"],
             auth_token=custom_tokenizer["auth_token"],
         )
-        return _tokenizer
     return _select_tokenizer_helper(model=model)
+
+
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _select_custom_tokenizer_helper(identifier: str, revision: str, auth_token: str | None) -> SelectTokenizerResponse:
+    verbose_logger.debug("Loading custom HuggingFace tokenizer %s (revision %s)", identifier, revision)
+    return create_pretrained_tokenizer(identifier=identifier, revision=revision, auth_token=auth_token)
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
@@ -2675,7 +2720,7 @@ def declared_value_factory(model: str, custom_llm_provider: str | None, key: str
     """Return a string value the model map declares for *key*, or ``None`` when it says nothing.
 
     The string-valued sibling of :func:`_supports_factory` and
-    :func:`_is_explicitly_disabled_factory`, public where those two are not because it is read
+    :func:`is_explicitly_disabled_factory`, public like the latter because both are read
     from the provider configs rather than from this module, sharing their
     ``get_llm_provider`` -> ``_get_model_info_helper`` chain and their unprefixed-twin
     fallback (#20885), so a provider-prefixed entry that omits the key still answers
@@ -2711,7 +2756,7 @@ def declared_value_factory(model: str, custom_llm_provider: str | None, key: str
         return None
 
 
-def _is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None, key: str) -> bool:
+def is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None, key: str) -> bool:
     """Return True only when the model map explicitly sets *key* to ``False``.
 
     This is the opt-out mirror of :func:`_supports_factory`.  Where
@@ -2830,7 +2875,7 @@ def is_vision_explicitly_disabled(model: str, custom_llm_provider: str | None = 
     The opt-out mirror of :func:`supports_vision`: a missing declaration reads as not
     disabled, so unknown or newly added models stay eligible for image routing.
     """
-    return _is_explicitly_disabled_factory(model, custom_llm_provider, "supports_vision")
+    return is_explicitly_disabled_factory(model, custom_llm_provider, "supports_vision")
 
 
 def supports_vision(model: str, custom_llm_provider: str | None = None) -> bool:
@@ -8732,6 +8777,7 @@ class ProviderConfigManager:
     def get_provider_responses_api_config(
         provider: LlmProviders | str,
         model: str | None = None,
+        api_base: str | None = None,
     ) -> BaseResponsesAPIConfig | None:
         from litellm.llms.openai_like.dynamic_config import (
             create_responses_config_class,
@@ -8753,7 +8799,7 @@ class ProviderConfigManager:
                 pass
 
         # Check Python classes first (custom overrides take priority)
-        result: Final = ProviderConfigManager._get_python_responses_api_config(provider_enum, model)
+        result: Final = ProviderConfigManager._get_python_responses_api_config(provider_enum, model, api_base)
         if result is not None:
             return result
 
@@ -8769,6 +8815,7 @@ class ProviderConfigManager:
     def _get_python_responses_api_config(
         provider: LlmProviders | None,
         model: str | None = None,
+        api_base: str | None = None,
     ) -> BaseResponsesAPIConfig | None:
         """Check for Python-class-based responses API configs (custom overrides)."""
         if provider is None:
@@ -8787,6 +8834,14 @@ class ProviderConfigManager:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
                 return litellm.AzureOpenAIResponsesAPIConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.common_utils import (
+                azure_ai_supports_native_responses,
+            )
+
+            if azure_ai_supports_native_responses(model, api_base):
+                return litellm.AzureAIResponsesAPIConfig()
+            return None
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
@@ -8984,6 +9039,12 @@ class ProviderConfigManager:
             )
 
             return WatsonxPassthroughConfig()
+        elif LlmProviders.NVIDIA_NIM == provider:
+            from litellm.llms.nvidia_nim.passthrough.transformation import (
+                NvidiaNimPassthroughConfig,
+            )
+
+            return NvidiaNimPassthroughConfig()
         return None
 
     @staticmethod

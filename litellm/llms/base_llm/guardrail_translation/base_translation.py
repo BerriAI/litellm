@@ -81,11 +81,15 @@ class StreamingScanKey:
     """What a streaming guardrail round would hand to ``apply_guardrail``. Two keys
     compare equal when the round would scan the same content again; ``stream_ended``
     stays out of the comparison and only says whether the handler is on its
-    end-of-stream path, where an empty payload is still scanned today."""
+    end-of-stream path, where an empty payload is still scanned today.
+    ``tool_calls_in_flight`` also stays out of the comparison: it flags that tool
+    calls have streamed which this round cannot scan yet, so a buffered window
+    holding them must stay withheld until the end-of-stream scan covers them."""
 
     texts: tuple[str, ...]
     tool_calls: tuple[str, ...] = ()
     stream_ended: bool = field(default=False, compare=False)
+    tool_calls_in_flight: bool = field(default=False, compare=False)
 
     @property
     def has_nothing_to_scan(self) -> bool:

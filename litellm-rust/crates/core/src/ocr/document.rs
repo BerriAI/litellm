@@ -1,3 +1,6 @@
+use std::io::Read;
+use std::path::Path;
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::mime::Mime;
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError};
@@ -5,10 +8,51 @@ use reqwest::Url;
 use serde_json::Map;
 
 use super::error::{OcrError, OcrRequestError, OcrResponseError};
-use super::types::{OcrConnection, OcrDocument};
+use super::types::{OcrConnection, OcrDocument, OcrDocumentInput};
 use crate::constants::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS};
-use crate::error::{MediaError, TransportError};
+use crate::media::Error as MediaError;
 use crate::media::{DownloadPolicy, MediaFetcher};
+use crate::transport::Error as TransportError;
+
+pub fn prepare_document(input: OcrDocumentInput) -> Result<OcrDocument, super::Error> {
+    match input {
+        OcrDocumentInput::Document(document) => Ok(document),
+        OcrDocumentInput::Path { path, mime_type } => {
+            read_path_document(&path, mime_type.as_deref())
+        }
+        OcrDocumentInput::Bytes {
+            bytes,
+            file_name,
+            mime_type,
+        } => Ok(encode_file_document(
+            &bytes,
+            file_name.as_deref(),
+            mime_type.as_deref(),
+        )?),
+        OcrDocumentInput::HostReader { .. } => Err(super::Error::InvalidRequest(
+            "OCR file reader was not read by the host".into(),
+        )),
+    }
+}
+
+pub fn read_path_document(
+    path: &Path,
+    mime_type: Option<&str>,
+) -> Result<OcrDocument, super::Error> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| {
+            file.take(OCR_INLINE_MAX_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+        })
+        .map_err(|source| super::Error::FileRead {
+            path: path.to_owned(),
+            kind: source.kind(),
+            message: source.to_string(),
+        })?;
+    let name = path.file_name().map(|name| name.to_string_lossy());
+    Ok(encode_file_document(&bytes, name.as_deref(), mime_type)?)
+}
 
 pub fn encode_file_document(
     bytes: &[u8],
@@ -70,18 +114,6 @@ pub fn mime_type_for_name(name: &str) -> &'static str {
         "bmp" => "image/bmp",
         _ => mime_guess::from_path(name)
             .first_raw()
-            .unwrap_or("application/octet-stream"),
-    }
-}
-
-pub fn upload_mime_type<'a>(file_name: Option<&str>, content_type: Option<&'a str>) -> &'a str {
-    match content_type
-        .and_then(|value| value.split(';').next())
-        .map(str::trim)
-    {
-        Some(value) if !value.is_empty() && value != "application/octet-stream" => value,
-        _ => file_name
-            .map(mime_type_for_name)
             .unwrap_or("application/octet-stream"),
     }
 }
@@ -229,24 +261,65 @@ mod tests {
     }
 
     #[test]
-    fn upload_mime_mapping_matches_python() {
+    fn path_documents_are_read_and_named_by_core() {
+        let dir = std::env::temp_dir().join(format!("litellm-ocr-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("scan.png");
+        std::fs::write(&path, b"abc").unwrap();
         assert_eq!(
-            upload_mime_type(Some("report.pdf"), Some("application/octet-stream")),
-            "application/pdf"
+            prepare_document(OcrDocumentInput::Path {
+                path: path.clone(),
+                mime_type: None,
+            })
+            .unwrap(),
+            OcrDocument::ImageUrl {
+                image_url: "data:image/png;base64,YWJj".into(),
+                extra_fields: Map::new(),
+            }
         );
-        assert_eq!(upload_mime_type(Some("image.png"), None), "image/png");
-        assert_eq!(upload_mime_type(None, None), "application/octet-stream");
         assert_eq!(
-            upload_mime_type(Some("doc.pdf"), Some("application/pdf; charset=utf-8")),
-            "application/pdf"
+            prepare_document(OcrDocumentInput::Path {
+                path: path.clone(),
+                mime_type: Some("application/pdf".into()),
+            })
+            .unwrap(),
+            document("data:application/pdf;base64,YWJj")
         );
+        std::fs::write(&path, vec![b'a'; OCR_INLINE_MAX_BYTES + 1]).unwrap();
         assert_eq!(
-            upload_mime_type(
-                Some("img.png"),
-                Some("image/png; charset=utf-8; boundary=something")
-            ),
-            "image/png"
+            prepare_document(OcrDocumentInput::Path {
+                path: path.clone(),
+                mime_type: None,
+            }),
+            Err(OcrRequestError::InlineDocumentTooLarge.into())
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let missing = dir.join("missing.pdf");
+        let Err(super::super::Error::FileRead { path, kind, .. }) =
+            prepare_document(OcrDocumentInput::Path {
+                path: missing.clone(),
+                mime_type: None,
+            })
+        else {
+            panic!("missing paths must surface a file read error");
+        };
+        assert_eq!(path, missing);
+        assert_eq!(kind, std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn byte_documents_are_encoded_and_host_readers_must_be_read_first() {
+        assert_eq!(
+            prepare_document(OcrDocumentInput::Bytes {
+                bytes: b"abc".as_slice().into(),
+                file_name: Some("scan.pdf".into()),
+                mime_type: None,
+            })
+            .unwrap(),
+            document("data:application/pdf;base64,YWJj")
+        );
+        assert!(prepare_document(OcrDocumentInput::HostReader { mime_type: None }).is_err());
     }
 
     #[test]

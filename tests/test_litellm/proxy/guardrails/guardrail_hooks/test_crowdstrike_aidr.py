@@ -1620,8 +1620,21 @@ def test_initialize_guardrail_rejects_unsupported_mode_instead_of_running_other_
 def test_initialize_guardrail_defaults_streaming_params() -> None:
     handler = _initialize_from_config(mode="post_call")
 
+    assert handler.streaming_buffer_until_moderated is False
+    assert handler.streaming_buffer_release_on_scan is False
     assert handler.streaming_end_of_stream_only is False
     assert handler.streaming_sampling_rate == 5
+
+
+def test_initialize_guardrail_forwards_buffer_streaming_params() -> None:
+    handler = _initialize_from_config(
+        mode="post_call",
+        streaming_buffer_until_moderated=True,
+        streaming_buffer_release_on_scan=True,
+    )
+
+    assert handler.streaming_buffer_until_moderated is True
+    assert handler.streaming_buffer_release_on_scan is True
 
 
 @pytest.mark.parametrize(

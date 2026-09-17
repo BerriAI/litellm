@@ -260,6 +260,8 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         fail_on_error: bool | None = True,
+        streaming_buffer_until_moderated: bool | None = None,
+        streaming_buffer_release_on_scan: bool | None = None,
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         async_handler: AsyncHTTPHandler | None = None,
@@ -287,6 +289,8 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             CrowdStrikeAIDRGuardrailConfigModelOptionalParams(
                 streaming_end_of_stream_only=streaming_end_of_stream_only,
                 streaming_sampling_rate=streaming_sampling_rate,
+                streaming_buffer_until_moderated=streaming_buffer_until_moderated,
+                streaming_buffer_release_on_scan=streaming_buffer_release_on_scan,
             )
         )
 
@@ -310,6 +314,8 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         )
 
     def _set_streaming_params(self, streaming_params: CrowdStrikeAIDRGuardrailConfigModelOptionalParams) -> None:
+        self.streaming_buffer_until_moderated: bool = streaming_params.streaming_buffer_until_moderated or False
+        self.streaming_buffer_release_on_scan: bool = streaming_params.streaming_buffer_release_on_scan or False
         self.streaming_end_of_stream_only: bool = streaming_params.streaming_end_of_stream_only or False
         self.streaming_sampling_rate: int = streaming_params.streaming_sampling_rate or 5
 
