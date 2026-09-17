@@ -1,13 +1,12 @@
 name: "Cost map independence"
 
-on: # zizmor: ignore[dangerous-triggers] runs the PR head's code on a read-only token, same as test-linting.yml
+on:
   pull_request:
     branches:
       - main
       - litellm_internal_staging
       - litellm_oss_staging
       - "litellm_**"
-  workflow_dispatch:
 
 permissions:
   contents: read
