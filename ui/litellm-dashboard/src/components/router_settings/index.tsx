@@ -86,15 +86,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
 
     const router_settings = formValue.routerSettings;
 
-    const numberKeys = new Set([
-      "allowed_fails",
-      "cooldown_time",
-      "num_retries",
-      "timeout",
-      "retry_after",
-      "default_max_parallel_requests_queue_size",
-    ]);
-    const unsettableNumberKeys = new Set(["default_max_parallel_requests_queue_size"]);
+    const numberKeys = new Set(["allowed_fails", "cooldown_time", "num_retries", "timeout", "retry_after"]);
     const jsonKeys = new Set(["model_group_alias"]);
     // retry_policy and model_group_retry_policy are owned by the Model Retry Settings tab;
     // routing_groups is owned by the Routing Groups tab. This page must not read or write them.
@@ -108,7 +100,6 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
       if (v.toLowerCase() === "null") return null;
 
       if (numberKeys.has(key)) {
-        if (v === "" && unsettableNumberKeys.has(key)) return null;
         const n = Number(v);
         return Number.isNaN(n) ? fallback : n;
       }

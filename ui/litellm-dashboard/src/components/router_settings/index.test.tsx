@@ -137,41 +137,6 @@ describe("RouterSettings", () => {
     );
   });
 
-  it("should save default_max_parallel_requests_queue_size as a number and an empty field as null", async () => {
-    vi.mocked(getCallbacksCall).mockResolvedValue({
-      router_settings: { ...mockCallbacksResponse.router_settings, default_max_parallel_requests_queue_size: null },
-    });
-    const user = userEvent.setup();
-    renderWithProviders(<RouterSettings {...defaultProps} />);
-
-    await findStrategySelect();
-
-    const queueSize = await screen.findByRole("textbox", { name: /default_max_parallel_requests_queue_size/i });
-    fireEvent.change(queueSize, { target: { value: "4" } });
-    await user.click(screen.getByRole("button", { name: /save changes/i }));
-
-    await waitFor(() =>
-      expect(setCallbacksCall).toHaveBeenLastCalledWith(
-        "test-token",
-        expect.objectContaining({
-          router_settings: expect.objectContaining({ default_max_parallel_requests_queue_size: 4 }),
-        }),
-      ),
-    );
-
-    fireEvent.change(queueSize, { target: { value: "" } });
-    await user.click(screen.getByRole("button", { name: /save changes/i }));
-
-    await waitFor(() =>
-      expect(setCallbacksCall).toHaveBeenLastCalledWith(
-        "test-token",
-        expect.objectContaining({
-          router_settings: expect.objectContaining({ default_max_parallel_requests_queue_size: null }),
-        }),
-      ),
-    );
-  });
-
   it("should show a success notification after saving", async () => {
     const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);

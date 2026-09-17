@@ -3841,7 +3841,6 @@ all_litellm_params = (
         "itpm",
         "otpm",
         "max_parallel_requests",
-        "max_parallel_requests_queue_size",
         "input_cost_per_token",
         "output_cost_per_token",
         "input_cost_per_second",
