@@ -3,28 +3,35 @@ import asyncio
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import (
-    Any,
     Final,
+    NamedTuple,
     Protocol,
     cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
 )
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
-from pydantic import ConfigDict, JsonValue, ValidationError, create_model
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model
 from pydantic.fields import FieldInfo
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
+from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
     SSO_SECRET_FIELDS,
     resolve_sso_config,
+)
+from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import invalidate_config_param
@@ -36,12 +43,38 @@ from litellm.repositories.table_repositories import (
     UISettingsRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.mcp import MCPToolSearchSettings
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
 )
 
 router: Final = APIRouter()
+
+
+JsonSchemaItems: Final = TypedDict(
+    "JsonSchemaItems",
+    {"$ref": ReadOnly[str], "enum": ReadOnly[Sequence[JsonValue]]},
+    total=False,
+)
+
+
+class JsonSchemaNode(TypedDict, total=False):
+    type: ReadOnly[str]
+    description: ReadOnly[str]
+    enum: ReadOnly[Sequence[JsonValue]]
+    anyOf: ReadOnly[Sequence["JsonSchemaNode"]]
+    items: ReadOnly["JsonSchemaItems"]
+    properties: ReadOnly[Mapping[str, "JsonSchemaNode"]]
+
+
+_EMPTY_SCHEMA_DEFS: Final[Mapping[str, "JsonSchemaNode"]] = MappingProxyType({})
+
+
+class JsonSchemaPropertyEntry(TypedDict):
+    description: ReadOnly[str]
+    type: ReadOnly[str]
+    items: NotRequired[ReadOnly["JsonSchemaItems"]]
 
 
 class _SsoSettingsMappingRow(Protocol):
@@ -157,10 +190,10 @@ class UIThemeConfig(BaseModel):
 class SettingsResponse(BaseModel):
     """Base response model for settings with values and schema information"""
 
-    values: dict[str, Any]
+    values: dict[str, object]
     """The current configuration values"""
 
-    field_schema: dict[str, Any]
+    field_schema: dict[str, object]
     """Schema information including descriptions and property types for UI display"""
 
 
@@ -181,6 +214,9 @@ class DefaultTeamSettingsResponse(SettingsResponse):
 
 class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
+
+
+_TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS))
 
 
 class UISettings(BaseModel):
@@ -275,6 +311,18 @@ class UISettings(BaseModel):
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
 
+    team_admin_editable_team_fields: Sequence[str] = Field(
+        default=(),
+        description=(
+            "Team settings fields a team admin may change on the teams they administer. "
+            "Empty means team admins cannot edit team settings at all. "
+            "Proxy admins and org admins are not affected."
+        ),
+        json_schema_extra={  # mutable-ok: pydantic only merges json_schema_extra when it is a plain dict
+            "items": {"type": "string", "enum": [*_TEAM_ADMIN_FIELD_ENUM]},  # mutable-ok: nested in the dict above
+        },
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -297,6 +345,7 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
+    TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 }
 
 ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"
@@ -331,6 +380,7 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
     "disable_key_generate_for_org_admin",
+    TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 ]
 
 # Extension point: packages outside OSS (e.g. litellm_enterprise) can
@@ -419,6 +469,10 @@ class MCPSemanticFilterSettings(BaseModel):
 
 class MCPSemanticFilterSettingsResponse(SettingsResponse):
     """Response model for MCP semantic filter settings"""
+
+
+class MCPToolSearchSettingsResponse(SettingsResponse):
+    """Response model for native MCP tool search settings"""
 
 
 @router.get(
@@ -548,6 +602,62 @@ async def delete_allowed_ip(
     return {"message": f"IP {ip_address.ip} deleted successfully", "status": "success"}
 
 
+def _resolve_non_null_variant(field_info: JsonSchemaNode) -> JsonSchemaNode:
+    """Pydantic v2 renders Optional fields as ``anyOf: [actual_type, null]``."""
+    if "anyOf" not in field_info:
+        return field_info
+    return next((variant for variant in field_info["anyOf"] if variant.get("type") != "null"), field_info)
+
+
+def _schema_items_entry(resolved: JsonSchemaNode, defs: Mapping[str, JsonSchemaNode]) -> "JsonSchemaItems | None":
+    """Items info (including enum values) for array fields, so the UI can render a multi-select dropdown."""
+    if "items" not in resolved:
+        return None
+    items: Final = resolved["items"]
+    if "$ref" not in items:
+        return items
+    ref_def: Final = defs.get(items["$ref"].split("/")[-1])
+    if ref_def is None or "enum" not in ref_def:
+        return None
+    enum_items: Final[JsonSchemaItems] = {"enum": ref_def["enum"]}
+    return enum_items
+
+
+def _schema_property_entry(field_info: JsonSchemaNode, defs: Mapping[str, JsonSchemaNode]) -> JsonSchemaPropertyEntry:
+    resolved: Final = _resolve_non_null_variant(field_info)
+    items_entry: Final = _schema_items_entry(resolved, defs)
+    description: Final = field_info.get("description", "")
+    type_name: Final = resolved.get("type", "string")
+    if items_entry is None:
+        entry: Final[JsonSchemaPropertyEntry] = {"description": description, "type": type_name}
+        return entry
+    entry_with_items: Final[JsonSchemaPropertyEntry] = {
+        "description": description,
+        "type": type_name,
+        "items": items_entry,
+    }
+    return entry_with_items
+
+
+class _RootSchema(NamedTuple):
+    description: str
+    properties: Mapping[str, JsonSchemaNode]
+    nested_defs: Mapping[str, JsonSchemaNode]
+    defs: Mapping[str, JsonSchemaNode]
+
+
+def _root_schema(settings_class: type[BaseModel]) -> _RootSchema:
+    from pydantic import TypeAdapter
+
+    raw_schema: Final = TypeAdapter(settings_class).json_schema(by_alias=True)
+    return _RootSchema(
+        description=raw_schema.get("description", ""),
+        properties=raw_schema["properties"],
+        nested_defs=raw_schema.get("definitions", _EMPTY_SCHEMA_DEFS),
+        defs=raw_schema["$defs"] if "$defs" in raw_schema else raw_schema.get("definitions", _EMPTY_SCHEMA_DEFS),
+    )
+
+
 async def _get_settings_with_schema(
     settings_key: str,
     settings_class: type[BaseModel],
@@ -561,69 +671,43 @@ async def _get_settings_with_schema(
         settings_class: The Pydantic class to use for schema
         config: The config dictionary
     """
-    from pydantic import TypeAdapter
-
     litellm_settings: Final = config.get("litellm_settings", {}) or {}
     settings_data: Final = litellm_settings.get(settings_key, {}) or {}
 
     # Create the settings object
     settings: Final = settings_class(**(settings_data))
     # Get the schema
-    schema: Final = TypeAdapter(settings_class).json_schema(by_alias=True)
+    root_schema: Final = _root_schema(settings_class)
 
     # Convert to dict for response
     settings_dict: Final = settings.model_dump()
 
     # Add descriptions to the response
-    result: Final = {
-        "values": settings_dict,
-        "field_schema": {
-            "description": schema.get("description", ""),
-            "properties": {},
-        },
+    schema_properties_out: Final[Mapping[str, JsonSchemaPropertyEntry]] = {
+        field_name: _schema_property_entry(field_info, root_schema.defs)
+        for field_name, field_info in root_schema.properties.items()
     }
 
-    # Add property descriptions
-    defs: Final = schema.get("$defs", schema.get("definitions", {}))
-    for field_name, field_info in schema["properties"].items():
-        # For Optional fields, Pydantic v2 uses anyOf with [actual_type, null].
-        # Resolve the non-null variant to get the real type and items.
-        resolved = field_info
-        if "anyOf" in field_info:
-            for variant in field_info["anyOf"]:
-                if variant.get("type") != "null":
-                    resolved = variant
-                    break
-
-        prop_entry: dict = {
-            "description": field_info.get("description", ""),
-            "type": resolved.get("type", "string"),
-        }
-        # Pass through items info (including enum values) for array fields
-        # so the UI can render a multi-select dropdown
-        if "items" in resolved:
-            items = resolved["items"]
-            # Resolve $ref to enum definitions if needed
-            if "$ref" in items:
-                ref_name = items["$ref"].split("/")[-1]
-                ref_def = defs.get(ref_name, {})
-                if "enum" in ref_def:
-                    prop_entry["items"] = {"enum": ref_def["enum"]}
-            else:
-                prop_entry["items"] = items
-        result["field_schema"]["properties"][field_name] = prop_entry
-
     # Add nested object descriptions
-    for def_name, def_schema in schema.get("definitions", {}).items():
-        result["field_schema"][def_name] = {
+    nested_defs_out: Final[Mapping[str, Mapping[str, object]]] = {
+        def_name: {
             "description": def_schema.get("description", ""),
             "properties": {
                 prop_name: {"description": prop_info.get("description", "")}
                 for prop_name, prop_info in def_schema.get("properties", {}).items()
             },
         }
+        for def_name, def_schema in root_schema.nested_defs.items()
+    }
 
-    return result
+    return {
+        "values": settings_dict,
+        "field_schema": {
+            "description": root_schema.description,
+            "properties": schema_properties_out,
+            **nested_defs_out,
+        },
+    }
 
 
 @router.get(
@@ -778,7 +862,7 @@ async def update_default_team_member_budget(teams: list[NewUserRequestTeam], use
 
 
 async def _update_litellm_setting(
-    settings: DefaultInternalUserParams | DefaultTeamSSOParams | MCPSemanticFilterSettings,
+    settings: DefaultInternalUserParams | DefaultTeamSSOParams | MCPSemanticFilterSettings | MCPToolSearchSettings,
     settings_key: str,
     success_message: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -804,7 +888,7 @@ async def _update_litellm_setting(
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
-    in_memory_var: Final = settings.model_dump(exclude_none=True)
+    in_memory_var: Final = settings.model_dump(mode="json", exclude_none=True)
 
     # Load existing config first, then set in-memory value after,
     # because get_config() may overwrite litellm.<key> with stale DB values
@@ -930,32 +1014,29 @@ async def get_sso_settings():
     resolved: Final = resolve_sso_config(sso_db_settings, os.environ)
 
     # Get the schema for UI display
-    from pydantic import TypeAdapter
-
-    schema: Final = TypeAdapter(SSOConfig).json_schema(by_alias=True)
+    root_schema: Final = _root_schema(SSOConfig)
 
     # Convert to dict for response, masking OAuth client secrets so plaintext
     # is never sent to the UI.
     sso_dict: Final = mask_sensitive_keys(resolved.config.model_dump(), set(SSO_SECRET_FIELDS))
 
     # Add descriptions to the response
-    result: Final = {
-        "values": sso_dict,
-        "provenance": resolved.provenance,
-        "field_schema": {
-            "description": schema.get("description", ""),
-            "properties": {},
-        },
-    }
-
-    # Add property descriptions
-    for field_name, field_info in schema["properties"].items():
-        result["field_schema"]["properties"][field_name] = {
+    schema_properties_out: Final[Mapping[str, Mapping[str, str]]] = {
+        field_name: {
             "description": field_info.get("description", ""),
             "type": field_info.get("type", "string"),
         }
+        for field_name, field_info in root_schema.properties.items()
+    }
 
-    return result
+    return {
+        "values": sso_dict,
+        "provenance": resolved.provenance,
+        "field_schema": {
+            "description": root_schema.description,
+            "properties": schema_properties_out,
+        },
+    }
 
 
 @router.patch(
@@ -1305,11 +1386,64 @@ async def update_mcp_semantic_filter_settings(
     return result
 
 
+@router.get(
+    "/get/mcp_tool_search_settings",
+    tags=["Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator only accepts a list
+    response_model=MCPToolSearchSettingsResponse,
+)
+async def get_mcp_tool_search_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> Mapping[str, object]:
+    """
+    Get the `litellm_settings.mcp_tool_search` configuration used by the native `mcp_tool_search` virtual tool.
+    """
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected. Please connect a database.")
+
+    config: Final = await proxy_config.get_config()
+
+    return await _get_settings_with_schema(
+        settings_key=MCP_TOOL_SEARCH_SETTINGS_KEY,
+        settings_class=MCPToolSearchSettings,
+        config=config,
+    )
+
+
+@router.patch(
+    "/update/mcp_tool_search_settings",
+    tags=["Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator only accepts a list
+)
+async def update_mcp_tool_search_settings(
+    settings: MCPToolSearchSettings,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> Mapping[str, object]:
+    """
+    Update `litellm_settings.mcp_tool_search` in the database.
+    Settings will be picked up by all pods within approximately 10 seconds via background polling.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can update MCP tool search settings.",
+        )
+
+    return await _update_litellm_setting(
+        settings=settings,
+        settings_key=MCP_TOOL_SEARCH_SETTINGS_KEY,
+        success_message="MCP tool search settings updated successfully. Changes will be applied across all pods within 10 seconds.",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
 UI_SETTINGS_CACHE_KEY: Final = "ui_settings:settings_dict"
 UI_SETTINGS_CACHE_TTL: Final = 600  # 10 minutes
 
 
-async def get_ui_settings_cached() -> dict[str, Any]:
+async def get_ui_settings_cached() -> dict[str, JsonValue]:
     """
     Return the persisted UI settings dict, using DualCache for reads.
 
@@ -1344,6 +1478,42 @@ async def get_ui_settings_cached() -> dict[str, Any]:
     return ui_settings
 
 
+_UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def apply_runtime_general_settings_flags(ui_settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    """Copy the UI settings that gate runtime behavior into ``general_settings``. Returns what was applied."""
+    from litellm.proxy.proxy_server import general_settings
+
+    flags: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
+    if flags:
+        general_settings.update(flags)
+    return MappingProxyType(flags)
+
+
+async def sync_ui_settings_to_general_settings(prisma_client: object) -> Mapping[str, JsonValue]:
+    """Re-read the persisted UI settings and apply the runtime flags to ``general_settings``.
+
+    Runs on startup and on every periodic config reload: the PATCH handler only updates the pod
+    that served it, so every other pod needs its own read to pick up a change without a restart.
+    Never raises. A read that fails leaves this pod on the flags it already had.
+    """
+    try:
+        db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
+            where={"id": "ui_settings"}
+        )
+        stored: Final = (db_record.ui_settings if db_record else None) or "{}"
+        parsed: Final = (
+            _UI_SETTINGS_OBJECT.validate_json(stored)
+            if isinstance(stored, str)
+            else _UI_SETTINGS_OBJECT.validate_python(stored)
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning("Could not refresh UI settings from the database: %s", e)
+        return MappingProxyType({})
+    return apply_runtime_general_settings_flags(parsed)
+
+
 @router.get(
     "/get/ui_settings",
     tags=["UI Settings"],
@@ -1372,13 +1542,7 @@ async def get_ui_settings():
     # Sanitize any unexpected keys from persisted config before returning
     ui_settings: Final = {k: v for k, v in parsed.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
-    # Sync runtime flags into general_settings so the proxy picks them up
-    # at runtime (covers server restart scenarios).
-    _flags_to_sync: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
-    if _flags_to_sync:
-        from litellm.proxy.proxy_server import general_settings
-
-        general_settings.update(_flags_to_sync)
+    apply_runtime_general_settings_flags(ui_settings)
 
     # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
     from litellm.proxy.proxy_server import user_api_key_cache
@@ -1458,6 +1622,20 @@ async def update_ui_settings(
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=e.errors())
 
+    unsupported_team_fields: Final = sorted(
+        frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+    )
+    if unsupported_team_fields:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
+                "error": (
+                    f"{TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING} does not support {unsupported_team_fields}. "
+                    f"Supported fields: {sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS)}."
+                )
+            },
+        )
+
     # Only include fields the caller actually sent (not Pydantic defaults).
     settings_dict: Final[Mapping[str, JsonValue]] = settings.model_dump(exclude_unset=True)
 
@@ -1503,13 +1681,7 @@ async def update_ui_settings(
         },
     )
 
-    # Sync runtime flags to general_settings so the proxy picks them up
-    # at runtime (general_settings is checked in pre-call utils).
-    _flags_to_sync: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
-    if _flags_to_sync:
-        from litellm.proxy.proxy_server import general_settings
-
-        general_settings.update(_flags_to_sync)
+    apply_runtime_general_settings_flags(ui_settings)
 
     # Invalidate + set DualCache so subsequent reads see the new values immediately
     from litellm.proxy.proxy_server import user_api_key_cache
@@ -1540,13 +1712,22 @@ async def update_ui_settings(
     tags=["UI Theme Settings"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def upload_logo(file: UploadFile = File(...)):
+async def upload_logo(
+    file: UploadFile = File(...),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Upload a custom logo for the admin UI.
     Accepts image files (PNG, JPG, JPEG, SVG) and stores them for use in the UI.
     """
     import os
     from pathlib import Path
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can upload a UI logo.",
+        )
 
     # Validate file type
     allowed_extensions: Final = {".png", ".jpg", ".jpeg", ".svg"}
@@ -1558,9 +1739,11 @@ async def upload_logo(file: UploadFile = File(...)):
             detail=f"Invalid file type. Allowed types: {', '.join(allowed_extensions)}",
         )
 
-    # Validate file size (max 5MB)
-    file_content: Final = await file.read()
-    if len(file_content) > 5 * 1024 * 1024:  # 5MB
+    # Read bounded to one byte past the limit, so an oversized upload is never
+    # fully buffered in memory before being rejected.
+    max_logo_size_bytes: Final = 5 * 1024 * 1024
+    file_content: Final = await file.read(max_logo_size_bytes + 1)
+    if len(file_content) > max_logo_size_bytes:
         raise HTTPException(status_code=400, detail="File size too large. Maximum size is 5MB.")
 
     # Create uploads directory if it doesn't exist

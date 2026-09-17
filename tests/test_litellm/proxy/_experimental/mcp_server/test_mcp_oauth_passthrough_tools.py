@@ -1,12 +1,18 @@
 """Unit tests for MCP OAuth passthrough tool-fetch behavior."""
 
+import logging
+import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
 
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
+
+
+from litellm.proxy._experimental.mcp_server.exceptions import MCPServerListError, MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _extract_upstream_auth_failure,
@@ -37,7 +43,7 @@ def test_extract_upstream_auth_failure_walks_exception_group():
     inner = httpx.HTTPStatusError("401", request=response.request, response=response)
 
     try:
-        raise ExceptionGroup("wrapped", [inner])  # noqa: F821 (PEP 654, py3.11+)
+        raise ExceptionGroup("wrapped", [inner])
     except Exception as group:
         result = _extract_upstream_auth_failure(group)
 
@@ -429,3 +435,43 @@ async def test_aggregate_with_single_accessible_server_still_absorbs():
 
     assert listing.tools == []
     assert listing.outcomes["delegate_docs"].tag == "auth_required"
+
+
+@pytest.mark.asyncio
+async def test_fetch_tools_logs_upstream_request_details_on_500(caplog):
+    manager = MCPServerManager()
+    request = httpx.Request(
+        "POST",
+        "https://upstream/apis/mcp",
+        headers={"Authorization": "Bearer upstream-token-0123456789"},
+        content=b'{"method":"initialize","jsonrpc":"2.0","id":0}',
+    )
+    response = httpx.Response(500, request=request)
+    mock_client = MagicMock()
+    mock_client.list_tools = AsyncMock(
+        side_effect=httpx.HTTPStatusError("500", request=request, response=response)
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with pytest.raises(MCPServerListError):
+            await manager._fetch_tools_with_timeout(mock_client, "sample_docs")
+
+    assert "POST https://upstream/ -> HTTP 500" in caplog.text
+    assert '"method":"initialize"' in caplog.text
+    assert "upstream-token-0123456789" not in caplog.text
+
+
+
+@pytest.mark.asyncio
+async def test_client_creation_failure_logs_sanitized_exchange(monkeypatch, caplog):
+    manager = MCPServerManager()
+    server = MCPServer(server_id="sample", name="sample", url="https://upstream/mcp", transport=MCPTransport.http, auth_type=MCPAuth.none)
+    request = httpx.Request("POST", "https://upstream/mcp?credential=query-secret")
+    response = httpx.Response(500, request=request, json={"error":"missing_scope"})
+    error = httpx.HTTPStatusError("query-secret", request=request, response=response)
+    monkeypatch.setattr(manager, "_create_mcp_client", AsyncMock(side_effect=error))
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with pytest.raises(MCPServerListError):
+            await manager._get_tools_from_server(server)
+    assert "POST https://upstream/ -> HTTP 500" in caplog.text
+    assert "missing_scope" in caplog.text and "query-secret" not in caplog.text

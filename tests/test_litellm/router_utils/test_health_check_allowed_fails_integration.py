@@ -179,7 +179,7 @@ class TestHealthCheckCooldownIntegration:
         assert result is False
 
         # Check counter was incremented
-        current_fails = router.failed_calls.get_cache(key="deploy-1")
+        current_fails = router.cache.get_cache(key="deployment:deploy-1:allowed_fails")
         assert current_fails == 1
 
     def test_health_check_failure_triggers_cooldown_at_threshold(self):
@@ -263,7 +263,7 @@ class TestHealthCheckCooldownIntegration:
         assert "exception" not in healthy_endpoint
 
         # Verify failed_calls counter is untouched
-        current_fails = router.failed_calls.get_cache(key="deploy-1")
+        current_fails = router.cache.get_cache(key="deployment:deploy-1:allowed_fails")
         assert current_fails is None
 
     def test_disable_cooldowns_prevents_health_check_cooldown(self):

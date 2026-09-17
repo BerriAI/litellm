@@ -11,6 +11,9 @@ func resourceLiteLLMMCPServer() *schema.Resource {
 		Read:   resourceLiteLLMMCPServerRead,
 		Update: resourceLiteLLMMCPServerUpdate,
 		Delete: resourceLiteLLMMCPServerDelete,
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 
 		Schema: map[string]*schema.Schema{
 			"server_name": {

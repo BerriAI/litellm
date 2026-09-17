@@ -25,31 +25,15 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
     <div>
       {/* Description */}
       {tool.description && (
-        <div style={{ marginBottom: 16 }}>
-          <span
-            style={{
-              lineHeight: 1.6,
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            {tool.description}
-          </span>
+        <div className="mb-4">
+          <span className="whitespace-pre-wrap leading-relaxed">{tool.description}</span>
         </div>
       )}
 
       {/* Parameters Table */}
       {parameterRows.length > 0 && (
         <div>
-          <span
-            className="text-muted-foreground"
-            style={{
-              fontSize: 12,
-              display: "block",
-              marginBottom: 8,
-            }}
-          >
-            Parameters
-          </span>
+          <span className="mb-2 block text-xs text-muted-foreground">Parameters</span>
           <Table>
             <TableHeader>
               <TableRow>
@@ -82,33 +66,10 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
 
       {/* If tool was called, show the arguments used */}
       {tool.called && tool.callData && (
-        <div style={{ marginTop: 16 }}>
-          <span
-            className="text-muted-foreground"
-            style={{
-              fontSize: 12,
-              display: "block",
-              marginBottom: 8,
-            }}
-          >
-            Called With
-          </span>
-          <div
-            style={{
-              background: "#f6ffed",
-              border: "1px solid #b7eb8f",
-              borderRadius: 4,
-              padding: 12,
-            }}
-          >
-            <pre
-              style={{
-                margin: 0,
-                fontSize: 12,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}
-            >
+        <div className="mt-4">
+          <span className="mb-2 block text-xs text-muted-foreground">Called With</span>
+          <div className="rounded border border-success/30 bg-success/10 p-3">
+            <pre className="m-0 whitespace-pre-wrap break-words text-xs text-foreground">
               {JSON.stringify(tool.callData.arguments, null, 2)}
             </pre>
           </div>

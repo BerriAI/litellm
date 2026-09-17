@@ -1168,7 +1168,6 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
     "model, region",
     [
         # ["bedrock/ai21.jamba-instruct-v1:0", "us-east-1"],
-        # ["bedrock/cohere.command-r-plus-v1:0", None],
         ["us.anthropic.claude-sonnet-4-5-20250929-v1:0", None],
         # ["mistral.mistral-7b-instruct-v0:2", None],
         # ["meta.llama3-8b-instruct-v1:0", None],
@@ -1271,7 +1270,7 @@ def test_bedrock_claude_3_streaming():
     "model",
     [
         "claude-haiku-4-5-20251001",
-        "cohere.command-r-plus-v1:0",  # bedrock
+        "bedrock/mistral.mistral-7b-instruct-v0:2",
         "gpt-3.5-turbo",
     ],
 )

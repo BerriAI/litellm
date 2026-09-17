@@ -1,4 +1,5 @@
 import httpx
+import pytest
 
 from litellm.litellm_core_utils.llm_request_utils import (
     flatten_form_field_values,
@@ -80,9 +81,7 @@ def test_flatten_form_field_values_later_source_wins_on_collision():
 
 
 def test_flatten_form_field_values_keeps_scalar_lists_as_repeated_fields():
-    assert flatten_form_field_values(
-        {"loras": ["a", "b", "c"], "generation_config": {"tags": [1, 2]}, "seed": 42}
-    ) == (
+    assert flatten_form_field_values({"loras": ["a", "b", "c"], "generation_config": {"tags": [1, 2]}, "seed": 42}) == (
         ("loras", ("a", "b", "c")),
         ("generation_config[tags]", ("1", "2")),
         ("seed", "42"),
@@ -97,3 +96,12 @@ def test_flatten_form_field_values_scalar_list_survives_update_into_multipart():
 
     assert names.count("loras") == 2
     assert names.count("model") == 1
+
+
+def test_flatten_form_field_values_rejects_over_deep_nesting():
+    nested: object = "leaf"
+    for _ in range(102):
+        nested = {"k": nested}
+    assert isinstance(nested, dict)
+    with pytest.raises(ValueError, match="max depth"):
+        flatten_form_field_values(nested)

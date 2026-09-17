@@ -1,10 +1,11 @@
 import asyncio
+import itertools
+import json
+from collections.abc import Sequence
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
-
-import json
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -102,11 +103,10 @@ async def test_async_user_key_affinity_routes_to_same_deployment():
 
     # Deterministic routing: first selection uses seq[0], second selection attempts seq[1]
     # unless the list has been filtered to length=1 by deployment affinity.
-    choice_calls = {"count": 0}
+    choice_calls: Final = itertools.count(1)
 
-    def deterministic_choice(seq):
-        choice_calls["count"] += 1
-        if choice_calls["count"] == 1:
+    def deterministic_choice(seq: Sequence[dict[str, object]]) -> dict[str, object]:
+        if next(choice_calls) == 1:
             return seq[0]
         return seq[1] if len(seq) > 1 else seq[0]
 
@@ -599,6 +599,45 @@ async def test_async_filter_deployments_falls_back_when_cached_deployment_is_unh
 
 
 @pytest.mark.asyncio
+async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
+    user_key = "user-key-order-fallback"
+    stable_model_map_key = "claude-sonnet-4-5@20250929"
+    cache = AsyncMock()
+    cache.async_get_cache = AsyncMock(return_value={"model_id": "deployment-1"})
+    callback = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=123,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=False,
+    )
+    healthy_deployments = [
+        {
+            "model_name": stable_model_map_key,
+            "litellm_params": {"model": f"vertex_ai/{stable_model_map_key}"},
+            "model_info": {"id": "deployment-1"},
+        },
+        {
+            "model_name": stable_model_map_key,
+            "litellm_params": {
+                "model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"
+            },
+            "model_info": {"id": "deployment-2"},
+        },
+    ]
+
+    filtered = await callback.async_filter_deployments(
+        model="some-router-model-group",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"_target_order": 2, "metadata": {"user_api_key_hash": user_key}},
+        parent_otel_span=None,
+    )
+
+    assert filtered == healthy_deployments
+    cache.async_get_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_async_user_key_affinity_ttl_expiry_allows_reroute():
     """
     After affinity TTL expires, cached pinning should no longer filter deployments.
@@ -959,3 +998,212 @@ async def test_model_group_affinity_config_overrides_global():
     )
     # All deployments returned (user-key affinity disabled for this group)
     assert len(filtered) == 2
+
+
+def _jwt_metadata(user_id: str) -> dict[str, str | None]:
+    return {"user_api_key_hash": None, "user_api_key_user_id": user_id}
+
+
+def _two_deployments(model_group: str) -> list[dict]:
+    return [
+        {
+            "model_name": model_group,
+            "litellm_params": {"model": "openai/gpt-5.4-mini"},
+            "model_info": {"id": "openai-deployment-a"},
+        },
+        {
+            "model_name": model_group,
+            "litellm_params": {"model": "openai/gpt-5.4-mini"},
+            "model_info": {"id": "openai-deployment-b"},
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_jwt_user_affinity_routes_to_same_deployment():
+    """
+    JWT-authenticated proxy requests carry no `user_api_key_hash`, only `user_api_key_user_id`.
+    They must still pin to one deployment per user.
+    """
+    model_group = "gpt-5.4-mini"
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "mock-api-key-a"},
+                "model_info": {"id": "openai-deployment-a"},
+            },
+            {
+                "model_name": model_group,
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "mock-api-key-b"},
+                "model_info": {"id": "openai-deployment-b"},
+            },
+        ],
+        optional_pre_call_checks=["deployment_affinity"],
+    )
+
+    choice_calls = {"count": 0}
+
+    def deterministic_choice(seq):
+        choice_calls["count"] += 1
+        if choice_calls["count"] == 1:
+            return seq[0]
+        return seq[1] if len(seq) > 1 else seq[0]
+
+    with patch(  # test-quality-ok: simple-shuffle has no injectable RNG; forcing the other pick is what proves the pin overrides the strategy
+        "litellm.router_strategy.simple_shuffle.random.choice",
+        side_effect=deterministic_choice,
+    ):
+        first_response = await router.acompletion(
+            model=model_group,
+            messages=[{"role": "user", "content": "Reply with the single word ok"}],
+            mock_response="ok",
+            metadata=_jwt_metadata("jwt-user-alice"),
+        )
+        second_response = await router.acompletion(
+            model=model_group,
+            messages=[{"role": "user", "content": "Reply with the single word ok"}],
+            mock_response="ok",
+            metadata=_jwt_metadata("jwt-user-alice"),
+        )
+
+    first_model_id = first_response._hidden_params["model_id"]
+    assert first_model_id in ("openai-deployment-a", "openai-deployment-b")
+    assert second_response._hidden_params["model_id"] == first_model_id
+
+
+@pytest.mark.asyncio
+async def test_proxy_jwt_auth_metadata_pins_per_user():
+    """
+    The metadata the proxy stamps for a JWT caller (`UserAPIKeyAuth(api_key=None, user_id=<sub>)`)
+    must claim a pin and be read back by the filter, and another JWT user must not inherit it.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    model_group = "gpt-5.4-mini"
+    healthy_deployments = _two_deployments(model_group)
+    callback = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=60,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=False,
+    )
+
+    def proxy_request(user_id: str) -> dict[str, object]:
+        return LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+            data={"model": model_group, "messages": [{"role": "user", "content": "hi"}], "metadata": {}},
+            user_api_key_dict=UserAPIKeyAuth(api_key=None, user_id=user_id),
+            _metadata_variable_name="metadata",
+        )
+
+    alice_request = proxy_request("jwt-user-alice")
+    alice_metadata = alice_request["metadata"]
+    assert isinstance(alice_metadata, dict)
+    assert alice_metadata["user_api_key_hash"] is None
+
+    await callback.async_pre_call_deployment_hook(
+        kwargs={
+            **alice_request,
+            "metadata": {**alice_metadata, "deployment_model_name": model_group},
+            "model_info": {"id": "openai-deployment-b"},
+        },
+        call_type=None,
+    )
+
+    alice_pinned = await callback.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs=alice_request,
+        parent_otel_span=None,
+    )
+    assert [deployment["model_info"]["id"] for deployment in alice_pinned] == ["openai-deployment-b"]
+
+    bob_filtered = await callback.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs=proxy_request("jwt-user-bob"),
+        parent_otel_span=None,
+    )
+    assert bob_filtered == healthy_deployments
+
+
+@pytest.mark.asyncio
+async def test_jwt_user_id_never_reads_a_virtual_key_pin():
+    """
+    A JWT user id that happens to equal a virtual key's 64-hex hash must not read that key's pin.
+    """
+    model_group = "gpt-5.4-mini"
+    healthy_deployments = _two_deployments(model_group)
+    callback = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=60,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=False,
+    )
+    key_hash = "a" * 64
+
+    await callback.async_pre_call_deployment_hook(
+        kwargs={
+            "metadata": {"user_api_key_hash": key_hash, "deployment_model_name": model_group},
+            "model_info": {"id": "openai-deployment-b"},
+        },
+        call_type=None,
+    )
+
+    key_pinned = await callback.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"metadata": {"user_api_key_hash": key_hash}},
+        parent_otel_span=None,
+    )
+    assert [deployment["model_info"]["id"] for deployment in key_pinned] == ["openai-deployment-b"]
+
+    lookalike_jwt_user = await callback.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"metadata": _jwt_metadata(key_hash)},
+        parent_otel_span=None,
+    )
+    assert lookalike_jwt_user == healthy_deployments
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_hash_wins_over_user_id_for_affinity():
+    """
+    A virtual-key caller with a user id pins on the key hash, so two keys owned by one user
+    keep independent pins.
+    """
+    model_group = "gpt-5.4-mini"
+    healthy_deployments = _two_deployments(model_group)
+    callback = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=60,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=False,
+    )
+
+    await callback.async_pre_call_deployment_hook(
+        kwargs={
+            "metadata": {
+                "user_api_key_hash": "key-one",
+                "user_api_key_user_id": "shared-user",
+                "deployment_model_name": model_group,
+            },
+            "model_info": {"id": "openai-deployment-b"},
+        },
+        call_type=None,
+    )
+
+    other_key_same_user = await callback.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"metadata": {"user_api_key_hash": "key-two", "user_api_key_user_id": "shared-user"}},
+        parent_otel_span=None,
+    )
+    assert other_key_same_user == healthy_deployments

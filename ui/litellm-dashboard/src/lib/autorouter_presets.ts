@@ -6,12 +6,20 @@ import {
   ComplexityRouterConfigValue,
   ClassifierType,
   ClassifierLLMConfig,
+  DEFAULT_CLASSIFICATION_MODE,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
   usesLlmClassifier,
 } from "@/components/add_model/ComplexityRouterConfig";
 import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
 import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
+import { hydrateCustomDimensions } from "@/components/add_model/custom_dimensions";
+import {
+  hydrateDimensionWeights,
+  hydrateTierBoundaries,
+  hydrateTokenThresholds,
+  hydrateReasoningOverrideMinScore,
+} from "@/components/add_model/heuristic_scoring_knobs";
 import {
   TierModelParams,
   TierModelParamsByTier,
@@ -19,7 +27,6 @@ import {
 } from "@/components/add_model/complexity_router_tiers";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
-import presetsRaw from "@/autorouter_presets.json";
 
 // `key` is the stable JSON object key (e.g. "anthropic_family"); `label` is display text and
 // never an identity.
@@ -30,16 +37,10 @@ export interface AutoRouterPreset {
   complexity_router_config: ComplexityRouterConfigPayload;
 }
 
-// The bundled JSON is a developer-authored, build-time asset, so it is trusted at the import
-// boundary rather than re-validated at runtime (resolveJsonModule widens its string literals,
-// hence this one cast). autorouter_presets.test.ts pins the parsed shape, so a JSON typo fails CI.
-const RAW = presetsRaw as Record<string, Omit<AutoRouterPreset, "key">>;
+export type AutoRouterPresetsResponse = Record<string, Omit<AutoRouterPreset, "key">>;
 
-const PRESETS: AutoRouterPreset[] = Object.entries(RAW).map(([key, preset]) => ({ key, ...preset }));
-
-export const getAllPresets = (): AutoRouterPreset[] => PRESETS;
-
-export const getPresetByKey = (key: string): AutoRouterPreset | undefined => PRESETS.find((p) => p.key === key);
+export const hydratePresets = (raw: AutoRouterPresetsResponse): AutoRouterPreset[] =>
+  Object.entries(raw).map(([key, preset]) => ({ key, ...preset }));
 
 // Generalized over ComplexityRouterConfigPayload so the same accessors check either a preset's own
 // bundled config or a caller's actually-built config - the two need to agree, since a preset only
@@ -158,15 +159,18 @@ export const deploymentRefsFromModelInfo = (
     return row.model_name && underlyingModels.length > 0 ? [{ modelGroup: row.model_name, underlyingModels }] : [];
   });
 
-const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
+export const resolveAvailableModels = (requiredModel: string, availability: ModelAvailability): readonly string[] => {
   const { modelGroups, underlyingIndex } = availability;
-  if (modelGroups.has(requiredModel)) return requiredModel;
+  if (modelGroups.has(requiredModel)) return [requiredModel];
   const normalized = normalizeModelName(requiredModel);
-  const groupMatch = Array.from(modelGroups).find((available) => normalizeModelName(available) === normalized);
-  if (groupMatch !== undefined) return groupMatch;
+  const groupMatches = Array.from(modelGroups).filter((available) => normalizeModelName(available) === normalized);
+  if (groupMatches.length > 0) return groupMatches;
   const key = normalizeUnderlyingModel(requiredModel);
-  return key === null ? undefined : underlyingIndex.get(key)?.[0];
+  return key === null ? [] : underlyingIndex.get(key) ?? [];
 };
+
+export const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined =>
+  resolveAvailableModels(requiredModel, availability)[0];
 
 export const getMissingModels = (
   config: Parameters<typeof getRequiredModels>[0],
@@ -288,13 +292,24 @@ export const buildPresetPrefill = (
       classifier_context_budget_chars: config.classifier_context_budget_chars,
       classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
       classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
+      classification_mode: config.classification_mode ?? DEFAULT_CLASSIFICATION_MODE,
       session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+      session_affinity_ttl_seconds: config.session_affinity_ttl_seconds,
       deployment_affinity: config.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
+      modality_routing: config.modality_routing ?? false,
+      modality_pin_override: config.modality_pin_override ?? false,
       adaptive: config.adaptive,
       adaptive_weights: config.adaptive_weights,
       tier_distance_penalty: config.tier_distance_penalty,
       adaptive_eligible: config.adaptive_eligible,
       return_raw_model_name: config.return_raw_model_name,
+      dimension_weights: hydrateDimensionWeights(config.dimension_weights),
+      custom_dimensions: hydrateCustomDimensions(config.custom_dimensions),
+      tier_boundaries: hydrateTierBoundaries(config.tier_boundaries),
+      token_thresholds: hydrateTokenThresholds(config.token_thresholds),
+      reasoning_override_min_score: hydrateReasoningOverrideMinScore(config.reasoning_override_min_score),
+      enable_context_window_escalation: config.enable_context_window_escalation,
+      context_window_escalation_buffer: config.context_window_escalation_buffer,
     },
     customTechnicalKeywords: config.custom_technical_keywords ?? [],
     keywordTierRules: hydrateKeywordTierRules(config.keyword_tier_rules ?? []),

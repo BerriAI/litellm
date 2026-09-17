@@ -25,6 +25,7 @@ import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
+import { getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
 import type { EntityType } from "@/components/EntityUsageExport/types";
 import {
   agentDailyActivityCall,
@@ -42,7 +43,9 @@ import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatte
 import EndpointUsage from "../EndpointUsage/EndpointUsage";
 import ModelViewToggle, { ModelViewType } from "../ModelViewToggle";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
+import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import TopModelView from "./TopModelView";
+import TeamUserSpendCard from "./TeamUserSpendCard";
 
 interface EntityMetrics {
   metrics: {
@@ -146,6 +149,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     isFetchingMore,
     progress,
     cancelled,
+    failed,
+    coversRange,
     cancel,
   } = usePaginatedDailyActivity({
     fetchFn,
@@ -161,6 +166,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     isFetchingMore: agentIsFetchingMore,
     progress: agentProgress,
     cancelled: agentCancelled,
+    failed: agentFailed,
     cancel: agentCancel,
   } = usePaginatedDailyActivity({
     fetchFn: agentDailyActivityCall,
@@ -275,6 +281,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
+  const userSpendTeamIds = useMemo(
+    () =>
+      selectedTags.length > 0
+        ? selectedTags
+        : (teams ?? []).map((team) => team.team_id).filter((id) => id !== "litellm-dashboard"),
+    [selectedTags, teams],
+  );
   const providerSpend = useMemo(() => getProviderSpend(spendData.results), [spendData.results]);
   const entityBreakdownColumns = useMemo<ColumnDef<EntityMetricWithMetadata>[]>(
     () => [
@@ -530,6 +543,17 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         </ShadcnCard>
       </div>
 
+      {entityType === "team" && (
+        <div className="col-span-2">
+          <TeamUserSpendCard
+            accessToken={accessToken}
+            startTime={startTime}
+            endTime={endTime}
+            teamIds={userSpendTeamIds}
+          />
+        </div>
+      )}
+
       {/* Top API Keys */}
       <div>
         <ShadcnCard>
@@ -635,16 +659,19 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     {
       key: "keys",
       label: "Key Activity",
-      content: <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />,
+      content: <KeyActivityPanel keyMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />,
     },
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
   ];
+
+  const spendFetchState = { coversRange, cancelled, failed };
 
   return (
     <div style={{ width: "100%" }} className="relative">
       <PaginationStatusAlerts
         isFetchingMore={isFetchingMore}
         cancelled={cancelled}
+        failed={failed}
         progress={progress}
         cancel={cancel}
       />
@@ -652,6 +679,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         <PaginationStatusAlerts
           isFetchingMore={agentIsFetchingMore}
           cancelled={agentCancelled}
+          failed={agentFailed}
           progress={agentProgress}
           cancel={agentCancel}
           subject="agent data"
@@ -661,7 +689,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
-        showFilters={filterSlot === undefined && entityList !== null && entityList.length > 0}
+        showFilters={filterSlot === undefined && entityList !== null}
         filterSlot={filterSlot}
         filterLabel={getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
@@ -669,6 +697,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
         teams={teams || []}
+        exportBlockedReason={getExportBlockedReason(spendFetchState)}
       />
       <Tabs defaultValue={tabs[0].key}>
         <TabsList className="mt-1">

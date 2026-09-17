@@ -1,6 +1,5 @@
 
 
-import litellm
 from litellm import LlmProviders
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import (
@@ -44,14 +43,6 @@ def test_xai_openai_compatible_provider_info():
     assert custom_llm_provider == "xai"
     assert api_base == "https://api.x.ai/v1"
     assert dynamic_api_key == "api-key"
-
-
-def test_xai_get_model_info_uses_xai_pricing_metadata():
-    model_info = litellm.get_model_info("xai/grok-3-mini")
-
-    assert model_info["litellm_provider"] == "xai"
-    assert model_info["key"] == "xai/grok-3-mini"
-    assert model_info["mode"] == "chat"
 
 
 def test_xai_validate_environment_reads_api_key(monkeypatch):

@@ -44,6 +44,91 @@ def _langfuse_environment_error(callback_vars: Mapping[str, str]) -> str | None:
     return None
 
 
+# Which credential family a dynamic variable belongs to. The families are the
+# integrations that share one account: every langfuse_* variable configures the
+# same Langfuse project whether it rides the classic callback or the OTel one,
+# and every dd_* variable configures the same Datadog account.
+_VAR_FAMILIES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "arize_": "Arize",
+        "dd_": "Datadog",
+        "gcs_": "GCS",
+        "humanloop_": "Humanloop",
+        "langfuse_": "Langfuse",
+        "langsmith_": "LangSmith",
+        "newrelic_": "New Relic",
+        "posthog_": "PostHog",
+        "wandb_": "Weights & Biases",
+        "weave_": "Weights & Biases",
+    }
+)
+
+
+def _family_of(var: str) -> str | None:
+    """The credential family ``var`` configures, or ``None`` if it configures none.
+
+    ``turn_off_message_logging`` and friends belong to no backend, so they carry
+    no credentials anyone could redirect.
+    """
+    return next((family for prefix, family in _VAR_FAMILIES.items() if var.startswith(prefix)), None)
+
+
+def cross_entry_family_error(
+    callback_vars: Mapping[str, str] | None,
+    stored_vars_by_entry: Sequence[Mapping[str, str]],
+) -> str | None:
+    """Reject an entry that changes what a family another entry holds resolves to.
+
+    Every stored entry's variables are flattened into one dict before a request
+    reads them, and the flattened dict is what the exporter authenticates and
+    addresses with. So an entry naming only a destination is enough to redirect
+    credentials that were written somewhere else: a host on a second entry pairs
+    with the key from the first, and the request carries that key to the new
+    host.
+
+    Two rules together keep the flattened dict out of the caller's hands. A
+    variable the family already configures has to keep the value it has, so
+    nothing already in use can be moved. A variable the family does not yet
+    configure may only carry a value the family already holds, which is what lets
+    the same credential go in under its other spelling (``langfuse_secret`` and
+    ``langfuse_secret_key`` are one key) without anything here having to list the
+    spellings. Between them, no value the caller chose can enter the family, and
+    repeating the family as it stands is still allowed -- that is how one
+    integration gets registered for both the success and the failure event.
+
+    A team admin who does want to move a family deletes the entry holding it
+    first, which reveals nothing.
+
+    Only the writers this endpoint newly admits are held to this, because a proxy
+    admin already holds every credential the proxy has.
+
+    ``stored_vars_by_entry`` has to arrive decrypted; the credential values are
+    encrypted at rest and ciphertext never equals the plaintext coming in.
+    """
+    if not callback_vars:
+        return None
+    stored_by_var: Final = {
+        var: value for entry in stored_vars_by_entry for var, value in entry.items() if _family_of(var) is not None
+    }
+    family_values: Final = frozenset(
+        (family, value)
+        for entry in stored_vars_by_entry
+        for var, value in entry.items()
+        if (family := _family_of(var)) is not None
+    )
+    held_families: Final = frozenset(family for family, _ in family_values)
+    return next(
+        (
+            f"{family} is already configured by another callback entry on this team. "
+            f"Remove that entry before setting {var} here."
+            for var, value, family in ((v, callback_vars[v], _family_of(v)) for v in callback_vars)
+            if family in held_families
+            and (stored_by_var[var] != value if var in stored_by_var else (family, value) not in family_values)
+        ),
+        None,
+    )
+
+
 def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str | None:
     """Validate every ``logging`` entry of a team/key metadata payload."""
     if not metadata:

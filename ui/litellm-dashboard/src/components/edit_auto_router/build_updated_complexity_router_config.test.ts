@@ -7,6 +7,19 @@ import {
   type KeywordMatchingState,
 } from "./edit_auto_router_modal";
 
+// The custom-tier router these cases round-trip, so a variant differs only by what it overrides.
+const storedCustomConfig = (overrides: Record<string, unknown> = {}) => ({
+  tiers: { CASUAL: ["gpt-4o-mini"], AUDIT: ["o1"] },
+  tier_definitions: [
+    { name: "CASUAL", description: "small talk" },
+    { name: "AUDIT", description: "security review" },
+  ],
+  fallback_tier: "CASUAL",
+  classifier_type: "llm",
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
+  ...overrides,
+});
+
 const STORED = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
   classifier_type: "heuristic",
@@ -33,6 +46,43 @@ const hydratedState: KeywordMatchingState = {
 };
 
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
+  it.each(["capability", "llm_v2", "heuristic"] as const)(
+    "handles enabled stored overrides when editing %s with or without keyword form state",
+    (classifier_type) => {
+      const stored = {
+        ...STORED,
+        classifier_type,
+        adaptive: classifier_type !== "llm_v2",
+        adaptive_weights: { quality: 0.6, cost: 0.4 },
+        adaptive_eligible: "all",
+        tier_distance_penalty: 0.8,
+        enable_context_window_escalation: true,
+        context_window_escalation_buffer: 0.9,
+      };
+      const value = hydrateComplexityRouterConfig(stored, undefined);
+      for (const keywordState of [undefined, hydratedState]) {
+        const saved = buildUpdatedComplexityRouterConfig(stored, value, undefined, keywordState);
+        const forecast = classifier_type !== "heuristic";
+        expect(saved.adaptive).toBe(!forecast);
+        expect(saved.enable_context_window_escalation).toBe(!forecast);
+        expect(saved.escalation_keywords).toEqual(forecast ? [] : stored.escalation_keywords);
+        for (const key of [
+          "adaptive_weights",
+          "adaptive_eligible",
+          "tier_distance_penalty",
+          "context_window_escalation_buffer",
+        ]) {
+          expect(Object.hasOwn(saved, key)).toBe(!forecast);
+        }
+        expect(saved.keyword_tier_rules).toEqual(STORED.keyword_tier_rules);
+        expect(saved.semantic_keyword_matching).toBe(true);
+        expect(saved.some_future_backend_key).toEqual(STORED.some_future_backend_key);
+      }
+      expect(value.enable_context_window_escalation).toBe(true);
+      expect(stored.escalation_keywords).toEqual(["urgent", "outage"]);
+    },
+  );
+
   it("round-trips an untouched edit without changing any keyword-matching value", () => {
     // Opening the modal hydrates state from STORED; saving with nothing changed must be a
     // no-op. These keys are now MANAGED, so a hydration bug silently wipes them.
@@ -48,6 +98,54 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
   it("preserves keys no control owns", () => {
     const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE, undefined, hydratedState);
     expect(result.some_future_backend_key).toEqual({ nested: true });
+  });
+
+  describe("custom dimensions", () => {
+    const stored = [
+      { name: "internalFrameworks", weight: 0.7, keywords: ["orbitmesh"] },
+      { name: "sqlDdl", weight: 0.3, patterns: ["create table"], scoring_mode: "match_count" },
+    ];
+    const withDimensions = { ...STORED, custom_dimensions: stored };
+
+    it("round-trips stored rows through hydration and save without dropping or reshaping one", () => {
+      const hydrated = hydrateComplexityRouterConfig(withDimensions, null);
+      expect(hydrated.custom_dimensions).toEqual([
+        { id: "stored-0", ...stored[0] },
+        { id: "stored-1", ...stored[1] },
+      ]);
+      const saved = buildUpdatedComplexityRouterConfig(withDimensions, {
+        ...FORM_VALUE,
+        custom_dimensions: hydrated.custom_dimensions,
+      });
+      expect(saved.custom_dimensions).toEqual(stored);
+    });
+
+    it("is a managed key, so removing the last row does not resurrect the stored dimensions", () => {
+      expect(MANAGED_COMPLEXITY_ROUTER_KEYS.has("custom_dimensions")).toBe(true);
+      const saved = buildUpdatedComplexityRouterConfig(withDimensions, { ...FORM_VALUE, custom_dimensions: [] });
+      expect(saved.custom_dimensions).toEqual([]);
+    });
+
+    it("omits the key entirely when the editor never held rows, so an untouched router gains nothing", () => {
+      expect(hydrateComplexityRouterConfig(STORED, null).custom_dimensions).toBeUndefined();
+      expect(buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE)).not.toHaveProperty("custom_dimensions");
+    });
+
+    it("drops rows a custom tier set forbids rather than sending them to a scorer that never runs", () => {
+      const customTierStored = storedCustomConfig({ custom_dimensions: stored });
+      const saved = buildUpdatedComplexityRouterConfig(customTierStored, {
+        tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        classifier_type: "llm" as const,
+        custom_tier_set: {
+          tiers: [
+            { id: "a", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+            { id: "b", name: "AUDIT", definition: "security review", models: ["o1"] },
+          ],
+          fallback_tier_id: "a",
+        },
+      });
+      expect(saved).not.toHaveProperty("custom_dimensions");
+    });
   });
 
   it("persists an edited keyword rule", () => {
@@ -98,10 +196,36 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
 const STORED_LLM = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
   classifier_type: "llm",
-  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
   classifier_context_window_size: 5,
   classifier_context_per_turn_chars: 300,
 };
+
+describe("capability classifier configuration", () => {
+  it("preserves the judge and calibrated policy through an untouched dashboard edit", () => {
+    const stored = {
+      tiers: { SIMPLE: ["efficient-model"], REASONING: ["capable-model"] },
+      classifier_type: "capability" as const,
+      classifier_llm_config: { model: "judge", timeout_ms: 30000, temperature: 0 },
+      capability_classifier_config: {
+        efficient_tier: "SIMPLE",
+        capable_tier: "REASONING",
+        base_threshold: 0.66,
+        max_output_tokens: 512,
+        response_format: "json_object",
+        calibration: { version: "fitted-v1", slope: 0.15, intercept: 0.19 },
+      },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, null);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+
+    expect(saved.classifier_type).toBe("capability");
+    expect(saved.classifier_llm_config).toEqual(stored.classifier_llm_config);
+    expect(saved.capability_classifier_config).toEqual(stored.capability_classifier_config);
+    expect(saved).not.toHaveProperty("classification_prompt");
+    expect(saved).not.toHaveProperty("custom_dimensions");
+  });
+});
 
 describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
   it("round-trips an untouched edit without changing the classifier context values", () => {
@@ -241,6 +365,94 @@ describe("buildUpdatedComplexityRouterConfig session affinity", () => {
       { ...FORM_VALUE, session_affinity: false },
     );
     expect(result.session_affinity).toBe(false);
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig session affinity ttl", () => {
+  it("writes an edited idle window", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, session_affinity_ttl_seconds: 300 });
+    expect(result.session_affinity_ttl_seconds).toBe(300);
+  });
+
+  it("carries a stored idle window through an untouched open-and-save", () => {
+    const stored = { ...STORED, session_affinity_ttl_seconds: 900 };
+    const result = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
+    expect(result.session_affinity_ttl_seconds).toBe(900);
+  });
+
+  it("drops the key when the field is cleared, so the router goes back to tracking the backend default", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, session_affinity_ttl_seconds: 900 },
+      { ...FORM_VALUE, session_affinity_ttl_seconds: undefined },
+    );
+    expect(result).not.toHaveProperty("session_affinity_ttl_seconds");
+  });
+
+  it("keeps the idle window on a custom tier set, whose deployment pin still uses it", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, {
+      ...FORM_VALUE,
+      session_affinity_ttl_seconds: 300,
+      custom_tier_set: {
+        tiers: [
+          { id: "a", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+          { id: "b", name: "AUDIT", definition: "security review", models: ["o1"] },
+        ],
+        fallback_tier_id: "a",
+      },
+    });
+    expect(result.session_affinity).toBe(false);
+    expect(result.session_affinity_ttl_seconds).toBe(300);
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig modality pin override", () => {
+  it("writes modality_pin_override explicitly both ways", () => {
+    expect(
+      buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, modality_pin_override: true }).modality_pin_override,
+    ).toBe(true);
+    expect(
+      buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, modality_pin_override: false }).modality_pin_override,
+    ).toBe(false);
+  });
+
+  it("re-asserts the backend's off-by-default when the form value is absent, rather than dropping the key", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, modality_pin_override: true }, FORM_VALUE);
+    expect(result.modality_pin_override).toBe(false);
+  });
+
+  it("round-trips a stored modality_pin_override=true through hydrate then save", () => {
+    const stored = { ...STORED, modality_routing: true, modality_pin_override: true };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+
+    expect(hydrated.modality_pin_override).toBe(true);
+    expect(buildUpdatedComplexityRouterConfig(stored, hydrated).modality_pin_override).toBe(true);
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig classification mode", () => {
+  it("round-trips a stored user_turn through hydrate then save", () => {
+    const stored = { ...STORED, classification_mode: "user_turn" };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+
+    expect(hydrated.classification_mode).toBe("user_turn");
+    expect(buildUpdatedComplexityRouterConfig(stored, hydrated).classification_mode).toBe("user_turn");
+  });
+
+  it("round-trips an explicitly stored every_request, so an untouched save leaves it as written", () => {
+    const stored = { ...STORED, classification_mode: "every_request" };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+
+    expect(hydrated.classification_mode).toBe("every_request");
+    expect(buildUpdatedComplexityRouterConfig(stored, hydrated).classification_mode).toBe("every_request");
+  });
+
+  it("rewrites a stored user_turn to every_request once the operator picks the default back", () => {
+    const stored = { ...STORED, classification_mode: "user_turn" };
+    const result = buildUpdatedComplexityRouterConfig(stored, {
+      ...FORM_VALUE,
+      classification_mode: "every_request",
+    });
+    expect(result.classification_mode).toBe("every_request");
   });
 });
 
@@ -458,12 +670,18 @@ describe("managed keys survive an untouched open-and-save", () => {
     tier_labels: { SIMPLE: "Cheap" },
     classifier_type: "heuristic_first",
     heuristic_first_max_tier: "SIMPLE",
-    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
     classifier_context_window_size: 5,
     classifier_context_budget_chars: 4000,
     classifier_context_include_assistant_turns: true,
     classifier_fallback: "default_model",
+    classification_prompt: "Route for a payments team.",
+    classification_examples: "- refund status -> SIMPLE",
+    classification_mode: "user_turn",
     session_affinity: true,
+    session_affinity_ttl_seconds: 300,
+    modality_routing: true,
+    modality_pin_override: true,
     deployment_affinity: false,
     adaptive: true,
     adaptive_weights: { quality: 0.4, cost: 0.6 },
@@ -473,20 +691,237 @@ describe("managed keys survive an untouched open-and-save", () => {
     tier_boundaries: { simple_medium: 0.2, medium_complex: 0.4, complex_reasoning: 0.7 },
     token_thresholds: { simple: 20, complex: 500 },
     dimension_weights: { tokenCount: 0.1 },
+    custom_dimensions: [{ name: "domain", weight: 0.9, keywords: ["orbitmesh"] }],
     reasoning_override_min_score: 0.3,
+    enable_context_window_escalation: false,
+    context_window_escalation_buffer: 0.9,
   };
 
-  it("carries every managed key through hydrate then save", () => {
+  // tier_definitions and fallback_tier cannot sit beside heuristic_first, which this fixture uses,
+  // and hybrid_boundary_margin belongs to the sibling hybrid type, so no single stored config can
+  // hold every managed key. Each gets its own round trip below.
+  const KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS = new Set(["tier_definitions", "fallback_tier", "hybrid_boundary_margin"]);
+
+  // The stall keys are rejected beside the session pinning and user-turn classification this
+  // fixture sets, so they get their own round trip below rather than widening this one.
+  const KEYS_ANOTHER_CLASSIFICATION_FREQUENCY_OWNS = new Set([
+    "stall_escalation_enabled",
+    "stall_escalation_window",
+    "stall_escalation_repeat_threshold",
+  ]);
+
+  // The opt-in fifth tier requires the LLM classifier, which this heuristic_first fixture is not,
+  // so it gets its own round trip below.
+  const KEYS_ANOTHER_TIER_LADDER_OWNS = new Set([
+    "capability_classifier_config",
+    "llm_v2_config",
+    "enable_non_reasoning_tier",
+  ]);
+
+  it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated);
 
-    const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS].filter((key) => saved[key] === undefined);
+    const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS]
+      .filter((key) => !KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS.has(key))
+      .filter((key) => !KEYS_ANOTHER_CLASSIFICATION_FREQUENCY_OWNS.has(key))
+      .filter((key) => !KEYS_ANOTHER_TIER_LADDER_OWNS.has(key))
+      .filter((key) => saved[key] === undefined);
     expect(dropped).toEqual([]);
+  });
+
+  it("carries an enabled non-reasoning tier and its models through their own round trip", () => {
+    // `tiers` is rewritten wholesale on save, so this is the regression that matters: opening an
+    // enabled router and saving an unrelated edit must not delete the tier or its pool.
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "haiku-classifier" },
+      heuristic_first_max_tier: undefined,
+      enable_non_reasoning_tier: true,
+      tiers: { ...(STORED_ALL_MANAGED.tiers as object), NON_REASONING: ["gpt-4o-mini"] },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+
+    expect(saved.enable_non_reasoning_tier).toBe(true);
+    expect((saved.tiers as Record<string, string[]>).NON_REASONING).toEqual(["gpt-4o-mini"]);
+  });
+
+  it("keeps a stored non-reasoning tier when the stored config never wrote the flag", () => {
+    // A hand-written config that names the tier: the flag is inferred from the stored pool, so an
+    // edit made for an unrelated reason cannot silently turn the tier off.
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "haiku-classifier" },
+      heuristic_first_max_tier: undefined,
+      tiers: { ...(STORED_ALL_MANAGED.tiers as object), NON_REASONING: ["gpt-4o-mini"] },
+    };
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
+
+    expect(saved.enable_non_reasoning_tier).toBe(true);
+    expect((saved.tiers as Record<string, string[]>).NON_REASONING).toEqual(["gpt-4o-mini"]);
+  });
+
+  it("leaves the tier and its flag out of a saved config that never had it on", () => {
+    const saved = buildUpdatedComplexityRouterConfig(
+      STORED_ALL_MANAGED,
+      hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined),
+    );
+
+    expect(saved).not.toHaveProperty("enable_non_reasoning_tier");
+    expect(saved.tiers).not.toHaveProperty("NON_REASONING");
+  });
+
+  it("carries the stall-escalation keys through their own round trip", () => {
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      session_affinity: false,
+      classification_mode: "every_request",
+      stall_escalation_enabled: true,
+      stall_escalation_window: 8,
+      stall_escalation_repeat_threshold: 4,
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+
+    expect(saved.stall_escalation_enabled).toBe(true);
+    expect(saved.stall_escalation_window).toBe(8);
+    expect(saved.stall_escalation_repeat_threshold).toBe(4);
+  });
+
+  it("leaves the stall keys out of a saved config that never had them on", () => {
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      session_affinity: false,
+      classification_mode: "every_request",
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+
+    expect(saved).not.toHaveProperty("stall_escalation_enabled");
+  });
+
+  it("drops a stored local-scorer threshold when the operator converts the router to custom tiers", () => {
+    const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
+    const converted = {
+      ...hydrated,
+      custom_tier_set: {
+        tiers: [
+          { id: "a", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+          { id: "b", name: "AUDIT", definition: "security review", models: ["o1"] },
+        ],
+        fallback_tier_id: "a",
+      },
+    };
+    const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, converted);
+
+    expect(saved.heuristic_first_max_tier).toBeUndefined();
+    expect(saved.classifier_type).toBe("llm");
+    expect(saved.tier_definitions).toHaveLength(2);
+  });
+
+  it("carries the custom-tier keys through their own round trip", () => {
+    const storedCustom = storedCustomConfig();
+    const hydrated = hydrateComplexityRouterConfig(storedCustom, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(storedCustom, hydrated);
+
+    expect(saved.tier_definitions).toEqual(storedCustom.tier_definitions);
+    expect(saved.fallback_tier).toBe("CASUAL");
+    expect(saved.tiers).toEqual(storedCustom.tiers);
+  });
+
+  it("clears a stored classification_prompt when the operator resets it, rather than preserving it as an unowned key", () => {
+    const storedCustom = storedCustomConfig({ classification_prompt: "Route for a payments team." });
+    const hydrated = hydrateComplexityRouterConfig(storedCustom, undefined);
+    const reset = { ...hydrated, classification_prompt: undefined };
+
+    expect(buildUpdatedComplexityRouterConfig(storedCustom, reset)).not.toHaveProperty("classification_prompt");
+  });
+
+  it("round-trips stored instructions and examples without merging their separate sections", () => {
+    const storedCustom = storedCustomConfig({
+      classification_prompt: "Route for a payments team.",
+      classification_examples: "- refund status -> CASUAL",
+    });
+    const hydrated = hydrateComplexityRouterConfig(storedCustom, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(storedCustom, hydrated);
+
+    expect(hydrated.classification_prompt).toBe(storedCustom.classification_prompt);
+    expect(hydrated.classification_examples).toBe(storedCustom.classification_examples);
+    expect(saved.classification_prompt).toBe(storedCustom.classification_prompt);
+    expect(saved.classification_examples).toBe(storedCustom.classification_examples);
+  });
+
+  it("clears a built-in router's stored instructions and examples when the operator resets them", () => {
+    const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
+    expect(hydrated.classification_prompt).toBe("Route for a payments team.");
+    expect(hydrated.classification_examples).toBe("- refund status -> SIMPLE");
+
+    const reset = { ...hydrated, classification_prompt: undefined, classification_examples: undefined };
+    const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, reset);
+    expect(saved).not.toHaveProperty("classification_prompt");
+    expect(saved).not.toHaveProperty("classification_examples");
+  });
+
+  it("round-trips a hybrid router's margin, which save requires and the backend rejects without", () => {
+    const storedHybrid: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      classifier_type: "hybrid",
+      hybrid_boundary_margin: 0.05,
+    };
+    delete storedHybrid.heuristic_first_max_tier;
+    const hydrated = hydrateComplexityRouterConfig(storedHybrid, undefined);
+    expect(hydrated.hybrid_boundary_margin).toBe(0.05);
+    expect(buildUpdatedComplexityRouterConfig(storedHybrid, hydrated).hybrid_boundary_margin).toBe(0.05);
   });
 
   it("round-trips the heuristic_first threshold, which save requires and the backend rejects without", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     expect(hydrated.heuristic_first_max_tier).toBe("SIMPLE");
     expect(buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated).heuristic_first_max_tier).toBe("SIMPLE");
+  });
+});
+
+describe("LLM V2 configuration preservation", () => {
+  const v2Config = {
+    efficient_profile: "Efficient coding model",
+    capable_profile: "Capable coding model",
+    harness: "Shell access, one attempt",
+    max_quality_gap: 0.03,
+    response_format: "json_object",
+    calibration: {
+      version: "pair-v1",
+      prompt_version: "llm-v2-1",
+      efficient: { slope: 1.2, intercept: -0.3 },
+      capable: { slope: 0.9, intercept: 0.1 },
+    },
+  };
+  const stored = {
+    tiers: { SIMPLE: ["efficient"], REASONING: ["capable"] },
+    classifier_type: "llm_v2" as const,
+    classifier_llm_config: { model: "judge", timeout_ms: 15000 },
+    llm_v2_config: v2Config,
+    classification_mode: "user_turn" as const,
+    adaptive: false,
+  };
+
+  it("preserves profiles and the judge when saving an existing V2 router", () => {
+    const value = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, value);
+    expect(saved.classifier_type).toBe("llm_v2");
+    expect(saved.classifier_llm_config).toMatchObject(stored.classifier_llm_config);
+    expect(saved.llm_v2_config).toEqual(v2Config);
+    expect(saved.classification_mode).toBe("user_turn");
+    expect(saved).not.toHaveProperty("classification_prompt");
+    expect(saved).not.toHaveProperty("dimension_weights");
+  });
+
+  it("drops V2 settings when switching to a different classifier", () => {
+    const value = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, { ...value, classifier_type: "heuristic" });
+    expect(saved).not.toHaveProperty("llm_v2_config");
+    expect(saved).not.toHaveProperty("classifier_llm_config");
   });
 });

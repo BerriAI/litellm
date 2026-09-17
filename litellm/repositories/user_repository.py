@@ -6,14 +6,33 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
-from litellm.models.user import LiteLLM_UserTable
+from pydantic import TypeAdapter
+
+from litellm.models.user import LiteLLM_UserTable, SCIMPlaceholder
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
 from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
+    from prisma import Prisma
     from prisma import models as prisma_models
 
 _JSON_ENCODED_COLUMNS: Final = frozenset({"metadata", "model_spend", "model_max_budget"})
+
+_SHADOWING_PLACEHOLDERS_SQL: Final = """
+SELECT p.user_id AS placeholder_user_id,
+       array_agg(r.user_id ORDER BY r.user_id) AS resolved_user_ids,
+       p.teams AS team_ids
+FROM "LiteLLM_UserTable" p
+JOIN "LiteLLM_UserTable" r
+  ON r.user_id <> p.user_id
+ AND (r.sso_user_id = p.user_id OR LOWER(r.user_email) = LOWER(p.user_id))
+WHERE p.sso_user_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM "LiteLLM_VerificationToken" k WHERE k.user_id = p.user_id)
+GROUP BY p.user_id, p.teams
+ORDER BY p.user_id
+"""
+
+_PLACEHOLDER_ROWS_ADAPTER: Final = TypeAdapter(tuple[SCIMPlaceholder, ...])
 
 
 class UserRepository(BaseRepository[LiteLLM_UserTable]):
@@ -58,6 +77,11 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_UserTable]:
         """Find all users in a team."""
         return await self.find_many(where={"teams": {"has": team_id}})
+
+    async def find_shadowing_placeholders(self, tx: "Prisma") -> tuple[SCIMPlaceholder, ...]:
+        """Users with no SSO id and no virtual keys whose id is another user's SSO id or email."""
+        rows: Final = await tx.query_raw(_SHADOWING_PLACEHOLDERS_SQL)
+        return _PLACEHOLDER_ROWS_ADAPTER.validate_python(rows)
 
     async def count_billable_users(self) -> int:
         """Number of users that count toward the license seat limit.

@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import re
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -19,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _convert_to_bedrock_tool_call_invoke,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
+    convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
     make_valid_bedrock_tool_name,
     ollama_pt,
@@ -191,8 +193,16 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
         {"type": "thinking", "thinking": "oss reasoning", "signature": None},
         {"type": "thinking", "thinking": "oss reasoning", "signature": ""},
         {"type": "thinking", "thinking": "oss reasoning"},
+        {"type": "thinking", "thinking": "openai reasoning", "signature": "litellm_encrypted_reasoning:gAAAA"},
+        {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:gAAAA"},
     ],
-    ids=["null_signature", "empty_signature", "missing_signature"],
+    ids=[
+        "null_signature",
+        "empty_signature",
+        "missing_signature",
+        "encrypted_reasoning_signature",
+        "encrypted_reasoning_redacted_data",
+    ],
 )
 def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     """Open-source reasoning models (DeepSeek-R1, Qwen, etc.) emit thinking blocks
@@ -219,7 +229,7 @@ def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     assistant = next(m for m in result if m["role"] == "assistant")
     content = assistant["content"]
     assert all(
-        block.get("type") != "thinking" for block in content
+        block.get("type") not in ("thinking", "redacted_thinking") for block in content
     ), f"unsignable thinking block must be dropped, got {content!r}"
     assert any(
         block.get("type") == "text" and block.get("text") == "2+2 equals 4."
@@ -2200,6 +2210,104 @@ def test_bedrock_tool_call_invoke_empty_arguments():
     assert result[0]["toolUse"]["input"] == {}
 
 
+_BEDROCK_TOOL_USE_ID_RE = re.compile(r"^[a-zA-Z0-9_.:-]{1,64}$")
+
+
+@pytest.mark.parametrize(
+    "tool_call_id",
+    [
+        "call_" + "x" * 100,
+        "call|with|pipes",
+        "call_" + "y" * 60 + "|end",
+        "call:ok.dots-and_under",
+        "",
+    ],
+)
+def test_bedrock_tool_use_id_is_sanitized_consistently_for_invoke_and_result(tool_call_id):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/34239: client-minted
+    tool_call ids longer than 64 chars or with chars outside [a-zA-Z0-9_.:-] made Bedrock
+    return a 400. The invoke and result paths must produce the same valid toolUseId so the
+    toolUse/toolResult pair still correlates.
+    """
+    invoke = _convert_to_bedrock_tool_call_invoke(
+        [
+            {
+                "id": tool_call_id,
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"location": "Boston"}'},
+            }
+        ]
+    )
+    result = _convert_to_bedrock_tool_call_result(
+        {"tool_call_id": tool_call_id, "role": "tool", "name": "get_weather", "content": "sunny"}
+    )
+    tool_use_id = invoke[0]["toolUse"]["toolUseId"]
+    assert _BEDROCK_TOOL_USE_ID_RE.match(tool_use_id)
+    assert result["toolResult"]["toolUseId"] == tool_use_id
+
+
+def test_bedrock_tool_use_id_valid_ids_pass_through_unchanged():
+    result = _convert_to_bedrock_tool_call_result(
+        {"tool_call_id": "tooluse_Ab.c:1-2_3", "role": "tool", "name": "f", "content": "ok"}
+    )
+    assert result["toolResult"]["toolUseId"] == "tooluse_Ab.c:1-2_3"
+
+
+def test_bedrock_tool_use_id_truncation_keeps_distinct_ids_distinct():
+    prefix = "call_" + "z" * 70
+    ids = {
+        _convert_to_bedrock_tool_call_result(
+            {"tool_call_id": f"{prefix}{suffix}", "role": "tool", "name": "f", "content": "ok"}
+        )["toolResult"]["toolUseId"]
+        for suffix in ("a", "b")
+    }
+    assert len(ids) == 2
+    assert all(len(i) == 64 for i in ids)
+
+
+def test_bedrock_tool_use_id_replaced_chars_do_not_collide_with_existing_ids():
+    ids = {
+        _convert_to_bedrock_tool_call_result({"tool_call_id": i, "role": "tool", "name": "f", "content": "ok"})[
+            "toolResult"
+        ]["toolUseId"]
+        for i in ("call|x", "call_x")
+    }
+    assert len(ids) == 2
+
+
+def test_bedrock_tool_call_invoke_concatenated_json_long_id_stays_within_limit():
+    long_id = "call_" + "q" * 62
+    result = _convert_to_bedrock_tool_call_invoke(
+        [
+            {
+                "id": long_id,
+                "type": "function",
+                "function": {"name": "run", "arguments": '{"cmd":"a"}{"cmd":"b"}'},
+            }
+        ]
+    )
+    ids = [block["toolUse"]["toolUseId"] for block in result]
+    assert len(ids) == 2
+    assert len(set(ids)) == 2
+    assert all(_BEDROCK_TOOL_USE_ID_RE.match(i) for i in ids)
+
+
+@pytest.mark.parametrize(
+    ("tool_call_id", "expected"),
+    [
+        ("call|with|pipes", "call_with_pipes"),
+        ("call:ok.dots", "call_ok_dots"),
+        ("call_" + "x" * 100, "call_" + "x" * 100),
+        ("toolu_01AbC-xyz", "toolu_01AbC-xyz"),
+        ("", "tool_use_id"),
+    ],
+)
+def test_anthropic_tool_use_id_keeps_pattern_only_rewrite_with_no_cap_or_hash(tool_call_id, expected):
+    result = convert_to_anthropic_tool_result({"role": "tool", "tool_call_id": tool_call_id, "content": "ok"})
+    assert result["tool_use_id"] == expected
+
+
 def test_bedrock_tool_call_invoke_concatenated_json():
     """
     Tool call whose arguments contain multiple concatenated JSON objects
@@ -2932,6 +3040,28 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5(monkeypatch):
             monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
+def test_add_cache_point_tool_block_stands_down_for_model_without_prompt_caching(monkeypatch):
+    """A tool carrying cache_control must not become a cachePoint for a Bedrock model
+    whose cost-map entry lacks prompt caching support, since Bedrock rejects the whole
+    request. An unmapped id keeps emitting so ARN deployments do not lose caching."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        add_cache_point_tool_block,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    tool = {"cache_control": {"type": "ephemeral"}}
+
+    assert add_cache_point_tool_block(tool, model="nvidia.nemotron-super-3-120b") is None
+    assert add_cache_point_tool_block(tool, model="us.nvidia.nemotron-super-3-120b") is None
+    assert add_cache_point_tool_block(
+        tool, model="arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+    ) == {"cachePoint": {"type": "default"}}
+    assert add_cache_point_tool_block(tool, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0") == {
+        "cachePoint": {"type": "default"}
+    }
+
+
 def test_bedrock_tools_pt_passes_ttl_for_claude_4_5(monkeypatch):
     """
     End-to-end: _bedrock_tools_pt should produce cachePoint blocks with ttl
@@ -3627,3 +3757,67 @@ def test_convert_gemini_tool_call_result_answers_tool_reference_only_result():
     )
 
     assert result == {"function_response": {"name": "ToolSearch", "response": {"content": ""}}}
+
+
+def test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use():
+    """A replayed srvtoolu_ call whose server tool result is not available
+    (e.g. the Responses bridge replays items without provider_specific_fields)
+    must become a plain client tool_use so the client's tool_result can pair
+    with it. A dangling server_tool_use makes Anthropic 400 the request with
+    "unexpected `tool_use_id` found in `tool_result` blocks"."""
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls=[
+            {
+                "id": "srvtoolu_01Unpaired",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "zig version"}'},
+            }
+        ],
+        web_search_results=None,
+        tool_results=None,
+    )
+
+    assert result == [
+        {
+            "type": "tool_use",
+            "id": "srvtoolu_01Unpaired",
+            "name": "web_search",
+            "input": {"query": "zig version"},
+        }
+    ]
+
+
+def test_convert_to_anthropic_tool_invoke_keeps_paired_server_tool_use():
+    """When the paired server tool result is available, the srvtoolu_ call is
+    still reconstructed as server_tool_use followed by its result block."""
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    server_result = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01Paired",
+        "content": [{"type": "web_search_result", "url": "https://ziglang.org", "title": "Zig"}],
+    }
+
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls=[
+            {
+                "id": "srvtoolu_01Paired",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "zig version"}'},
+            }
+        ],
+        web_search_results=[server_result],
+        tool_results=None,
+    )
+
+    assert result == [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01Paired",
+            "name": "web_search",
+            "input": {"query": "zig version"},
+        },
+        server_result,
+    ]

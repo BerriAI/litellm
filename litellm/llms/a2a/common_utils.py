@@ -2,6 +2,7 @@
 Common utilities for A2A (Agent-to-Agent) Protocol
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 from pydantic import BaseModel
@@ -91,7 +92,7 @@ def extract_text_from_a2a_message(message: dict[str, Any], depth: int = 0, max_d
     return " ".join(text_parts)
 
 
-def extract_text_from_a2a_response(response_dict: dict[str, Any], max_depth: int = 10) -> str:
+def extract_text_from_a2a_response(response_dict: Mapping[str, object], max_depth: int = 10) -> str:
     """
     Extract text content from A2A response result.
 

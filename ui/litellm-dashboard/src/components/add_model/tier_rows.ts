@@ -1,8 +1,15 @@
-import type { ComplexityTiers } from "./ComplexityRouterConfig";
+import { isForecastClassifier } from "./forecast_classifier_config";
+import type { ClassifierType, ComplexityTiers } from "./ComplexityRouterConfig";
 import type { ComplexityTier } from "./KeywordTierRules";
 import type { TierModelParams, TierModelParamsByTier } from "./complexity_router_tiers";
 
 export const TIER_ORDER: ComplexityTier[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
+
+export const ALL_BUILT_IN_TIERS: ComplexityTier[] = ["NON_REASONING", ...TIER_ORDER];
+
+/** The ladder one router renders, ascending; NON_REASONING appears only when enabled. */
+export const tierOrderFor = (enableNonReasoningTier: boolean | undefined): ComplexityTier[] =>
+  enableNonReasoningTier ? ALL_BUILT_IN_TIERS : TIER_ORDER;
 
 export interface TierRow {
   id: string;
@@ -26,7 +33,9 @@ export const MAX_TIER_NAME_CHARS = 64;
 export const MAX_TIER_DEFINITION_CHARS = 500;
 
 export interface ActiveTierSet {
+  classifier_type?: ClassifierType;
   tiers: ComplexityTiers;
+  enable_non_reasoning_tier?: boolean;
   custom_tier_set?: CustomTierSet;
   tier_model_params?: TierModelParamsByTier;
 }
@@ -39,7 +48,8 @@ export const activeTierName = (row: TierRow): string => row.name.trim();
 export const sameTierIdentity = (left: string, right: string): boolean =>
   left.trim().toLowerCase() === right.trim().toLowerCase();
 
-export const isBuiltInTierName = (name: string): boolean => TIER_ORDER.some((tier) => sameTierIdentity(tier, name));
+export const isBuiltInTierName = (name: string): boolean =>
+  ALL_BUILT_IN_TIERS.some((tier) => sameTierIdentity(tier, name));
 
 const builtInRow = (tier: keyof ComplexityTiers, tiers: ComplexityTiers): TierRow => ({
   id: tier,
@@ -51,8 +61,15 @@ const builtInRow = (tier: keyof ComplexityTiers, tiers: ComplexityTiers): TierRo
 // The only reader of the tier set. Built-in rows carry the canonical tier key as their id, so every
 // pointer into the set is a row id in both modes and nothing downstream branches on the mode.
 export const activeTierRows = (value: ActiveTierSet): ActiveTierRow[] => {
-  const rows = value.custom_tier_set?.tiers ?? TIER_ORDER.map((tier) => builtInRow(tier, value.tiers));
-  return rows.map((row) => ({ ...row, params: value.tier_model_params?.[row.id] ?? {} }));
+  const rows =
+    value.custom_tier_set?.tiers ??
+    tierOrderFor(value.enable_non_reasoning_tier).map((tier) => builtInRow(tier, value.tiers));
+  return rows
+    .filter(
+      (row) =>
+        value.custom_tier_set || !isForecastClassifier(value.classifier_type ?? "heuristic") || row.models.length > 0,
+    )
+    .map((row) => ({ ...row, params: value.tier_model_params?.[row.id] ?? {} }));
 };
 
 // The wire shape of an edited tier set, shared by the payload builder and the prompt preview so the
@@ -113,6 +130,10 @@ export const CUSTOM_TIER_RESTRICTIONS = {
     omit: ["escalation_keywords"],
     reason: "Escalation bumps a request along the built-in tier ladder, which your tier set replaces",
   },
+  stallEscalation: {
+    omit: ["stall_escalation_enabled", "stall_escalation_window", "stall_escalation_repeat_threshold"],
+    reason: "Stall escalation bumps a request along the built-in tier ladder, which your tier set replaces",
+  },
   adaptive: {
     omit: ["adaptive", "adaptive_weights", "tier_distance_penalty", "adaptive_eligible"],
     reason: "Adaptive routing scores models along the built-in tier ladder, which your tier set replaces",
@@ -122,24 +143,21 @@ export const CUSTOM_TIER_RESTRICTIONS = {
     reason: "Session pinning escalates along the built-in tier ladder, which your tier set replaces",
   },
   heuristicClassifier: {
-    omit: ["heuristic_first_max_tier"],
+    omit: ["heuristic_first_max_tier", "hybrid_boundary_margin"],
     reason:
       "The heuristic scorer only produces the built-in tiers, so an edited set needs the LLM classifier. " +
-      "Heuristic first is out for the same reason: its local scorer decides the cheap traffic",
+      "Heuristic first and hybrid are out for the same reason: their local scorer decides the traffic it is sure of",
   },
   heuristicScoring: {
     omit: [
       "tier_boundaries",
       "token_thresholds",
       "dimension_weights",
+      "custom_dimensions",
       "reasoning_override_min_score",
       "custom_technical_keywords",
     ],
     reason: "The heuristic scorer never runs under an edited tier set, so its inputs have no effect",
-  },
-  classifierPrompt: {
-    omit: [],
-    reason: "A replacement prompt drops the tier bullets and the injection guard. Your definitions are the rubric",
   },
   classificationRubric: {
     omit: [],

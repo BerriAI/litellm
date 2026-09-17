@@ -277,3 +277,18 @@ def test_update_valid_token_db_values_override_custom_auth_when_set():
     # DB values should win
     assert result.end_user_tpm_limit == 500
     assert result.end_user_model_max_budget == db_budget
+
+
+def test_end_user_budget_tpd_limit_reaches_the_token():
+    from litellm.proxy.auth.user_api_key_auth import _apply_budget_limits_to_end_user_params
+
+    end_user_params = {"end_user_id": "user_1"}
+    _apply_budget_limits_to_end_user_params(
+        end_user_params=end_user_params,
+        budget_info=LiteLLM_BudgetTable(rpm_limit=5, tpd_limit=750000),
+        end_user_id="user_1",
+    )
+    result = update_valid_token_with_end_user_params(UserAPIKeyAuth(token="test_token"), end_user_params)
+
+    assert result.end_user_rpm_limit == 5
+    assert result.end_user_tpd_limit == 750000

@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -11,6 +12,7 @@ from litellm.types.utils import ImageResponse
 from litellm.utils import convert_to_model_response_object
 
 if TYPE_CHECKING:
+    import tiktoken
     from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
 
 
@@ -19,6 +21,10 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
     DEFAULT_WIDTH = 1024
     DEFAULT_HEIGHT = 1024
+
+    MAX_IMAGES_PER_REQUEST: Final = 1
+    MIN_DIMENSION_PX: Final = 768
+    MAX_TOTAL_PX: Final = 1_056_768
 
     @staticmethod
     def get_mai_image_generation_url(
@@ -144,16 +150,27 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
             if k in supported_params:
                 if k == "size" and v:
-                    self._map_size_param(v, optional_params)
+                    self._map_size_param(v, optional_params, model)
+                elif k == "n" and v is not None and self._image_count(v, model) != self.MAX_IMAGES_PER_REQUEST:
+                    if not drop_params:
+                        raise self._unsupported(
+                            model,
+                            f"n={v} is not supported for model {model}. The Azure AI MAI image "
+                            f"endpoint returns exactly {self.MAX_IMAGES_PER_REQUEST} image per "
+                            "request and ignores any count, so a larger value would silently "
+                            "return fewer images than requested. Send one request per image, or "
+                            "set drop_params=True to drop n.",
+                        )
                 else:
                     optional_params[k] = v
             elif k in ("width", "height"):
                 optional_params[k] = v
             elif not drop_params:
-                raise ValueError(
+                raise self._unsupported(
+                    model,
                     f"Parameter {k} is not supported for model {model}. "
                     f"Supported parameters are {supported_params} and width/height. "
-                    f"Set drop_params=True to drop unsupported parameters."
+                    f"Set drop_params=True to drop unsupported parameters.",
                 )
 
         if "width" not in optional_params:
@@ -164,7 +181,19 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         optional_params.pop("size", None)
         return optional_params
 
-    def _map_size_param(self, size: str, optional_params: dict) -> None:
+    @staticmethod
+    def _unsupported(model: str, message: str) -> UnsupportedParamsError:
+        return UnsupportedParamsError(message=message, llm_provider="azure_ai", model=model)
+
+    def _image_count(self, n: object, model: str) -> int:
+        if isinstance(n, int):
+            return n
+        try:
+            return int(str(n))
+        except ValueError:
+            raise self._unsupported(model, f"n={n!r} is not a whole number of images for model {model}.")
+
+    def _map_size_param(self, size: str, optional_params: dict, model: str) -> None:
         size_mapping: Final = {
             "1024x1024": (1024, 1024),
             "1792x1024": (1792, 1024),
@@ -175,19 +204,36 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
         if size in size_mapping:
             width, height = size_mapping[size]
-            optional_params["width"] = width
-            optional_params["height"] = height
         elif "x" in size:
             try:
                 width, height = map(int, size.lower().split("x"))
-                optional_params["width"] = width
-                optional_params["height"] = height
             except ValueError:
-                raise ValueError(f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024').")
+                raise self._unsupported(
+                    model, f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024')."
+                )
         else:
-            raise ValueError(
+            raise self._unsupported(
+                model,
                 f"Unsupported size value: '{size}'. "
-                f"Use a known size (e.g., '1024x1024') or a custom 'WIDTHxHEIGHT' string."
+                f"Use a known size (e.g., '1024x1024') or a custom 'WIDTHxHEIGHT' string.",
+            )
+
+        self._validate_dimensions(model=model, size=size, width=width, height=height)
+        optional_params["width"] = width
+        optional_params["height"] = height
+
+    def _validate_dimensions(self, model: str, size: str, width: int, height: int) -> None:
+        if width < self.MIN_DIMENSION_PX or height < self.MIN_DIMENSION_PX:
+            raise self._unsupported(
+                model,
+                f"Unsupported size value: '{size}'. Azure AI MAI image models require width and "
+                f"height of at least {self.MIN_DIMENSION_PX} pixels.",
+            )
+        if width * height > self.MAX_TOTAL_PX:
+            raise self._unsupported(
+                model,
+                f"Unsupported size value: '{size}'. Azure AI MAI image models accept at most "
+                f"{self.MAX_TOTAL_PX} total pixels ({width}x{height} is {width * height}).",
             )
 
     def transform_image_generation_response(
@@ -199,7 +245,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:

@@ -87,7 +87,6 @@ const alwaysMounted = {
   api_key: undefined,
   api_base: undefined,
   custom_llm_provider: "openai",
-  litellm_credential_name: null,
   model: "gpt-4o",
 };
 

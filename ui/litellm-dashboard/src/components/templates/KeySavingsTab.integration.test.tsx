@@ -40,11 +40,17 @@ const mockActivity = (
   isFetchingMore: false,
   progress: { currentPage: 1, totalPages: 1 },
   cancelled: false,
+  failed: false,
   cancel: vi.fn(),
   ...overrides,
 });
 
 const scopedRange = () => vi.spyOn(useScopedDailyActivityRangeModule, "useScopedDailyActivityRange");
+
+const activity = {
+  dateValue: { from: new Date(2025, 0, 1), to: new Date(2025, 0, 31) },
+  onDateChange: vi.fn(),
+};
 
 const renderTab = (props: Partial<React.ComponentProps<typeof KeySavingsTab>> = {}) =>
   render(
@@ -53,6 +59,7 @@ const renderTab = (props: Partial<React.ComponentProps<typeof KeySavingsTab>> = 
       keyToken="key-abc123"
       userId="user-123"
       userRole="Internal User"
+      activity={activity}
       {...props}
     />,
   );
@@ -114,7 +121,7 @@ describe("KeySavingsTab", () => {
 
     renderTab({ userId: "user-456", userRole: "Internal User" });
 
-    expect(hook).toHaveBeenCalledWith("test-token", { userId: "user-456", apiKey: "key-abc123" });
+    expect(hook).toHaveBeenCalledWith("test-token", { userId: "user-456", apiKey: "key-abc123" }, activity);
     expect(screen.getByTestId("key-savings-scope-note")).toHaveTextContent("Showing your own requests");
   });
 
@@ -123,7 +130,7 @@ describe("KeySavingsTab", () => {
 
     renderTab({ userId: "admin-123", userRole: "Admin" });
 
-    expect(hook).toHaveBeenCalledWith("test-token", { userId: null, apiKey: "key-abc123" });
+    expect(hook).toHaveBeenCalledWith("test-token", { userId: null, apiKey: "key-abc123" }, activity);
     expect(screen.queryByTestId("key-savings-scope-note")).not.toBeInTheDocument();
   });
 
@@ -132,7 +139,7 @@ describe("KeySavingsTab", () => {
 
     renderTab({ userId: "org-admin-1", userRole: "Org Admin" });
 
-    expect(hook).toHaveBeenCalledWith("test-token", { userId: "org-admin-1", apiKey: "key-abc123" });
+    expect(hook).toHaveBeenCalledWith("test-token", { userId: "org-admin-1", apiKey: "key-abc123" }, activity);
     expect(screen.getByTestId("key-savings-scope-note")).toHaveTextContent("Showing your own requests");
   });
 });

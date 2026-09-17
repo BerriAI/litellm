@@ -10,6 +10,10 @@ from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.openai_like.json_loader import SimpleProviderConfig
+from litellm.llms.openai_like.messages.transformation import (
+    JSONProviderAnthropicMessagesConfig,
+)
 
 
 def _claude_code_payload(effort="medium", max_tokens=8192, **output_config_extra):
@@ -294,3 +298,39 @@ def test_non_adaptive_request_without_effort_is_untouched():
 
     assert "thinking" not in result
     assert "output_config" not in result
+
+
+def test_reasoning_effort_budget_capped_below_max_tokens():
+    result = _transform("claude-haiku-4-5", {"max_tokens": 4000, "reasoning_effort": "xhigh"})
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 3999}
+    assert result["max_tokens"] == 4000
+
+
+def test_reasoning_effort_thinking_dropped_when_min_budget_cannot_fit():
+    result = _transform("claude-haiku-4-5", {"max_tokens": 1024, "reasoning_effort": "xhigh"})
+
+    assert "thinking" not in result
+    assert result["max_tokens"] == 1024
+
+
+def test_reasoning_effort_budget_capped_for_openai_like_messages_upstream():
+    provider = SimpleProviderConfig(
+        "meta",
+        {
+            "base_url": "https://api.meta.ai/v1",
+            "api_key_env": "META_API_KEY",
+            "supported_endpoints": ["/v1/messages"],
+        },
+    )
+
+    result = JSONProviderAnthropicMessagesConfig(provider).transform_anthropic_messages_request(
+        model="muse-spark-1.2",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params={"max_tokens": 4000, "reasoning_effort": "xhigh"},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 3999}
+    assert result["max_tokens"] == 4000

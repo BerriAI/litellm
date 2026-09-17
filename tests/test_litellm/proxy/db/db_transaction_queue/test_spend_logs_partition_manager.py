@@ -4,7 +4,7 @@ selection, the non-partitioned no-op safety path, and the drop/ensure SQL flow.
 """
 
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,7 +19,6 @@ from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
     upcoming_partitions,
 )
 
-
 DDL_TIMEOUT_MS = 30000
 
 
@@ -28,19 +27,23 @@ def _budget(ms: "int | None" = DDL_TIMEOUT_MS):
     return lambda: ms
 
 
-def _wire_tx(db) -> list[str]:
+def _wire_tx(db) -> "tuple[list[str], list[int | timedelta | None]]":
     """
     Model the prisma seam the partition DDL uses.
 
     Every statement this manager issues, DDL and catalog query alike, runs inside
     db.tx() so it can carry SET LOCAL timeouts. Those SET LOCAL statements are
-    collected in the returned list rather than forwarded, so assertions on
-    db.execute_raw and db.query_raw still see only the real statements.
+    collected in the first returned list rather than forwarded, so assertions on
+    db.execute_raw and db.query_raw still see only the real statements. The
+    second list records the interactive-transaction timeout each tx was opened
+    with.
     """
     session_settings: list[str] = []
+    tx_timeouts: list[int | timedelta | None] = []
 
     @asynccontextmanager
-    async def _tx():
+    async def _tx(*, max_wait: "int | timedelta | None" = None, timeout: "int | timedelta | None" = None):
+        tx_timeouts.append(timeout)
         tx = MagicMock()
 
         async def _execute_raw(sql, *args):
@@ -57,7 +60,7 @@ def _wire_tx(db) -> list[str]:
         yield tx
 
     db.tx = _tx
-    return session_settings
+    return session_settings, tx_timeouts
 
 
 def test_period_start_per_interval():
@@ -227,7 +230,7 @@ async def test_partition_ddl_carries_a_statement_and_lock_timeout():
             }
         ]
     )
-    session_settings = _wire_tx(client.db)
+    session_settings, _ = _wire_tx(client.db)
 
     await mgr.ensure_partitions(client, _budget(7000))
     await mgr.drop_partitions_older_than(client, datetime(2026, 6, 5, tzinfo=timezone.utc), _budget(7000))
@@ -249,7 +252,7 @@ async def test_catalog_queries_carry_a_statement_timeout():
     mgr = SpendLogsPartitionManager()
     client = MagicMock()
     client.db.query_raw = AsyncMock(return_value=[])
-    session_settings = _wire_tx(client.db)
+    session_settings, _ = _wire_tx(client.db)
 
     await mgr.is_partitioned(client, _budget(4000))
     assert session_settings == ["SET LOCAL statement_timeout = 4000"], (
@@ -261,6 +264,34 @@ async def test_catalog_queries_carry_a_statement_timeout():
     assert session_settings == ["SET LOCAL statement_timeout = 4000"], (
         f"_list_partitions issued no statement timeout: {session_settings}"
     )
+
+
+@pytest.mark.asyncio
+async def test_partition_transactions_outlive_their_statement_bound():
+    """
+    prisma's interactive transaction has its own timeout, 5s by default, which
+    keeps ticking while a statement waits on the partition lock. A tx shorter
+    than the SET LOCAL bound it carries is closed mid-lock-wait and the engine
+    then answers the next call with a 422, so the partition is silently not
+    created. A tx equal to the bound is closed too: the statement can consume
+    its whole bound waiting on the lock, then still needs to commit.
+    """
+    mgr = SpendLogsPartitionManager()
+    client = MagicMock()
+    client.db.execute_raw = AsyncMock(return_value=0)
+    client.db.query_raw = AsyncMock(return_value=[])
+    _, tx_timeouts = _wire_tx(client.db)
+
+    await mgr.is_partitioned(client, _budget())
+    await mgr.ensure_partitions(client, _budget())
+    await mgr.drop_partitions_older_than(client, datetime(2026, 6, 5, tzinfo=timezone.utc), _budget())
+
+    assert len(tx_timeouts) > 0
+    for tx_timeout in tx_timeouts:
+        assert isinstance(tx_timeout, timedelta)
+        assert tx_timeout > timedelta(milliseconds=DDL_TIMEOUT_MS), (
+            f"tx timeout {tx_timeout} does not outlive its {DDL_TIMEOUT_MS}ms statement bound"
+        )
 
 
 @pytest.mark.asyncio
@@ -308,17 +339,15 @@ async def test_partition_maintenance_issues_nothing_when_the_budget_is_already_s
 
 
 def test_unsupported_interval_raises():
-    with pytest.raises(ValueError, match='Unsupported partition interval: year'):
+    with pytest.raises(ValueError, match="Unsupported partition interval: year"):
         period_start(date(2026, 6, 1), "year")
-    with pytest.raises(ValueError, match='Unsupported partition interval: year'):
+    with pytest.raises(ValueError, match="Unsupported partition interval: year"):
         next_period_start(date(2026, 6, 1), "year")
 
 
 def test_parse_partition_upper_bound_unparseable_to_value_is_none():
     """A TO(...) value that is not a valid timestamp must not raise; return None."""
-    assert (
-        parse_partition_upper_bound("FOR VALUES FROM ('x') TO ('not-a-date')") is None
-    )
+    assert parse_partition_upper_bound("FOR VALUES FROM ('x') TO ('not-a-date')") is None
 
 
 @pytest.mark.asyncio

@@ -1,8 +1,10 @@
 import React from "react";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { vi, test, expect, beforeEach } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { vi, test, expect, beforeEach, describe, type Mock } from "vitest";
+import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import OrganizationInfoView from "./organization_view";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 
@@ -12,8 +14,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
-// Mock networking calls used by the component's mutation handlers. entityLinks -> migratedPages
-// imports serverRootPath from the same module, so the mock must export it too.
+// Mock networking calls used by the component's mutation handlers.
 vi.mock("../networking", () => {
   return {
     __esModule: true,
@@ -108,7 +109,7 @@ beforeEach(() => {
 test("renders organization view after loading data", async () => {
   mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
 
-  const { findAllByText } = renderWithProviders(
+  renderWithProviders(
     <OrganizationInfoView
       organizationId="org_123"
       onClose={() => {}}
@@ -116,11 +117,10 @@ test("renders organization view after loading data", async () => {
       is_org_admin={false}
       is_proxy_admin={false}
       userModels={[]}
-      editOrg={false}
     />,
   );
 
-  const [orgName] = await findAllByText("Acme Corp");
+  const [orgName] = await screen.findAllByText("Acme Corp");
   expect(orgName).toBeInTheDocument();
 });
 
@@ -136,7 +136,6 @@ test("should display empty state when organization has no members", async () => 
       is_org_admin={false}
       is_proxy_admin={false}
       userModels={[]}
-      editOrg={false}
     />,
   );
 
@@ -166,7 +165,6 @@ test("should display team aliases when teams are available", async () => {
       is_org_admin={false}
       is_proxy_admin={false}
       userModels={[]}
-      editOrg={false}
     />,
   );
 
@@ -200,7 +198,6 @@ test("should display team ID as fallback when alias is not found", async () => {
       is_org_admin={false}
       is_proxy_admin={false}
       userModels={[]}
-      editOrg={false}
     />,
   );
 
@@ -224,7 +221,6 @@ test("links each team badge to that team's detail page", async () => {
       is_org_admin={false}
       is_proxy_admin={false}
       userModels={[]}
-      editOrg={false}
     />,
   );
 
@@ -251,7 +247,6 @@ test("model badges stay non-clickable", async () => {
       is_org_admin={false}
       is_proxy_admin={false}
       userModels={[]}
-      editOrg={false}
     />,
   );
 
@@ -273,7 +268,6 @@ test("should keep unsaved settings edits when switching tabs and back", async ()
       is_org_admin={false}
       is_proxy_admin={true}
       userModels={[]}
-      editOrg={false}
     />,
   );
 
@@ -309,7 +303,6 @@ test("renders a tpm/rpm limit of 0 as 0 in the overview and settings tabs, never
       is_org_admin={false}
       is_proxy_admin={true}
       userModels={[]}
-      editOrg={false}
     />,
   );
 
@@ -323,4 +316,100 @@ test("renders a tpm/rpm limit of 0 as 0 in the overview and settings tabs, never
   expect(within(settings).getByText("RPM: 0")).toBeInTheDocument();
   expect(screen.queryByText("TPM: Unlimited")).not.toBeInTheDocument();
   expect(screen.queryByText("RPM: Unlimited")).not.toBeInTheDocument();
+});
+
+const renderOrgView = (props: { is_proxy_admin?: boolean } = {}) => (
+  <OrganizationInfoView
+    organizationId="org_123"
+    onClose={() => {}}
+    accessToken="test-token"
+    is_org_admin={false}
+    is_proxy_admin={props.is_proxy_admin ?? false}
+    userModels={[]}
+  />
+);
+
+const lastSearchParams = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
+describe("organization detail tab in the URL (?org_tab=)", () => {
+  beforeEach(() => {
+    mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as unknown as ReturnType<
+      typeof useOrganization
+    >);
+  });
+
+  test("opens on the tab named by ?org_tab=", () => {
+    renderWithProviders(renderOrgView(), { searchParams: "?org=org_123&org_tab=members" });
+
+    expect(screen.getByRole("tab", { name: "Members" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("No members found")).toBeInTheDocument();
+  });
+
+  test("the settings deep link used by the list's Edit action opens the Settings tab", () => {
+    renderWithProviders(renderOrgView({ is_proxy_admin: true }), { searchParams: "?org=org_123&org_tab=settings" });
+
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: /Edit Settings/i })).toBeInTheDocument();
+  });
+
+  test("opens on Overview when the URL names no tab", () => {
+    renderWithProviders(renderOrgView(), { searchParams: "?org=org_123" });
+
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("writes the selected tab to ?org_tab= and drops it again for Overview", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(renderOrgView(), { searchParams: "?org=org_123", onUrlUpdate });
+
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+    await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.get("org_tab")).toBe("settings"));
+    expect(lastSearchParams(onUrlUpdate)?.get("org")).toBe("org_123");
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
+
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+
+    await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.has("org_tab")).toBe(false));
+    expect(lastSearchParams(onUrlUpdate)?.get("org")).toBe("org_123");
+  });
+
+  test("falls back to Overview for an unknown ?org_tab= and removes it from the URL", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    render(renderOrgView(), {
+      wrapper: ({ children }) => (
+        <NuqsTestingAdapter
+          searchParams="?org=org_123&org_tab=billing"
+          onUrlUpdate={onUrlUpdate}
+          hasMemory
+          resetUrlUpdateQueueOnMount={false}
+        >
+          <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+        </NuqsTestingAdapter>
+      ),
+    });
+
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(lastSearchParams(onUrlUpdate)?.has("org_tab")).toBe(false);
+    expect(lastSearchParams(onUrlUpdate)?.get("org")).toBe("org_123");
+  });
+
+  test("follows back and forward navigation between tabs while the detail view stays open", () => {
+    const atUrl = (searchParams: string) => (
+      <NuqsTestingAdapter searchParams={searchParams} hasMemory>
+        <QueryClientProvider client={testQueryClient}>{renderOrgView()}</QueryClientProvider>
+      </NuqsTestingAdapter>
+    );
+    const { rerender } = render(atUrl("?org=org_123&org_tab=members"));
+    expect(screen.getByRole("tab", { name: "Members" })).toHaveAttribute("aria-selected", "true");
+
+    rerender(atUrl("?org=org_123"));
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+
+    rerender(atUrl("?org=org_123&org_tab=members"));
+    expect(screen.getByRole("tab", { name: "Members" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("No members found")).toBeInTheDocument();
+  });
 });

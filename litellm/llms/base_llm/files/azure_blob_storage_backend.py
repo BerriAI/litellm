@@ -7,14 +7,34 @@ to reuse all authentication and Azure Storage operations.
 """
 
 import time
+from pathlib import Path
 from typing import Final
 from urllib.parse import quote, urlparse
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
+from litellm.proxy.common_utils.path_utils import safe_filename
 
 from .storage_backend import BaseFileStorageBackend
+
+
+def _safe_basename(original_filename: str) -> str:
+    try:
+        return safe_filename(original_filename)
+    except ValueError:
+        return "file"
+
+
+def _safe_extension(original_filename: str) -> str:
+    """The extension off a basename, with no path separators or traversal sequences.
+
+    original_filename.split(".")[-1] does not parse path structure, so a filename
+    like "a.jsonl/../../etc/cron.d/x" would put "../../etc/cron.d/x" straight into
+    the blob path built below. Path.suffix only ever looks at the last path
+    component, so routing through safe_filename() first closes that off.
+    """
+    return Path(_safe_basename(original_filename)).suffix.lstrip(".")
 
 
 class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
@@ -81,16 +101,15 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
     def _generate_file_name(self, original_filename: str, file_naming_strategy: str) -> str:
         """Generate file name based on naming strategy."""
         if file_naming_strategy == "original_filename":
-            # Use original filename, but sanitize it
-            return quote(original_filename, safe="")
+            return quote(_safe_basename(original_filename), safe="")
         elif file_naming_strategy == "timestamp":
             # Use timestamp
-            extension = original_filename.split(".")[-1] if "." in original_filename else ""
+            extension = _safe_extension(original_filename)
             timestamp: Final = int(time.time() * 1000)  # milliseconds
             return f"{timestamp}.{extension}" if extension else str(timestamp)
         else:  # default to "uuid"
             # Use UUID
-            extension = original_filename.split(".")[-1] if "." in original_filename else ""
+            extension = _safe_extension(original_filename)
             file_uuid: Final = str(uuid.uuid4())
             return f"{file_uuid}.{extension}" if extension else file_uuid
 

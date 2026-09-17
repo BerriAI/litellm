@@ -6,9 +6,10 @@ from .exceptions import NotFoundError, UnauthorizedError
 
 
 class UsersManagementClient:
-    def __init__(self, base_url: str, api_key: str | None = None):
+    def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 30):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.timeout = timeout
 
     def _get_headers(self) -> dict[str, str]:
         headers: Final = {"Content-Type": "application/json"}
@@ -19,7 +20,7 @@ class UsersManagementClient:
     def list_users(self, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """List users (GET /user/list)"""
         url: Final = f"{self.base_url}/user/list"
-        response: Final = requests.get(url, headers=self._get_headers(), params=params)
+        response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self.timeout)
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()
@@ -29,7 +30,7 @@ class UsersManagementClient:
         """Get user info (GET /user/info)"""
         url: Final = f"{self.base_url}/user/info"
         params: Final = {"user_id": user_id} if user_id else {}
-        response: Final = requests.get(url, headers=self._get_headers(), params=params)
+        response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self.timeout)
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         if response.status_code == 404:
@@ -41,7 +42,7 @@ class UsersManagementClient:
         """Get user info v2 - lightweight, returns only user object (GET /v2/user/info)"""
         url: Final = f"{self.base_url}/v2/user/info"
         params: Final = {"user_id": user_id} if user_id else {}
-        response: Final = requests.get(url, headers=self._get_headers(), params=params)
+        response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self.timeout)
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         if response.status_code == 404:
@@ -52,7 +53,7 @@ class UsersManagementClient:
     def create_user(self, user_data: dict[str, Any]) -> dict[str, Any]:
         """Create a new user (POST /user/new)"""
         url: Final = f"{self.base_url}/user/new"
-        response: Final = requests.post(url, headers=self._get_headers(), json=user_data)
+        response: Final = requests.post(url, headers=self._get_headers(), json=user_data, timeout=self.timeout)
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()
@@ -61,7 +62,9 @@ class UsersManagementClient:
     def delete_user(self, user_ids: list[str]) -> dict[str, Any]:
         """Delete users (POST /user/delete)"""
         url: Final = f"{self.base_url}/user/delete"
-        response: Final = requests.post(url, headers=self._get_headers(), json={"user_ids": user_ids})
+        response: Final = requests.post(
+            url, headers=self._get_headers(), json={"user_ids": user_ids}, timeout=self.timeout
+        )
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()

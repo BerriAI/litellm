@@ -4,6 +4,7 @@ Unit tests for AttachmentRegistry - tests policy attachment matching.
 Tests the main entry point: get_attached_policies()
 """
 
+import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -139,6 +140,71 @@ class TestGetAttachedPolicies:
         assert "gpt4-policy" in attached
         assert len(attached) == 3
 
+    def test_matches_are_ordered_from_broadest_to_narrowest_scope(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "model-policy", "models": ["gpt-4"]},
+                {"policy": "team-policy", "teams": ["t1"]},
+                {"policy": "global-policy", "scope": "*"},
+            ]
+        )
+
+        context = PolicyMatchContext(team_alias="t1", model="gpt-4")
+
+        assert registry.get_attached_policies(context) == [
+            "global-policy",
+            "team-policy",
+            "model-policy",
+        ]
+
+    def test_combined_team_and_model_attachment_uses_model_specificity(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "team-policy", "teams": ["t1"]},
+                {"policy": "team-model-policy", "teams": ["t1"], "models": ["gpt-4"]},
+            ]
+        )
+
+        context = PolicyMatchContext(team_alias="t1", model="gpt-4")
+
+        assert registry.get_attached_policies(context) == [
+            "team-policy",
+            "team-model-policy",
+        ]
+
+    def test_duplicate_policy_uses_broadest_matching_attachment(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "shared-policy", "models": ["gpt-4"]},
+                {"policy": "model-policy", "models": ["gpt-4"]},
+                {"policy": "shared-policy", "scope": "*"},
+            ]
+        )
+
+        context = PolicyMatchContext(model="gpt-4")
+
+        assert registry.get_attached_policies(context) == [
+            "shared-policy",
+            "model-policy",
+        ]
+        assert registry.get_attached_policies_with_reasons(context)[0]["matched_via"] == "scope:*"
+
+    def test_duplicate_policy_prefers_single_scope_over_combined_scope(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [
+                {"policy": "shared-policy", "teams": ["t1"], "models": ["gpt-4"]},
+                {"policy": "shared-policy", "models": ["gpt-4"]},
+            ]
+        )
+
+        context = PolicyMatchContext(team_alias="t1", model="gpt-4")
+
+        assert registry.get_attached_policies_with_reasons(context)[0]["matched_via"] == "model:gpt-4"
+
     def test_same_policy_multiple_attachments_no_duplicates(self):
         """Test same policy attached multiple ways doesn't duplicate."""
         registry = AttachmentRegistry()
@@ -156,6 +222,21 @@ class TestGetAttachedPolicies:
 
         # Should only appear once
         assert attached.count("multi-policy") == 1
+
+    def test_many_distinct_policies_resolve_in_linear_time(self):
+        policy_count = 20_000
+        registry = AttachmentRegistry()
+        registry.load_attachments(
+            [{"policy": f"policy-{index}", "scope": "*"} for index in range(policy_count)]
+        )
+        context = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-4")
+
+        started = time.perf_counter()
+        attached = registry.get_attached_policies(context)
+        elapsed = time.perf_counter() - started
+
+        assert attached == [f"policy-{index}" for index in range(policy_count)]
+        assert elapsed < 1.0, f"{policy_count} attachments took {elapsed:.2f}s, dedup is no longer one pass"
 
     def test_no_attachments_returns_empty(self):
         """Test empty attachments returns empty list."""

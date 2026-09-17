@@ -120,6 +120,24 @@ describe("AuditLogsTable", () => {
     expect(screen.getByText("No matching audit logs")).toBeInTheDocument();
   });
 
+  it("renders the toolbar search box from the search props and forwards typed input", () => {
+    const onSearchChange = vi.fn();
+    renderTable({ searchValue: "team-", onSearchChange });
+
+    const input = screen.getByPlaceholderText("Search audit logs by ID…");
+    expect(input).toHaveValue("team-");
+
+    fireEvent.change(input, { target: { value: "team-7" } });
+    expect(onSearchChange).toHaveBeenCalledWith("team-7");
+  });
+
+  it("treats an active search as a filter for the empty state", () => {
+    const emptySearchResult = { data: [], rowCount: 0, searchValue: "zzz", onSearchChange: vi.fn() };
+    renderTable(emptySearchResult);
+
+    expect(screen.getByText("No matching audit logs")).toBeInTheDocument();
+  });
+
   it("renders active filter chips with human-readable labels", () => {
     const filters: ColumnFiltersState = [{ id: "action", value: "created" }];
     renderTable({ columnFilters: filters });

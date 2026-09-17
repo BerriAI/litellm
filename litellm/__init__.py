@@ -7,6 +7,9 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 # Suppress Pydantic 2.11+ deprecation warning about accessing model_fields on instances
 # This warning can accumulate during streaming and cause memory leaks
 warnings.filterwarnings("ignore", message=".*Accessing the.*attribute on the instance is deprecated.*")
+# ReadOnly on TypedDict fields is repo-wide static discipline (LIT012); pydantic warns it
+# cannot enforce it at runtime, which floods proxy boot once such a type is schema-walked
+warnings.filterwarnings("ignore", message=".*`ReadOnly` qualifier.*")
 ### INIT VARIABLES #########################
 import threading
 import os
@@ -26,7 +29,7 @@ def _dev_env_hot_reload_enabled() -> bool:
 if os.getenv("LITELLM_MODE", "DEV") == "DEV":
     _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import (
     Any,
     Callable,
@@ -42,8 +45,11 @@ from typing import (
     TYPE_CHECKING,
     Union,
 )
+from collections.abc import Mapping
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm.types.integrations.newrelic import NewRelicInitParams
+from litellm.litellm_core_utils.core_helpers import drop_params_env_flag
+from litellm.types.integrations.pointfive import PointFiveInitParams
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -150,6 +156,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "smtp_email",
     "deepeval",
     "s3_v2",
+    "pointfive",
     "aws_sqs",
     "vector_store_pre_call_hook",
     "dotprompt",
@@ -235,8 +242,9 @@ token: Optional[str] = (
 )
 telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
-drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
+drop_params = drop_params_env_flag(os.environ, verbose_logger)
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
+bedrock_neutralize_orphaned_tool_blocks: bool = True
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
@@ -274,7 +282,6 @@ databricks_key: Optional[str] = None
 openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
-autorouter_savings_baseline_model: Optional[str] = None
 replicate_key: Optional[str] = None
 bytez_key: Optional[str] = None
 gdc_key: Optional[str] = None
@@ -323,6 +330,9 @@ ssl_certificate: Optional[str] = None
 user_url_validation: bool = True
 user_url_allowed_hosts: List[str] = []
 provider_url_destination_allowed_hosts: List[str] = []
+#: "override" (default) or "additive": whether a key or team destination replaces
+#: the operator's exporter for that backend or exports alongside it.
+otel_tenant_destination_mode: str | None = None
 ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
@@ -334,6 +344,7 @@ _anthropic_prompt_caching_ttl_env: Optional[str] = os.getenv("LITELLM_ANTHROPIC_
 anthropic_prompt_caching_ttl: Optional[Literal["5m", "1h"]] = (
     "1h" if _anthropic_prompt_caching_ttl_env == "1h" else "5m" if _anthropic_prompt_caching_ttl_env == "5m" else None
 )
+openai_system_messages_first: bool = False
 disable_vertex_batch_output_transformation: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
@@ -422,6 +433,10 @@ anthropic_beta_headers_url: str = os.getenv(
     "LITELLM_ANTHROPIC_BETA_HEADERS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json",
 )
+autorouter_presets_url: str = os.getenv(
+    "LITELLM_AUTOROUTER_PRESETS_URL",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/proxy/public_endpoints/autorouter_presets.json",
+)
 suppress_debug_info: bool = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
@@ -429,6 +444,7 @@ s3_audit_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 newrelic_params: Optional[Union[NewRelicInitParams, Dict]] = None
+pointfive_params: Optional[Union[PointFiveInitParams, Mapping[str, object]]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
@@ -465,6 +481,7 @@ prometheus_metrics_config: Optional[List] = None
 prometheus_exclude_metrics: Optional[List[str]] = None
 prometheus_exclude_labels: Optional[List[str]] = None
 prometheus_emit_stream_label: bool = False
+prometheus_emit_input_sequence_length_label: bool = False
 prometheus_deployment_and_latency_caller_identity: Literal[
     "api_key_alias",
     "user_email",
@@ -486,7 +503,11 @@ disable_copilot_system_to_assistant: bool = False  # If false (default), convert
 public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
+public_skills_index: bool = False
 public_agent_groups: Optional[List[str]] = None
+agent_search_embedding_model: Optional[str] = None
+mcp_tool_search: Optional[Mapping[str, object]] = None
+skill_search_embedding_model: Optional[str] = None
 # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
 # New format: { "displayName": { "url": "...", "index": 0 } }
 # Old format: { "displayName": "url" } (for backward compatibility)
@@ -505,6 +526,7 @@ aiohttp_trust_env: bool = False  # set to true to use HTTP_ Proxy settings
 disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
 disable_aiohttp_trust_env: bool = False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
+http2: bool = False
 network_mock: bool = False  # When True, use mock transport — no real network calls
 
 ####### STOP SEQUENCE LIMIT #######
@@ -533,7 +555,7 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, mark_litellm_import_complete
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -656,6 +678,8 @@ aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
 dashscope_models: Set = set()
+qwencloud_models: Set = set()
+qwen_ai_platform_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
@@ -906,6 +930,10 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.add(key)
+        elif value.get("litellm_provider") == "qwencloud":
+            qwencloud_models.add(key)
+        elif value.get("litellm_provider") == "qwen_ai_platform":
+            qwen_ai_platform_models.add(key)
         elif value.get("litellm_provider") == "modelscope":
             modelscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
@@ -1069,6 +1097,8 @@ model_list = list(
     | deepgram_models
     | elevenlabs_models
     | dashscope_models
+    | qwencloud_models
+    | qwen_ai_platform_models
     | moonshot_models
     | publicai_models
     | darkbloom_models
@@ -1175,6 +1205,8 @@ def _build_models_by_provider() -> dict:
         "elevenlabs": elevenlabs_models,
         "heroku": heroku_models,
         "dashscope": dashscope_models,
+        "qwencloud": qwencloud_models,
+        "qwen_ai_platform": qwen_ai_platform_models,
         "modelscope": modelscope_models,
         "moonshot": moonshot_models,
         "publicai": publicai_models,
@@ -1342,6 +1374,7 @@ from .exceptions import (
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
+    VectorStoreSearchError,
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
@@ -1373,8 +1406,22 @@ from .images.main import *
 from .videos.main import *
 from .batch_completion.main import *
 from .rerank_api.main import *
-from .llms.anthropic.experimental_pass_through.messages.handler import *
-from .responses.main import *
+from .messages.dispatch import *
+from .responses.dispatch import *
+from .responses.main import (
+    acancel_responses,
+    acompact_responses,
+    adelete_responses,
+    aget_responses,
+    alist_input_items,
+    aresponses_api_with_mcp,
+    cancel_responses,
+    compact_responses,
+    delete_responses,
+    get_responses,
+    list_input_items,
+    mock_responses_api_response,
+)
 
 # Interactions API is available as litellm.interactions module
 # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
@@ -1402,8 +1449,9 @@ from .skills.main import (
     adelete_skill,
 )
 from .containers.main import *
-from .ocr.main import *
-from .rust_bridge.ocr import use_litellm_rust
+from .ocr.dispatch import *
+from .chat_completions.dispatch import *
+from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
 from .search.main import *
@@ -1443,9 +1491,11 @@ from .vector_stores.vector_store_registry import (
     VectorStoreRegistry,
     VectorStoreIndexRegistry,
 )
+from .types.vector_stores import VectorStoreSearchFailureMode
 
 vector_store_registry: Optional[VectorStoreRegistry] = None
 vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
+vector_store_search_failure_mode: VectorStoreSearchFailureMode = "annotate"
 
 ### RAG ###
 from . import rag
@@ -1784,6 +1834,9 @@ if TYPE_CHECKING:
     from .llms.azure.responses.o_series_transformation import (
         AzureOpenAIOSeriesResponsesAPIConfig as AzureOpenAIOSeriesResponsesAPIConfig,
     )
+    from .llms.azure_ai.responses.transformation import (
+        AzureAIResponsesAPIConfig as AzureAIResponsesAPIConfig,
+    )
     from .llms.xai.responses.transformation import (
         XAIResponsesAPIConfig as XAIResponsesAPIConfig,
     )
@@ -1983,6 +2036,9 @@ if TYPE_CHECKING:
     from .llms.hosted_vllm.responses.transformation import (
         HostedVLLMResponsesAPIConfig as HostedVLLMResponsesAPIConfig,
     )
+    from .llms.fireworks_ai.responses.transformation import (
+        FireworksAIResponsesAPIConfig as FireworksAIResponsesAPIConfig,
+    )
     from .llms.github_copilot.chat.transformation import (
         GithubCopilotConfig as GithubCopilotConfig,
     )
@@ -2010,6 +2066,24 @@ if TYPE_CHECKING:
     )
     from .llms.dashscope.rerank.transformation import (
         DashScopeRerankConfig as DashScopeRerankConfig,
+    )
+    from .llms.dashscope.qwencloud import (
+        QwenCloudChatConfig as QwenCloudChatConfig,
+    )
+    from .llms.dashscope.qwencloud import (
+        QwenCloudEmbeddingConfig as QwenCloudEmbeddingConfig,
+    )
+    from .llms.dashscope.qwencloud import (
+        QwenCloudRerankConfig as QwenCloudRerankConfig,
+    )
+    from .llms.dashscope.qwen_ai_platform import (
+        QwenAIPlatformChatConfig as QwenAIPlatformChatConfig,
+    )
+    from .llms.dashscope.qwen_ai_platform import (
+        QwenAIPlatformEmbeddingConfig as QwenAIPlatformEmbeddingConfig,
+    )
+    from .llms.dashscope.qwen_ai_platform import (
+        QwenAIPlatformRerankConfig as QwenAIPlatformRerankConfig,
     )
     from .llms.modelscope.chat.transformation import (
         ModelScopeChatConfig as ModelScopeChatConfig,
@@ -2361,3 +2435,5 @@ def __getattr__(name: str) -> Any:
 
 
 # ALL_LITELLM_RESPONSE_TYPES is lazy-loaded via __getattr__ to avoid loading utils at import time
+
+mark_litellm_import_complete()

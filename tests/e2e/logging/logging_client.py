@@ -189,6 +189,45 @@ class LangfuseCreds:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class WeaveCreds:
+    """Weights & Biases Weave credentials for a key-scoped ``weave_otel`` callback.
+
+    The proxy still needs WANDB_API_KEY / WANDB_PROJECT_ID in its own environment:
+    the weave_otel logger is constructed from those before the per-key vars are
+    applied, so a key-scoped callback on a proxy without them never initializes.
+    The per-key vars are what direct THIS key's spans at this project.
+    """
+
+    api_key: str
+    project_id: str
+
+    def key_logging_metadata(self) -> KeyMetadata:
+        return KeyMetadata(
+            logging=[
+                KeyLoggingCallback(
+                    callback_name="weave_otel",
+                    callback_type="success_and_failure",
+                    callback_vars=KeyLoggingCallbackVars(
+                        wandb_api_key=self.api_key,
+                        weave_project_id=self.project_id,
+                    ),
+                )
+            ]
+        )
+
+
+def load_weave_creds() -> WeaveCreds:
+    api_key = os.getenv("WANDB_API_KEY")
+    project_id = (os.getenv("WEAVE_PROJECT_ID") or os.getenv("WANDB_PROJECT_ID") or "").strip()
+    if not (api_key and project_id):
+        pytest.fail(
+            "Weave e2e requires WANDB_API_KEY and WEAVE_PROJECT_ID (or WANDB_PROJECT_ID, "
+            "format <entity>/<project>); missing credentials is a hard failure, not a skip"
+        )
+    return WeaveCreds(api_key=api_key, project_id=project_id)
+
+
 def load_langfuse_creds() -> LangfuseCreds:
     public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
     secret_key = os.getenv("LANGFUSE_SECRET_KEY")
@@ -480,12 +519,8 @@ class LoggingClient:
             stream=True if stream else None,
         )
         if stream:
-            return self.proxy.transport.stream(
-                "/v1/messages", headers=self.proxy.transport.bearer(key), json=body
-            )
-        return self.proxy.transport.send(
-            "/v1/messages", headers=self.proxy.transport.bearer(key), json=body
-        )
+            return self.proxy.transport.stream("/v1/messages", headers=self.proxy.transport.bearer(key), json=body)
+        return self.proxy.transport.send("/v1/messages", headers=self.proxy.transport.bearer(key), json=body)
 
     def responses_raw(
         self, key: str, model: str, text: str, *, max_output_tokens: int = 64, stream: bool = False
@@ -499,12 +534,8 @@ class LoggingClient:
             model=model, input=text, max_output_tokens=max_output_tokens, stream=True if stream else None
         )
         if stream:
-            return self.proxy.transport.stream(
-                "/v1/responses", headers=self.proxy.transport.bearer(key), json=body
-            )
-        return self.proxy.transport.send(
-            "/v1/responses", headers=self.proxy.transport.bearer(key), json=body
-        )
+            return self.proxy.transport.stream("/v1/responses", headers=self.proxy.transport.bearer(key), json=body)
+        return self.proxy.transport.send("/v1/responses", headers=self.proxy.transport.bearer(key), json=body)
 
     def scrape_metrics(self) -> str:
         return self.proxy.probe("/metrics", params=NoBody()).body
@@ -530,9 +561,7 @@ class LoggingClient:
                 return False
             return True
 
-        rows = self.proxy.poll_logs_for_key(
-            key, min_rows=1, predicate=lambda rs: any(_matches(r) for r in rs)
-        )
+        rows = self.proxy.poll_logs_for_key(key, min_rows=1, predicate=lambda rs: any(_matches(r) for r in rs))
         for row in rows:
             if _matches(row):
                 return row
@@ -593,9 +622,7 @@ class LoggingClient:
         deadline = time.monotonic() + POLL_TIMEOUT
         last: LangfuseObservation | None = None
         while time.monotonic() < deadline:
-            last = self.find_langfuse_observation(
-                creds, key_alias=key_alias, prompt_marker=prompt_marker
-            )
+            last = self.find_langfuse_observation(creds, key_alias=key_alias, prompt_marker=prompt_marker)
             if last is not None:
                 cost = observation_spend(last)
                 if not require_positive_cost or (cost is not None and cost > 0):
@@ -611,9 +638,7 @@ class LoggingClient:
         prompt_marker: str,
     ) -> list[LangfuseObservation]:
         """Generation plus any sibling/child observations (guardrail spans, etc.)."""
-        gen = self.poll_langfuse_observation(
-            creds, key_alias=key_alias, prompt_marker=prompt_marker
-        )
+        gen = self.poll_langfuse_observation(creds, key_alias=key_alias, prompt_marker=prompt_marker)
         if gen is None or not gen.trace_id:
             return [] if gen is None else [gen]
         return self.list_langfuse_observations(creds, trace_id=gen.trace_id) or [gen]
@@ -636,3 +661,15 @@ def first_ok(client: LoggingClient, send: Callable[[], StreamingResponse]) -> St
 
 def build_logging_client(proxy: ProxyClient) -> LoggingClient:
     return LoggingClient(proxy=proxy)
+
+
+def readiness_details_body(client: LoggingClient) -> str:
+    """/health/readiness/details, tolerating the 503 it serves while the
+    ephemeral stack's DB leg blips: the recorded state the logging suites check
+    here is the callback list, which the body carries either way."""
+    result = client.proxy.probe("/health/readiness/details", params=NoBody())
+    db_blip = result.status_code == 503 and '"db":"disconnected"' in result.body
+    assert result.status_code == 200 or db_blip, (
+        f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
+    )
+    return result.body

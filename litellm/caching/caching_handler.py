@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
 from litellm.types.caching import CachedEmbedding
+from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
@@ -107,17 +108,31 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     return "choices" in cached_result
 
 
-def _should_defer_streaming_cache_hit_callbacks(*, kwargs: dict[str, object]) -> bool:
+def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
+    if kwargs.get("stream", False) is True:
+        return True
+    return converted_stream_requested(kwargs) and not kwargs.get("_agentic_loop_depth")
+
+
+def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> bool:
     """
-    When stream=True, do not run success callbacks at cache-hit time.
+    When the cache hit is replayed as a stream, do not run success callbacks at cache-hit time.
 
     Cached chat/text completion replay uses CustomStreamWrapper; cached Responses
     replay uses CachedResponsesAPIStreamingIterator; cached Anthropic Messages
     replay uses CachedAnthropicMessagesStreamIterator. All invoke logging success
     handlers when the stream finishes; firing them here too would double-count
-    spend and callback records.
+    spend and callback records. A plain (non-stream) replay logs here, since nothing
+    else will.
     """
-    return kwargs.get("stream", False) is True
+    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+        CachedAnthropicMessagesStreamIterator,
+    )
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    return isinstance(
+        cached_result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator, CachedAnthropicMessagesStreamIterator)
+    )
 
 
 def _prompt_tokens_details_as_mapping(details: "PromptTokensDetailsWrapper") -> Mapping[str, object]:
@@ -267,7 +282,7 @@ class LLMCachingHandler:
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         args=args,
                     )
-                    if not _should_defer_streaming_cache_hit_callbacks(kwargs=kwargs):
+                    if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
                         # LOG SUCCESS
                         self._async_log_cache_hit_on_callbacks(
                             logging_obj=logging_obj,
@@ -383,7 +398,7 @@ class LLMCachingHandler:
                         is_async=False,
                     )
 
-                    if not _should_defer_streaming_cache_hit_callbacks(kwargs=kwargs):
+                    if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
                         logging_obj.handle_sync_success_callbacks_for_async_calls(
                             result=cached_result,
                             start_time=start_time,
@@ -672,7 +687,7 @@ class LLMCachingHandler:
     def _async_log_cache_hit_on_callbacks(
         self,
         logging_obj: LiteLLMLoggingObj,
-        cached_result: Any,
+        cached_result: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
         cache_hit: bool,
@@ -823,7 +838,7 @@ class LLMCachingHandler:
         if (call_type == CallTypes.acompletion.value or call_type == CallTypes.completion.value) and isinstance(
             cached_result, dict
         ):
-            if kwargs.get("stream", False) is True:
+            if _stream_replay_requested(kwargs):
                 cached_result = self._convert_cached_stream_response(
                     cached_result=cached_result,
                     call_type=call_type,
@@ -838,7 +853,7 @@ class LLMCachingHandler:
         if (
             call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value
         ) and isinstance(cached_result, dict):
-            if kwargs.get("stream", False) is True:
+            if _stream_replay_requested(kwargs):
                 cached_result = self._convert_cached_stream_response(
                     cached_result=cached_result,
                     call_type=call_type,
@@ -893,7 +908,7 @@ class LLMCachingHandler:
         elif (call_type == "aresponses" or call_type == "responses") and isinstance(cached_result, dict):
             use_chat_completion_cache: Final = _is_chat_completion_cached_dict(cached_result)
             if use_chat_completion_cache:
-                if kwargs.get("stream", False) is True:
+                if _stream_replay_requested(kwargs):
                     bridge_call_type: Final = (
                         CallTypes.acompletion.value if call_type == "aresponses" else CallTypes.completion.value
                     )
@@ -921,7 +936,7 @@ class LLMCachingHandler:
                 ):
                     response_obj._hidden_params["cache_hit"] = True
 
-                if kwargs.get("stream", False) is True:
+                if _stream_replay_requested(kwargs):
                     cached_result = CachedResponsesAPIStreamingIterator(
                         response=response_obj,
                         logging_obj=logging_obj,
@@ -1184,7 +1199,7 @@ class LLMCachingHandler:
         logging_obj: LiteLLMLoggingObj,
         model: str,
         kwargs: dict[str, Any],
-        cached_result: Any,
+        cached_result: object,
         is_async: bool,
         is_embedding: bool = False,
         custom_llm_provider: str | None = None,
@@ -1217,7 +1232,9 @@ class LLMCachingHandler:
         }
 
         if litellm.cache is not None:
-            litellm_params["preset_cache_key"] = litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
+            litellm_params["preset_cache_key"] = (
+                self.preset_cache_key or litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
+            )
         else:
             litellm_params["preset_cache_key"] = None
 
