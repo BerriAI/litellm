@@ -68,12 +68,10 @@ impl AnthropicCountTokensConfig for AnthropicCountTokensTransformation {
 
     fn validate_request(&self, model: &str, messages: &[AnthropicMessage]) -> Result<(), Error> {
         if model.is_empty() {
-            return Err(Error::InvalidRequest("model parameter is required".into()));
+            return Err(Error::MissingField("model"));
         }
         if messages.is_empty() {
-            return Err(Error::InvalidRequest(
-                "messages parameter is required".into(),
-            ));
+            return Err(Error::MissingField("messages"));
         }
         Ok(())
     }
@@ -143,7 +141,7 @@ mod tests {
                 None,
                 None
             ),
-            Err(Error::InvalidRequest(message)) if message == "model parameter is required"
+            Err(Error::MissingField("model"))
         ));
         assert!(matches!(
             ANTHROPIC_COUNT_TOKENS_TRANSFORMATION.transform_request(
@@ -152,7 +150,7 @@ mod tests {
                 None,
                 None
             ),
-            Err(Error::InvalidRequest(message)) if message == "messages parameter is required"
+            Err(Error::MissingField("messages"))
         ));
     }
 

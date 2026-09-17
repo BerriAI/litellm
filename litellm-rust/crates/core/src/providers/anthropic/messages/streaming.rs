@@ -7,17 +7,7 @@ use litellm_framing::sse::{SseFrame, SseFramer};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-#[derive(Debug, thiserror::Error)]
-pub enum AnthropicStreamDecodeError {
-    #[error("stream framing failed: {0}")]
-    Framing(#[from] litellm_framing::Error),
-    #[error("Anthropic SSE frame has no data")]
-    MissingSseData,
-    #[error("Anthropic stream event is invalid: {0}")]
-    InvalidEvent(#[from] serde_json::Error),
-    #[error("Bedrock event payload has invalid base64: {0}")]
-    InvalidBedrockPayload(#[from] base64::DecodeError),
-}
+use crate::messages::Error;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AnthropicStreamUsage {
@@ -148,47 +138,48 @@ struct BedrockChunkPayload {
     bytes: String,
 }
 
-pub fn decode_anthropic_sse_frame(
-    frame: SseFrame,
-) -> Result<AnthropicMessagesStreamEvent, AnthropicStreamDecodeError> {
-    let data = frame
-        .data
-        .ok_or(AnthropicStreamDecodeError::MissingSseData)?;
-    Ok(serde_json::from_str(&data)?)
+pub fn decode_anthropic_sse_frame(frame: SseFrame) -> Result<AnthropicMessagesStreamEvent, Error> {
+    let data = frame.data.ok_or(Error::MissingStreamData)?;
+    serde_json::from_str(&data).map_err(|error| Error::InvalidStreamEvent(error.to_string()))
 }
 
 pub fn decode_bedrock_anthropic_frame(
     frame: AwsEventStreamFrame,
-) -> Result<AnthropicMessagesStreamEvent, AnthropicStreamDecodeError> {
-    let payload: BedrockChunkPayload = serde_json::from_slice(&frame.payload)?;
-    let event = base64::engine::general_purpose::STANDARD.decode(payload.bytes)?;
-    Ok(serde_json::from_slice(&event)?)
+) -> Result<AnthropicMessagesStreamEvent, Error> {
+    let payload: BedrockChunkPayload = serde_json::from_slice(&frame.payload)
+        .map_err(|error| Error::InvalidBedrockPayload(error.to_string()))?;
+    let event = base64::engine::general_purpose::STANDARD
+        .decode(payload.bytes)
+        .map_err(|error| Error::InvalidBedrockBase64(error.to_string()))?;
+    serde_json::from_slice(&event).map_err(|error| Error::InvalidStreamEvent(error.to_string()))
 }
 
 pub fn direct_anthropic_event_stream<S, B, E>(
     input: S,
-) -> impl Stream<Item = Result<AnthropicMessagesStreamEvent, AnthropicStreamDecodeError>> + Send
+) -> impl Stream<Item = Result<AnthropicMessagesStreamEvent, Error>> + Send
 where
     S: Stream<Item = Result<B, E>> + Send,
     B: Buf + Send,
     E: std::error::Error + Send + Sync + 'static,
 {
-    SseFramer
-        .frame(input)
-        .map(|frame| decode_anthropic_sse_frame(frame?))
+    SseFramer.frame(input).map(|frame| {
+        let frame = frame.map_err(|error| Error::StreamFraming(error.to_string()))?;
+        decode_anthropic_sse_frame(frame)
+    })
 }
 
 pub fn bedrock_anthropic_event_stream<S, B, E>(
     input: S,
-) -> impl Stream<Item = Result<AnthropicMessagesStreamEvent, AnthropicStreamDecodeError>> + Send
+) -> impl Stream<Item = Result<AnthropicMessagesStreamEvent, Error>> + Send
 where
     S: Stream<Item = Result<B, E>> + Send,
     B: Buf + Send,
     E: std::error::Error + Send + Sync + 'static,
 {
-    AwsEventStreamFramer
-        .frame(input)
-        .map(|frame| decode_bedrock_anthropic_frame(frame?))
+    AwsEventStreamFramer.frame(input).map(|frame| {
+        let frame = frame.map_err(|error| Error::StreamFraming(error.to_string()))?;
+        decode_bedrock_anthropic_frame(frame)
+    })
 }
 
 #[cfg(test)]
