@@ -267,23 +267,23 @@ def _frontier() -> tuple[FrontierModel, ...]:
     )
     models: list[FrontierModel] = []  # mutable-ok: accumulated once at import into a tuple
     for map_key in sorted(COST_MAP):
-        entry: Final = COST_MAP[map_key]
-        pair: Final = (entry.litellm_provider, entry.mode)
-        wiring: Final = _PROVIDER_WIRING.get(pair)
+        entry = COST_MAP[map_key]
+        pair = (entry.litellm_provider, entry.mode)
+        wiring = _PROVIDER_WIRING.get(pair)
         if wiring is None:
             raise ValueError(
                 f"cost_map entry {map_key} has no wiring for "
                 f"(litellm_provider={pair[0]}, mode={pair[1]}); add a "
                 f"_ProviderWiring row in cost_matrix.py"
             )
-        siblings: Final = groups[pair]
-        override_key: Final = (
+        siblings = groups[pair]
+        override_key = (
             siblings[(siblings.index(map_key) + 1) % len(siblings)] if len(siblings) > 1 else None
         )
-        override_litellm: Final = (
+        override_litellm = (
             _litellm_model_for(override_key, wiring) if override_key is not None else None
         )
-        deployment: Final = _DEPLOYMENTS.get(map_key)
+        deployment = _DEPLOYMENTS.get(map_key)
         models.append(
             FrontierModel(
                 model_name=f"cc-{map_key.replace('/', '-').replace(':', '-').replace('.', '-').lower()}",

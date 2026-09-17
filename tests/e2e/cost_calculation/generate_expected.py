@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from cost_matrix import (
     EXPECTED_PATH,
     FRONTIER_MODELS,
@@ -168,11 +170,19 @@ def main() -> None:
     rewrite: Final = "--rewrite" in sys.argv[1:]
     proposed: Final = _proposed()
     proposed_values: Final = {key: cell.model_dump() for key, cell in proposed.items()}
-    existing: Final = (
-        json.loads(EXPECTED_PATH.read_text()) if EXPECTED_PATH.exists() else {}
+    existing: Final[Mapping[str, ExpectedCell]] = (
+        TypeAdapter(dict[str, ExpectedCell]).validate_python(
+            json.loads(EXPECTED_PATH.read_text())
+        )
+        if EXPECTED_PATH.exists()
+        else {}
     )
     merged: Final = {
-        key: (proposed_values[key] if rewrite or key not in existing else existing[key])
+        key: (
+            proposed_values[key]
+            if rewrite or key not in existing
+            else existing[key].model_dump()
+        )
         for key in sorted(proposed_values)
     }
     added: Final = sum(1 for key in proposed_values if key not in existing)
