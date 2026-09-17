@@ -13,7 +13,6 @@ mod client;
 mod common_utils;
 mod handler;
 mod prepare;
-pub mod transformation;
 pub mod types;
 
 use handler::{execute_messages_provider_call, execute_messages_provider_stream};

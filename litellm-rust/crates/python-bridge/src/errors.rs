@@ -35,21 +35,20 @@ pub(crate) fn responses_error_to_pyerr(error: responses::Error) -> PyErr {
 
 pub(crate) fn core_error_to_pyerr(error: Error) -> PyErr {
     let value_error = match &error {
-        Error::Ocr(error) => matches!(
-            error,
-            ocr::Error::Auth(_)
-                | ocr::Error::InvalidProvider(_)
-                | ocr::Error::InvalidRequest(_)
-                | ocr::Error::InvalidType { .. }
-                | ocr::Error::MissingField(_)
-                | ocr::Error::MissingDocumentUrl
-        ),
+        Error::Ocr(error) => {
+            error.is_request()
+                || matches!(
+                    error,
+                    ocr::Error::Auth(_)
+                        | ocr::Error::InvalidProvider(_)
+                        | ocr::Error::InvalidRequest(_)
+                        | ocr::Error::MissingField(_)
+                        | ocr::Error::MissingDocumentUrl
+                )
+        }
         Error::Messages(error) => match error {
             messages::Error::Auth(source) => auth_is_value_error(source),
-            messages::Error::InvalidProvider(_)
-            | messages::Error::InvalidRequest(_)
-            | messages::Error::Headers(_) => true,
-            _ => false,
+            _ => error.is_request(),
         },
         Error::AudioTranscription(error) => match error {
             audio_transcription::Error::Auth(source) => auth_is_value_error(source),
