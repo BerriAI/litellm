@@ -2576,11 +2576,14 @@ class ProxyBaseLLMRequestProcessing:
                 )
 
                 async def refresh_stream_headers() -> Mapping[str, str]:
-                    """`custom_headers` rebuilt for whichever deployment served the stream."""
-                    if not getattr(response, "fallback_headers_adopted", False):
-                        return custom_headers
+                    """`custom_headers` rebuilt once the first chunk is buffered, from `self.data` as the
+                    guardrails left it and for whichever deployment served the stream."""
                     return self._stream_response_headers(
-                        hidden_params=get_hidden_params_dict(response),
+                        hidden_params=(
+                            get_hidden_params_dict(response)
+                            if getattr(response, "fallback_headers_adopted", False)
+                            else hidden_params
+                        ),
                         user_api_key_dict=user_api_key_dict,
                         logging_obj=logging_obj,
                         version=version,
