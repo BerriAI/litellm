@@ -27473,6 +27473,181 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPGatewaySession": {
+          "description": "One live stateful Streamable HTTP session held by this proxy worker.",
+          "properties": {
+            "client_ip": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Ip"
+            },
+            "client_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Name"
+            },
+            "client_version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Version"
+            },
+            "idle_seconds": {
+              "title": "Idle Seconds",
+              "type": "number"
+            },
+            "in_flight_requests": {
+              "title": "In Flight Requests",
+              "type": "integer"
+            },
+            "key_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Alias"
+            },
+            "session_id_prefix": {
+              "title": "Session Id Prefix",
+              "type": "string"
+            },
+            "team_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Alias"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            }
+          },
+          "required": [
+            "session_id_prefix",
+            "idle_seconds",
+            "in_flight_requests"
+          ],
+          "title": "MCPGatewaySession",
+          "type": "object"
+        },
+        "MCPGatewaySessionGroupCount": {
+          "properties": {
+            "count": {
+              "title": "Count",
+              "type": "integer"
+            },
+            "label": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Label"
+            }
+          },
+          "required": [
+            "count"
+          ],
+          "title": "MCPGatewaySessionGroupCount",
+          "type": "object"
+        },
+        "MCPGatewaySessionsResponse": {
+          "properties": {
+            "by_client": {
+              "items": {
+                "$ref": "#/components/schemas/MCPGatewaySessionGroupCount"
+              },
+              "title": "By Client",
+              "type": "array"
+            },
+            "by_user": {
+              "items": {
+                "$ref": "#/components/schemas/MCPGatewaySessionGroupCount"
+              },
+              "title": "By User",
+              "type": "array"
+            },
+            "sessions": {
+              "items": {
+                "$ref": "#/components/schemas/MCPGatewaySession"
+              },
+              "title": "Sessions",
+              "type": "array"
+            },
+            "total_sessions": {
+              "title": "Total Sessions",
+              "type": "integer"
+            },
+            "worker_pid": {
+              "title": "Worker Pid",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "worker_pid",
+            "total_sessions"
+          ],
+          "title": "MCPGatewaySessionsResponse",
+          "type": "object"
+        },
         "MCPOAuthUserCredentialRequest": {
           "description": "Stores a user's OAuth2 token for an OpenAPI MCP server.",
           "properties": {
@@ -30202,6 +30377,33 @@
             }
           ],
           "summary": "Store Mcp User Env Vars",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/sessions": {
+        "get": {
+          "description": "Live stateful MCP gateway sessions on this proxy worker, grouped by AI client and by user.",
+          "operationId": "get_mcp_gateway_sessions_v1_mcp_sessions_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPGatewaySessionsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Mcp Gateway Sessions",
           "tags": [
             "mcp_management"
           ]

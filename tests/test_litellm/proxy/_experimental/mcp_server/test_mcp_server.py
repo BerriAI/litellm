@@ -2609,6 +2609,246 @@ async def test_initialize_request_tracks_active_session_after_response_header():
         mcp_server._remove_stateful_session_tracking(session_id)
 
 
+_INITIALIZE_WITH_CLIENT_INFO: Final = (
+    b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18",'
+    b'"capabilities":{},"clientInfo":{"name":"claude-code","version":"1.0.0"}}}'
+)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_name", "expected_version"),
+    [
+        (_INITIALIZE_WITH_CLIENT_INFO, "claude-code", "1.0.0"),
+        (
+            b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18",'
+            b'"capabilities":{},"clientInfo":{"name":"","version":"0"}}}',
+            "",
+            "0",
+        ),
+    ],
+)
+def test_extract_initialize_client_info_reads_client_name_and_version(body, expected_name, expected_version):
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    client_info = mcp_server._extract_initialize_client_info(body)
+
+    assert client_info is not None
+    assert client_info.name == expected_name
+    assert client_info.version == expected_version
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"",
+        b"not json",
+        b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+        b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}',
+    ],
+)
+def test_extract_initialize_client_info_returns_none_without_client_info(body):
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    assert mcp_server._extract_initialize_client_info(body) is None
+
+
+@pytest.mark.asyncio
+async def test_initialize_request_records_client_name_in_gateway_sessions_report():
+    """The real initialize body's clientInfo is attributed to the session the
+    stateful manager creates, together with the authenticated user."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+            session_manager_stateless,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "initialize-client-info-session-1"
+    owner_auth = UserAPIKeyAuth(
+        api_key="initialize-key",
+        user_id="user-a",
+        user_email="a@example.com",
+        key_alias="alice-key",
+        team_id="team-1",
+    )
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer initialize-key"),
+        ],
+    }
+    receive = AsyncMock(return_value={"type": "http.request", "body": _INITIALIZE_WITH_CLIENT_INFO, "more_body": False})
+    instances: dict[str, object] = {}
+
+    async def stateful_handle(s, r, se):
+        instances[session_id] = MagicMock()
+        await se(
+            {
+                "type": "http.response.start",
+                "headers": [(b"mcp-session-id", session_id.encode())],
+            }
+        )
+
+    async def stateless_handle(s, r, se):
+        raise AssertionError("initialize request should use stateful manager")
+
+    try:
+        with (
+            patch(  # test-quality-ok: admission auth is resolved by a module-level function; the suite's only seam
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(owner_auth, None, None, None, None, None),
+            ),
+            patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[MagicMock()],
+            ),
+            patch(  # test-quality-ok: session manager init is a module-level flag; the suite's only seam
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(  # test-quality-ok: the transports are module-level singletons; the suite's only seam
+                session_manager_stateful, "handle_request", side_effect=stateful_handle
+            ),
+            patch.object(  # test-quality-ok: the transports are module-level singletons; the suite's only seam
+                session_manager_stateless, "handle_request", side_effect=stateless_handle
+            ),
+            patch.object(  # test-quality-ok: the transport registry is a module-level singleton; the suite's only seam
+                session_manager_stateful, "_server_instances", instances
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_auth_contexts, {}, clear=True
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_client_info, {}, clear=True
+            ),
+        ):
+            await handle_streamable_http_mcp(scope, receive, AsyncMock())
+            report = mcp_server.get_mcp_gateway_sessions_report()
+
+        assert report.total_sessions == 1
+        assert [session.model_dump() for session in report.sessions] == [
+            {
+                "session_id_prefix": session_id[:8],
+                "client_name": "claude-code",
+                "client_version": "1.0.0",
+                "user_id": "user-a",
+                "user_email": "a@example.com",
+                "key_alias": "alice-key",
+                "team_id": "team-1",
+                "team_alias": None,
+                "client_ip": "",
+                "idle_seconds": report.sessions[0].idle_seconds,
+                "in_flight_requests": 0,
+            }
+        ]
+        assert [(group.label, group.count) for group in report.by_client] == [("claude-code", 1)]
+        assert [(group.label, group.count) for group in report.by_user] == [("user-a", 1)]
+        assert "initialize-key" not in report.model_dump_json()
+    finally:
+        mcp_server._remove_stateful_session_tracking(session_id)
+
+
+def test_gateway_sessions_report_groups_live_sessions_by_client_and_user():
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import session_manager_stateful
+    except ImportError:
+        pytest.skip("MCP server not available")
+    from mcp.types import Implementation
+
+    def auth_user(user_id: str) -> object:
+        return mcp_server.MCPAuthenticatedUser(
+            user_api_key_auth=UserAPIKeyAuth(api_key=f"key-{user_id}", user_id=user_id),
+            client_ip="10.0.0.1",
+        )
+
+    contexts = {
+        "alice-1": auth_user("alice"),
+        "alice-2": auth_user("alice"),
+        "bob-1": auth_user("bob"),
+        "anon-1": mcp_server.MCPAuthenticatedUser(user_api_key_auth=None),
+        "gone-1": auth_user("alice"),
+    }
+    client_info = {
+        "alice-1": Implementation(name="claude-code", version="1.0.0"),
+        "alice-2": Implementation(name="claude-code", version="1.0.1"),
+        "bob-1": Implementation(name="cursor", version="0.50.0"),
+        "gone-1": Implementation(name="cursor", version="0.50.0"),
+    }
+    last_seen = {"alice-1": 90.0, "alice-2": 100.0, "bob-1": 70.0, "anon-1": 100.0, "gone-1": 100.0}
+    live_instances = {session_id: MagicMock() for session_id in ("alice-1", "alice-2", "bob-1", "anon-1")}
+
+    with (
+        patch.object(  # test-quality-ok: the transport registry is a module-level singleton; the suite's only seam
+            session_manager_stateful, "_server_instances", live_instances
+        ),
+        patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+            mcp_server._stateful_session_auth_contexts, contexts, clear=True
+        ),
+        patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+            mcp_server._stateful_session_client_info, client_info, clear=True
+        ),
+        patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+            mcp_server._stateful_session_auth_context_last_seen, last_seen, clear=True
+        ),
+        patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+            mcp_server._stateful_session_active_request_counts, {"bob-1": 2}, clear=True
+        ),
+    ):
+        report = mcp_server.get_mcp_gateway_sessions_report(now=100.0)
+
+    assert report.total_sessions == 4
+    assert [(group.label, group.count) for group in report.by_client] == [
+        ("claude-code", 2),
+        ("cursor", 1),
+        (None, 1),
+    ]
+    assert [(group.label, group.count) for group in report.by_user] == [
+        ("alice", 2),
+        ("bob", 1),
+        (None, 1),
+    ]
+    by_prefix = {session.session_id_prefix: session for session in report.sessions}
+    assert set(by_prefix) == {"alice-1", "alice-2", "bob-1", "anon-1"}
+    assert by_prefix["alice-1"].idle_seconds == 10.0
+    assert by_prefix["bob-1"].in_flight_requests == 2
+    assert by_prefix["bob-1"].client_ip == "10.0.0.1"
+    assert by_prefix["anon-1"].client_name is None
+    assert by_prefix["anon-1"].user_id is None
+    assert "key-alice" not in report.model_dump_json()
+
+
+def test_remove_stateful_session_tracking_drops_client_info():
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+    except ImportError:
+        pytest.skip("MCP server not available")
+    from mcp.types import Implementation
+
+    session_id = "client-info-cleanup-session"
+    with patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+        mcp_server._stateful_session_client_info,
+        {session_id: Implementation(name="cursor", version="1")},
+        clear=True,
+    ):
+        mcp_server._remove_stateful_session_tracking(session_id)
+        assert session_id not in mcp_server._stateful_session_client_info
+
+
 @pytest.mark.asyncio
 async def test_initialize_request_with_existing_session_tracks_new_session():
     try:
