@@ -4787,7 +4787,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "time() - litellm_check_batch_cost_last_run_timestamp",
+          "expr": "time() - (litellm_check_batch_cost_last_run_timestamp > 0)",
           "legendFormat": "seconds since last run",
           "range": true,
           "refId": "A"
