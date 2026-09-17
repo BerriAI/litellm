@@ -33932,6 +33932,8 @@
             "priority": {
               "anyOf": [
                 {
+                  "maximum": 2147483647.0,
+                  "minimum": -2147483648.0,
                   "type": "integer"
                 },
                 {
@@ -36089,6 +36091,8 @@
             "priority": {
               "anyOf": [
                 {
+                  "maximum": 2147483647.0,
+                  "minimum": -2147483648.0,
                   "type": "integer"
                 },
                 {
