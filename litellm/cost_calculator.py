@@ -2170,7 +2170,7 @@ def ocr_batch_cost(
 def _lookup_model_info_or_none(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
     try:
         return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception:
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; caller logs and bills 0.0
         return None
 
 
