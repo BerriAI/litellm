@@ -15,6 +15,7 @@ from litellm._logging import redact_internal_details_from_client_message, verbos
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
+    OpenAILiveResponseEvent,
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
     OpenAIRealtimeResponseDelta,
@@ -148,6 +149,7 @@ class RealTimeStreaming:
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
         *,
         account_usage: bool = True,
+        live_initialization_seconds: float = 0,
     ):
         self.websocket: _ClientWebSocket = websocket
         self.backend_ws = backend_ws
@@ -155,6 +157,10 @@ class RealTimeStreaming:
         self._logging_worker = logging_worker
         self._account_usage = account_usage
         self.messages: list[OpenAIRealtimeEvents] = []
+        if account_usage and live_initialization_seconds > 0:
+            self.messages.append(
+                {"type": "litellm.live.initialization", "usage": {"seconds": live_initialization_seconds}}
+            )
         self._backend_sent_frames: bool = False
         self.input_message: dict = {}
         self.input_messages: list[dict[str, str]] = []
@@ -266,8 +272,15 @@ class RealTimeStreaming:
         else:
             message_obj = cast(dict[str, Any], json.loads(cast(str, message)))
         self._collect_tool_calls_from_response_done(cast(dict, message_obj))
-        if message_obj.get("type") == "session.closed" and isinstance(message_obj.get("usage"), dict):
+        if message_obj.get("type") in ("session.closed", "session.usage.updated") and isinstance(
+            message_obj.get("usage"), dict
+        ):
             self.messages.append(TypeAdapter(OpenAIRealtimeSessionClosed).validate_python(message_obj))
+            return
+        if message_obj.get("type") == "response.event" and isinstance(message_obj.get("event"), dict):
+            nested: Final = message_obj["event"]
+            if nested.get("type") in ("response.completed", "response.incomplete", "response.failed"):
+                self.messages.append(TypeAdapter(OpenAILiveResponseEvent).validate_python(message_obj))
             return
         if not self._should_store_message(message_obj):
             return

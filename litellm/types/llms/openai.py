@@ -2037,8 +2037,13 @@ class OpenAIRealtimeStreamResponseBaseObject(TypedDict):
 
 
 class OpenAIRealtimeSessionClosed(TypedDict):
-    type: ReadOnly[Literal["session.closed"]]
+    type: ReadOnly[Literal["session.closed", "session.usage.updated", "litellm.live.initialization"]]
     usage: ReadOnly[Mapping[str, object]]
+
+
+class OpenAILiveResponseEvent(TypedDict):
+    type: ReadOnly[Literal["response.event"]]
+    event: ReadOnly[Mapping[str, object]]
 
 
 class OpenAIRealtimeConversationObject(TypedDict, total=False):
@@ -2295,6 +2300,7 @@ class OpenAIRealtimeEventTypes(Enum):
 OpenAIRealtimeEvents = (
     OpenAIRealtimeStreamResponseBaseObject
     | OpenAIRealtimeSessionClosed
+    | OpenAILiveResponseEvent
     | OpenAIRealtimeStreamSessionEvents
     | OpenAIRealtimeStreamResponseOutputItemAdded
     | OpenAIRealtimeResponseContentPartAdded

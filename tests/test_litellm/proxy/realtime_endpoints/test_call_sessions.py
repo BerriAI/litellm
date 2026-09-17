@@ -178,7 +178,9 @@ async def test_mixed_case_offer_preserves_boundary_metadata_and_closes_extra_fil
 @pytest.mark.parametrize("policy", ["budget", "personal_models"])
 @pytest.mark.parametrize("mixed_case", [False, True])
 @pytest.mark.parametrize("pre_read", [False, True])
-async def test_offer_auth_enforces_session_model_policy_before_upstream(monkeypatch, multipart, policy, mixed_case, pre_read):
+async def test_offer_auth_enforces_session_model_policy_before_upstream(
+    monkeypatch, multipart, policy, mixed_case, pre_read
+):
     import json
     from unittest.mock import AsyncMock, MagicMock
 
@@ -557,8 +559,9 @@ async def test_realtime_endpoint_rejects_untrusted_call_ids(monkeypatch, call_id
 @pytest.mark.parametrize("multipart", [False, True])
 @pytest.mark.parametrize("credential", ["authorization", "api-key", "subprotocol", "x-litellm-api-key", "custom"])
 @pytest.mark.parametrize("signaling_credential", ["authorization", "api-key", "x-litellm-api-key", "mixed"])
+@pytest.mark.parametrize("signaling_path", ["/v1/realtime/calls", "/v1/live", "/live", "/openai/v1/live"])
 async def test_offer_exchange_wraps_call_and_filters_client_headers(
-    monkeypatch, multipart, credential, signaling_credential
+    monkeypatch, multipart, credential, signaling_credential, signaling_path
 ):
     import json
     from unittest.mock import AsyncMock
@@ -596,7 +599,7 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(
         {
             "type": "http",
             "method": "POST",
-            "path": "/v1/realtime/calls",
+            "path": signaling_path,
             "scheme": "http",
             "server": ("localhost", 80),
             "query_string": b"intent=quicksilver&architecture=avas&untrusted=bad",
@@ -672,6 +675,8 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(
     monkeypatch.setattr(codex, "supervise_codex_call", supervise)
     response = await codex.create_codex_realtime_call(request)
     assert response.status_code == 201
+    expected_prefix = "/v1/realtime/calls/" if signaling_path == "/v1/realtime/calls" else "/v1/live/"
+    assert response.headers["location"].startswith(expected_prefix)
     assert response.body == b"v=0\r\nanswer"
     token = response.headers["location"].rsplit("/", 1)[-1]
     call = codex.decode_call(token, "Bearer owner")
@@ -1147,7 +1152,9 @@ async def test_signaling_rejection_after_admission_refunds_parallel_slot(monkeyp
 
     class Reject(CustomLogger):
         async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
-            current = await proxy.internal_usage_cache.async_get_cache(key, litellm_parent_otel_span=None, local_only=True)
+            current = await proxy.internal_usage_cache.async_get_cache(
+                key, litellm_parent_otel_span=None, local_only=True
+            )
             assert limiter._gauge_in_flight_from_cache_value(current) == 1
             raise RuntimeError("Policy rejected after admission")
 

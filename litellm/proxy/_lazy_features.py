@@ -214,9 +214,14 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         ),
     ),
     LazyFeature(
+        name="live",
+        module_path="litellm.proxy.realtime_endpoints.live",
+        path_prefixes=("/openai/v1/live/sessions", "/v1/live/sessions", "/live/sessions"),
+    ),
+    LazyFeature(
         name="realtime",
         module_path="litellm.proxy.realtime_endpoints.endpoints",
-        path_prefixes=("/openai/v1/realtime", "/v1/realtime", "/realtime"),
+        path_prefixes=("/openai/v1/realtime", "/v1/realtime", "/realtime", "/openai/v1/live", "/v1/live", "/live"),
     ),
     LazyFeature(
         name="anthropic_passthrough",

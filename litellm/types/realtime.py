@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 from typing_extensions import ReadOnly, TypedDict
 
 from .llms.openai import (
@@ -10,6 +10,16 @@ from .llms.openai import (
 )
 
 ALL_DELTA_TYPES = Literal["text", "audio"]
+
+
+class LiveSessionDurationUsage(BaseModel):
+    duration: float = Field(
+        strict=True, ge=0, allow_inf_nan=False, validation_alias=AliasChoices("seconds", "audio_duration_ms")
+    )
+
+
+class LiveSessionUsageEvent(BaseModel):
+    usage: LiveSessionDurationUsage
 
 
 class RealtimeResponseTransformInput(TypedDict):

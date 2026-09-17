@@ -572,7 +572,11 @@ def _azure_relay_router():
         model_list=[
             {
                 "model_name": "gpt",
-                "litellm_params": {"model": "azure_ai/gpt-5.4-mini", "api_base": "https://a.services.ai.azure.com", "api_key": "k"},
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.4-mini",
+                    "api_base": "https://a.services.ai.azure.com",
+                    "api_key": "k",
+                },
             },
             {
                 "model_name": "other-group",
@@ -966,11 +970,24 @@ def test_get_model_from_request_extracts_realtime_session_model(route, encoded):
 
 
 @pytest.mark.parametrize("session", ['{"model":"actual-voice"}', {"model": "actual-voice"}])
-def test_realtime_calls_auth_uses_executed_session_model_despite_decoys(session):
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/realtime/calls",
+        "/v1/live",
+        "/live",
+        "/openai/v1/live",
+        "/v1/live/sessions",
+        "/live/sessions",
+        "/openai/v1/live/sessions",
+        "/v1/live/sessions/incoming/accept",
+    ],
+)
+def test_realtime_calls_auth_uses_executed_session_model_despite_decoys(session, route):
     assert (
         get_model_from_request(
             request_data={"model": "body-decoy", "session": session},
-            route="/v1/realtime/calls",
+            route=route,
             request_query_params={"model": "query-decoy"},
             request_headers={"x-litellm-model": "header-decoy"},
         )

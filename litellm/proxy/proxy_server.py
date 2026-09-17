@@ -11920,7 +11920,12 @@ async def _reject_realtime_session(
 
 _CODEX_LIVE_AUTH_DEPENDENCY: Final = Depends(user_api_key_auth_websocket)
 
+reserve_lazy_slot(app, "live")
+reserve_lazy_slot(app, "realtime")
 
+
+@app.websocket("/openai/v1/live/{call_id}")
+@app.websocket("/live/{call_id}")
 @app.websocket("/v1/live/{call_id}")
 async def codex_live_sideband_endpoint(
     websocket: WebSocket,
@@ -11934,6 +11939,7 @@ async def codex_live_sideband_endpoint(
 
 @app.websocket("/v1/live")
 @app.websocket("/live")
+@app.websocket("/openai/v1/live")
 @app.websocket("/openai/v1/realtime")
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")

@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from typing import Final, Protocol
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ValidationError
 from websockets.exceptions import ConnectionClosedOK
 
 from litellm._logging import verbose_proxy_logger
@@ -16,6 +16,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     invalidate_budget_reservation_counters,
     release_or_invalidate_budget_reservation,
 )
+from litellm.types.realtime import LiveSessionUsageEvent
 
 
 class ObserverSocket(Protocol):
@@ -34,14 +35,6 @@ class _ObserverEvent(BaseModel):
     type: str
 
 
-class _LiveDurationUsage(BaseModel):
-    audio_duration_ms: float = Field(strict=True, ge=0, allow_inf_nan=False)
-
-
-class _LiveTerminalEvent(BaseModel):
-    usage: _LiveDurationUsage
-
-
 class CallSupervisor:
     def __init__(
         self,
@@ -57,6 +50,7 @@ class CallSupervisor:
         termination_timeout: float = 60,
         logging_timeout: float = LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
         terminal_usage_required: bool = True,
+        connected_ready: bool = False,
         force_close_call: Callable[[], Awaitable[None]] | None = None,
         lease: RealtimeCallLease | None = None,
     ) -> None:
@@ -75,7 +69,9 @@ class CallSupervisor:
         self._terminal_usage_required = terminal_usage_required
         self._ready = asyncio.Event()
         self._stop = asyncio.Event()
-        self._started = False
+        self._started = connected_ready
+        if connected_ready:
+            self._ready.set()
         self._terminal = False
         self._terminal_usage_valid = False
         self._close_confirmed = False
@@ -128,7 +124,7 @@ class CallSupervisor:
             if event.type == "session.closed":
                 self._terminal = True
                 try:
-                    _LiveTerminalEvent.model_validate_json(message)
+                    LiveSessionUsageEvent.model_validate_json(message)
                 except ValidationError:
                     self._terminal_usage_valid = False
                 else:
@@ -206,7 +202,9 @@ class CallSupervisor:
                         await asyncio.wait_for(
                             self._stream.log_messages(wait_for_dispatch=True), timeout=self._logging_timeout
                         )
-                        self._accounting_complete = True
+                        self._accounting_complete = not bool(
+                            self._logging.model_call_details.get("realtime_backend_accounting_incomplete")
+                        )
                     except asyncio.TimeoutError:
                         verbose_proxy_logger.error("Realtime observer timed out dispatching usage accounting")
                     finally:

@@ -356,7 +356,13 @@ async def _create_codex_realtime_call(request: Request) -> Response:
             valid_token=auth,
             llm_router=server.llm_router,
         )
-        data: Final = build_call_request(offer, request.query_params, request.headers)
+        live_signaling: Final = request.url.path.rstrip("/") in ("/live", "/v1/live", "/openai/v1/live")
+        query: Final = (
+            MappingProxyType({"intent": "quicksilver", "architecture": "avas", **request.query_params})
+            if live_signaling
+            else request.query_params
+        )
+        data: Final = build_call_request(offer, query, request.headers)
         signaling_auth: Final = auth.model_copy(update=MappingProxyType({"budget_reservation": None}))
         if isinstance(limiter, _PROXY_MaxParallelRequestsHandler) and (
             auth.max_parallel_requests is not None
@@ -409,7 +415,9 @@ async def _create_codex_realtime_call(request: Request) -> Response:
             response.content,
             status_code=response.status_code,
             media_type="application/sdp",
-            headers=MappingProxyType({"Location": f"/v1/realtime/calls/{token}"}),
+            headers=MappingProxyType(
+                {"Location": f"/v1/live/{token}" if live_signaling else f"/v1/realtime/calls/{token}"}
+            ),
         )
     finally:
         try:

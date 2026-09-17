@@ -3590,3 +3590,43 @@ async def test_provider_bytes_are_sent_raw_after_pacing():
 
     assert [call.args[0] for call in backend_ws.send.await_args_list] == [b"\x00\x01", '{"type":"endStream"}']
     provider_config.pace_backend_send.assert_awaited_once_with(b"\x00\x01")
+
+
+def test_public_live_accounting_survives_filtered_logging(monkeypatch):
+    monkeypatch.setattr(litellm, "logged_real_time_event_types", [])
+    stream = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    events = [
+        {"type": "session.usage.updated", "usage": {"seconds": 15}},
+        {
+            "type": "response.event",
+            "event": {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_one",
+                    "model": "gpt-backend",
+                    "usage": {"total_tokens": 12},
+                },
+            },
+        },
+        {"type": "session.closed", "usage": {"seconds": 30}},
+    ]
+    for event in events:
+        stream.store_message({**event, "private_transcript": "do not retain"})
+    stream.store_message(
+        {"type": "response.event", "event": {"type": "response.output_text.delta", "delta": "private"}}
+    )
+    assert stream.messages == events
+
+
+@pytest.mark.parametrize("account_usage,expected", [(True, 1), (False, 0)])
+def test_live_initialization_is_retained_only_by_accounting_owner(account_usage, expected):
+    stream = RealTimeStreaming(
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        account_usage=account_usage,
+        live_initialization_seconds=15,
+    )
+    assert len(stream.messages) == expected
+    if account_usage:
+        assert stream.messages == [{"type": "litellm.live.initialization", "usage": {"seconds": 15}}]

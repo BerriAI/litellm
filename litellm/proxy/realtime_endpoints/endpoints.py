@@ -362,6 +362,15 @@ async def create_realtime_client_secret(
     return RealtimeClientSecretResponse(**upstream_json)
 
 
+@router.post("/v1/live", tags=["realtime"])
+@router.post("/live", tags=["realtime"])
+@router.post("/openai/v1/live", tags=["realtime"])
+async def proxy_live_calls(request: Request) -> Response:
+    from litellm.proxy.realtime_endpoints.call_sessions import create_codex_realtime_call
+
+    return await create_codex_realtime_call(request)
+
+
 @router.post(
     "/v1/realtime/calls",
     tags=["realtime"],

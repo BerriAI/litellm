@@ -187,7 +187,8 @@ class Sink:
 @pytest.mark.parametrize(
     "duration,valid", [(0, True), (1000, True), (None, False), (-1, False), (True, False), ("1000", False)]
 )
-async def test_live_terminal_requires_valid_duration_for_accounting(monkeypatch, duration, valid):
+@pytest.mark.parametrize("duration_field", ["audio_duration_ms", "seconds"])
+async def test_live_terminal_requires_valid_duration_for_accounting(monkeypatch, duration, valid, duration_field):
     from litellm.proxy.realtime_endpoints import call_supervision
 
     socket = Socket()
@@ -201,7 +202,7 @@ async def test_live_terminal_requires_valid_duration_for_accounting(monkeypatch,
     await socket.messages.put({"type": "session.started"})
     await supervisor.start()
     await socket.messages.put(
-        {"type": "session.closed", **({"usage": {"audio_duration_ms": duration}} if duration is not None else {})}
+        {"type": "session.closed", **({"usage": {duration_field: duration}} if duration is not None else {})}
     )
     await supervisor.wait()
     close.assert_not_awaited()
@@ -695,3 +696,58 @@ async def test_ga_observer_disconnect_requires_confirmed_hangup(closure, hangup_
     assert bool(logger.model_call_details.get("realtime_usage_incomplete")) == (not hangup_succeeds)
     assert sink.logs == 1
     assert socket.closed
+
+
+@pytest.mark.asyncio
+async def test_live_connected_attach_is_ready_without_session_started_and_bills_once():
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    sink = Sink(logger)
+
+    async def close():
+        await socket.messages.put({"type": "session.closed", "usage": {"seconds": 30}})
+
+    supervisor = CallSupervisor(
+        socket,
+        sink,
+        logger,
+        UserAPIKeyAuth(),
+        close,
+        connected_ready=True,
+        ready_timeout=0.1,
+    )
+    await supervisor.start()
+    await socket.messages.put({"type": "session.usage.updated", "usage": {"seconds": 15}})
+    await supervisor.close()
+    await supervisor.close()
+    assert sink.logs == 1
+    assert sink.events[-1] == {"type": "session.closed", "usage": {"seconds": 30}}
+    assert "realtime_usage_incomplete" not in logger.model_call_details
+    assert socket.closed
+
+
+@pytest.mark.asyncio
+async def test_live_missing_backend_accounting_invalidates_budget_after_dispatch(monkeypatch):
+    from litellm.proxy.realtime_endpoints import call_supervision
+
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    invalidate = AsyncMock()
+    monkeypatch.setattr(call_supervision, "invalidate_budget_reservation_counters", invalidate)
+
+    class IncompleteSink(Sink):
+        async def log_messages(self, *, wait_for_dispatch=False):
+            await super().log_messages(wait_for_dispatch=wait_for_dispatch)
+            logger.model_call_details["realtime_backend_accounting_incomplete"] = True
+
+    sink = IncompleteSink(logger)
+    supervisor = CallSupervisor(socket, sink, logger, UserAPIKeyAuth(), AsyncMock(), connected_ready=True)
+    await supervisor.start()
+    await socket.messages.put({"type": "session.closed", "usage": {"seconds": 30}})
+    await supervisor.wait()
+    assert sink.logs == 1
+    assert logger.model_call_details["realtime_accounting_incomplete"] is True
+    assert "realtime_usage_incomplete" not in logger.model_call_details
+    invalidate.assert_awaited_once()

@@ -15890,6 +15890,844 @@
       }
     }
   },
+  "live": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/live/sessions": {
+        "post": {
+          "operationId": "create_live_session_live_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Create Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/live/sessions/{session_id}/accept": {
+        "post": {
+          "operationId": "control_live_session_live_sessions__session_id__accept_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/live/sessions/{session_id}/content": {
+        "get": {
+          "operationId": "control_live_session_live_sessions__session_id__content_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/live/sessions/{session_id}/fork": {
+        "post": {
+          "operationId": "fork_live_session_live_sessions__session_id__fork_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Fork Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/live/sessions/{session_id}/hangup": {
+        "post": {
+          "operationId": "control_live_session_live_sessions__session_id__hangup_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/live/sessions/{session_id}/refer": {
+        "post": {
+          "operationId": "control_live_session_live_sessions__session_id__refer_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/live/sessions/{session_id}/reject": {
+        "post": {
+          "operationId": "control_live_session_live_sessions__session_id__reject_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions": {
+        "post": {
+          "operationId": "create_live_session_openai_v1_live_sessions_post_2",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Create Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/accept": {
+        "post": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__accept_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/content": {
+        "get": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__content_get_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/fork": {
+        "post": {
+          "operationId": "fork_live_session_openai_v1_live_sessions__session_id__fork_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Fork Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/hangup": {
+        "post": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__hangup_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/refer": {
+        "post": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__refer_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/reject": {
+        "post": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__reject_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/v1/live/sessions": {
+        "post": {
+          "operationId": "create_live_session_v1_live_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Create Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/accept": {
+        "post": {
+          "operationId": "control_live_session_v1_live_sessions__session_id__accept_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/content": {
+        "get": {
+          "operationId": "control_live_session_v1_live_sessions__session_id__content_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/fork": {
+        "post": {
+          "operationId": "fork_live_session_v1_live_sessions__session_id__fork_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Fork Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/hangup": {
+        "post": {
+          "operationId": "control_live_session_v1_live_sessions__session_id__hangup_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/refer": {
+        "post": {
+          "operationId": "control_live_session_v1_live_sessions__session_id__refer_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/reject": {
+        "post": {
+          "operationId": "control_live_session_v1_live_sessions__session_id__reject_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "live"
+          ]
+        }
+      }
+    }
+  },
   "llm_passthrough": {
     "components": {
       "schemas": {
@@ -19217,6 +20055,284 @@
             }
           ],
           "summary": "Image Generation",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/live": {
+        "post": {
+          "operationId": "proxy_live_calls_openai_v1_live_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Live Calls",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions": {
+        "post": {
+          "operationId": "create_live_session_openai_v1_live_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Create Live Session",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/accept": {
+        "post": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__accept_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/content": {
+        "get": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__content_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/fork": {
+        "post": {
+          "operationId": "fork_live_session_openai_v1_live_sessions__session_id__fork_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Fork Live Session",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/hangup": {
+        "post": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__hangup_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/refer": {
+        "post": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__refer_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/reject": {
+        "post": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__reject_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
           "tags": [
             "llm_passthrough"
           ]
@@ -37024,6 +38140,19 @@
   "realtime": {
     "components": {
       "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
         "RealtimeClientSecretResponse": {
           "description": "Response from POST /v1/realtime/client_secrets.\n\nBoth the top-level `value` and `session.client_secret.value`\nwill contain the encrypted token instead of the raw ephemeral key.\nThe `session` field is kept as a raw dict so unknown fields pass through.",
           "properties": {
@@ -37080,10 +38209,606 @@
           },
           "title": "RealtimeTranscriptionSessionResponse",
           "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
         }
       }
     },
     "paths": {
+      "/live": {
+        "post": {
+          "operationId": "proxy_live_calls_live_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Live Calls",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/live/sessions": {
+        "post": {
+          "operationId": "create_live_session_live_sessions_post_2",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Create Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/live/sessions/{session_id}/accept": {
+        "post": {
+          "operationId": "control_live_session_live_sessions__session_id__accept_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/live/sessions/{session_id}/content": {
+        "get": {
+          "operationId": "control_live_session_live_sessions__session_id__content_get_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/live/sessions/{session_id}/fork": {
+        "post": {
+          "operationId": "fork_live_session_live_sessions__session_id__fork_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Fork Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/live/sessions/{session_id}/hangup": {
+        "post": {
+          "operationId": "control_live_session_live_sessions__session_id__hangup_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/live/sessions/{session_id}/refer": {
+        "post": {
+          "operationId": "control_live_session_live_sessions__session_id__refer_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/live/sessions/{session_id}/reject": {
+        "post": {
+          "operationId": "control_live_session_live_sessions__session_id__reject_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/live": {
+        "post": {
+          "operationId": "proxy_live_calls_openai_v1_live_post_2",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Live Calls",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions": {
+        "post": {
+          "operationId": "create_live_session_openai_v1_live_sessions_post_3",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Create Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/accept": {
+        "post": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__accept_post_3",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/content": {
+        "get": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__content_get_3",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/fork": {
+        "post": {
+          "operationId": "fork_live_session_openai_v1_live_sessions__session_id__fork_post_3",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Fork Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/hangup": {
+        "post": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__hangup_post_3",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/refer": {
+        "post": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__refer_post_3",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/openai/v1/live/sessions/{session_id}/reject": {
+        "post": {
+          "operationId": "control_live_session_openai_v1_live_sessions__session_id__reject_post_3",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
       "/openai/v1/realtime/calls": {
         "post": {
           "operationId": "proxy_realtime_calls_openai_v1_realtime_calls_post_2",
@@ -37223,6 +38948,284 @@
             }
           ],
           "summary": "Create Realtime Transcription Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/live": {
+        "post": {
+          "operationId": "proxy_live_calls_v1_live_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Live Calls",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/live/sessions": {
+        "post": {
+          "operationId": "create_live_session_v1_live_sessions_post_2",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Create Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/accept": {
+        "post": {
+          "operationId": "control_live_session_v1_live_sessions__session_id__accept_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/content": {
+        "get": {
+          "operationId": "control_live_session_v1_live_sessions__session_id__content_get_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/fork": {
+        "post": {
+          "operationId": "fork_live_session_v1_live_sessions__session_id__fork_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Fork Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/hangup": {
+        "post": {
+          "operationId": "control_live_session_v1_live_sessions__session_id__hangup_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/refer": {
+        "post": {
+          "operationId": "control_live_session_v1_live_sessions__session_id__refer_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
+          "tags": [
+            "realtime"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/reject": {
+        "post": {
+          "operationId": "control_live_session_v1_live_sessions__session_id__reject_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Control Live Session",
           "tags": [
             "realtime"
           ]
