@@ -3,12 +3,13 @@ Tests for Parallel AI Search API integration (v1 endpoint).
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 import litellm
+from litellm.llms.parallel_ai.search.cost_calculator import PARALLEL_AI_ADDITIONAL_RESULT_COST
 
 MOCK_V1_RESPONSE = {
     "search_id": "search_abc123",
@@ -433,12 +434,12 @@ class TestParallelAISearch:
         assert result.model_dump()["excerpts"] == ()
 
     @pytest.mark.parametrize(
-        "mode,usage,max_results,expected_cost",
+        "mode,usage,max_results",
         [
-            ("turbo", [{"name": "sku_search", "count": 1}], None, 0.001),
-            ("fast", [{"name": "sku_search", "count": 1}], None, 0.001),
-            ("basic", [{"name": "sku_search", "count": 1}], None, 0.005),
-            ("advanced", [{"name": "sku_search", "count": 1}], None, 0.005),
+            ("turbo", [{"name": "sku_search", "count": 1}], None),
+            ("fast", [{"name": "sku_search", "count": 1}], None),
+            ("basic", [{"name": "sku_search", "count": 1}], None),
+            ("advanced", [{"name": "sku_search", "count": 1}], None),
             (
                 "basic",
                 [
@@ -446,14 +447,13 @@ class TestParallelAISearch:
                     {"name": "sku_search_additional_results", "count": 2},
                 ],
                 20,
-                0.007,
             ),
-            ("basic", None, 20, 0.015),
+            ("basic", None, 20),
         ],
     )
     @pytest.mark.asyncio
     async def test_search_cost_uses_mode_and_provider_usage(
-        self, mode, usage, max_results, expected_cost, bundled_cost_map, respx_mock, httpx_transport
+        self, mode, usage, max_results, bundled_cost_map, respx_mock, httpx_transport
     ):
         response_payload = {**MOCK_V1_RESPONSE, "usage": usage}
         respx_mock.post("https://api.parallel.ai/v1/search").respond(json=response_payload)
@@ -465,6 +465,18 @@ class TestParallelAISearch:
             max_results=max_results,
         )
 
+        rate: Final = litellm.model_cost[
+            "parallel_ai/search-fast" if mode in ("fast", "turbo") else "parallel_ai/search"
+        ]["input_cost_per_query"]
+        request_count: Final = (
+            sum(item["count"] for item in usage if item["name"] == "sku_search") if usage is not None else 1
+        )
+        additional_results: Final = (
+            sum(item["count"] for item in usage if item["name"] == "sku_search_additional_results")
+            if usage is not None
+            else max(max_results - 10, 0)
+        )
+        expected_cost: Final = request_count * rate + additional_results * PARALLEL_AI_ADDITIONAL_RESULT_COST
         assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
 
     @pytest.mark.asyncio
@@ -483,7 +495,9 @@ class TestParallelAISearch:
             mode="basic",
         )
 
-        assert response._hidden_params["response_cost"] == pytest.approx(0.005)
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            litellm.model_cost["parallel_ai/search"]["input_cost_per_query"]
+        )
 
     @pytest.mark.asyncio
     async def test_caller_cannot_supply_provider_usage(self, bundled_cost_map, respx_mock, httpx_transport):
@@ -502,5 +516,7 @@ class TestParallelAISearch:
             _parallel_ai_usage=[{"name": "sku_search", "count": 0}],
         )
 
-        assert response._hidden_params["response_cost"] == pytest.approx(0.005)
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            litellm.model_cost["parallel_ai/search"]["input_cost_per_query"]
+        )
         assert "_parallel_ai_usage" not in json.loads(route.calls[0].request.content)

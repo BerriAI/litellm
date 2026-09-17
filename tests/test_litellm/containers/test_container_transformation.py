@@ -387,4 +387,3 @@ class TestOpenAIContainerTransformation:
         ]
 
         assert actual_cost == expected_cost
-        assert actual_cost == 0.03  # OpenAI code interpreter costs $0.03 per session

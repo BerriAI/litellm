@@ -529,11 +529,16 @@ class TestVideoGeneration:
                 custom_llm_provider="runwayml",
             )
 
-        assert abs(cost_for("runwayml/seedance2", "4k", 8.0) - 12.0) < 0.001
-        assert abs(cost_for("runwayml/seedance2", "1080p", 8.0) - 3.2) < 0.001
-        assert abs(cost_for("runwayml/seedance2", "720p", 8.0) - 2.88) < 0.001
-        assert abs(cost_for("runwayml/seedance2_5", "480p", 8.0) - 1.6) < 0.001
-        assert abs(cost_for("runwayml/gen4.5", None, 8.0) - 0.96) < 0.001
+        def expected(model: str, resolution: str | None, duration: float) -> float:
+            entry = litellm.model_cost[model]
+            field = f"output_cost_per_second_{resolution}" if resolution else "output_cost_per_second"
+            return duration * entry.get(field, entry["output_cost_per_second"])
+
+        assert abs(cost_for("runwayml/seedance2", "4k", 8.0) - expected("runwayml/seedance2", "4k", 8.0)) < 0.001
+        assert abs(cost_for("runwayml/seedance2", "1080p", 8.0) - expected("runwayml/seedance2", "1080p", 8.0)) < 0.001
+        assert abs(cost_for("runwayml/seedance2", "720p", 8.0) - expected("runwayml/seedance2", "720p", 8.0)) < 0.001
+        assert abs(cost_for("runwayml/seedance2_5", "480p", 8.0) - expected("runwayml/seedance2_5", "480p", 8.0)) < 0.001
+        assert abs(cost_for("runwayml/gen4.5", None, 8.0) - expected("runwayml/gen4.5", None, 8.0)) < 0.001
 
     def test_completion_cost_xai_imagine_video_720p_tier_from_cost_map(self, monkeypatch):
         """720p xAI Imagine Video requests bill the published 720p rate, not the 480p base rate."""
@@ -556,10 +561,16 @@ class TestVideoGeneration:
                 custom_llm_provider="xai",
             )
 
-        assert abs(cost_for("xai/grok-imagine-video", "720p", 10.0) - 0.7) < 0.001
-        assert abs(cost_for("xai/grok-imagine-video-1.5", "720p", 10.0) - 1.4) < 0.001
-        assert abs(cost_for("xai/grok-imagine-video-1.5", "480p", 10.0) - 0.8) < 0.001
-        assert abs(cost_for("xai/grok-imagine-video-1.5", "1080p", 10.0) - 2.5) < 0.001
+        def expected(model: str, resolution: str, duration: float) -> float:
+            entry = litellm.model_cost[model]
+            return duration * entry.get(
+                f"output_cost_per_second_{resolution}", entry["output_cost_per_second"]
+            )
+
+        assert abs(cost_for("xai/grok-imagine-video", "720p", 10.0) - expected("xai/grok-imagine-video", "720p", 10.0)) < 0.001
+        assert abs(cost_for("xai/grok-imagine-video-1.5", "720p", 10.0) - expected("xai/grok-imagine-video-1.5", "720p", 10.0)) < 0.001
+        assert abs(cost_for("xai/grok-imagine-video-1.5", "480p", 10.0) - expected("xai/grok-imagine-video-1.5", "480p", 10.0)) < 0.001
+        assert abs(cost_for("xai/grok-imagine-video-1.5", "1080p", 10.0) - expected("xai/grok-imagine-video-1.5", "1080p", 10.0)) < 0.001
 
     def test_completion_cost_veo_31_tiers_pin_published_rates(self, monkeypatch):
         """The gemini and vertex_ai veo 3.1 entries bill Google's published per-second tier rates."""
@@ -585,16 +596,21 @@ class TestVideoGeneration:
                 custom_llm_provider=provider,
             )
 
+        def expected(model: str, resolution: str | None, duration: float) -> float:
+            entry = litellm.model_cost[model]
+            field = f"output_cost_per_second_{resolution}" if resolution else "output_cost_per_second"
+            return duration * entry.get(field, entry["output_cost_per_second"])
+
         for provider in ("gemini", "vertex_ai"):
             for suffix in ("generate-preview", "generate-001"):
                 standard = f"{provider}/veo-3.1-{suffix}"
                 fast = f"{provider}/veo-3.1-fast-{suffix}"
-                assert abs(cost_for(standard, provider, None, 8.0) - 3.2) < 1e-6
-                assert abs(cost_for(standard, provider, "1080p", 8.0) - 3.2) < 1e-6
-                assert abs(cost_for(standard, provider, "4k", 8.0) - 4.8) < 1e-6
-                assert abs(cost_for(fast, provider, "720p", 8.0) - 0.8) < 1e-6
-                assert abs(cost_for(fast, provider, "1080p", 8.0) - 0.96) < 1e-6
-                assert abs(cost_for(fast, provider, "4k", 8.0) - 2.4) < 1e-6
+                assert abs(cost_for(standard, provider, None, 8.0) - expected(standard, None, 8.0)) < 1e-6
+                assert abs(cost_for(standard, provider, "1080p", 8.0) - expected(standard, "1080p", 8.0)) < 1e-6
+                assert abs(cost_for(standard, provider, "4k", 8.0) - expected(standard, "4k", 8.0)) < 1e-6
+                assert abs(cost_for(fast, provider, "720p", 8.0) - expected(fast, "720p", 8.0)) < 1e-6
+                assert abs(cost_for(fast, provider, "1080p", 8.0) - expected(fast, "1080p", 8.0)) < 1e-6
+                assert abs(cost_for(fast, provider, "4k", 8.0) - expected(fast, "4k", 8.0)) < 1e-6
 
     def test_video_generation_with_files(self):
         """Test video generation with file uploads."""

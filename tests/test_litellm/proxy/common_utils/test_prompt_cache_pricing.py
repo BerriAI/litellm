@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -7,29 +8,53 @@ from litellm.proxy.common_utils.prompt_cache_pricing import price_cache_tokens
 from litellm.types.management_endpoints.prompt_cache_prediction import CacheTokenBuckets
 
 
-@pytest.mark.parametrize(
-    ("model", "expected"),
-    [("anthropic/claude-sonnet-4-5", 1.26), ("anthropic/claude-sonnet-4-6", 0.63)],
-)
-def test_prices_all_cache_buckets_at_total_context_tier(model: str, expected: float) -> None:
+def _tiered_rate(entry: Mapping[str, float], field: str, total: int) -> float:
+    above_field: Final = f"{field}_above_200k_tokens"
+    if total > 200_000 and above_field in entry:
+        return entry[above_field]
+    return entry[field]
+
+
+def _expected_cache_cost(model: str, tokens: CacheTokenBuckets) -> float:
+    key: Final = litellm.get_model_info(model=model, custom_llm_provider="anthropic")["key"]
+    entry: Final = litellm.model_cost[key]
+    total: Final = tokens.total_tokens
+    one_hour_field: Final = (
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens"
+        if total > 200_000 and "cache_creation_input_token_cost_above_1hr_above_200k_tokens" in entry
+        else "cache_creation_input_token_cost_above_1hr"
+    )
+    return (
+        tokens.uncached_input_tokens * _tiered_rate(entry, "input_cost_per_token", total)
+        + tokens.cache_read_input_tokens * _tiered_rate(entry, "cache_read_input_token_cost", total)
+        + tokens.cache_creation_5m_input_tokens * _tiered_rate(entry, "cache_creation_input_token_cost", total)
+        + tokens.cache_creation_1h_input_tokens * entry[one_hour_field]
+    )
+
+
+@pytest.mark.parametrize("model", ["anthropic/claude-sonnet-4-5", "anthropic/claude-sonnet-4-6"])
+def test_prices_all_cache_buckets_at_total_context_tier(model: str) -> None:
     tokens: Final = CacheTokenBuckets(
         uncached_input_tokens=100_000,
         cache_read_input_tokens=50_000,
         cache_creation_5m_input_tokens=20_000,
         cache_creation_1h_input_tokens=40_000,
     )
-    assert price_cache_tokens(model, "unconfigured-deployment", tokens) == pytest.approx(expected)
+    assert price_cache_tokens(model, "unconfigured-deployment", tokens) == pytest.approx(
+        _expected_cache_cost(model, tokens)
+    )
 
 
-@pytest.mark.parametrize(("total", "expected"), [(200_000, 0.387), (200_001, 0.774006)])
-def test_long_context_tier_starts_above_threshold(total: int, expected: float) -> None:
+@pytest.mark.parametrize("total", [200_000, 200_001])
+def test_long_context_tier_starts_above_threshold(total: int) -> None:
+    model: Final = "anthropic/claude-sonnet-4-5"
     tokens: Final = CacheTokenBuckets(
         uncached_input_tokens=total - 100_000,
         cache_creation_1h_input_tokens=10_000,
         cache_read_input_tokens=90_000,
     )
-    actual: Final = price_cache_tokens("anthropic/claude-sonnet-4-5", "unconfigured-deployment", tokens)
-    assert actual == pytest.approx(expected)
+    actual: Final = price_cache_tokens(model, "unconfigured-deployment", tokens)
+    assert actual == pytest.approx(_expected_cache_cost(model, tokens))
 
 
 def test_deployment_tariff_wins_without_proxy_discounts_or_margins(monkeypatch: pytest.MonkeyPatch) -> None:

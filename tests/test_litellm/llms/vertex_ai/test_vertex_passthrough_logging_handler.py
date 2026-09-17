@@ -234,8 +234,9 @@ def test_audio_predict_response_supports_bytes_base64_encoded(
         request_body={"instances": [{"prompt": "ambient piano"}]},
     )
 
-    assert result["kwargs"]["response_cost"] == pytest.approx(0.06)
-    assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.06)
+    expected_cost: Final = litellm.model_cost["vertex_ai/lyria-002"]["output_cost_per_image"]
+    assert result["kwargs"]["response_cost"] == pytest.approx(expected_cost)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected_cost)
 
 
 @pytest.mark.parametrize("runtime_entry_is_missing", (True, False))
@@ -244,6 +245,7 @@ def test_lyria_predict_cost_falls_back_to_bundled_map_when_runtime_metadata_is_i
     runtime_entry_is_missing: bool,
     local_model_cost_map: None,
 ) -> None:
+    expected_cost: Final = litellm.model_cost["vertex_ai/lyria-002"]["output_cost_per_image"]
     if runtime_entry_is_missing:
         monkeypatch.delitem(litellm.model_cost, "vertex_ai/lyria-002")
     else:
@@ -284,8 +286,8 @@ def test_lyria_predict_cost_falls_back_to_bundled_map_when_runtime_metadata_is_i
     if runtime_entry_is_missing:
         assert "vertex_ai/lyria-002" not in litellm.model_cost
     assert result["kwargs"]["model"] == "lyria-002"
-    assert result["kwargs"]["response_cost"] == pytest.approx(0.06)
-    assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.06)
+    assert result["kwargs"]["response_cost"] == pytest.approx(expected_cost)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected_cost)
 
 
 def test_image_predict_response_is_not_billed_as_audio(

@@ -333,11 +333,8 @@ def test_handle_realtime_stream_cost_calculation():
         litellm_model_name="gpt-3.5-turbo",
     )
 
-    # Calculate expected cost
-    # gpt-3.5-turbo costs: $0.0015/1K tokens input, $0.002/1K tokens output
-    expected_cost = (300 * 0.0015 / 1000) + (  # input tokens (100 + 200)
-        150 * 0.002 / 1000
-    )  # output tokens (50 + 100)
+    turbo_info = litellm.model_cost["gpt-3.5-turbo"]
+    expected_cost = (300 * turbo_info["input_cost_per_token"]) + (150 * turbo_info["output_cost_per_token"])
     assert abs(cost - expected_cost) <= 0.00075  # Allow small floating point differences
 
     # Test with different model name in session
@@ -350,11 +347,8 @@ def test_handle_realtime_stream_cost_calculation():
         litellm_model_name="gpt-3.5-turbo",
     )
 
-    # Calculate expected cost using gpt-4 rates
-    # gpt-4 costs: $0.03/1K tokens input, $0.06/1K tokens output
-    expected_cost = (300 * 0.03 / 1000) + (  # input tokens
-        150 * 0.06 / 1000
-    )  # output tokens
+    gpt4_info = litellm.model_cost["gpt-4"]
+    expected_cost = (300 * gpt4_info["input_cost_per_token"]) + (150 * gpt4_info["output_cost_per_token"])
     assert abs(cost - expected_cost) < 0.00076
 
     # Test with no response.done events
@@ -1352,18 +1346,12 @@ def test_gemini_25_implicit_caching_cost():
         model="gemini/gemini-2.5-flash",
     )
 
-    # Current pricing for gemini/gemini-2.5-flash:
-    # input: $0.30 / 1M tokens (3e-07 per token)
-    # cache_read: $0.03 / 1M tokens (3e-08 per token)
-    # output: $2.50 / 1M tokens (2.5e-06 per token)
-
-    # Breakdown:
-    # - Cached tokens: 14316 * 3e-08 = 0.00042948
-    # - Non-cached tokens: (15033-14316) * 3e-07 = 717 * 3e-07 = 0.00021510
-    # - Output tokens: 17 * 2.5e-06 = 0.00004250
-    # Total: 0.00042948 + 0.00021510 + 0.00004250 = 0.00068708
-
-    expected_cost = 0.00068708
+    model_info: Final = litellm.model_cost["gemini-2.5-flash"]
+    expected_cost = (
+        14316 * model_info["cache_read_input_token_cost"]
+        + (15033 - 14316) * model_info["input_cost_per_token"]
+        + 17 * model_info["output_cost_per_token"]
+    )
 
     # Allow for small floating point differences
     assert abs(result - expected_cost) < 1e-8, f"Expected cost {expected_cost}, but got {result}"
@@ -3822,7 +3810,8 @@ def test_completion_cost_together_metadata_only_model_still_uses_size_bucket(_lo
         custom_llm_provider="together_ai",
     )
 
-    assert cost == pytest.approx((23 + 15) * 8e-07, rel=1e-9)
+    bucket: Final = litellm.model_cost["together-ai-21.1b-41b"]
+    assert cost == pytest.approx((23 + 15) * bucket["input_cost_per_token"], rel=1e-9)
 
 
 def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):

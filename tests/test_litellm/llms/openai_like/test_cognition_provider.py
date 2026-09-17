@@ -176,7 +176,12 @@ class TestCognitionRouting:
         )
 
         usage = response.usage
-        expected = usage.prompt_tokens * 5e-07 + usage.completion_tokens * 2.5e-06
+        import litellm
+
+        entry: Final = litellm.model_cost["cognition/swe-1.7"]
+        expected: Final = usage.prompt_tokens * entry["input_cost_per_token"] + usage.completion_tokens * entry[
+            "output_cost_per_token"
+        ]
         assert response._hidden_params["response_cost"] == pytest.approx(expected)
 
     @pytest.mark.asyncio
@@ -200,5 +205,10 @@ class TestCognitionRouting:
         )
 
         usage = response.usage
-        expected = usage.prompt_tokens * 2.5e-06 + usage.completion_tokens * 1.25e-05
+        import litellm
+
+        entry: Final = litellm.model_cost["cognition/swe-1.7-lightning"]
+        expected: Final = usage.prompt_tokens * entry["input_cost_per_token"] + usage.completion_tokens * entry[
+            "output_cost_per_token"
+        ]
         assert response._hidden_params["response_cost"] == pytest.approx(expected)

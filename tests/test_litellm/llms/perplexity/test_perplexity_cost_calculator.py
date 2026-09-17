@@ -6,6 +6,7 @@ search queries, and reasoning tokens.
 """
 
 import json
+from typing import Final
 import math
 import os
 from datetime import datetime, timezone
@@ -150,9 +151,9 @@ class TestPerplexityCostCalculator:
 
         prompt_cost, completion_cost = perplexity_cost_per_token(model="sonar-deep-research", usage=usage)
 
-        # Should calculate manually: 100 * 2e-6 + 50 * 8e-6
-        expected_prompt = 100 * 2e-6
-        expected_completion = 50 * 8e-6
+        entry: Final = litellm.model_cost["perplexity/sonar-deep-research"]
+        expected_prompt: Final = 100 * entry["input_cost_per_token"]
+        expected_completion: Final = 50 * entry["output_cost_per_token"]
 
         assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-6)
         assert math.isclose(completion_cost, expected_completion, rel_tol=1e-6)

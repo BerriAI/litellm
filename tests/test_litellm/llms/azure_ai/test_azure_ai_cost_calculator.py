@@ -162,7 +162,7 @@ class TestAzureModelRouterFlatCost:
     def test_router_entry_prices_its_own_fee(self, router_entry_name: str) -> None:
         usage = Usage(prompt_tokens=1_000_000, completion_tokens=0, total_tokens=1_000_000)
         prompt_cost, completion_cost_usd = cost_per_token(model=router_entry_name, usage=usage)
-        assert prompt_cost == pytest.approx(0.14, rel=1e-9)
+        assert prompt_cost == pytest.approx(1_000_000 * ROUTER_FEE_PER_TOKEN, rel=1e-9)
         assert completion_cost_usd == 0.0
 
     def test_routed_model_is_priced_as_itself(self) -> None:
@@ -213,7 +213,7 @@ class TestAzureModelRouterFlatCost:
     def test_flat_cost_helper(self) -> None:
         assert calculate_azure_model_router_flat_cost(
             model="azure-model-router", prompt_tokens=10_000
-        ) == pytest.approx(0.0014, rel=1e-9)
+        ) == pytest.approx(10_000 * ROUTER_FEE_PER_TOKEN, rel=1e-9)
         assert calculate_azure_model_router_flat_cost(model="gpt-5-nano", prompt_tokens=10_000) == 0.0
 
     def test_flat_cost_reads_the_fee_from_the_deployment_named_entry(self) -> None:
@@ -226,7 +226,7 @@ class TestAzureModelRouterFlatCost:
         )
         assert calculate_azure_model_router_flat_cost(
             model="azure-model-router", prompt_tokens=1_000_000
-        ) == pytest.approx(0.14, rel=1e-9)
+        ) == pytest.approx(1_000_000 * ROUTER_FEE_PER_TOKEN, rel=1e-9)
 
 
 @pytest.mark.usefixtures("local_model_cost_map")

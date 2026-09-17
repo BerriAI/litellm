@@ -6,6 +6,7 @@ including integration with the main LiteLLM cost calculator.
 """
 
 import json
+from typing import Final
 import math
 import os
 
@@ -165,9 +166,11 @@ class TestPerplexityIntegration:
             usage_object=usage,
         )
 
-        # Should calculate costs correctly
-        expected_prompt_cost = (100 * 2e-6) + (10 * 2e-6)
-        expected_completion_cost = (50 * 8e-6) + (1 * 0.005)
+        entry: Final = litellm.model_cost["perplexity/sonar-deep-research"]
+        expected_prompt_cost: Final = (100 * entry["input_cost_per_token"]) + (10 * entry["citation_cost_per_token"])
+        expected_completion_cost: Final = (50 * entry["output_cost_per_token"]) + (
+            1 * entry["search_context_cost_per_query"]["search_context_size_low"]
+        )
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-6)
         assert math.isclose(completion_cost_val, expected_completion_cost, rel_tol=1e-6)

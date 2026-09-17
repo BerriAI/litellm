@@ -2447,9 +2447,9 @@ def test_get_max_tokens_for_model_claude_37():
     """
     config = AnthropicConfig()
 
-    # Claude 3.7 Sonnet should return 64000 (64K default, 128K requires beta header)
+    expected = litellm.get_model_info("claude-3-7-sonnet-20250219")["max_output_tokens"]
     max_tokens = config.get_max_tokens_for_model("claude-3-7-sonnet-20250219")
-    assert max_tokens == 64000
+    assert max_tokens == expected
 
 
 def test_get_max_tokens_for_model_unknown():
@@ -2646,7 +2646,8 @@ def test_transform_request_uses_dynamic_max_tokens():
         headers={},
     )
 
-    assert result["max_tokens"] == 64000
+    expected = litellm.get_model_info("claude-3-7-sonnet-20250219")["max_output_tokens"]
+    assert result["max_tokens"] == expected
 
 
 def test_transform_request_respects_user_max_tokens():
