@@ -697,6 +697,15 @@ class JevClassifierConfig(BaseModel):
             raise ValueError("jev_classifier_config.instructions must be non-empty; omit it to use the default")
         return value
 
+    @model_validator(mode="after")
+    def _keep_the_environment_key_on_the_environment_base(self) -> "JevClassifierConfig":
+        if self.api_base is not None and self.api_key is None:
+            raise ValueError(
+                "jev_classifier_config.api_base requires jev_classifier_config.api_key: TYPESAFE_API_KEY is only sent "
+                "to TYPESAFE_API_BASE or https://api.typesafe.ai"
+            )
+        return self
+
 
 MAX_CUSTOM_PATTERN_REPEAT: Final[int] = 64
 MAX_CUSTOM_PATTERN_WORK: Final[int] = 2048
