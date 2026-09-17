@@ -21,6 +21,9 @@
       "mcp",
       "observability",
       "compatibility"
+    ],
+    "sdk": [
+      "sdk"
     ]
   },
   "tests": {
@@ -187,6 +190,12 @@
     ],
     "tests/integration/spend/test_filtered_ledger.py::test_rotated_keys_users_and_model_groups_preserve_success_failure_cache_ledger": [
       "quota_management.spend_tracking.filtered_ledger_preserves_owner_identity_and_totals"
+    ],
+    "tests/integration/sdk/test_http2_wire.py::test_async_handler_negotiates_http2_only_when_enabled": [
+      "other.sdk_wire.http2.async_handler_negotiates_h2_only_when_enabled"
+    ],
+    "tests/integration/sdk/test_http2_wire.py::test_sync_handler_negotiates_http2_only_when_enabled": [
+      "other.sdk_wire.http2.sync_handler_negotiates_h2_only_when_enabled"
     ]
   },
   "browser": {
