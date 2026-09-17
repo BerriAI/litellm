@@ -543,6 +543,20 @@ async def test_a_team_with_no_default_budget_reports_no_effective_cap_for_a_memb
 
 
 @pytest.mark.asyncio
+async def test_a_zero_team_default_reports_no_cap_because_enforcement_reads_zero_there_as_uncapped():
+    prisma = _FakePrisma(
+        teams=[_team("m1", default_budget_id="team-default")],
+        memberships=[_membership("m1", None)],
+        budgets=[_budget("team-default", max_budget=0.0)],
+    )
+
+    results = await _bulk_update(prisma, [{"user_id": "m1", "tpm_limit": 9}])
+
+    assert [(r.success, r.max_budget, r.max_budget_source) for r in results] == [(True, None, None)]
+    assert results[0].tpm_limit == 9
+
+
+@pytest.mark.asyncio
 async def test_a_row_that_names_nobody_on_the_team_reports_no_cap_and_no_source():
     prisma = _FakePrisma(
         teams=[_team("m1", default_budget_id="team-default")],
