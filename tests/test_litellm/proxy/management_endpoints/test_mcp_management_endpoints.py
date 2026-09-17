@@ -4106,12 +4106,20 @@ async def test_health_discovery_respects_route_restricted_key_grants(
         user_role=LitellmUserRoles.INTERNAL_USER,
         api_key="test-health-key",
         allowed_routes=["/v1/mcp/server", "/v1/mcp/server/health"] if restricted else [],
-        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="health-permissions", mcp_servers=list(grants)),
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="health-permissions", mcp_servers=list(grants),
+        ),
     )
     with (
-        patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),  # test-quality-ok: TQ008 inject real registry into legacy route binding
-        patch.object(mcp_server_manager, "global_mcp_server_manager", manager),  # test-quality-ok: TQ008 share real registry with unchanged permission resolver
-        patch("litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": mode}),  # test-quality-ok: TQ008 configure mode without mocking authorization
+        patch.object(  # test-quality-ok: TQ008 inject real registry into legacy route binding
+            mgmt_endpoints, "global_mcp_server_manager", manager,
+        ),
+        patch.object(  # test-quality-ok: TQ008 inject shared registry without mocking permission policy
+            mcp_server_manager, "global_mcp_server_manager", manager,
+        ),
+        patch(  # test-quality-ok: TQ008 configure mode without mocking authorization
+            "litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": mode},
+        ),
     ):
         result: Final = await mgmt_endpoints.health_check_servers(
             server_ids=list(requested) if requested is not None else None,
