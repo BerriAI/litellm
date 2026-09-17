@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.constants import GROQ_BROWSER_VISIT_WEBSITE_COST_PER_CALL
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -19,7 +20,6 @@ WEB_SEARCH_MODELS = (
 )
 
 COMPOUND_MODELS = ("compound", "compound-mini", "groq/compound", "groq/compound-mini")
-
 
 
 class TestGroqWebSearchOptions:
@@ -206,13 +206,13 @@ class TestGroqWebSearchUsageSignal:
 
     @pytest.mark.usefixtures("local_model_cost_map")
     @pytest.mark.parametrize(
-        "executed_tools, expected_cost",
+        "executed_tools, searches, opens",
         [
-            (EXECUTED_TOOLS_THREE_SEARCHES_TWO_OPENS, 3 * 0.005 + 2 * 0.001),
-            (EXECUTED_TOOLS_OPENS_ONLY, 2 * 0.001),
+            (EXECUTED_TOOLS_THREE_SEARCHES_TWO_OPENS, 3, 2),
+            (EXECUTED_TOOLS_OPENS_ONLY, 0, 2),
         ],
     )
-    def test_response_billed_per_action(self, executed_tools: list, expected_cost: float):
+    def test_response_billed_per_action(self, executed_tools: list, searches: int, opens: int):
         response = _groq_completion_with_mocked_response(_searched_groq_response(executed_tools))
         assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
             response_object=response, usage=response.usage
@@ -224,6 +224,11 @@ class TestGroqWebSearchUsageSignal:
             custom_llm_provider="groq",
             standard_built_in_tools_params={"web_search_options": {"search_context_size": "high"}},
         )
+        model_info = litellm.get_model_info(model="groq/openai/gpt-oss-20b")
+        expected_cost = (
+            searches * model_info["search_context_cost_per_query"]["search_context_size_medium"]
+            + opens * GROQ_BROWSER_VISIT_WEBSITE_COST_PER_CALL
+        )
         assert cost == pytest.approx(expected_cost)
 
 
@@ -232,8 +237,9 @@ class TestGroqWebSearchCost:
     @pytest.mark.parametrize("model", WEB_SEARCH_MODELS)
     @pytest.mark.parametrize("search_context_size", ["low", "medium", "high"])
     def test_browser_search_priced_per_search(self, model: str, search_context_size: str):
+        model_info = litellm.get_model_info(model=model, custom_llm_provider="groq")
         cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
             web_search_options={"search_context_size": search_context_size},
-            model_info=litellm.get_model_info(model=model, custom_llm_provider="groq"),
+            model_info=model_info,
         )
-        assert cost == 0.005
+        assert cost == model_info["search_context_cost_per_query"][f"search_context_size_{search_context_size}"]

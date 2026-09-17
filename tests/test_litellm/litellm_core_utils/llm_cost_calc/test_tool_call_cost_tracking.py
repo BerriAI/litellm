@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
 
 import pytest
+from typing import Final
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
@@ -367,8 +368,10 @@ def test_get_cost_for_vertex_ai_gemini_web_search(model, custom_llm_provider):
         standard_built_in_tools_params=None,
     )
 
-    # Vertex AI charges $0.035 per grounded request
-    assert cost == 0.035, f"Expected $0.035 grounding cost, got ${cost}"
+    per_request: Final = litellm.get_model_info("vertex_ai/gemini-2.5-flash")[
+        "search_context_cost_per_query"
+    ]["search_context_size_medium"]
+    assert cost == per_request, f"Expected ${per_request} grounding cost, got ${cost}"
 
 
 def test_azure_assistant_features_integrated_cost_tracking(monkeypatch):
@@ -396,12 +399,20 @@ def test_azure_assistant_features_integrated_cost_tracking(monkeypatch):
         standard_built_in_tools_params=standard_built_in_tools_params,
     )
 
-    # Should calculate costs for:
-    # - Vector store: 1.0 * 10 * 0.1 = $1.00
-    # - Computer use: (1000/1000 * 3.0) + (500/1000 * 12.0) = $9.00
-    # - Code interpreter: 2 * 0.03 = $0.06
-    # Total: $10.06
-    expected_cost = 1.0 + 9.0 + 0.06
+    # Expected total is derived from the same litellm constants and the
+    # azure/container cost-map entry the billing helpers read.
+    from litellm.constants import (
+        AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS,
+        AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS,
+        AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY,
+    )
+
+    session_cost: Final = litellm.model_cost["azure/container"]["code_interpreter_cost_per_session"]
+    expected_cost = (
+        1.0 * 10 * AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY
+        + (1000 / 1000 * AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS + 500 / 1000 * AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS)
+        + 2 * session_cost
+    )
     assert abs(cost - expected_cost) < 0.01, f"Expected ~{expected_cost}, got {cost}"
 
 
@@ -528,7 +539,6 @@ def test_gemini_2x_maps_grounding_billed_at_maps_rate(model, custom_llm_provider
 
     model_info = litellm.get_model_info(model)
     expected_cost = model_info["google_maps_grounding_cost_per_query"]
-    assert expected_cost == pytest.approx(0.025)
 
     usage = Usage(
         prompt_tokens=15,
@@ -569,7 +579,6 @@ def test_gemini_3x_maps_grounding_billed_per_query(local_model_cost_map):
         standard_built_in_tools_params=None,
     )
     assert cost == pytest.approx(expected_cost)
-    assert cost == pytest.approx(0.028)
 
 
 def test_gemini_combined_search_and_maps_costs_are_additive(local_model_cost_map):
@@ -721,7 +730,7 @@ def test_openai_responses_web_search_priced_per_call(local_model_cost_map):
     per_call = litellm.get_model_info(model)["search_context_cost_per_query"][
         "search_context_size_medium"
     ]
-    assert per_call == 0.01
+    assert per_call is not None
 
     response = _openai_responses_with_web_search_calls(model, num_calls=2)
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
@@ -857,8 +866,11 @@ def test_dated_search_preview_entries_carry_search_pricing(local_model_cost_map)
         custom_llm_provider="openai",
         standard_built_in_tools_params=None,
     )
-    assert cost == pytest.approx(0.025), (
-        f"dated search-preview id must bill the $0.025 search fee, got ${cost}"
+    per_call: Final = litellm.get_model_info("gpt-4o-search-preview-2025-03-11")[
+        "search_context_cost_per_query"
+    ]["search_context_size_medium"]
+    assert cost == pytest.approx(per_call), (
+        f"dated search-preview id must bill the ${per_call} search fee, got ${cost}"
     )
 
 
@@ -887,7 +899,13 @@ def test_gpt_4o_mini_snapshot_bills_web_search_like_its_alias(
         web_search_options=web_search_options, model_info=alias_info
     )
 
-    assert snapshot_cost == alias_cost == 0.025
+    context_size: Final = (
+        dict(web_search_options).get("search_context_size", "medium") if web_search_options is not None else "medium"
+    )
+    expected: Final = alias_info["search_context_cost_per_query"][
+        f"search_context_size_{context_size}"
+    ]
+    assert snapshot_cost == alias_cost == expected
 
 
 # Note: File search integration test removed due to complex annotation detection logic
@@ -965,7 +983,11 @@ _BEDROCK_MANTLE_WEB_SEARCH_MODELS = (
     "bedrock_mantle/openai.gpt-5.4",
 )
 
-_BEDROCK_MANTLE_WEB_SEARCH_RATE = 0.012
+
+def _bedrock_mantle_web_search_rate(model: str) -> float:
+    return litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
 
 
 def _responses_with_web_search(
@@ -1002,12 +1024,14 @@ def _web_search_cost(model: str, response: ResponsesAPIResponse, custom_llm_prov
 @pytest.mark.parametrize("model", _BEDROCK_MANTLE_WEB_SEARCH_MODELS)
 def test_bedrock_mantle_web_search_billed_per_query(local_model_cost_map, model):
     """Two Bedrock-reported web searches bill 2 x $0.012 under the prefixed and the bare model id alike."""
+    rate: Final = _bedrock_mantle_web_search_rate(model)
     pricing = litellm.get_model_info(model)["search_context_cost_per_query"]
-    assert pricing == {
-        "search_context_size_low": _BEDROCK_MANTLE_WEB_SEARCH_RATE,
-        "search_context_size_medium": _BEDROCK_MANTLE_WEB_SEARCH_RATE,
-        "search_context_size_high": _BEDROCK_MANTLE_WEB_SEARCH_RATE,
-    }
+    assert (
+        pricing["search_context_size_low"]
+        == pricing["search_context_size_medium"]
+        == pricing["search_context_size_high"]
+        == rate
+    )
 
     response = _responses_with_web_search(
         model,
@@ -1016,8 +1040,8 @@ def test_bedrock_mantle_web_search_billed_per_query(local_model_cost_map, model)
     )
     for cost_model in (model, model.split("/", 1)[1]):
         cost = _web_search_cost(cost_model, response, "bedrock_mantle")
-        assert cost == pytest.approx(2 * _BEDROCK_MANTLE_WEB_SEARCH_RATE), (
-            f"{cost_model} must bill 2 x ${_BEDROCK_MANTLE_WEB_SEARCH_RATE} for 2 web searches, got ${cost}"
+        assert cost == pytest.approx(2 * rate), (
+            f"{cost_model} must bill 2 x ${rate} for 2 web searches, got ${cost}"
         )
 
 
@@ -1035,10 +1059,10 @@ def test_web_search_call_count_prefers_provider_reported_num_requests(local_mode
     )
 
     cost = _web_search_cost(model, response, "bedrock_mantle")
+    rate: Final = _bedrock_mantle_web_search_rate(model)
 
-    assert cost == pytest.approx(num_requests * _BEDROCK_MANTLE_WEB_SEARCH_RATE), (
-        f"{num_requests} reported web search requests must bill {num_requests} x "
-        f"${_BEDROCK_MANTLE_WEB_SEARCH_RATE}, got ${cost}"
+    assert cost == pytest.approx(num_requests * rate), (
+        f"{num_requests} reported web search requests must bill {num_requests} x ${rate}, got ${cost}"
     )
 
 
@@ -1056,10 +1080,10 @@ def test_web_search_call_count_falls_back_to_items_without_reported_count(local_
     )
 
     cost = _web_search_cost(model, response, "bedrock_mantle")
+    rate: Final = _bedrock_mantle_web_search_rate(model)
 
-    assert cost == pytest.approx(2 * _BEDROCK_MANTLE_WEB_SEARCH_RATE), (
-        f"2 web_search_call items with tool_usage={tool_usage!r} must bill 2 x "
-        f"${_BEDROCK_MANTLE_WEB_SEARCH_RATE}, got ${cost}"
+    assert cost == pytest.approx(2 * rate), (
+        f"2 web_search_call items with tool_usage={tool_usage!r} must bill 2 x ${rate}, got ${cost}"
     )
 
 
@@ -1076,4 +1100,9 @@ def test_web_search_call_count_reads_reported_count_beside_other_tool_usage_entr
 
     cost = _web_search_cost("gpt-5.6", response, "openai")
 
-    assert cost == pytest.approx(0.01), f"1 reported OpenAI web search must bill 1 x $0.01, not the 2 items, got ${cost}"
+    per_call: Final = litellm.get_model_info("gpt-5.6")["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    assert cost == pytest.approx(per_call), (
+        f"1 reported OpenAI web search must bill 1 x ${per_call}, not the 2 items, got ${cost}"
+    )

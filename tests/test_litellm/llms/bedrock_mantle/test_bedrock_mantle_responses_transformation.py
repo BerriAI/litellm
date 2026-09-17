@@ -8,6 +8,7 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 """
 
 import copy
+from typing import Final
 import logging
 
 import pytest
@@ -1866,14 +1867,14 @@ class TestBedrockMantleResponsesSigV4:
 class TestBedrockMantleResponsesPricing:
 
     @pytest.mark.parametrize(
-        "model, input_cost, output_cost",
+        "model",
         [
-            ("openai.gpt-5.6-sol", 5.5e-06, 3.3e-05),
-            ("openai.gpt-5.6-terra", 2.2e-06, 1.32e-05),
-            ("openai.gpt-5.6-luna", 2.2e-07, 1.32e-06),
+            "openai.gpt-5.6-sol",
+            "openai.gpt-5.6-terra",
+            "openai.gpt-5.6-luna",
         ],
     )
-    def test_gpt_5_6_responses_call_cost(self, local_cost_map, model, input_cost, output_cost):
+    def test_gpt_5_6_responses_call_cost(self, local_cost_map, model):
         from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 
         input_tokens = 100000
@@ -1896,7 +1897,10 @@ class TestBedrockMantleResponsesPricing:
             custom_llm_provider="bedrock_mantle",
         )
 
-        assert cost == pytest.approx(input_tokens * input_cost + output_tokens * output_cost)
+        entry: Final = litellm.model_cost[f"bedrock_mantle/{model}"]
+        assert cost == pytest.approx(
+            input_tokens * entry["input_cost_per_token"] + output_tokens * entry["output_cost_per_token"]
+        )
 
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models

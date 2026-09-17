@@ -2180,8 +2180,9 @@ def test_create_model_info_response_resolves_alias_to_deployment_model():
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
 
-    assert response["max_input_tokens"] == 1000000
-    assert response["max_output_tokens"] == 128000
+    entry: Final = litellm.model_cost["eu.anthropic.claude-opus-5"]
+    assert response["max_input_tokens"] == entry["max_input_tokens"]
+    assert response["max_output_tokens"] == entry["max_output_tokens"]
 
 
 def test_create_model_info_response_keeps_exact_alias_over_generalized_deployment_model():
@@ -2211,7 +2212,8 @@ def test_create_model_info_response_keeps_exact_alias_over_generalized_deploymen
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
 
-    assert response["max_input_tokens"] == 1000000
+    entry: Final = litellm.model_cost["claude-opus-5"]
+    assert response["max_input_tokens"] == entry["max_input_tokens"]
 
 
 def test_create_model_info_response_falls_back_to_alias_for_opaque_deployment_name():

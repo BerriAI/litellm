@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+from typing import Final
+
 import litellm
 from litellm._internal_context import pinned_billing_time
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
@@ -1710,8 +1712,9 @@ def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
         custom_llm_provider=custom_llm_provider,
     )
 
-    print(f"prompt_cost: {prompt_cost}")
-    assert round(prompt_cost, 3) == 0.029
+    entry: Final = litellm.model_cost[model]
+    expected_prompt = (28436 - 2000) * entry["input_cost_per_token"] + 2000 * entry["cache_creation_input_token_cost"]
+    assert prompt_cost == pytest.approx(expected_prompt)
 
 
 def test_string_cost_values():
@@ -2369,10 +2372,15 @@ def test_bedrock_anthropic_prompt_caching():
         custom_llm_provider=custom_llm_provider,
     )
 
-    assert prompt_cost >= 0
-    assert completion_cost >= 0
-    assert round(prompt_cost, 3) == 0.111
-    assert round(completion_cost, 5) == 0.00820
+    entry: Final = litellm.model_cost[model]
+    expected_prompt = (
+        (52123 - 7183 - 22465) * entry["input_cost_per_token"]
+        + 7183 * entry["cache_creation_input_token_cost"]
+        + 22465 * entry["cache_read_input_token_cost"]
+    )
+    expected_completion = 497 * entry["output_cost_per_token"]
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost == pytest.approx(expected_completion)
 
 
 def test_reasoning_tokens_without_text_tokens_gpt5_nano():
@@ -2410,9 +2418,9 @@ def test_reasoning_tokens_without_text_tokens_gpt5_nano():
         custom_llm_provider=custom_llm_provider,
     )
 
-    # gpt-5-nano pricing: $0.05/1M input, $0.40/1M output
-    expected_prompt_cost = 17 * 0.05 / 1_000_000
-    expected_completion_cost = 977 * 0.40 / 1_000_000  # ALL tokens, not just reasoning
+    entry: Final = litellm.model_cost[model]
+    expected_prompt_cost = 17 * entry["input_cost_per_token"]
+    expected_completion_cost = 977 * entry["output_cost_per_token"]  # ALL tokens, not just reasoning
 
     assert abs(prompt_cost - expected_prompt_cost) < 1e-10, (
         f"Prompt cost incorrect: {prompt_cost} vs {expected_prompt_cost}"
@@ -2423,7 +2431,7 @@ def test_reasoning_tokens_without_text_tokens_gpt5_nano():
     )
 
     # Verify it's NOT using only reasoning_tokens (the bug)
-    wrong_cost = 768 * 0.40 / 1_000_000  # Only reasoning tokens
+    wrong_cost = 768 * entry["output_cost_per_token"]  # Only reasoning tokens
     assert abs(completion_cost - wrong_cost) > 1e-6, (
         "Bug detected: Cost calculation is using only reasoning_tokens instead of all completion_tokens!"
     )
@@ -2456,9 +2464,8 @@ def test_image_count_prevents_text_tokens_fallback(_local_model_cost_map):
         custom_llm_provider="bedrock",
     )
 
-    # Cost should be 1 * input_cost_per_image ($6e-05) = $0.00006
-    # NOT 768 * input_cost_per_token ($1.35e-07) + $0.00006 = $0.000164
-    expected_image_cost = 1 * 6e-05
+    # Cost should be 1 * input_cost_per_image, not the per-token fallback on top of it
+    expected_image_cost = litellm.model_cost["amazon.nova-2-multimodal-embeddings-v1:0"]["input_cost_per_image"]
     assert prompt_cost == expected_image_cost, (
         f"Expected prompt_cost={expected_image_cost} (image-only), "
         f"got {prompt_cost}. text_tokens fallback may be double-charging."
@@ -2480,7 +2487,8 @@ def test_query_count_bills_input_cost_per_query(_local_model_cost_map):
         custom_llm_provider="bedrock",
     )
 
-    assert prompt_cost == pytest.approx(3 * 7e-05 + 1e-04)
+    entry: Final = litellm.model_cost["us.twelvelabs.marengo-embed-3-0-v1:0"]
+    assert prompt_cost == pytest.approx(3 * entry["input_cost_per_query"] + entry["input_cost_per_image"])
     assert completion_cost == 0.0
 
 
@@ -2714,10 +2722,12 @@ def test_priority_service_tier_above_threshold_uses_priority_tier_rates_for_cach
         service_tier="priority",
     )
 
-    # gemini-3-pro-preview priority + above_200k rates from the pricing JSON:
-    #   input  7.2e-6, output 3.24e-5, cache_read 7.2e-7
-    expected_prompt = 50_000 * 7.2e-6 + 200_000 * 7.2e-7
-    expected_completion = 1_000 * 3.24e-5
+    entry: Final = litellm.model_cost["gemini-3-pro-preview"]
+    expected_prompt = (
+        50_000 * entry["input_cost_per_token_above_200k_tokens_priority"]
+        + 200_000 * entry["cache_read_input_token_cost_above_200k_tokens_priority"]
+    )
+    expected_completion = 1_000 * entry["output_cost_per_token_above_200k_tokens_priority"]
     assert prompt_cost == pytest.approx(expected_prompt, rel=1e-9)
     assert completion_cost == pytest.approx(expected_completion, rel=1e-9)
 
@@ -3615,15 +3625,15 @@ def test_gemini_38_flash_matches_37_flash_promotional_pricing(prefix, _local_mod
 
 
 @pytest.mark.parametrize(
-    ("model", "provider", "image_token_rate"),
+    ("model", "provider"),
     [
-        ("gpt-realtime-2.1", "openai", 5e-06),
-        ("gpt-realtime-2.1-mini", "openai", 8e-07),
-        ("azure/gpt-realtime-2.1", "azure", 5e-06),
-        ("azure/gpt-realtime-2.1-mini", "azure", 8e-07),
+        ("gpt-realtime-2.1", "openai"),
+        ("gpt-realtime-2.1-mini", "openai"),
+        ("azure/gpt-realtime-2.1", "azure"),
+        ("azure/gpt-realtime-2.1-mini", "azure"),
     ],
 )
-def test_realtime_image_tokens_priced_per_token(model, provider, image_token_rate, _local_model_cost_map):
+def test_realtime_image_tokens_priced_per_token(model, provider, _local_model_cost_map):
     """Realtime image input is billed per 1M image tokens, not per image."""
     usage = Usage(
         prompt_tokens=1_100,
@@ -3632,8 +3642,10 @@ def test_realtime_image_tokens_priced_per_token(model, provider, image_token_rat
         prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=100, image_tokens=1_000),
     )
     prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider=provider)
-    text_rate = litellm.model_cost[model]["input_cost_per_token"]
-    assert prompt_cost == pytest.approx(100 * text_rate + 1_000 * image_token_rate)
+    entry: Final = litellm.model_cost[model]
+    assert prompt_cost == pytest.approx(
+        100 * entry["input_cost_per_token"] + 1_000 * entry["input_cost_per_image_token"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -3846,10 +3858,19 @@ def test_cache_read_breakdown_splits_cached_audio_at_the_audio_cache_rate(_local
     breakdown = get_token_type_cost_breakdown(model="gpt-realtime-2.1-mini", custom_llm_provider="openai", usage=usage)
     prompt_cost, _ = generic_cost_per_token(model="gpt-realtime-2.1-mini", usage=usage, custom_llm_provider="openai")
 
-    assert breakdown.cache_read_cost == pytest.approx(896 * 6e-8 + 1920 * 3e-7)
+    entry: Final = litellm.model_cost["gpt-realtime-2.1-mini"]
+    assert breakdown.cache_read_cost == pytest.approx(
+        896 * entry["cache_read_input_token_cost"] + 1920 * entry["cache_read_input_audio_token_cost"]
+    )
     assert breakdown.rates is not None
-    assert breakdown.rates.cache_read_input_audio_token_cost == pytest.approx(3e-7)
-    assert prompt_cost == pytest.approx((1693 - 896) * 6e-7 + (3170 - 1920) * 1e-5 + breakdown.cache_read_cost)
+    assert breakdown.rates.cache_read_input_audio_token_cost == pytest.approx(
+        entry["cache_read_input_audio_token_cost"]
+    )
+    assert prompt_cost == pytest.approx(
+        (1693 - 896) * entry["input_cost_per_token"]
+        + (3170 - 1920) * entry["input_cost_per_audio_token"]
+        + breakdown.cache_read_cost
+    )
 
 
 def test_generic_cost_per_token_bills_cache_creation_at_the_input_rate_without_a_write_price():

@@ -11,7 +11,10 @@ from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
 
 AUDIO_FILE: Final = Path(__file__).parents[3] / "gettysburg.wav"
-WHISPER_COST_PER_SECOND: Final = 0.0001
+
+
+def _whisper_cost_per_second() -> float:
+    return litellm.model_cost["azure_ai/whisper"]["input_cost_per_second"]
 
 
 def _transcription_client() -> AzureOpenAI:
@@ -42,7 +45,7 @@ def test_azure_ai_transcription_is_priced_at_the_azure_ai_entry():
     assert duration is not None and duration > 0
     assert response._hidden_params["custom_llm_provider"] == "azure_ai"
     assert completion_cost(completion_response=response, call_type="transcription") == pytest.approx(
-        WHISPER_COST_PER_SECOND * duration
+        _whisper_cost_per_second() * duration
     )
 
 

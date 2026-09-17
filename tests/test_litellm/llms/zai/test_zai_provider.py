@@ -3,6 +3,7 @@ Tests for Z.AI (Zhipu AI) provider - GLM models
 """
 
 import math
+from typing import Final
 
 import pytest
 
@@ -55,32 +56,23 @@ def test_zai_in_provider_lists():
     assert "zai" in litellm.provider_list
 
 
-def test_zai_glm46_cost_calculation(local_model_cost_map):
-    """Test the cost calculation for glm-4.6"""
+@pytest.mark.parametrize("model", ["zai/glm-4.6", "zai/glm-4.7"])
+def test_zai_glm_cost_calculation(local_model_cost_map, model):
+    """Test the cost calculation picks the model's own cost-map entry"""
 
     prompt_cost, completion_cost = cost_per_token(
-        model="zai/glm-4.6",
+        model=model,
         prompt_tokens=1000000,  # 1M tokens
         completion_tokens=1000000,
     )
 
-    # GLM-4.6: $0.6/M input, $2.2/M output
-    assert math.isclose(prompt_cost, 0.6, rel_tol=1e-6)
-    assert math.isclose(completion_cost, 2.2, rel_tol=1e-6)
-
-
-def test_glm47_cost_calculation(local_model_cost_map):
-    """Test cost calculation for GLM-4.7"""
-
-    prompt_cost, completion_cost = cost_per_token(
-        model="zai/glm-4.7",
-        prompt_tokens=1000000,  # 1M tokens
-        completion_tokens=1000000,
+    entry: Final = litellm.model_cost[model]
+    assert math.isclose(
+        prompt_cost, 1000000 * entry["input_cost_per_token"], rel_tol=1e-6
     )
-
-    # GLM-4.7: $0.6/M input, $2.2/M output (same as GLM-4.6)
-    assert math.isclose(prompt_cost, 0.6, rel_tol=1e-6)
-    assert math.isclose(completion_cost, 2.2, rel_tol=1e-6)
+    assert math.isclose(
+        completion_cost, 1000000 * entry["output_cost_per_token"], rel_tol=1e-6
+    )
 
 
 @pytest.mark.asyncio

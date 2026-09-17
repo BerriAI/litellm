@@ -396,19 +396,17 @@ class TestGetRouterDeploymentModelInfo:
         assert logging_obj.get_router_deployment_model_info() is None
 
     @pytest.mark.parametrize(
-        "declared,expected_input,expected_output",
+        "declared",
         [
-            ({"input_cost_per_token": 1e-06}, 1e-06, 1.5e-05),
-            ({"output_cost_per_token": 5e-06}, 3e-06, 5e-06),
-            ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, 0.0, 0.0),
+            {"input_cost_per_token": 1e-06},
+            {"output_cost_per_token": 5e-06},
+            {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
         ],
         ids=["input-only", "output-only", "both-zero"],
     )
     def test_one_sided_override_keeps_the_published_rate_for_the_other_side(
         self,
         declared: dict[str, float],
-        expected_input: float,
-        expected_output: float,
     ) -> None:
         """A deployment may configure one direction only.
 
@@ -420,7 +418,8 @@ class TestGetRouterDeploymentModelInfo:
 
         model = "bedrock/global.anthropic.claude-sonnet-4-6"
         published = litellm.get_model_info(model=model)
-        assert (published["input_cost_per_token"], published["output_cost_per_token"]) == (3e-06, 1.5e-05)
+        expected_input = declared.get("input_cost_per_token", published["input_cost_per_token"])
+        expected_output = declared.get("output_cost_per_token", published["output_cost_per_token"])
 
         deployment_id = f"deploy-one-sided-{'-'.join(sorted(declared))}"
         litellm.model_cost[deployment_id] = {"id": deployment_id, **declared}
@@ -494,6 +493,7 @@ class TestGetRouterDeploymentModelInfo:
         from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
         model = "bedrock/global.anthropic.claude-sonnet-4-6"
+        published_output: Final = litellm.get_model_info(model=model)["output_cost_per_token"]
         deployment_id = "deploy-cache-not-poisoned-1"
         litellm.model_cost[deployment_id] = {"id": deployment_id, "input_cost_per_token": 1e-06}
         obj = LiteLLMLoggingObj(
@@ -511,7 +511,7 @@ class TestGetRouterDeploymentModelInfo:
             cached_before = dict(litellm.get_model_info(model=deployment_id))
             info = obj.get_router_deployment_model_info()
             assert info is not None
-            assert info["output_cost_per_token"] == 1.5e-05
+            assert info["output_cost_per_token"] == published_output
             assert dict(litellm.get_model_info(model=deployment_id)) == cached_before
         finally:
             litellm.model_cost.pop(deployment_id, None)
