@@ -139,8 +139,10 @@ class Scenario:
 
     def delete_key(self, token: str) -> None:
         self.gateway.post("/key/delete", {"keys": [token]})
-        response: Final = self.gateway.request("GET", "/key/info", params={"key": sha256(token.encode()).hexdigest()})
-        assert response.status_code == 404, f"Deleted key remains readable: {response.status_code}"
+        hashed: Final = sha256(token.encode()).hexdigest()
+        assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token = %s', (hashed,)) == []
+        info: Final = object_value(self.gateway.get("/key/info", {"key": hashed})["info"])
+        assert info["status"] == "deleted", f"Deleted key still served as live: {info['status']}"
 
     def delete_model(self, identity: str) -> None:
         self.gateway.post("/model/delete", {"id": identity})
