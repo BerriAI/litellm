@@ -3052,13 +3052,16 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
     like ``bedrock/bedrock/bedrock/us.anthropic.claude-sonnet-4-6`` or region
     aliases).
 
-    Returns a copy of the matching entry so the caller can inherit its defaults
-    without mutating the shared built-in. Returns ``None`` when no candidate
-    exists under a provider ``get_model_info`` would accept for ``provider``, or,
-    when the value names none, for the provider prefix the key itself carries,
-    which is what ``get_model_info`` derives when it reads the key back.
+    The key itself is tried first, so a catalog row whose lookup tripped
+    inherits from itself rather than from a region-stripped sibling priced at
+    the base rate. Returns a copy of the matching entry so the caller can
+    inherit its defaults without mutating the shared built-in. Returns ``None``
+    when no candidate exists under a provider ``get_model_info`` would accept
+    for ``provider``, or, when the value names none, for the provider prefix
+    the key itself carries, which is what ``get_model_info`` derives when it
+    reads the key back.
     """
-    candidates: Final[list[str]] = []
+    candidates: Final[list[str]] = [key]
     segments: Final = key.split("/")
     match_provider: Final = provider or (segments[0] if len(segments) > 1 and segments[0] in LlmProvidersSet else "")
     idx = 0
@@ -3066,7 +3069,7 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
         idx += 1
         candidates.append("/".join(segments[idx:]))
 
-    base: Final = candidates[-1] if candidates else key
+    base: Final = candidates[-1]
     for region_prefix in _BEDROCK_REGION_PREFIXES:
         if base.startswith(region_prefix):
             candidates.append(base[len(region_prefix) :])

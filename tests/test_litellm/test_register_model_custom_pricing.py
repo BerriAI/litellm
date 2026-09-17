@@ -841,6 +841,36 @@ def test_register_model_prices_a_geo_alias_from_its_builtin_when_the_lookup_fail
         _invalidate_model_cost_lowercase_map()
 
 
+def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(monkeypatch):
+    """A catalog row registered under its own key with no provider
+    (``au.anthropic.<model>`` from a config ``model_info``) must inherit from
+    itself when ``get_model_info`` trips, never from its region-stripped
+    sibling, whose prices are the base rate rather than the geo rate.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    _invalidate_model_cost_lowercase_map()
+    geo_key: Final = "au.anthropic.claude-sonnet-5"
+    geo_row: Final = dict(litellm.model_cost[geo_key])
+    sibling: Final = litellm.model_cost["anthropic.claude-sonnet-5"]
+    assert geo_row["input_cost_per_token"] != sibling["input_cost_per_token"]
+
+    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+        raise RuntimeError("dictionary changed size during iteration")
+
+    with pytest.MonkeyPatch.context() as lookup_patch:
+        lookup_patch.setattr(litellm.utils, "get_model_info", lookup_tripped_by_a_concurrent_registration)
+        litellm.register_model({geo_key: {"mode": "chat"}}, persist_across_reloads=False)
+
+    try:
+        for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+            assert litellm.model_cost[geo_key][field] == geo_row[field]
+            assert litellm.get_model_info(geo_key)[field] == geo_row[field]
+        assert litellm.model_cost[geo_key]["litellm_provider"] == geo_row["litellm_provider"]
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
 def test_register_model_inherits_builtin_token_pricing_for_unmapped_key(monkeypatch):
     """A key shape ``get_model_info`` cannot resolve inherits the whole built-in
     entry, not just its cache pricing, so ``get_model_info`` on the raw key
