@@ -350,3 +350,20 @@ class TestAzureAIServiceTierCostCalculation:
 
         assert flex_prompt < standard_prompt
         assert flex_completion < standard_completion
+
+
+@pytest.mark.parametrize("model", ["Codestral-2501", "MAI-Thinking-1"])
+def test_azure_ai_cached_tokens_bill_at_the_entry_rates(local_model_cost_map, model: str) -> None:
+    info: Final = litellm.get_model_info(model=model, custom_llm_provider="azure_ai")
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        prompt_tokens_details={"cached_tokens": 400},
+    )
+
+    prompt_cost, response_completion_cost = cost_per_token(model=model, usage=usage)
+
+    cache_read_rate: Final = info.get("cache_read_input_token_cost") or 0.0
+    assert prompt_cost == pytest.approx(600 * info["input_cost_per_token"] + 400 * cache_read_rate)
+    assert response_completion_cost == pytest.approx(500 * info["output_cost_per_token"])
