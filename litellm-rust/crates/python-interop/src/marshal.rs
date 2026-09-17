@@ -7,14 +7,16 @@ use pyo3::prelude::*;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-pub fn from_py<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
+/// Converts a `#[pyo3(from_py_with = ...)]` argument, reporting failures as `ValueError`
+/// so a bad argument reads as a bad argument rather than as whatever the conversion hit.
+pub fn from_py_argument<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
 where
     T: DeserializeOwned,
 {
     pythonize::depythonize(value).map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
-pub fn from_py_preserving_errors<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
+pub fn from_py<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
 where
     T: DeserializeOwned,
 {
@@ -22,15 +24,6 @@ where
 }
 
 pub fn to_py<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
-where
-    T: Serialize + ?Sized,
-{
-    pythonize::pythonize(py, value)
-        .map(Bound::unbind)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
-}
-
-pub fn to_py_preserving_errors<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
 where
     T: Serialize + ?Sized,
 {
@@ -127,14 +120,14 @@ value = Broken()
             )
             .unwrap();
             let value = locals.get_item("value").unwrap().unwrap();
-            let legacy_error = from_py::<i64>(&value).unwrap_err();
-            assert!(legacy_error.is_instance_of::<PyValueError>(py));
+            let argument_error = from_py_argument::<i64>(&value).unwrap_err();
+            assert!(argument_error.is_instance_of::<PyValueError>(py));
             assert!(
-                !legacy_error
+                !argument_error
                     .value(py)
                     .is(locals.get_item("failure").unwrap().unwrap())
             );
-            let error = from_py_preserving_errors::<i64>(&value).unwrap_err();
+            let error = from_py::<i64>(&value).unwrap_err();
             assert!(
                 error
                     .value(py)

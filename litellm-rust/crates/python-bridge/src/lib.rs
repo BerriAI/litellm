@@ -30,7 +30,7 @@ impl ResponsesWebSocketConnection {
         _cls: &Bound<'py, pyo3::types::PyType>,
         py: Python<'py>,
         url: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] headers: Option<Value>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py_argument)] headers: Option<Value>,
         timeout_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let headers = marshal_headers(headers)?;

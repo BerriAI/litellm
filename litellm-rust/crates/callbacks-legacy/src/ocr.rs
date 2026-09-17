@@ -7,9 +7,7 @@ use pyo3::types::PyDict;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use litellm_python_interop::{
-    from_py_preserving_errors as from_py, to_py_preserving_errors as to_py,
-};
+use litellm_python_interop::{from_py, to_py};
 
 use crate::{LegacyCallbacks, PythonLogger};
 

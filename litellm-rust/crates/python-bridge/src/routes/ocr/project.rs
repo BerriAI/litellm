@@ -5,7 +5,7 @@ use litellm_core::ocr::wire::{
     OcrWireRequest, consumed_optional_params, decode_document, decode_request_input,
 };
 use litellm_core::ocr::{LiteLLMOcrRequest, NativeOutcome, OcrCall, OcrDocumentInput};
-use litellm_python_interop::from_py_preserving_errors as from_py;
+use litellm_python_interop::from_py;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{Map, Value};

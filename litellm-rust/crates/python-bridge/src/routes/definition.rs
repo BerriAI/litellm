@@ -193,6 +193,46 @@ mod tests {
     }
 
     #[test]
+    fn route_arguments_that_fail_to_convert_raise_value_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "routes").expect("module should be created");
+            crate::routes::register(&module).expect("routes should register");
+
+            let locals = PyDict::new(py);
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+class Broken:
+    def __index__(self):
+        raise LookupError('conversion failed')
+value = Broken()
+"#
+                ),
+                Some(&locals),
+                Some(&locals),
+            )
+            .expect("helper class should define");
+            let broken = locals
+                .get_item("value")
+                .expect("locals should be readable")
+                .expect("helper value should exist");
+
+            for name in ["chat_completions", "achat_completions"] {
+                let error = module
+                    .getattr(name)
+                    .and_then(|function| function.call1(("model", &broken)))
+                    .expect_err("route should reject a value it cannot convert");
+
+                assert!(
+                    error.is_instance_of::<pyo3::exceptions::PyValueError>(py),
+                    "{name} surfaced {error} instead of ValueError"
+                );
+            }
+        });
+    }
+
+    #[test]
     fn sync_and_async_routes_apply_the_same_input_validation() {
         Python::initialize();
         Python::attach(|py| {
