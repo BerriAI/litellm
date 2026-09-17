@@ -4400,6 +4400,7 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     temp_budget_increase: float | None = Field(
         default=None,
         ge=0,
+        allow_inf_nan=False,
         description="Temporary additive budget increase for this team member, active until temp_budget_expiry",
     )
     temp_budget_expiry: datetime | None = Field(
