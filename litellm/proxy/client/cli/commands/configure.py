@@ -56,7 +56,7 @@ _CLAUDE_CODE_VIEW: Final = MappingProxyType(
 _MODEL_OPTION_HELP: Final = (
     f"Proxy model to set as {STARTING_MODEL_ROLE}. Must be listed on /v1/models for the key; without it, "
     "Claude Code keeps its own default and a pin an earlier configure made is let go of. Nothing pins Claude "
-    "Code's sub-agent or background tiers; `lite autoroute up` is the mode that does."
+    "Code's sub-agent or background tiers; `lite autoroute start` is the mode that does."
 )
 
 
