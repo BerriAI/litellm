@@ -14,7 +14,7 @@ from fastapi import HTTPException, Request
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import SubjectIdentity, SubjectTokenRefusal
 from litellm.proxy._types import JWTAuthBuilderResult, ProxyException
-from litellm.proxy.auth.handle_jwt import JWTAuthManager
+from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 
 EXCHANGE_ROUTE: Final = "/token"
 REJECTED_SUBJECT_TOKEN: Final = "subject_token was rejected by the gateway's JWT auth"
@@ -23,16 +23,21 @@ REJECTED_SUBJECT_TOKEN: Final = "subject_token was rejected by the gateway's JWT
 @dataclass(frozen=True, slots=True)
 class TokenExchangePrerequisites:
     """The deployment-level gates ``user_api_key_auth`` applies before it verifies any JWT
-    bearer. Discovery and registration advertise the exchange grant only when every one of
-    them holds, and an exchange attempt is refused naming the first one that does not."""
+    bearer, plus the JWT-to-virtual-key mapping it consults first: a gateway that maps
+    tokens authenticates a JWT as its mapped key, with that key's models and budget, or
+    refuses an unmapped one, and the exchange proves the token through ``auth_builder``
+    alone, so it would mint the user's own credential past that policy. Discovery and
+    registration advertise the exchange grant only when every gate holds, and an exchange
+    attempt is refused naming the first one that does not."""
 
     jwt_auth_enabled: bool
     has_database: bool
     licensed: bool
+    maps_jwts_to_virtual_keys: bool
 
     @property
     def available(self) -> bool:
-        return self.jwt_auth_enabled and self.has_database and self.licensed
+        return self.jwt_auth_enabled and self.has_database and self.licensed and not self.maps_jwts_to_virtual_keys
 
     def refusal(self) -> SubjectTokenRefusal | None:
         if not self.jwt_auth_enabled:
@@ -50,12 +55,18 @@ class TokenExchangePrerequisites:
                 error="unsupported_grant_type",
                 description="JWT auth is an enterprise only feature; no license is set",
             )
+        if self.maps_jwts_to_virtual_keys:
+            return SubjectTokenRefusal(
+                error="unsupported_grant_type",
+                description="this gateway maps IdP tokens to virtual keys, which the exchange does not serve",
+            )
         return None
 
 
 def read_token_exchange_prerequisites() -> TokenExchangePrerequisites:
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # rebound after startup, so read them per call
         general_settings,
+        jwt_handler,
         premium_user,
         prisma_client,
     )
@@ -64,7 +75,14 @@ def read_token_exchange_prerequisites() -> TokenExchangePrerequisites:
         jwt_auth_enabled=general_settings.get("enable_jwt_auth", False) is True,
         has_database=prisma_client is not None,
         licensed=premium_user is True,
+        maps_jwts_to_virtual_keys=_maps_jwts_to_virtual_keys(jwt_handler),
     )
+
+
+def _maps_jwts_to_virtual_keys(jwt_handler: JWTHandler) -> bool:
+    if not hasattr(jwt_handler, "litellm_jwtauth"):
+        return False
+    return jwt_handler.litellm_jwtauth.is_virtual_key_mapping_configured()
 
 
 def token_exchange_available() -> bool:

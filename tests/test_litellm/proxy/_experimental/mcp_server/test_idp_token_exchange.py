@@ -3,6 +3,7 @@ import logging
 import pytest
 from fastapi import HTTPException
 
+from litellm.caching.caching import DualCache
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import SubjectIdentity, SubjectTokenRefusal
 from litellm.proxy._experimental.mcp_server.idp_token_exchange import (
     REJECTED_SUBJECT_TOKEN,
@@ -10,12 +11,17 @@ from litellm.proxy._experimental.mcp_server.idp_token_exchange import (
     identity_from_subject_token,
     token_exchange_available,
 )
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth, ProxyException
 from litellm.proxy.auth.handle_jwt import JWTHandler
 
 IDP_JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.idp-signature"
 REQUEST_HEADERS = {"x-litellm-team-id": "team-b", "user-agent": "lite/0.1"}
-EVERY_GATE_HOLDS = {"jwt_auth_enabled": True, "has_database": True, "licensed": True}
+EVERY_GATE_HOLDS = {
+    "jwt_auth_enabled": True,
+    "has_database": True,
+    "licensed": True,
+    "maps_jwts_to_virtual_keys": False,
+}
 JWKS_URL = "https://idp.example.com/.well-known/jwks.json"
 
 
@@ -82,6 +88,7 @@ async def test_a_jwt_that_resolves_no_team_names_a_teamless_identity():
         ({"jwt_auth_enabled": False}, IDP_JWT, "unsupported_grant_type", "JWT auth is not enabled"),
         ({"has_database": False}, IDP_JWT, "unsupported_grant_type", "no database"),
         ({"licensed": False}, IDP_JWT, "unsupported_grant_type", "enterprise"),
+        ({"maps_jwts_to_virtual_keys": True}, IDP_JWT, "unsupported_grant_type", "virtual keys"),
         ({}, "sk-litellm-virtual-key", "invalid_request", "not a JWT"),
     ],
 )
@@ -96,28 +103,53 @@ async def test_the_gates_user_api_key_auth_applies_refuse_before_any_verificatio
     assert authorizer.calls == []
 
 
-@pytest.mark.parametrize("unmet", [{}, {"jwt_auth_enabled": False}, {"has_database": False}, {"licensed": False}])
+@pytest.mark.parametrize(
+    "unmet",
+    [
+        {},
+        {"jwt_auth_enabled": False},
+        {"has_database": False},
+        {"licensed": False},
+        {"maps_jwts_to_virtual_keys": True},
+    ],
+)
 def test_the_grant_is_available_exactly_when_every_gate_holds(unmet):
     prerequisites = TokenExchangePrerequisites(**{**EVERY_GATE_HOLDS, **unmet})
     assert prerequisites.available is (unmet == {})
     assert (prerequisites.refusal() is None) is prerequisites.available
 
 
+MAPPED_ISSUER = JWTIssuerConfig(
+    issuer="https://idp.example.test", audience="litellm-gateway", virtual_key_claim_field="client_id"
+)
+
+
+def _running_jwt_handler(litellm_jwtauth):
+    handler = JWTHandler()
+    if litellm_jwtauth is not None:
+        handler.update_environment(prisma_client=None, user_api_key_cache=DualCache(), litellm_jwtauth=litellm_jwtauth)
+    return handler
+
+
 @pytest.mark.parametrize(
-    "general_settings, prisma_client, premium_user, expected",
+    "general_settings, prisma_client, premium_user, litellm_jwtauth, expected",
     [
-        ({"enable_jwt_auth": True}, object(), True, True),
-        ({}, object(), True, False),
-        ({"enable_jwt_auth": True}, None, True, False),
-        ({"enable_jwt_auth": True}, object(), False, False),
+        ({"enable_jwt_auth": True}, object(), True, LiteLLM_JWTAuth(), True),
+        ({"enable_jwt_auth": True}, object(), True, None, True),
+        ({}, object(), True, LiteLLM_JWTAuth(), False),
+        ({"enable_jwt_auth": True}, None, True, LiteLLM_JWTAuth(), False),
+        ({"enable_jwt_auth": True}, object(), False, LiteLLM_JWTAuth(), False),
+        ({"enable_jwt_auth": True}, object(), True, LiteLLM_JWTAuth(virtual_key_claim_field="client_id"), False),
+        ({"enable_jwt_auth": True}, object(), True, LiteLLM_JWTAuth(issuers=[MAPPED_ISSUER]), False),
     ],
 )
 def test_availability_is_read_from_the_running_proxy(
-    monkeypatch, general_settings, prisma_client, premium_user, expected
+    monkeypatch, general_settings, prisma_client, premium_user, litellm_jwtauth, expected
 ):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
+    monkeypatch.setattr("litellm.proxy.proxy_server.jwt_handler", _running_jwt_handler(litellm_jwtauth))
     assert token_exchange_available() is expected
 
 

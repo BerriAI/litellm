@@ -11111,13 +11111,31 @@ def test_native_client_login_walks_discovery_consent_token_refresh_and_revoke(mo
     assert stranger.json()["error"] == "invalid_client"
 
 
-@pytest.mark.parametrize("exchange_servable", [True, False])
-def test_discovery_advertises_the_exchange_grant_only_where_the_gateway_can_serve_it(monkeypatch, exchange_servable):
+@pytest.mark.parametrize(
+    "jwt_auth_enabled, virtual_key_claim_field, exchange_servable",
+    [(True, None, True), (False, None, False), (True, "client_id", False)],
+    ids=["jwt auth on", "jwt auth off", "jwts mapped to virtual keys"],
+)
+def test_discovery_advertises_the_exchange_grant_only_where_the_gateway_can_serve_it(
+    monkeypatch, jwt_auth_enabled, virtual_key_claim_field, exchange_servable
+):
     """Every document a native client reads before it picks a grant (the versioned contract, the
     aggregate authorization-server metadata, and the registration response) lists the RFC 8693
-    exchange exactly when the running proxy can serve it: JWT auth on, a database, and a license."""
+    exchange exactly when the running proxy can serve it: JWT auth on, a database, a license, and
+    no JWT-to-virtual-key mapping, since the exchange would mint past the mapped key's policy."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
     client, _session_cookie, _minted = _native_client_app(monkeypatch)
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": exchange_servable})
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(virtual_key_claim_field=virtual_key_claim_field),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.jwt_handler", handler)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": jwt_auth_enabled})
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     exchange_grant = ["urn:ietf:params:oauth:grant-type:token-exchange"] if exchange_servable else []
