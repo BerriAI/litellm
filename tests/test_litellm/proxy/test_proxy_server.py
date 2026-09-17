@@ -3450,7 +3450,8 @@ async def test_load_config_warns_that_the_source_login_limit_is_off_without_trus
     tmp_path, monkeypatch, caplog
 ):
     """The per-source failed-login limit is skipped when the source cannot be attributed, and the
-    operator must be told so at startup; a configured range silences it."""
+    operator must be told so at startup. Both a configured range and an explicit empty list (no
+    proxies, the peer is the source) silence it, since both keep the limit on."""
     import logging
 
     from litellm.proxy.auth.login_throttle import warn_source_login_limit_is_off
@@ -3465,12 +3466,13 @@ async def test_load_config_warns_that_the_source_login_limit_is_off_without_trus
         await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
     assert "trusted_proxy_ranges is not set" in caplog.text
 
-    caplog.clear()
-    warn_source_login_limit_is_off.cache_clear()
-    config_file.write_text("model_list: []\ngeneral_settings:\n  trusted_proxy_ranges: ['10.0.0.0/8']\n")
-    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
-    assert "trusted_proxy_ranges is not set" not in caplog.text
+    for configured in ("['10.0.0.0/8']", "[]"):
+        caplog.clear()
+        warn_source_login_limit_is_off.cache_clear()
+        config_file.write_text(f"model_list: []\ngeneral_settings:\n  trusted_proxy_ranges: {configured}\n")
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+        assert "trusted_proxy_ranges is not set" not in caplog.text, configured
 
 
 @pytest.mark.asyncio

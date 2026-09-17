@@ -553,14 +553,14 @@ def test_budget_is_shared_across_username_casing(client, monkeypatch, reset_logi
 
 
 def test_a_refused_attempt_carries_retry_after(client, monkeypatch, reset_login_throttle):
-    """The 429 tells the caller how long the block has left, after the 30 seconds it was already held."""
+    """The 429 tells the caller how long the block has left."""
     _install_real_auth(monkeypatch, max_failed_login_attempts_per_user=1, failed_login_block_seconds=77)
 
     assert [_json_login(client, "/v2/login") for _ in range(2)] == [401, 401]
 
     refused = client.post("/v2/login", json={"username": "admin", "password": "wrong"})
     assert refused.status_code == 429
-    assert refused.headers.get("retry-after") == "47"
+    assert refused.headers.get("retry-after") == "77"
 
 
 def test_the_form_returns_a_human_readable_lockout_page(client, monkeypatch, reset_login_throttle):
@@ -572,8 +572,8 @@ def test_the_form_returns_a_human_readable_lockout_page(client, monkeypatch, res
     refused = client.post("/login", data={"username": "admin", "password": "wrong"})
     assert refused.status_code == 429
     assert refused.headers.get("content-type", "").startswith("text/html")
-    assert "Try again in about 47 seconds" in refused.text
-    assert refused.headers.get("retry-after") == "47"
+    assert "Try again in about 77 seconds" in refused.text
+    assert refused.headers.get("retry-after") == "77"
 
 
 def test_a_second_username_from_the_same_source_still_gets_through(client, monkeypatch, reset_login_throttle):
@@ -608,8 +608,29 @@ def test_a_spray_across_usernames_is_not_blocked_without_trusted_proxy_ranges(
     assert sprayed == [401] * 8
 
 
-def test_the_configured_admin_password_still_signs_in_while_blocked(client, monkeypatch, reset_login_throttle):
-    """The operator must never be locked out of the console by traffic aimed at it."""
+def test_a_spray_across_usernames_is_blocked_on_the_source_with_an_empty_trusted_proxy_ranges(
+    client, monkeypatch, reset_login_throttle
+):
+    """An explicit empty list says nothing fronts the proxy, so the peer address is the client and the
+    source scope is on. A forwarded header from an untrusted peer is ignored rather than trusted."""
+    _install_real_auth(monkeypatch, trusted_proxy_ranges=[], max_failed_login_attempts_per_source=4)
+
+    sprayed = [
+        client.post(
+            "/v2/login",
+            json={"username": f"sprayed-{i}@corp.com", "password": "wrong"},
+            headers={"x-forwarded-for": f"203.0.113.{i}"},
+        ).status_code
+        for i in range(5)
+    ]
+    assert sprayed == [401] * 5
+
+    assert _json_login(client, "/v2/login", username="sprayed-6@corp.com") == 429
+
+
+def test_the_configured_admin_password_is_refused_while_blocked(client, monkeypatch, reset_login_throttle):
+    """The env credentials get no bypass: a bypass would make them the one password worth guessing without
+    limit. An operator who is blocked administers the proxy with the master key over the API meanwhile."""
     from unittest.mock import AsyncMock, patch
 
     _install_real_auth(monkeypatch, max_failed_login_attempts_per_user=1)
@@ -625,18 +646,38 @@ def test_the_configured_admin_password_still_signs_in_while_blocked(client, monk
             "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
         ),
     ):
+        assert _json_login(client, "/v2/login", password="right-password") == 429
+        reset_login_throttle()
         assert _json_login(client, "/v2/login", password="right-password") == 200
 
 
-def test_a_database_users_correct_password_signs_in_while_blocked(client, monkeypatch, reset_login_throttle):
-    """The block is soft: guessing at an account slows the guesser down, it does not lock the owner out."""
+def test_the_master_key_as_a_bearer_token_still_works_while_the_ui_password_is_blocked(
+    client, monkeypatch, reset_login_throttle
+):
+    """Lockout recovery: the API path with the master key never enters the sign-in throttle."""
     _install_real_auth(monkeypatch, max_failed_login_attempts_per_user=1)
+
+    assert [_json_login(client, "/v2/login") for _ in range(3)] == [401, 401, 429]
+
+    assert client.get("/models", headers={"Authorization": "Bearer sk-not-the-master"}).status_code >= 400
+    assert client.get("/models", headers={"Authorization": "Bearer sk-test-master"}).status_code == 200
+    assert _json_login(client, "/v2/login", password="right-password") == 429, "the UI block is unaffected"
+
+
+def test_a_database_users_correct_password_is_refused_while_blocked(client, monkeypatch, reset_login_throttle):
+    """The block is hard: while it lasts, nothing from that source signs in as that user, right password or not,
+    and the block is not extended by the refused attempts."""
+    _install_real_auth(monkeypatch, max_failed_login_attempts_per_user=1, failed_login_block_seconds=64)
     _db_user(monkeypatch, "user@corp.com")
 
     assert [_json_login(client, "/v2/login", username="user@corp.com") for _ in range(3)] == [401, 401, 429]
 
+    refused = client.post("/v2/login", json={"username": "user@corp.com", "password": "right-db-password"})
+    assert refused.status_code == 429
+    assert refused.headers.get("retry-after") == "64"
+
+    reset_login_throttle()
     assert _json_login(client, "/v2/login", username="user@corp.com", password="right-db-password") == 200
-    assert _json_login(client, "/v2/login", username="user@corp.com") == 429, "the block itself is still in force"
 
 
 def test_sign_in_succeeds_again_once_the_block_is_cleared(client, monkeypatch, reset_login_throttle):

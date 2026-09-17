@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Sequence
 from typing import Any, Final
 
 from fastapi import Request
@@ -19,7 +20,7 @@ class NetworkContext(BaseModel):
 
 class TrustedProxyConfig(BaseModel):
     use_forwarded_for: bool = False
-    trusted_proxy_cidrs: list[str] = Field(default_factory=list)
+    trusted_proxy_cidrs: Sequence[str] = Field(default_factory=tuple)
 
 
 def normalize_cidr_ranges(configured_ranges: Any, *, setting_name: str = "trusted_proxy_cidrs") -> list[str]:

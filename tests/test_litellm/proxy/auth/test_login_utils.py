@@ -13,28 +13,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
-class _RecordedSleeps:
-    """A sleep that records what it was asked to wait for instead of waiting."""
-
-    def __init__(self):
-        self.seconds: list[float] = []
-
-    async def __call__(self, seconds: float) -> None:
-        self.seconds.append(seconds)
-
-
-@pytest.fixture(autouse=True)
-def login_delays(monkeypatch):
-    """Replace the hold on a blocked wrong password, so the suite pays no wall clock and can read it back."""
-    from litellm.proxy.auth import login_throttle
-
-    recorded = _RecordedSleeps()
-    monkeypatch.setattr(login_throttle, "_sleep", recorded)
-    login_throttle._HELD_ATTEMPTS.clear()
-    yield recorded
-    login_throttle._HELD_ATTEMPTS.clear()
-
-
 def _unlimited_throttle():
     """A throttle wired to real in-memory stores with limits no test can reach."""
     from litellm.caching.in_memory_cache import InMemoryCache
@@ -749,8 +727,8 @@ def _local_count(throttle, key: str) -> int:
 
 @pytest.mark.asyncio
 async def test_too_many_failures_for_one_username_block_that_pair_and_carry_retry_after(monkeypatch):
-    """One failure past the pair limit blocks the source for that username; the next wrong guess is held
-    and answered 429 with the block's remaining time, and the counter is not touched by blocked guesses."""
+    """One failure past the pair limit blocks the source for that username; the next guess is answered 429
+    with the block's remaining time, and the counter is not touched by blocked guesses."""
     from litellm.proxy._types import ProxyException
 
     monkeypatch.setenv("UI_USERNAME", "admin")
@@ -764,30 +742,17 @@ async def test_too_many_failures_for_one_username_block_that_pair_and_carry_retr
     with pytest.raises(ProxyException) as blocked:
         await _guess(throttle)
     assert blocked.value.code == "429"
-    assert blocked.value.headers.get("Retry-After") == "47", "the 30s hold is taken off the remaining block"
+    assert blocked.value.headers.get("Retry-After") == "77"
     assert _local_count(throttle, keys.pair_counter) == 3, "a blocked guess is not counted again"
 
 
 @pytest.mark.asyncio
-async def test_a_wrong_password_from_a_blocked_key_is_held_before_it_is_refused(monkeypatch, login_delays):
-    """The hold is the rate cap: a blocked key gets one verified guess per held slot per 30 seconds."""
-    from litellm.proxy.auth.login_throttle import BLOCKED_ATTEMPT_HOLD_SECONDS
+async def test_a_blocked_key_is_refused_before_the_password_is_looked_at(monkeypatch):
+    """The block is the rate cap: once a key is blocked, nothing from it reaches the user lookup or the
+    password check, so a guessing script gets no verification work out of the proxy."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.login_utils import authenticate_user
 
-    monkeypatch.setenv("UI_USERNAME", "admin")
-    monkeypatch.setenv("UI_PASSWORD", "right")
-    throttle = _throttle(user_limit=1)
-
-    assert [await _fail(throttle) for _ in range(2)] == ["401", "401"]
-    assert login_delays.seconds == [], "an unblocked wrong password is answered at once"
-
-    assert await _fail(throttle) == "429"
-    assert login_delays.seconds == [BLOCKED_ATTEMPT_HOLD_SECONDS]
-
-
-@pytest.mark.asyncio
-async def test_a_correct_password_signs_in_while_its_pair_is_blocked(monkeypatch):
-    """The block is soft: the real user is still verified and gets in, so nobody can be locked out by
-    guessing at their account."""
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
@@ -795,13 +760,50 @@ async def test_a_correct_password_signs_in_while_its_pair_is_blocked(monkeypatch
 
     assert [await _fail(throttle, username="user@corp.com") for _ in range(3)] == ["401", "401", "429"]
 
-    result = await _db_login(throttle, "user@corp.com", "right", correct=True)
-    assert result.key == "sk-ui"
+    lookup = _known_user("user@corp.com")
+    verify = MagicMock(return_value=True)
+    with (
+        patch(  # test-quality-ok: the user lookup is the database boundary; a blocked attempt must not reach it
+            "litellm.proxy.auth.login_utils.UserRepository", lookup
+        ),
+        patch(  # test-quality-ok: the password check is the expensive step; a blocked attempt must not reach it
+            "litellm.proxy.auth.login_utils.verify_password", verify
+        ),
+        pytest.raises(ProxyException) as refused,
+    ):
+        await authenticate_user(
+            username="user@corp.com",
+            password="right",
+            master_key="sk-master",
+            prisma_client=MagicMock(),
+            throttle=throttle,
+        )
+
+    assert refused.value.code == "429"
+    assert lookup.return_value.table.find_first.await_count == 0
+    assert verify.call_count == 0
 
 
 @pytest.mark.asyncio
-async def test_a_correct_password_signs_in_while_its_source_is_blocked(monkeypatch):
-    """Same for the source-wide block: it slows guessing from that address, it does not refuse a user."""
+async def test_a_correct_password_is_refused_while_its_pair_is_blocked(monkeypatch):
+    """Letting the right password through would give a guesser unlimited tries, so the block is hard: the
+    real user waits it out, or uses the master key over the API, which never passes through here."""
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
+    throttle = _throttle(user_limit=1, block_seconds=90)
+
+    assert [await _fail(throttle, username="user@corp.com") for _ in range(3)] == ["401", "401", "429"]
+
+    with pytest.raises(ProxyException) as refused:
+        await _db_login(throttle, "user@corp.com", "right", correct=True)
+    assert refused.value.code == "429"
+    assert refused.value.headers.get("Retry-After") == "90"
+
+
+@pytest.mark.asyncio
+async def test_a_correct_password_is_refused_while_its_source_is_blocked(monkeypatch):
+    """Same for the source-wide block: every username from that address is refused until it lapses."""
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
@@ -811,8 +813,9 @@ async def test_a_correct_password_signs_in_while_its_source_is_blocked(monkeypat
         assert await _fail(throttle, username=f"other-{i}@corp.com") == "401"
     assert await _fail(throttle, username="other-9@corp.com") == "429", "the source is blocked for everyone"
 
-    result = await _db_login(throttle, "user@corp.com", "right", correct=True)
-    assert result.key == "sk-ui"
+    with pytest.raises(ProxyException) as refused:
+        await _db_login(throttle, "user@corp.com", "right", correct=True)
+    assert refused.value.code == "429"
 
 
 @pytest.mark.asyncio
@@ -901,6 +904,63 @@ async def test_without_trusted_proxy_ranges_the_source_scope_is_off(monkeypatch)
     assert throttle.source_limit is None
     assert throttle.client_ip == "10.0.0.1", "the header is not trusted without a configured proxy range"
     assert [await _fail(throttle, username=f"user-{i}@corp.com") for i in range(6)] == ["401"] * 6
+
+
+@pytest.mark.asyncio
+async def test_an_empty_trusted_proxy_ranges_means_the_peer_is_the_client_and_the_source_scope_is_on(monkeypatch):
+    """An explicit empty list says there are no proxies: the peer address is the client, the forwarded header
+    is ignored, and the source-wide limit applies. Only an unset key means the topology is unknown."""
+    from litellm.proxy.auth.login_throttle import LoginThrottle
+
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    request = MagicMock()
+    request.headers = {"x-forwarded-for": "203.0.113.9"}
+    request.client = MagicMock()
+    request.client.host = "198.51.100.7"
+    throttle = LoginThrottle.from_request(
+        request,
+        general_settings={"trusted_proxy_ranges": [], "max_failed_login_attempts_per_source": 3},
+        redis_cache=None,
+    )
+
+    assert throttle.client_ip == "198.51.100.7"
+    assert throttle.source_limit == 3
+    assert [await _fail(throttle, username=f"user-{i}@corp.com") for i in range(4)] == ["401"] * 4
+    assert await _fail(throttle, username="user-99@corp.com") == "429", "the spray is stopped by the source limit"
+
+
+@pytest.mark.parametrize("configured", [None, 5, {"10.0.0.0/8": True}, ["", "  "]])
+def test_a_trusted_proxy_ranges_value_that_names_no_ranges_leaves_the_topology_unknown(configured):
+    """Only a real list of ranges or an explicit empty list counts as a declaration; anything else is the same
+    as unset, so a typo cannot switch the source-wide block on behind a shared ingress."""
+    from litellm.proxy.auth.login_throttle import LoginThrottle, declared_proxy_ranges
+
+    settings = {"trusted_proxy_ranges": configured} if configured is not None else {}
+    assert declared_proxy_ranges(settings) is None
+
+    request = MagicMock()
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "198.51.100.7"
+    throttle = LoginThrottle.from_request(request, general_settings=settings, redis_cache=None)
+    assert throttle.source_limit is None
+    assert throttle.client_ip == "198.51.100.7"
+
+
+def test_declared_proxy_ranges_distinguishes_none_from_empty_from_configured():
+    from litellm.proxy.auth.login_throttle import declared_proxy_ranges
+
+    assert declared_proxy_ranges({}) is None
+    assert declared_proxy_ranges({"trusted_proxy_ranges": []}) == ()
+    assert declared_proxy_ranges({"trusted_proxy_ranges": ["10.0.0.0/8", " 192.168.1.1 "]}) == (
+        "10.0.0.0/8",
+        "192.168.1.1",
+    )
+    assert declared_proxy_ranges({"trusted_proxy_ranges": "10.0.0.0/8,172.16.0.0/12"}) == (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+    )
 
 
 @pytest.mark.asyncio
@@ -1056,9 +1116,10 @@ async def test_the_block_time_is_fixed_and_not_refreshed_by_blocked_guesses(monk
 
 
 @pytest.mark.asyncio
-async def test_the_configured_admin_credentials_bypass_the_throttle(monkeypatch):
-    """The only account that can fix a misconfiguration is exempt: no hold, no slot, even while blocked."""
-    from litellm.proxy.auth import login_throttle as lt
+async def test_the_configured_admin_credentials_are_not_exempt_from_the_block(monkeypatch):
+    """Exempting the env credentials would make them the one password worth guessing without limit, so the
+    right UI_PASSWORD is refused while its pair is blocked, and signs in normally once the block lapses."""
+    from litellm.proxy._types import ProxyException
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
@@ -1075,9 +1136,31 @@ async def test_the_configured_admin_credentials_bypass_the_throttle(monkeypatch)
             "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
         ),
     ):
+        with pytest.raises(ProxyException) as refused:
+            await _guess(throttle, password="right")
+        assert refused.value.code == "429"
+
+        throttle.blocks.delete_cache(throttle._keys("admin").pair_block)
         result = await _guess(throttle, password="right")
     assert result.key == "sk-ui"
-    assert lt._HELD_ATTEMPTS == {}
+
+
+@pytest.mark.asyncio
+async def test_the_master_key_used_as_the_ui_password_is_not_exempt_from_the_block(monkeypatch):
+    """Without UI_PASSWORD the master key doubles as the admin password; it gets no special treatment here
+    either. Lockout recovery is the master key as a bearer token over the API, which never enters this path."""
+    from litellm.proxy._types import ProxyException
+
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.delenv("UI_PASSWORD", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
+    throttle = _throttle(user_limit=1)
+
+    assert [await _fail(throttle) for _ in range(3)] == ["401", "401", "429"]
+
+    with pytest.raises(ProxyException) as refused:
+        await _guess(throttle, password="sk-master")
+    assert refused.value.code == "429"
 
 
 @pytest.mark.asyncio
@@ -1180,138 +1263,29 @@ async def test_a_wrong_password_for_a_known_user_also_counts(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_held_attempts_from_one_blocked_key_are_capped(monkeypatch):
-    """Holding a wrong guess open must not let one blocked key park unlimited sockets in password checks."""
-    import asyncio
-
+async def test_a_source_block_outranks_a_pair_block_in_the_retry_after(monkeypatch):
+    """When both scopes are blocked, the answer carries the source block's time, which is the one that
+    still applies to every other username from that address."""
     from litellm.proxy._types import ProxyException
-    from litellm.proxy.auth import login_throttle as lt
-    from litellm.proxy.auth.login_throttle import MAX_HELD_ATTEMPTS_PER_KEY
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
-    release = asyncio.Event()
-
-    async def _park(_seconds: float) -> None:
-        await release.wait()
-
-    monkeypatch.setattr(lt, "_sleep", _park)
-    throttle = _throttle(user_limit=1, client_ip="203.0.113.44")
-    slot = throttle._keys("admin").pair_block
-    assert [await _fail(throttle) for _ in range(2)] == ["401", "401"]
-
-    held = [asyncio.create_task(_guess(throttle)) for _ in range(MAX_HELD_ATTEMPTS_PER_KEY)]
-    for _ in range(1000):
-        if lt._HELD_ATTEMPTS.get(slot) == MAX_HELD_ATTEMPTS_PER_KEY:
-            break
-        await asyncio.sleep(0)
-    assert lt._HELD_ATTEMPTS.get(slot) == MAX_HELD_ATTEMPTS_PER_KEY
-
-    try:
-        with pytest.raises(ProxyException) as over_cap:
-            await _guess(throttle)
-        assert over_cap.value.code == "429"
-        assert over_cap.value.headers.get("Retry-After") == "300", "refused at once, for the whole block"
-        assert await _fail(throttle, username="someone-else@corp.com") == "401", "other keys are not affected"
-    finally:
-        release.set()
-        for task in held:
-            with pytest.raises(ProxyException):
-                await task
-
-    assert lt._HELD_ATTEMPTS.get(slot) is None, "the slots are released once the held attempts answer"
-
-
-@pytest.mark.asyncio
-async def test_a_full_hold_pool_still_lets_the_right_password_in(monkeypatch):
-    """Five parked wrong guesses from the office must not turn the soft block into a lockout for the real user."""
-    import asyncio
-
-    from litellm.proxy.auth import login_throttle as lt
-    from litellm.proxy.auth.login_throttle import MAX_HELD_ATTEMPTS_PER_KEY
-
-    monkeypatch.setenv("UI_USERNAME", "admin")
-    monkeypatch.setenv("UI_PASSWORD", "right")
-    monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
-    release = asyncio.Event()
-
-    async def _park(_seconds: float) -> None:
-        await release.wait()
-
-    monkeypatch.setattr(lt, "_sleep", _park)
-    throttle = _throttle(user_limit=1, source_limit=3, client_ip="203.0.113.46")
-    assert [await _fail(throttle, username=f"spray-{i}@corp.com") for i in range(4)] == ["401"] * 4
-    source_slot = throttle._keys("known@example.com").source_block
-    assert throttle._local_block_ttl(source_slot) > 0, "the source is blocked"
-
-    held = [
-        asyncio.create_task(_guess(throttle, username="known@example.com")) for _ in range(MAX_HELD_ATTEMPTS_PER_KEY)
-    ]
-    for _ in range(1000):
-        if lt._HELD_ATTEMPTS.get(source_slot) == MAX_HELD_ATTEMPTS_PER_KEY:
-            break
-        await asyncio.sleep(0)
-    assert lt._HELD_ATTEMPTS == {source_slot: MAX_HELD_ATTEMPTS_PER_KEY}
-
-    try:
-        signed_in = await _db_login(throttle, "known@example.com", "right", correct=True)
-        assert signed_in.user_id == "u-1"
-    finally:
-        release.set()
-        for task in held:
-            with pytest.raises(ProxyException):
-                await task
-
-
-@pytest.mark.asyncio
-async def test_a_blocked_source_shares_one_held_slot_pool_across_its_blocked_usernames(monkeypatch):
-    """Once the source is blocked, a pair block for a username must not hand that username its own five slots."""
-    import asyncio
-
-    from litellm.proxy._types import ProxyException
-    from litellm.proxy.auth import login_throttle as lt
-    from litellm.proxy.auth.login_throttle import MAX_HELD_ATTEMPTS_PER_KEY
-
-    monkeypatch.setenv("UI_USERNAME", "admin")
-    monkeypatch.setenv("UI_PASSWORD", "right")
-    release = asyncio.Event()
-
-    async def _park(_seconds: float) -> None:
-        await release.wait()
-
-    monkeypatch.setattr(lt, "_sleep", _park)
-    throttle = _throttle(user_limit=1, source_limit=3, client_ip="203.0.113.45")
+    throttle = _throttle(user_limit=1, source_limit=3, block_seconds=120, client_ip="203.0.113.45")
     assert [await _fail(throttle) for _ in range(2)] == ["401", "401"], "the admin pair is now blocked"
+    throttle.blocks.set_cache(throttle._keys("admin").pair_block, 1, ttl=30)
     assert [await _fail(throttle, username=f"spray-{i}@corp.com") for i in range(3)] == ["401"] * 3
-    source_slot = throttle._keys("admin").source_block
-    assert throttle._local_block_ttl(source_slot) > 0, "the source is now blocked as well"
+    assert throttle._local_block_ttl(throttle._keys("admin").source_block) == 120, "the source is now blocked too"
 
-    usernames = ["admin", *(f"fresh-{i}@corp.com" for i in range(MAX_HELD_ATTEMPTS_PER_KEY - 1))]
-    held = [asyncio.create_task(_guess(throttle, username=name)) for name in usernames]
-    for _ in range(1000):
-        if lt._HELD_ATTEMPTS.get(source_slot) == MAX_HELD_ATTEMPTS_PER_KEY:
-            break
-        await asyncio.sleep(0)
-    assert lt._HELD_ATTEMPTS == {source_slot: MAX_HELD_ATTEMPTS_PER_KEY}
-
-    try:
-        for name in ("admin", "fresh-0@corp.com", "never-seen@corp.com"):
-            with pytest.raises(ProxyException) as over_cap:
-                await _guess(throttle, username=name)
-            assert over_cap.value.code == "429"
-            assert over_cap.value.headers.get("Retry-After") == "300"
-    finally:
-        release.set()
-        for task in held:
-            with pytest.raises(ProxyException):
-                await task
-
-    assert lt._HELD_ATTEMPTS == {}
+    for name in ("admin", "spray-0@corp.com", "never-seen@corp.com"):
+        with pytest.raises(ProxyException) as refused:
+            await _guess(throttle, username=name)
+        assert refused.value.code == "429"
+        assert refused.value.headers.get("Retry-After") == "120", name
 
 
 @pytest.mark.asyncio
-async def test_disabling_the_control_removes_the_hold_as_well(monkeypatch, login_delays):
-    """The escape hatch has to turn off the whole control, not only the refusal."""
+async def test_disabling_the_control_lets_every_attempt_through(monkeypatch):
+    """The escape hatch has to turn off the whole control: no counting and no refusal."""
     import dataclasses
 
     monkeypatch.setenv("UI_USERNAME", "admin")
@@ -1319,7 +1293,7 @@ async def test_disabling_the_control_removes_the_hold_as_well(monkeypatch, login
     throttle = dataclasses.replace(_throttle(user_limit=1), enabled=False)
 
     assert [await _fail(throttle) for _ in range(6)] == ["401"] * 6
-    assert login_delays.seconds == []
+    assert _local_count(throttle, throttle._keys("admin").pair_counter) == 0
 
 
 class _FakeRedis:
@@ -1404,12 +1378,15 @@ async def test_redis_is_the_only_counter_while_it_answers(monkeypatch):
 
     assert await _fail(second_worker, username="user@corp.com") == "429", "the second worker sees the block"
 
+    block_keys = [k for k in redis.values if ":block:user:" in k]
+    assert block_keys, "the block lives in Redis, where every worker reads it"
+    for key in block_keys:
+        await redis.async_delete_cache(key)
     await _db_login(second_worker, "user@corp.com", "right", correct=True)
 
     assert not [k for k in redis.values if ":user:" in k and ":block:" not in k], (
         "success clears the shared pair counter"
     )
-    assert [k for k in redis.values if ":block:user:" in k], "an active block is not lifted by one success"
 
 
 @pytest.mark.asyncio
@@ -1436,7 +1413,7 @@ async def test_a_redis_outage_falls_back_to_this_workers_own_counter(monkeypatch
         verbose_proxy_logger.removeHandler(handler)
 
     assert blocked.value.code == "429"
-    assert blocked.value.headers.get("Retry-After") == "270"
+    assert blocked.value.headers.get("Retry-After") == "300"
     assert any("Redis failed while counting Admin UI sign-in attempts" in r.getMessage() for r in records)
 
 

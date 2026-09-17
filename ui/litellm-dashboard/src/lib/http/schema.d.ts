@@ -26512,7 +26512,7 @@ export interface components {
             enforce_fallback_model_access?: boolean | null;
             /**
              * Failed Login Block Seconds
-             * @description How long a blocked source address, or source address and username, stays blocked. The block is soft: a correct password still signs in, but each attempt from a blocked key takes one of 5 held slots per worker and a wrong password is held for 30 seconds before it is refused with 429. Set under `general_settings` in config.yaml. Defaults to 300
+             * @description How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300
              */
             failed_login_block_seconds?: number | null;
             /**
@@ -26566,7 +26566,7 @@ export interface components {
             max_batch_file_size_mb?: number | null;
             /**
              * Max Failed Login Attempts Per Source
-             * @description Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Only enforced when `trusted_proxy_ranges` is set, since otherwise every client behind an ingress shares one address. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10
+             * @description Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Only enforced when `trusted_proxy_ranges` is set: to the proxies in front of LiteLLM, or to an empty list when clients connect directly. Left unset, the peer address may be a shared ingress and this limit is off. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10
              */
             max_failed_login_attempts_per_source?: number | null;
             /**
@@ -26756,7 +26756,7 @@ export interface components {
             supported_db_objects?: components["schemas"]["SupportedDBObjectType"][] | null;
             /**
              * Trusted Proxy Ranges
-             * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.
+             * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler, and whose X-Forwarded-For is used to attribute Admin UI sign-in attempts to a source address. Set it to an empty list when clients connect directly, so the peer address is the source. Left unset, the per-source sign-in limit is off.
              */
             trusted_proxy_ranges?: string[] | null;
             /**

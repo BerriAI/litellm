@@ -186,9 +186,11 @@ async def authenticate_user(
             or if username/password login is disabled while SSO is configured
 
     Recovery: an admin locked out of the UI by
-    `disable_password_login_when_sso_enabled` can still administer the proxy over
-    the API with the master key (Authorization: Bearer <master_key>), which never
-    goes through this function. To restore UI username/password login, unset the
+    `disable_password_login_when_sso_enabled`, or by the failed sign-in block in
+    `throttle`, can still administer the proxy over the API with the master key
+    (Authorization: Bearer <master_key>), which never goes through this function.
+    No credential, the env admin credentials and the master key included, is
+    exempt from the block. To restore UI username/password login, unset the
     setting in config.yaml (or the DB-persisted general_settings) and restart the
     proxy; this is a deliberate, auditable config change rather than a hidden
     bypass.
@@ -217,12 +219,8 @@ async def authenticate_user(
             code=500,
         )
 
-    admin_credentials_match: Final = _admin_credentials_match(username, password, master_key, general_settings)
-
-    async with throttle.attempt(username, exempt=admin_credentials_match) as attempt:
-        return await _sign_in(
-            username, password, master_key, prisma_client, attempt, general_settings, admin_credentials_match
-        )
+    attempt: Final = await throttle.attempt(username)
+    return await _sign_in(username, password, master_key, prisma_client, attempt, general_settings)
 
 
 async def _sign_in(
@@ -232,8 +230,8 @@ async def _sign_in(
     prisma_client: PrismaClient | None,
     attempt: LoginAttempt,
     general_settings: Mapping[str, object],
-    admin_credentials_match: bool,
 ) -> LoginResult:
+    admin_credentials_match: Final = _admin_credentials_match(username, password, master_key, general_settings)
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
     _user_row: LiteLLM_UserTable | None = None
     user_role: (

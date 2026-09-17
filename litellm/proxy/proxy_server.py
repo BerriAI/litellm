@@ -328,8 +328,8 @@ from litellm.proxy.auth.fallback_model_access import router_fallback_access_chec
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
 from litellm.proxy.auth.login_throttle import (
-    TRUSTED_PROXY_RANGES_KEY,
     LoginThrottle,
+    declared_proxy_ranges,
     warn_login_counters_are_per_worker,
     warn_source_login_limit_is_off,
 )
@@ -5819,7 +5819,7 @@ class ProxyConfig:
 
         if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
             warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
-        if not general_settings.get(TRUSTED_PROXY_RANGES_KEY):
+        if declared_proxy_ranges(general_settings) is None:
             warn_source_login_limit_is_off()
 
         _bg_hc_model_groups: Final = parse_background_health_check_model_groups(general_settings)
