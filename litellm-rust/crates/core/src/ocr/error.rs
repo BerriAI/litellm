@@ -113,7 +113,6 @@ impl From<crate::call_arguments::ArgumentError> for Error {
 impl Error {
     pub fn http_status_code(&self) -> Option<u16> {
         match self {
-            Self::MissingDocumentUrl => Some(500),
             Self::Provider { status, .. }
             | Self::Transport(crate::transport::Error::Http { status, .. }) => Some(*status),
             error if error.is_request() => Some(400),
@@ -142,6 +141,7 @@ impl Error {
                 | Self::Features
                 | Self::DotModel
                 | Self::InvalidRequest(_)
+                | Self::InvalidProvider(_)
                 | Self::Params(_)
                 | Self::Headers(_)
         )

@@ -88,7 +88,21 @@ enum ProjectedDocument {
 
 impl ProjectedDocument {
     fn project(document: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let kind: String = document.get_item("type")?.extract()?;
+        let kind: String = document
+            .get_item("type")
+            .and_then(|value| value.extract())
+            .map_err(|error| {
+                let py = document.py();
+                if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py)
+                    || error.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+                {
+                    ocr_error_to_pyerr(litellm_core::ocr::Error::RequestField {
+                        path: "document.type".into(),
+                    })
+                } else {
+                    error
+                }
+            })?;
         if kind != "file" {
             return Ok(Self::Other {
                 wire: from_py(document)?,
@@ -185,7 +199,7 @@ pub(super) fn admitted_call(outcome: NativeOutcome<OcrCall>) -> PyResult<OcrCall
 mod tests {
     use litellm_core::ocr::Error;
     use litellm_core::ocr::OcrDecline;
-    use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
+    use pyo3::exceptions::PyValueError;
 
     use super::*;
 
@@ -515,21 +529,21 @@ kwargs = {'api_key': key}
     }
 
     #[test]
-    fn document_discriminator_errors_keep_their_existing_exceptions() {
+    fn document_discriminator_errors_are_validation_errors_and_preserve_custom_failures() {
         Python::initialize();
         Python::attach(|py| {
             let missing = py.eval(c"{}", None, None).unwrap();
             assert!(
                 project_document(&missing)
                     .unwrap_err()
-                    .is_instance_of::<PyKeyError>(py)
+                    .is_instance_of::<PyValueError>(py)
             );
 
             let non_string = py.eval(c"{'type': 1}", None, None).unwrap();
             assert!(
                 project_document(&non_string)
                     .unwrap_err()
-                    .is_instance_of::<PyTypeError>(py)
+                    .is_instance_of::<PyValueError>(py)
             );
 
             let locals = eval(

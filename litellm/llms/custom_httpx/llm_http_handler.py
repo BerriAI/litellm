@@ -59,7 +59,7 @@ from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
-from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
+from litellm.llms.base_llm.ocr.transformation import OCR_REQUEST_FORMAT_PARAM, BaseOCRConfig, OCRResponse
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -1568,7 +1568,7 @@ class BaseLLMHTTPHandler:
         transformed_result: Final = provider_config.transform_ocr_request(
             model=model,
             document=document,
-            optional_params=optional_params,
+            optional_params={key: value for key, value in optional_params.items() if key != OCR_REQUEST_FORMAT_PARAM},
             headers=headers,
             api_key=api_key,
             api_base=api_base,
@@ -1634,7 +1634,7 @@ class BaseLLMHTTPHandler:
         transformed_result: Final = await provider_config.async_transform_ocr_request(
             model=model,
             document=document,
-            optional_params=optional_params,
+            optional_params={key: value for key, value in optional_params.items() if key != OCR_REQUEST_FORMAT_PARAM},
             headers=headers,
             api_key=api_key,
             api_base=api_base,
@@ -1672,12 +1672,26 @@ class BaseLLMHTTPHandler:
         optional_params: Mapping[str, object],
     ) -> OCRResponse:
         """Shared logic for transforming OCR responses."""
-        return provider_config.transform_ocr_response(
+        normalized: Final = provider_config.transform_ocr_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
             optional_params=optional_params,
         )
+        return self._finalize_ocr_response(normalized, response, optional_params)
+
+    @staticmethod
+    def _finalize_ocr_response(
+        normalized: OCRResponse,
+        response: httpx.Response,
+        optional_params: Mapping[str, object],
+    ) -> OCRResponse:
+        if (
+            optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native"
+            and normalized.get_provider_native_response() is None
+        ):
+            normalized.set_provider_native_response(response.json())
+        return normalized
 
     def ocr(
         self,
@@ -1823,12 +1837,13 @@ class BaseLLMHTTPHandler:
         )
 
         # Use async response transform for async operations
-        return await provider_config.async_transform_ocr_response(
+        normalized: Final = await provider_config.async_transform_ocr_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
             optional_params=optional_params,
         )
+        return self._finalize_ocr_response(normalized, response, optional_params)
 
     def search(
         self,
@@ -6157,6 +6172,8 @@ class BaseLLMHTTPHandler:
             status_code=status_code,
             headers=error_headers,
         )
+        if isinstance(provider_config, BaseOCRConfig) and isinstance(error_response, httpx.Response):
+            provider_error.response = error_response
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
         raise provider_error

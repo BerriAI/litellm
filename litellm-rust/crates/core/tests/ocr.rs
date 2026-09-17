@@ -956,32 +956,29 @@ async fn response_limit_accepts_exact_size_and_rejects_declared_and_chunked_over
     }
 }
 
+#[rstest]
+#[case::declared("Content-Length: 1000000")]
+#[case::chunked("Transfer-Encoding: chunked")]
 #[tokio::test]
-async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_draining() {
-    let prefix = "x".repeat(4 * (crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS + 1));
-    for headers in ["Content-Length: 1000000", "Transfer-Encoding: chunked"] {
-        let body = if headers.starts_with("Transfer") {
-            format!("{:x}\r\n{prefix}\r\n", prefix.len())
-        } else {
-            prefix.clone()
-        };
-        let response = format!("HTTP/1.1 429 Too Many Requests\r\n{headers}\r\n\r\n{body}");
-        let error = read_bounded_response(response.into_bytes(), 4096)
-            .await
-            .unwrap_err();
-        match error {
-            super::Error::Transport(crate::transport::Error::Http { status, body }) => {
-                assert_eq!(status, 429);
-                assert_eq!(
-                    body,
-                    format!(
-                        "{}... (truncated)",
-                        "x".repeat(crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS)
-                    )
-                );
-            }
-            error => panic!("unexpected error: {error}"),
+async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_draining(
+    #[case] headers: &str,
+) {
+    let prefix = "x".repeat(4096);
+    let body = if headers.starts_with("Transfer") {
+        format!("{:x}\r\n{prefix}\r\n", prefix.len())
+    } else {
+        prefix.clone()
+    };
+    let response = format!("HTTP/1.1 429 Too Many Requests\r\n{headers}\r\n\r\n{body}");
+    let error = read_bounded_response(response.into_bytes(), prefix.len())
+        .await
+        .unwrap_err();
+    match error {
+        super::Error::Transport(crate::transport::Error::Http { status, body }) => {
+            assert_eq!(status, 429);
+            assert_eq!(body, prefix);
         }
+        error => panic!("unexpected error: {error}"),
     }
 }
 
