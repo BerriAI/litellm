@@ -163,7 +163,7 @@ class TinyFishPassthroughLoggingHandler:
                 end_time=end_time,
                 kwargs=kwargs,
             ).as_handler_result()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # billing/logging must never break the relayed request
             verbose_proxy_logger.exception("Error in TinyFish passthrough logging handler: %s", e)
             fallback_payload: Final[PassThroughEndpointLoggingTypedDict] = {
                 "result": StandardPassThroughResponseObject(response=result),
@@ -256,7 +256,7 @@ class TinyFishPassthroughLoggingHandler:
                 cache_hit=cache_hit,
                 **payload.kwargs,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # billing/logging must never break the relayed request
             verbose_proxy_logger.exception("[Non blocking logging error] TinyFish run-async billing failed: %s", e)
 
     @staticmethod
@@ -325,7 +325,7 @@ class TinyFishPassthroughLoggingHandler:
                 return None
             payload: Final[object] = response.json()  # any-ok: httpx Response.json() -> Any
             return _parse_run(payload)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # billing/logging must never break the relayed request
             verbose_proxy_logger.warning("[Non blocking logging error] TinyFish run fetch failed: %s", e)
             return None
 
@@ -354,7 +354,7 @@ class TinyFishPassthroughLoggingHandler:
                 end_time=end_time,
                 kwargs=_EMPTY_KWARGS,
             ).as_handler_result()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # billing/logging must never break the relayed request
             verbose_proxy_logger.exception("Error in TinyFish SSE passthrough logging handler: %s", e)
             fallback_payload: Final[PassThroughEndpointLoggingTypedDict] = {
                 "result": StandardPassThroughResponseObject(response=""),
@@ -383,7 +383,7 @@ class TinyFishPassthroughLoggingHandler:
             # the poller paths pass no request kwargs, so SLO attribution (key hash, team, tags) needs the stored params
             "litellm_params": kwargs.get("litellm_params")
             or logging_obj.model_call_details.get("litellm_params")
-            or {},
+            or {},  # mutable-ok: the logging pipeline requires a plain kwargs dict
         }
         logging_obj.model_call_details.update(
             model=TINYFISH_MODEL_NAME,
