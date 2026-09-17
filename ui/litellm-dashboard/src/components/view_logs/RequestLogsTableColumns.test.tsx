@@ -355,7 +355,6 @@ describe("TTFT column", () => {
   });
 });
 
-
 describe("Request outcome", () => {
   it("shows a failed agent outcome even when metadata has no status", () => {
     renderRows([logEntry({ call_type: "asend_message", status: "failure", session_total_count: 4 })]);
