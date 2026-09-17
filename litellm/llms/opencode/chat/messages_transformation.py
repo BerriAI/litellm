@@ -20,6 +20,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.opencode.common_utils import (
     OpenCodeException,
     cost_map_max_output_tokens,
+    ensure_opencode_pricing,
     resolve_opencode_api_base,
     resolve_opencode_api_key,
     with_opencode_session_header,
@@ -193,7 +194,14 @@ class OpenCodeMessagesConfig(AnthropicMessagesConfig):
         cost-map ``max_output_tokens`` here.  ``model`` arrives bare (e.g.
         ``qwen3.7-plus``), so qualify it with the surface prefix for the
         ``litellm.model_cost`` lookup.
+
+        Unlike the chat arm, this path never reaches the mitigation inside
+        ``responses_api_bridge_check``, so apply it here first: on a cost map
+        that predates this provider the lookup below finds no cap at all, and a
+        placeholder entry registered by ``Router`` can outrank the bare-name
+        sibling and bill zero.
         """
+        ensure_opencode_pricing(f"opencode_{self.surface}", model)
         default_max_tokens: Final = (
             cost_map_max_output_tokens(surface=self.surface, model=model)
             if anthropic_messages_optional_request_params.get("max_tokens") is None

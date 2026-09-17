@@ -954,3 +954,62 @@ class TestMessagesCostMap:
             entry = litellm.model_cost[key]
             assert entry["input_cost_per_token"] >= 0
             assert entry["output_cost_per_token"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# Degraded cost map — pricing mitigation on the messages arm
+# ---------------------------------------------------------------------------
+
+
+class TestMessagesArmPricingMitigation:
+    """The messages arm is the only arm that has to mitigate for itself.
+
+    The chat arm reaches ``ensure_opencode_pricing`` inside
+    ``responses_api_bridge_check``; ``/v1/messages`` goes straight to this
+    transform, so on a cost map that predates the provider — the published
+    remote map, until this ships — the cap lookup finds nothing, and the
+    unpriced placeholder ``Router`` registers for a deployment outranks the
+    bare-name sibling and bills zero.
+    """
+
+    def test_max_tokens_defaulted_when_cost_map_lacks_entry(self, monkeypatch):
+        served = {
+            key: value
+            for key, value in litellm.get_model_cost_map(url="").items()
+            if key != "opencode_zen/claude-sonnet-4"
+        }
+        monkeypatch.setattr(litellm, "model_cost", served)
+
+        payload = OpenCodeMessagesConfig(surface="zen").transform_anthropic_messages_request(
+            model="claude-sonnet-4",
+            messages=[{"role": "user", "content": "hi"}],
+            anthropic_messages_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert payload["max_tokens"] == 64000
+        assert litellm.model_cost["opencode_zen/claude-sonnet-4"]["output_cost_per_token"] == 1.5e-05
+
+    def test_unpriced_placeholder_is_repriced_before_billing(self, monkeypatch):
+        served = dict(litellm.get_model_cost_map(url=""))
+        served["opencode_zen/claude-sonnet-4"] = {
+            "litellm_provider": "opencode_zen",
+            "max_tokens": 64000,
+            "max_output_tokens": 64000,
+            "input_cost_per_token": None,
+            "output_cost_per_token": None,
+        }
+        monkeypatch.setattr(litellm, "model_cost", served)
+
+        OpenCodeMessagesConfig(surface="zen").transform_anthropic_messages_request(
+            model="claude-sonnet-4",
+            messages=[{"role": "user", "content": "hi"}],
+            anthropic_messages_optional_request_params={"max_tokens": 16},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        entry = litellm.model_cost["opencode_zen/claude-sonnet-4"]
+        assert entry["input_cost_per_token"] == 3e-06
+        assert entry["output_cost_per_token"] == 1.5e-05
