@@ -1953,6 +1953,8 @@ dependencies = [
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
+ "aws-smithy-eventstream",
+ "aws-smithy-types",
  "base64 0.22.1",
  "bytes",
  "data-url",
@@ -1961,6 +1963,7 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-auth-azure",
  "litellm-auth-gcp",
+ "litellm-framing",
  "mime_guess",
  "moka",
  "rand 0.8.7",
