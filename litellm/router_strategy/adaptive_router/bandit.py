@@ -73,7 +73,10 @@ def apply_delta(cell: BanditCell, delta_alpha: float, delta_beta: float) -> Band
     new_alpha: Final = max(MIN_SHAPE_PARAMETER, cell.alpha + delta_alpha)
     new_beta: Final = max(MIN_SHAPE_PARAMETER, cell.beta + delta_beta)
     if new_alpha + new_beta > SAMPLE_CAP:
-        return cell
+        return BanditCell(
+            alpha=max(MIN_SHAPE_PARAMETER, cell.alpha),
+            beta=max(MIN_SHAPE_PARAMETER, cell.beta),
+        )
     return BanditCell(alpha=new_alpha, beta=new_beta)
 
 

@@ -93,6 +93,12 @@ def test_apply_delta_keeps_shape_parameters_positive():
     assert cell.beta > 0.0
 
 
+def test_apply_delta_sanitizes_capped_invalid_cell():
+    cell = apply_delta(BanditCell(alpha=0.0, beta=float(SAMPLE_CAP)), delta_alpha=0.0, delta_beta=0.0)
+    assert cell.alpha > 0.0
+    assert cell.beta > 0.0
+
+
 def test_normalized_cost_cheapest_wins():
     assert normalized_cost(0.001, [0.001, 0.005, 0.01]) == 1.0
     assert normalized_cost(0.01, [0.001, 0.005, 0.01]) == 0.0
