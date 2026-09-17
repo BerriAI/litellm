@@ -4,11 +4,11 @@ Gateway-level allowlist of MCP client applications, matched against the
 name is client-supplied, so this is a policy control and not a security boundary.
 """
 
-import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
@@ -16,6 +16,19 @@ from litellm._logging import verbose_logger
 MCP_ALLOWED_CLIENTS_SETTING: Final = "mcp_allowed_clients"
 
 _ALLOWED_CLIENTS_ADAPTER: Final = TypeAdapter(list[str])
+_GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+class _ClientInfo(BaseModel):
+    name: str | None = None
+
+
+class _InitializeParams(BaseModel):
+    clientInfo: _ClientInfo | None = None
+
+
+class _InitializeRequest(BaseModel):
+    params: _InitializeParams | None = None
 
 
 class MCPClientForbiddenBody(TypedDict):
@@ -57,15 +70,21 @@ def parse_allowed_mcp_clients(raw_setting: object) -> frozenset[str] | None:
         return frozenset()
 
 
+def allowed_mcp_clients_from_general_settings(general_settings: object) -> frozenset[str] | None:
+    """Reads the allowlist out of the proxy's untyped general_settings mapping."""
+    return parse_allowed_mcp_clients(
+        _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings).get(MCP_ALLOWED_CLIENTS_SETTING)
+    )
+
+
 def extract_mcp_client_name(body: bytes) -> str | None:
     try:
-        data: Final = json.loads(body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+        request: Final = _InitializeRequest.model_validate_json(body)
+    except ValidationError:
         return None
-    params: Final = data.get("params") if isinstance(data, dict) else None
-    client_info: Final = params.get("clientInfo") if isinstance(params, dict) else None
-    name: Final = client_info.get("name") if isinstance(client_info, dict) else None
-    return name if isinstance(name, str) and name else None
+    client_info: Final = request.params.clientInfo if request.params is not None else None
+    name: Final = client_info.name if client_info is not None else None
+    return name if name else None
 
 
 def check_mcp_client_allowed(body: bytes, allowed_clients: frozenset[str] | None) -> MCPClientRejection | None:
