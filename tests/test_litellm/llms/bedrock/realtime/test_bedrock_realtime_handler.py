@@ -995,6 +995,9 @@ class TestBedrockRealtimeSdkImportErrors:
         assert "aws-sdk-bedrock-runtime 0.7.0 is installed but" in message
         assert ">=0.10.0,<0.12.0" in message
         assert not message.startswith("Missing aws_sdk_bedrock_runtime")
+        assert isinstance(exc_info.value.__cause__, ImportError)
+        assert str(exc_info.value.__cause__) not in message
+        assert "cannot import name" not in message
         close_reason = message.encode()[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode()
         assert "0.7.0 is installed" in close_reason
         assert BEDROCK_REALTIME_SDK_SUPPORTED_RANGE in close_reason
