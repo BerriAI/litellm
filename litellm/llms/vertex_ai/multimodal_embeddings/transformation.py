@@ -287,14 +287,14 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                             object="embedding",
                         )
                         openai_embeddings.append(openai_embedding_object)
-                    elif "imageEmbedding" in _prediction:
+                    if "imageEmbedding" in _prediction:
                         openai_embedding_object = Embedding(
                             embedding=_prediction["imageEmbedding"],
                             index=idx,
                             object="embedding",
                         )
                         openai_embeddings.append(openai_embedding_object)
-                    elif "videoEmbeddings" in _prediction:
+                    if "videoEmbeddings" in _prediction:
                         for video_embedding in _prediction["videoEmbeddings"]:
                             openai_embedding_object = Embedding(
                                 embedding=video_embedding["embedding"],
