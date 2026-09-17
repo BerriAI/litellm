@@ -1,7 +1,7 @@
 import asyncio
 import datetime
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import timezone
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -44,6 +44,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import hash_token
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
@@ -4018,6 +4019,34 @@ def _router_rejected_failure_payload(model_group: str, llm_router: litellm.Route
     )
 
 
+_ProviderResolution = tuple[str, str, str | None, str | None]
+
+
+def _router_init_provider_stub(
+    model: str,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    litellm_params: GenericLiteLLMParams | None = None,
+) -> _ProviderResolution:
+    prefix, _, suffix = model.partition("/")
+    return (suffix or model, custom_llm_provider or (prefix if suffix else "openai"), api_base, api_key)
+
+
+def _oauth_tripwire(resolution_attempts: list[str]) -> Callable[..., _ProviderResolution]:
+    def _trip(
+        model: str,
+        custom_llm_provider: str | None = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
+    ) -> _ProviderResolution:
+        resolution_attempts.append(model)
+        raise AssertionError("get_llm_provider would run the OAuth device flow")
+
+    return _trip
+
+
 def _openai_and_anthropic_router() -> litellm.Router:
     return litellm.Router(
         model_list=[
@@ -4057,20 +4086,13 @@ def test_get_logging_payload_router_rejected_request_without_router_leaves_provi
     ],
 )
 def test_get_logging_payload_inferred_provider_never_resolves_declared_authenticating_providers(
-    monkeypatch, litellm_params: dict[str, str], expected_provider: str
+    monkeypatch: pytest.MonkeyPatch, litellm_params: dict[str, str], expected_provider: str
 ):
     resolution_attempts: list[str] = []
 
-    def _router_init_stub(model, custom_llm_provider=None, *args, **kwargs):
-        return model.split("/", 1)[-1], custom_llm_provider or model.split("/", 1)[0], None, None
-
-    def _oauth_tripwire(model, *args, **kwargs):
-        resolution_attempts.append(model)
-        raise AssertionError("get_llm_provider would run the OAuth device flow")
-
-    monkeypatch.setattr(litellm, "get_llm_provider", _router_init_stub)
+    monkeypatch.setattr(litellm, "get_llm_provider", _router_init_provider_stub)
     llm_router = litellm.Router(model_list=[{"model_name": "oauth-group", "litellm_params": litellm_params}])
-    monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire)
+    monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire(resolution_attempts))
 
     payload = _router_rejected_failure_payload("oauth-group", llm_router)
 
@@ -4087,17 +4109,11 @@ def test_get_logging_payload_inferred_provider_never_resolves_declared_authentic
     ],
 )
 def test_get_logging_payload_inferred_provider_honours_global_litellm_proxy_override(
-    monkeypatch, litellm_params: dict[str, str]
+    monkeypatch: pytest.MonkeyPatch, litellm_params: dict[str, str]
 ):
-    def _router_init_stub(model, custom_llm_provider=None, *args, **kwargs):
-        return model.split("/", 1)[-1], custom_llm_provider or model.split("/", 1)[0], None, None
-
-    def _oauth_tripwire(model, *args, **kwargs):
-        raise AssertionError("get_llm_provider would run the OAuth device flow")
-
-    monkeypatch.setattr(litellm, "get_llm_provider", _router_init_stub)
+    monkeypatch.setattr(litellm, "get_llm_provider", _router_init_provider_stub)
     llm_router = litellm.Router(model_list=[{"model_name": "proxied-group", "litellm_params": litellm_params}])
-    monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire)
+    monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire([]))
     monkeypatch.setattr(litellm, "use_litellm_proxy", True)
 
     payload = _router_rejected_failure_payload("proxied-group", llm_router)
@@ -4106,13 +4122,10 @@ def test_get_logging_payload_inferred_provider_honours_global_litellm_proxy_over
 
 
 def test_get_logging_payload_router_rejected_request_for_unresolvable_deployment_leaves_provider_empty(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    def _router_init_stub(model, custom_llm_provider=None, *args, **kwargs):
-        return model, custom_llm_provider or "openai", None, None
-
     with monkeypatch.context() as router_init:
-        router_init.setattr(litellm, "get_llm_provider", _router_init_stub)
+        router_init.setattr(litellm, "get_llm_provider", _router_init_provider_stub)
         llm_router = litellm.Router(
             model_list=[{"model_name": "opaque-group", "litellm_params": {"model": "my-unprefixed-model"}}]
         )
