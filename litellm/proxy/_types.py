@@ -468,6 +468,7 @@ class LiteLLMRoutes(enum.Enum):
     mapped_pass_through_routes = [
         "/bedrock",
         "/comprehendmedical",
+        "/azure_speech",
         "/vertex-ai",
         "/vertex_ai",
         "/cohere",

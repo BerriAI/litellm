@@ -9,7 +9,12 @@ from fastapi import Request, UploadFile, status
 from typing_extensions import NotRequired, ReadOnly, Required
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import CLIENT_REQUESTED_MODEL_SCOPE_KEY, MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
+from litellm.constants import (
+    AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
+    AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX,
+    CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
+)
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -212,6 +217,12 @@ async def _read_request_body(request: Request | None) -> dict:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)
         return {}
+
+
+def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
+    return route.startswith(
+        f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}{AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX}"
+    ) and _normalize_media_type(content_type).startswith("audio/")
 
 
 async def read_raw_json_body(request: Request | None) -> bytes | None:

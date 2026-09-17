@@ -105,6 +105,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
     _safe_set_request_parsed_body,
+    is_opaque_audio_pass_through_request,
     populate_request_with_path_params,
     read_raw_json_body,
     rewrite_request_model,
@@ -1354,6 +1355,12 @@ async def _read_request_body_deferring_parse_failure(
     must run (resolving identity onto the request's trace) before the 400 goes
     out; the caller re-raises the returned exception once identity is seeded.
     """
+    if is_opaque_audio_pass_through_request(
+        route=get_request_route(request=request),
+        content_type=_safe_get_request_headers(request=request).get("content-type", ""),
+    ):
+        _safe_set_request_parsed_body(request=request, parsed_body={})  # mutable-ok: the body cache stores a plain dict
+        return {}, None  # mutable-ok: request_data is a plain dict across the whole auth path
     try:
         parsed_body: Final = await _read_request_body(request=request)
     except ProxyException as parse_exception:
