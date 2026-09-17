@@ -64,13 +64,13 @@ class TestSferenceProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="sference/Qwen/Qwen3.6-35B-A3B",
+            model="sference/deepseek-ai/DeepSeek-V4.1-Flash",
             custom_llm_provider=None,
             api_base=None,
             api_key="sk-test",
         )
 
-        assert model == "Qwen/Qwen3.6-35B-A3B"
+        assert model == "deepseek-ai/DeepSeek-V4.1-Flash"
         assert provider == "sference"
         assert api_base == "https://api.sference.com/v1"
         assert api_key == "sk-test"
@@ -79,7 +79,7 @@ class TestSferenceProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="sference/Qwen/Qwen3.6-35B-A3B",
+            model="sference/deepseek-ai/DeepSeek-V4.1-Flash",
             custom_llm_provider=None,
             api_base="https://custom.sference.example/v1",
             api_key="sk-test",
@@ -93,7 +93,7 @@ class TestSferenceProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="Qwen/Qwen3.6-35B-A3B",
+            model="deepseek-ai/DeepSeek-V4.1-Flash",
             custom_llm_provider=None,
             api_base="https://api.sference.com/v1",
             api_key=None,
@@ -108,7 +108,7 @@ class TestSferenceProviderConfig:
 
         monkeypatch.setenv("SFERENCE_API_KEY", "sk-env-key")
         model, provider, api_key, api_base = get_llm_provider(
-            model="Qwen/Qwen3.6-35B-A3B",
+            model="deepseek-ai/DeepSeek-V4.1-Flash",
             custom_llm_provider=None,
             api_base="https://api.sference.com/v1",
             api_key="sk-explicit",
@@ -121,7 +121,7 @@ class TestSferenceProviderConfig:
 
         monkeypatch.setenv("SFERENCE_API_KEY", "sk-env-key")
         model, provider, api_key, api_base = get_llm_provider(
-            model="sference/Qwen/Qwen3.6-35B-A3B",
+            model="sference/deepseek-ai/DeepSeek-V4.1-Flash",
             custom_llm_provider=None,
             api_base=None,
             api_key=None,
@@ -140,7 +140,7 @@ class TestSferenceProviderConfig:
         url = cfg.get_complete_url(
             api_base=None,
             api_key="sk-test",
-            model="Qwen/Qwen3.6-35B-A3B",
+            model="deepseek-ai/DeepSeek-V4.1-Flash",
             optional_params={},
             litellm_params={},
         )
@@ -149,40 +149,40 @@ class TestSferenceProviderConfig:
 
 class TestSferenceSupportedParams:
     def test_reasoning_model_supports_reasoning_effort(self):
-        params = litellm.get_supported_openai_params(model="Qwen/Qwen3.6-35B-A3B", custom_llm_provider="sference")
+        params = litellm.get_supported_openai_params(model="deepseek-ai/DeepSeek-V4.1-Flash", custom_llm_provider="sference")
         assert params is not None
         assert "reasoning_effort" in params
 
     def test_non_reasoning_model_excludes_reasoning_effort(self):
-        """Qwen3-VL is listed with thinking unsupported in the sference catalog,
-        so it must not advertise reasoning_effort."""
+        """Models absent from the sference catalog are not known to reason,
+        so they must not advertise reasoning_effort."""
         params = litellm.get_supported_openai_params(
-            model="Qwen/Qwen3-VL-30B-A3B-Instruct", custom_llm_provider="sference"
+            model="acme-corp/custom-byom-model", custom_llm_provider="sference"
         )
         assert params is not None
         assert "reasoning_effort" not in params
 
     def test_tool_params_supported(self):
-        params = litellm.get_supported_openai_params(model="Qwen/Qwen3.6-35B-A3B", custom_llm_provider="sference")
+        params = litellm.get_supported_openai_params(model="deepseek-ai/DeepSeek-V4.1-Flash", custom_llm_provider="sference")
         assert params is not None
         assert "tools" in params
         assert "tool_choice" in params
 
     def test_service_tier_and_prompt_cache_key_supported(self):
-        params = litellm.get_supported_openai_params(model="Qwen/Qwen3.6-35B-A3B", custom_llm_provider="sference")
+        params = litellm.get_supported_openai_params(model="deepseek-ai/DeepSeek-V4.1-Flash", custom_llm_provider="sference")
         assert params is not None
         assert "service_tier" in params
         assert "prompt_cache_key" in params
 
     def test_reasoning_effort_and_service_tier_mapped_through(self):
         cfg = litellm.ProviderConfigManager.get_provider_chat_config(
-            model="Qwen/Qwen3.6-35B-A3B", provider=litellm.LlmProviders.SFERENCE
+            model="deepseek-ai/DeepSeek-V4.1-Flash", provider=litellm.LlmProviders.SFERENCE
         )
         assert cfg is not None
         mapped = cfg.map_openai_params(
             non_default_params={"reasoning_effort": "high", "service_tier": "flex"},
             optional_params={},
-            model="Qwen/Qwen3.6-35B-A3B",
+            model="deepseek-ai/DeepSeek-V4.1-Flash",
             drop_params=False,
         )
         assert mapped["reasoning_effort"] == "high"
@@ -202,7 +202,7 @@ class TestSferenceCompletion:
                 "id": "chatcmpl-123",
                 "object": "chat.completion",
                 "created": 1786206392,
-                "model": "Qwen/Qwen3.6-35B-A3B",
+                "model": "deepseek-ai/DeepSeek-V4.1-Flash",
                 "choices": [
                     {
                         "index": 0,
@@ -216,7 +216,7 @@ class TestSferenceCompletion:
         )
 
         response = litellm.completion(
-            model="sference/Qwen/Qwen3.6-35B-A3B",
+            model="sference/deepseek-ai/DeepSeek-V4.1-Flash",
             messages=[{"role": "user", "content": "hi"}],
             reasoning_effort="high",
             service_tier="flex",
@@ -227,7 +227,7 @@ class TestSferenceCompletion:
         assert request.headers["Authorization"] == "Bearer sk-env-key"
 
         body = json.loads(request.content)
-        assert body["model"] == "Qwen/Qwen3.6-35B-A3B"
+        assert body["model"] == "deepseek-ai/DeepSeek-V4.1-Flash"
         assert body["reasoning_effort"] == "high"
         assert body["service_tier"] == "flex"
         assert response.choices[0].message.content == "Hello!"
@@ -235,13 +235,13 @@ class TestSferenceCompletion:
 
 class TestSferenceValidateEnvironment:
     def test_missing_api_key_reported(self):
-        result = litellm.validate_environment(model="sference/Qwen/Qwen3.6-35B-A3B")
+        result = litellm.validate_environment(model="sference/deepseek-ai/DeepSeek-V4.1-Flash")
         assert result["keys_in_environment"] is False
         assert "SFERENCE_API_KEY" in result["missing_keys"]
 
     def test_present_api_key_accepted(self, monkeypatch):
         monkeypatch.setenv("SFERENCE_API_KEY", "sk-env-key")
-        result = litellm.validate_environment(model="sference/Qwen/Qwen3.6-35B-A3B")
+        result = litellm.validate_environment(model="sference/deepseek-ai/DeepSeek-V4.1-Flash")
         assert result["keys_in_environment"] is True
         assert result["missing_keys"] == []
 
@@ -253,7 +253,7 @@ class TestSferenceModelsByProvider:
 
         sference_models = litellm.models_by_provider.get("sference")
         assert sference_models is not None
-        assert len(sference_models) == 6
+        assert len(sference_models) == 7
         assert "sference/moonshotai/Kimi-K3" in sference_models
 
 
@@ -291,7 +291,7 @@ class TestSferenceAnthropicMessages:
         )
 
         cfg = litellm.ProviderConfigManager.get_provider_anthropic_messages_config(
-            model="Qwen/Qwen3.6-35B-A3B", provider=litellm.LlmProviders.SFERENCE
+            model="deepseek-ai/DeepSeek-V4.1-Flash", provider=litellm.LlmProviders.SFERENCE
         )
         assert isinstance(cfg, JSONProviderAnthropicMessagesConfig)
 
@@ -308,7 +308,7 @@ class TestSferenceAnthropicMessages:
         url = cfg.get_complete_url(
             api_base=None,
             api_key="sk-test",
-            model="Qwen/Qwen3.6-35B-A3B",
+            model="deepseek-ai/DeepSeek-V4.1-Flash",
             optional_params={},
             litellm_params={},
         )
@@ -327,7 +327,7 @@ class TestSferenceAnthropicMessages:
 
         headers, _ = cfg.validate_anthropic_messages_environment(
             headers={},
-            model="Qwen/Qwen3.6-35B-A3B",
+            model="deepseek-ai/DeepSeek-V4.1-Flash",
             messages=[{"role": "user", "content": "hi"}],
             optional_params={},
             litellm_params={},
@@ -355,14 +355,14 @@ class TestSferenceModelInfoAndCost:
         """get_max_tokens must not raise for cataloged sference models; the pinned
         value is the published context ceiling."""
         assert litellm.get_max_tokens("sference/moonshotai/Kimi-K3") == 1048576
-        assert litellm.get_max_tokens("sference/Qwen/Qwen3.6-35B-A3B") == 262144
+        assert litellm.get_max_tokens("sference/deepseek-ai/DeepSeek-V4.1-Flash") == 1048576
 
     def test_vision_model_info_from_catalog(self):
-        info = litellm.get_model_info("sference/Qwen/Qwen3-VL-30B-A3B-Instruct")
+        info = litellm.get_model_info("sference/zai-org/GLM-5.3-Flash")
 
         assert info["litellm_provider"] == "sference"
         assert info["supports_vision"] is True
-        assert info["supports_reasoning"] is False
+        assert info["supports_reasoning"] is True
 
     def test_cost_calculation_with_cached_tokens(self):
         """Cost math must combine uncached input at input price, cached input at
