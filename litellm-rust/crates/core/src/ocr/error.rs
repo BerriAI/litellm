@@ -1,111 +1,21 @@
-use thiserror::Error;
-
-use crate::transport::Error as TransportError;
-
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
-    #[error("expected {expected}, got {actual}")]
-    InvalidType {
-        expected: &'static str,
-        actual: &'static str,
+    #[error("upstream OCR error ({status}): {body}")]
+    Provider {
+        status: u16,
+        body: String,
+        headers: Vec<(String, String)>,
     },
-    #[error("missing required field: {0}")]
-    MissingField(&'static str),
-    #[error("Document URL is required")]
-    MissingDocumentUrl,
-    #[error("invalid response: {0}")]
-    InvalidResponse(String),
-    #[error("invalid provider: {0}")]
-    InvalidProvider(String),
-    #[error("invalid request: {0}")]
-    InvalidRequest(String),
-    #[error("{0}")]
-    Auth(String),
-    #[error(
-        "Missing {provider} API Key - A call is being made to {provider} but no key is set either in the environment variables or via params"
-    )]
-    MissingApiKey { provider: &'static str },
-    #[error(
-        "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
-    )]
-    MissingAzureAiCredentials,
-    #[error(
-        "invalid authentication configuration: Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID"
-    )]
-    MissingAzureDocumentIntelligenceCredentials,
-    #[error(
-        "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
-    )]
-    MissingReductoApiKey,
-    #[error("upstream request failed with status {status}: {body}")]
-    Http { status: u16, body: String },
-    #[error("upstream network error: {0}")]
-    Network(String),
-    /// The provider was never reached: DNS, TCP, TLS or proxy setup failed
-    /// before any byte of the request went out. Nothing was billed, so a host
-    /// that keeps a reference implementation can serve the request itself.
-    /// A timeout is deliberately not this, since the provider may have received
-    /// and answered the request already.
-    #[error("could not reach the provider: {0}")]
-    Connect(String),
-    #[error("routing error: {0}")]
-    Routing(String),
-    /// The request is outside the surface this route covers in Rust. Hosts that
-    /// keep a reference implementation treat this as "fall back", not "fail".
-    #[error("unsupported by the rust path: {0}")]
-    Unsupported(&'static str),
-}
-
-impl Error {
-    pub const fn http_status_code(&self) -> Option<u16> {
-        match self {
-            Self::InvalidRequest(_) => Some(400),
-            Self::MissingDocumentUrl => Some(500),
-            Self::Http { status, .. } => Some(*status),
-            _ => None,
-        }
-    }
-}
-
-impl From<OcrRequestError> for Error {
-    fn from(error: OcrRequestError) -> Self {
-        match error {
-            OcrRequestError::MissingField(field) => Self::MissingField(field),
-            OcrRequestError::MissingDocumentUrl => Self::MissingDocumentUrl,
-            error => Self::InvalidRequest(error.to_string()),
-        }
-    }
-}
-
-impl From<OcrResponseError> for Error {
-    fn from(error: OcrResponseError) -> Self {
-        Self::InvalidResponse(error.to_string())
-    }
-}
-
-impl From<TransportError> for Error {
-    fn from(error: TransportError) -> Self {
-        match error {
-            TransportError::Http { status, body } => Self::Http { status, body },
-            TransportError::Network(message) => Self::Network(message),
-            TransportError::Connect(message) => Self::Connect(message),
-        }
-    }
-}
-
-impl From<litellm_auth::Error> for Error {
-    fn from(error: litellm_auth::Error) -> Self {
-        match error {
-            litellm_auth::Error::MissingApiKey { provider, .. } => Self::MissingApiKey { provider },
-            error => Self::Auth(error.to_string()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum OcrRequestError {
     #[error("File is empty or could not be read")]
     EmptyFile,
+    #[error("Failed to read OCR file {}: {source}", path.display())]
+    FileRead {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::sync::Arc<std::io::Error>,
+    },
+    #[error("OCR document preparation task failed: {0}")]
+    DocumentTask(#[source] std::sync::Arc<tokio::task::JoinError>),
     #[error("Invalid MIME type: {0}")]
     InvalidMimeType(String),
     #[error(
@@ -142,10 +52,6 @@ pub enum OcrRequestError {
     Features,
     #[error("OCR model cannot be a dot segment")]
     DotModel,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum OcrResponseError {
     #[error("OCR response exceeds the size limit of {limit} bytes")]
     TooLarge { limit: usize },
     #[error("invalid OCR response field: {path}")]
@@ -160,40 +66,101 @@ pub enum OcrResponseError {
     OperationStatus(String),
     #[error("OCR response numeric value is out of range: {0}")]
     NumericRange(&'static str),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum OcrPollingError {
     #[error("OCR accepted response is missing a valid operation-location")]
     PollLocation,
     #[error("OCR operation-location must use the submission origin without credentials")]
     PollOrigin,
     #[error("OCR polling timed out")]
     PollTimeout,
+    #[error("unsupported by the rust path: {0}")]
+    Unsupported(&'static str),
+    #[error("invalid provider: {0}")]
+    InvalidProvider(String),
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
+    #[error("invalid response: {0}")]
+    InvalidResponse(String),
+    #[error(
+        "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
+    )]
+    MissingAzureAiCredentials,
+    #[error(
+        "invalid authentication configuration: Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID"
+    )]
+    MissingAzureDocumentIntelligenceCredentials,
+    #[error(
+        "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
+    )]
+    MissingReductoApiKey,
+    #[error(transparent)]
+    Auth(#[from] litellm_auth::Error),
+    #[error(transparent)]
+    Transport(#[from] crate::transport::Error),
+    #[error(transparent)]
+    Params(#[from] crate::params::Error),
+    #[error(transparent)]
+    Headers(#[from] crate::http_utils::HeaderError),
 }
 
-#[derive(Debug, Error)]
-pub enum OcrError {
-    #[error("{0}")]
-    Request(#[from] OcrRequestError),
-    #[error("{0}")]
-    Response(#[from] OcrResponseError),
-    #[error("{0}")]
-    Transport(#[from] TransportError),
-    #[error("{0}")]
-    Polling(#[from] OcrPollingError),
-    #[error("{0}")]
-    Public(#[from] Error),
-}
-
-impl From<OcrError> for Error {
-    fn from(error: OcrError) -> Self {
-        match error {
-            OcrError::Request(error) => error.into(),
-            OcrError::Response(error) => error.into(),
-            OcrError::Transport(error) => error.into(),
-            OcrError::Polling(error) => Error::InvalidResponse(error.to_string()),
-            OcrError::Public(error) => error,
+impl From<crate::call_arguments::ArgumentError> for Error {
+    fn from(error: crate::call_arguments::ArgumentError) -> Self {
+        Self::RequestField {
+            path: format!("optional_params.{}", error.path),
         }
+    }
+}
+
+impl Error {
+    pub fn http_status_code(&self) -> Option<u16> {
+        match self {
+            Self::Provider { status, .. }
+            | Self::Transport(crate::transport::Error::Http { status, .. }) => Some(*status),
+            error if error.is_request() => Some(400),
+            _ => None,
+        }
+    }
+
+    pub fn is_request(&self) -> bool {
+        matches!(
+            self,
+            Self::EmptyFile
+                | Self::InvalidMimeType(_)
+                | Self::CohereImageOnly
+                | Self::RequestFormat
+                | Self::RequestField { .. }
+                | Self::MissingField(_)
+                | Self::MissingDocumentUrl
+                | Self::InvalidDataUri
+                | Self::ReductoSource
+                | Self::InlineDocumentTooLarge
+                | Self::BlockedDocumentUrl
+                | Self::DownloadDisabled
+                | Self::DownloadTooLarge
+                | Self::TooManyRedirects
+                | Self::Pages(_)
+                | Self::Features
+                | Self::DotModel
+                | Self::InvalidRequest(_)
+                | Self::InvalidProvider(_)
+                | Self::Params(_)
+                | Self::Headers(_)
+        )
+    }
+
+    pub fn is_response(&self) -> bool {
+        matches!(
+            self,
+            Self::TooLarge { .. }
+                | Self::ResponseField { .. }
+                | Self::EmptyContent
+                | Self::MissingRedirectLocation
+                | Self::InvalidRedirect
+                | Self::OperationStatus(_)
+                | Self::NumericRange(_)
+                | Self::PollLocation
+                | Self::PollOrigin
+                | Self::PollTimeout
+                | Self::InvalidResponse(_)
+        )
     }
 }

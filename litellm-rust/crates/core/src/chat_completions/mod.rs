@@ -10,17 +10,15 @@ mod error;
 pub use error::Error;
 mod client;
 mod common_utils;
-pub mod conversation;
+pub use litellm_providers::chat::{conversation, response_utils};
 pub(crate) mod handler;
 mod prepare;
-pub mod response_utils;
-pub mod transformation;
-pub mod types;
-
-use serde_json::{Map, Value};
+pub mod streaming;
+pub use litellm_providers::chat::types;
 
 use handler::execute_chat_completions_provider_call;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};
+use serde_json::{Map, Value};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
 pub async fn chat_completions(

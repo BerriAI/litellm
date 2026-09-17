@@ -31,6 +31,7 @@ cannot drift without a test failure.
 
 import base64
 import json
+import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
@@ -1088,6 +1089,28 @@ async def test_create__exception_calls_failure_hook(harness, openai_env_creds):
     assert harness.logging.post_call_failure_hook.call_args.kwargs["original_exception"].args[0] == "provider boom"
 
 
+async def test_create__exception_carries_the_litellm_call_id(harness, openai_env_creds, caplog):
+    call_id = "lit7836-batch-call-id"
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "litellm_call_id": call_id,
+        },
+    )
+    harness.litellm_acreate.side_effect = ValueError("provider boom")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"), pytest.raises(ProxyException) as raised:
+        await call_create(harness)
+
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+    record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
+    assert record.litellm_call_id == call_id
+    assert call_id in record.getMessage()
+
+
 # =========================================================================== #
 #                                                                             #
 #   GET /v1/batches/{batch_id}  -  retrieve_batch routing-contract tests      #
@@ -1951,6 +1974,24 @@ async def test_list__exception_calls_failure_hook(list_harness):
 
     list_harness.logging.post_call_failure_hook.assert_called_once()
     assert list_harness.logging.post_call_failure_hook.call_args.kwargs["original_exception"].args[0] == "provider boom"
+
+
+@pytest.mark.asyncio
+async def test_list__failure_hook_and_response_share_the_request_litellm_call_id(list_harness):
+    call_id = "lit7836-list-batches-call-id"
+    list_harness.pre_call.side_effect = lambda **kw: (
+        {**list_harness.body["body"], "litellm_call_id": call_id},
+        MagicMock(),
+    )
+    list_harness.litellm_alist.side_effect = ValueError("provider boom")
+
+    with pytest.raises(ProxyException) as raised:
+        await call_list(list_harness, after="batch-0", limit=5)
+
+    failure_request_data = list_harness.logging.post_call_failure_hook.call_args.kwargs["request_data"]
+    assert failure_request_data["litellm_call_id"] == call_id
+    assert (failure_request_data["after"], failure_request_data["limit"]) == ("batch-0", 5)
+    assert raised.value.headers["x-litellm-call-id"] == call_id
 
 
 # =========================================================================== #

@@ -1397,7 +1397,7 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
     from litellm.integrations.s3_v2 import S3Logger
     from litellm.integrations.sqs import SQSLogger
     from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import VectorStorePreCallHook
-    from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
+    from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
     from litellm.router import Router
 
     class _InventoryTestGuardrail(CustomGuardrail):
@@ -1425,7 +1425,7 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
         litellm,
         "callbacks",
         [
-            _PROXY_MaxBudgetLimiter(),
+            _PROXY_CacheControlCheck(),
             _PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock()),
             ServiceLogging(),
             VectorStorePreCallHook(),

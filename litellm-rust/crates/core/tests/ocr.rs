@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use rstest::rstest;
 use serde_json::{Value, json};
 
 use super::OcrClient;
@@ -14,6 +15,59 @@ use super::{
     OcrHostOperation, OcrHostResult,
 };
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
+
+#[rstest]
+#[case::mistral("mistral/model", json!({}))]
+#[case::vertex("vertex_ai/mistral-ocr-latest", json!({"vertex_project":"test-project", "vertex_location":"us-central1"}))]
+#[tokio::test]
+async fn ocr_contract_upstream_error_preserves_status_body_and_headers(
+    #[case] model: &str,
+    #[case] options: Value,
+) {
+    let payload = json!({"message": format!("{} END-OF-PROVIDER-BODY", "x".repeat(4096))});
+    let expected_body = serde_json::to_string(&payload).unwrap();
+    let (base, seen, server) = mock_server(vec![MockResponse {
+        status: 422,
+        headers: vec![
+            ("Retry-After", "17".into()),
+            ("X-Request-ID", "request-123".into()),
+            ("X-Future-Header", "retained".into()),
+        ],
+        body: payload,
+    }])
+    .await;
+    let error = perform_ocr(wire_request(model, &base, options))
+        .await
+        .unwrap_err();
+    server.await.unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    let super::Error::Provider {
+        status,
+        body,
+        headers,
+    } = error
+    else {
+        panic!("expected provider error, got {error:?}");
+    };
+    assert_eq!(status, 422);
+    for (name, value) in [
+        ("retry-after", "17"),
+        ("x-request-id", "request-123"),
+        ("x-future-header", "retained"),
+    ] {
+        assert!(
+            headers
+                .iter()
+                .any(|(key, actual)| key.eq_ignore_ascii_case(name) && actual == value)
+        );
+    }
+    assert_eq!(
+        body.len(),
+        expected_body.len(),
+        "provider error body was truncated"
+    );
+    assert_eq!(body, expected_body);
+}
 
 #[test]
 fn request_boundary_selects_mistral_and_rejects_unknown_providers() {
@@ -63,8 +117,8 @@ async fn facade_executes_direct_mistral_once() {
     .await
     .unwrap();
     server.await.unwrap();
-    assert_eq!(result.pages[0]["markdown"], "hello");
-    assert_eq!(result.pages[0]["custom"], "preserved");
+    assert_eq!(result.pages[0].markdown, "hello");
+    assert_eq!(result.pages[0].extra_fields["custom"], "preserved");
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].starts_with("POST /v1/ocr "));
@@ -80,7 +134,8 @@ async fn facade_executes_direct_mistral_once() {
             "model":"model",
             "document":{"type":"document_url","document_url":"data:application/pdf;base64,YWJj"},
             "pages":"0,2-4",
-            "extract_header":true
+            "extract_header":true,
+            "unknown":"ignored"
         })
     );
 }
@@ -102,7 +157,10 @@ async fn facade_retains_native_response_when_requested() {
     .unwrap();
 
     server.await.unwrap();
-    assert_eq!(response.provider_native_response, Some(provider_response));
+    assert_eq!(
+        response.provider_native_response.map(Value::Object),
+        Some(provider_response)
+    );
 }
 
 #[tokio::test]
@@ -355,6 +413,7 @@ async fn fallible_host_phases_do_not_replay_or_reach_transport() {
                     OcrHostOperation::AcquireAzureAdToken => {
                         panic!("test request has no token provider")
                     }
+                    OcrHostOperation::ReadDocument => panic!("test request has no file reader"),
                     OcrHostOperation::PreCall(request) => {
                         phases.push("pre");
                         result = Some(OcrHostResult::PreCall(if failure_phase == "pre" {
@@ -420,7 +479,7 @@ async fn invalid_provider_response_runs_post_call_before_normalization_failure()
         }
     };
     server.await.unwrap();
-    assert!(matches!(error, crate::ocr::Error::InvalidResponse(_)));
+    assert!(matches!(error, crate::ocr::Error::ResponseField { .. }));
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert_eq!(post_calls, [json!(r#"{"pages":"invalid"}"#)]);
 }
@@ -461,7 +520,7 @@ async fn direct_native_host_drives_the_same_state_machine() {
                     OcrHostOperation::PostCall(_) => "PostCall".into(),
                     OcrHostOperation::ConstructResponse(_) => "ConstructResponse".into(),
                     OcrHostOperation::Success { response, .. } => {
-                        assert_eq!(response.pages[0]["markdown"], "native");
+                        assert_eq!(response.pages[0].markdown, "native");
                         "Success".into()
                     }
                     _ => panic!("unexpected OCR operation"),
@@ -477,7 +536,7 @@ async fn direct_native_host_drives_the_same_state_machine() {
         }
     };
     server.await.unwrap();
-    assert_eq!(response.pages[0]["markdown"], "native");
+    assert_eq!(response.pages[0].markdown, "native");
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert_eq!(
         operations,
@@ -499,6 +558,139 @@ async fn direct_native_host_drives_the_same_state_machine() {
         call.resume(None).await,
         Err(crate::ocr::Error::InvalidRequest(_))
     ));
+}
+
+async fn drive_native_file_call(
+    request: super::LiteLLMOcrRequest<super::OcrDocumentInput>,
+    content: Result<super::OcrFileContent, crate::ocr::Error>,
+) -> (Result<super::LiteLLMOcrResponse, crate::ocr::Error>, usize) {
+    let NativeOutcome::Completed(mut call) =
+        OcrCall::admit(super::test_support::ocr_client(), OcrAdmission::all())
+    else {
+        panic!("supported call declined")
+    };
+    let mut request = Some(request);
+    let mut content = Some(content);
+    let mut result = None;
+    let mut reads = 0;
+    let outcome = loop {
+        match call.resume(result.take()).await {
+            Ok(OcrCallStep::Host(OcrHostOperation::ProjectRequest)) => {
+                result = Some(OcrHostResult::Request(Ok((
+                    Box::new(request.take().unwrap()),
+                    false,
+                ))));
+            }
+            Ok(OcrCallStep::Host(OcrHostOperation::ReadDocument)) => {
+                reads += 1;
+                result = Some(OcrHostResult::Document(content.take().unwrap()));
+            }
+            Ok(OcrCallStep::Host(operation)) => result = Some(NoopOcrHost.invoke(operation).await),
+            Ok(OcrCallStep::Complete(response)) => break Ok(response),
+            Err(error) => break Err(error),
+        }
+    };
+    (outcome, reads)
+}
+
+#[tokio::test]
+async fn host_reader_documents_are_read_once_at_the_core_selected_point_and_encoded() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({
+        "pages":[{"index":0,"markdown":"file"}]
+    }))])
+    .await;
+    let request = wire_request("mistral/model", &base, json!({})).with_document(
+        super::OcrDocumentInput::HostReader {
+            mime_type: Some("application/pdf".into()),
+        },
+    );
+    let (response, reads) = drive_native_file_call(
+        request,
+        Ok(super::OcrFileContent {
+            bytes: b"abc".as_slice().into(),
+            file_name: Some("scan.png".into()),
+        }),
+    )
+    .await;
+    server.await.unwrap();
+    assert_eq!(response.unwrap().pages[0].markdown, "file");
+    assert_eq!(reads, 1);
+    assert!(seen.lock().unwrap()[0].contains("data:application/pdf;base64,YWJj"));
+}
+
+#[tokio::test]
+async fn host_reader_failures_and_empty_files_fail_before_the_provider_is_called() {
+    let (base, seen, _server) = mock_server(vec![]).await;
+    let request = wire_request("mistral/model", &base, json!({}));
+    let failure = crate::ocr::Error::InvalidRequest("reader exploded".into());
+    let (response, reads) = drive_native_file_call(
+        request.with_document(super::OcrDocumentInput::HostReader { mime_type: None }),
+        Err(failure.clone()),
+    )
+    .await;
+    assert!(
+        matches!(response.unwrap_err(), crate::ocr::Error::InvalidRequest(message) if message == "reader exploded")
+    );
+    assert_eq!(reads, 1);
+
+    let request = wire_request("mistral/model", &base, json!({}));
+    let (response, _) = drive_native_file_call(
+        request.with_document(super::OcrDocumentInput::HostReader { mime_type: None }),
+        Ok(super::OcrFileContent {
+            bytes: Default::default(),
+            file_name: None,
+        }),
+    )
+    .await;
+    assert!(matches!(
+        response.unwrap_err(),
+        crate::ocr::Error::EmptyFile
+    ));
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn path_documents_are_read_by_core_without_a_host_operation() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({
+        "pages":[{"index":0,"markdown":"path"}]
+    }))])
+    .await;
+    let dir = std::env::temp_dir().join(format!("litellm-ocr-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("scan.png");
+    std::fs::write(&path, b"abc").unwrap();
+    let request = wire_request("mistral/model", &base, json!({})).with_document(
+        super::OcrDocumentInput::Path {
+            path: path.clone(),
+            mime_type: None,
+        },
+    );
+    let (response, reads) = drive_native_file_call(
+        request,
+        Err(crate::ocr::Error::InvalidRequest("unused".into())),
+    )
+    .await;
+    server.await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(response.unwrap().pages[0].markdown, "path");
+    assert_eq!(reads, 0);
+    assert!(seen.lock().unwrap()[0].contains("data:image/png;base64,YWJj"));
+
+    let (base, seen, _server) = mock_server(vec![]).await;
+    let request = wire_request("mistral/model", &base, json!({}));
+    let (response, _) = drive_native_file_call(
+        request.with_document(super::OcrDocumentInput::Path {
+            path: path.clone(),
+            mime_type: None,
+        }),
+        Err(crate::ocr::Error::InvalidRequest("unused".into())),
+    )
+    .await;
+    assert!(matches!(
+        response.unwrap_err(),
+        crate::ocr::Error::FileRead { path: failed, source } if failed == path && source.kind() == std::io::ErrorKind::NotFound
+    ));
+    assert!(seen.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -528,7 +720,9 @@ async fn public_finalization_failure_never_dispatches_success_or_replays_provide
                         OcrHostResult::Lifecycle(Err(HostFailure::Error(selected.clone())))
                     }
                     OcrHostOperation::Failure { error, .. } => {
-                        assert_eq!(error, selected);
+                        assert!(
+                            matches!(error, crate::ocr::Error::InvalidRequest(message) if message == "public metadata failed")
+                        );
                         failures.push("sync");
                         OcrHostResult::Lifecycle(Err(HostFailure::Error(
                             crate::ocr::Error::InvalidRequest("failure callback failed".into()),
@@ -554,7 +748,9 @@ async fn public_finalization_failure_never_dispatches_success_or_replays_provide
         }
     };
     server.await.unwrap();
-    assert_eq!(error, selected);
+    assert!(
+        matches!(error, crate::ocr::Error::InvalidRequest(message) if message == "public metadata failed")
+    );
     assert_eq!(failures, ["sync", "async"]);
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
@@ -593,13 +789,93 @@ async fn cancellation_at_provider_hook_prevents_execution_and_further_resumption
     let selected = crate::ocr::Error::InvalidRequest("cancelled".into());
     assert!(matches!(
         call.interrupt(HostFailure::Cancelled(selected.clone())).await,
-        Err(error) if error == selected
+        Err(crate::ocr::Error::InvalidRequest(message)) if message == "cancelled"
     ));
     assert!(
         call.resume(Some(OcrHostResult::Lifecycle(Ok(()))))
             .await
             .is_err()
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cancellation_acknowledges_blocking_preparation_completion() {
+    use std::future::Future;
+    use std::io::Write;
+    use std::task::Poll;
+
+    use crate::call_lifecycle::host::HostFailure;
+
+    let path = std::env::temp_dir().join(format!("litellm-ocr-{}.fifo", rand::random::<u64>()));
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let request = wire_request("mistral/model", "http://127.0.0.1:1", json!({})).with_document(
+        super::OcrDocumentInput::Path {
+            path: path.clone(),
+            mime_type: Some("application/pdf".into()),
+        },
+    );
+    let NativeOutcome::Completed(mut call) =
+        OcrCall::admit(super::test_support::ocr_client(), OcrAdmission::all())
+    else {
+        panic!("supported call declined")
+    };
+    let mut request = Some(request);
+    let mut result = None;
+    loop {
+        match call.resume(result.take()).await.unwrap() {
+            OcrCallStep::Host(OcrHostOperation::ProjectRequest) => break,
+            OcrCallStep::Host(operation) => result = Some(NoopOcrHost.invoke(operation).await),
+            OcrCallStep::Complete(_) => panic!("provider executed before request projection"),
+        }
+    }
+    let mut preparation = Box::pin(call.resume(Some(OcrHostResult::Request(Ok((
+        Box::new(request.take().unwrap()),
+        false,
+    ))))));
+    std::future::poll_fn(|cx| {
+        assert!(preparation.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    drop(preparation);
+
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let writer_path = path.clone();
+    let writer = tokio::task::spawn_blocking(move || {
+        let mut fifo = std::fs::File::options()
+            .write(true)
+            .open(writer_path)
+            .unwrap();
+        entered_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+        fifo.write_all(b"document").unwrap();
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let selected = crate::ocr::Error::InvalidRequest("cancelled".into());
+    let mut acknowledgement = Box::pin(call.interrupt(HostFailure::Cancelled(selected.clone())));
+    std::future::poll_fn(|cx| {
+        assert!(acknowledgement.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    release_tx.send(()).unwrap();
+    assert!(
+        matches!(acknowledgement.await, Err(crate::ocr::Error::InvalidRequest(message)) if message == "cancelled")
+    );
+    writer.await.unwrap();
+    std::fs::remove_file(path).unwrap();
 }
 
 #[tokio::test]
@@ -627,7 +903,7 @@ async fn missing_host_result_preserves_pending_operation() {
 async fn read_bounded_response(
     response: Vec<u8>,
     limit: usize,
-) -> Result<bytes::Bytes, super::error::OcrError> {
+) -> Result<bytes::Bytes, super::Error> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -656,7 +932,7 @@ async fn read_bounded_response(
 
 #[tokio::test]
 async fn response_limit_accepts_exact_size_and_rejects_declared_and_chunked_overflow() {
-    use super::error::{OcrError, OcrResponseError};
+    use super::Error;
 
     for response in [
         "HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nabcdefgh",
@@ -675,37 +951,34 @@ async fn response_limit_accepts_exact_size_and_rejects_declared_and_chunked_over
     ] {
         assert!(matches!(
             read_bounded_response(response.as_bytes().to_vec(), 8).await,
-            Err(OcrError::Response(OcrResponseError::TooLarge { limit: 8 }))
+            Err(Error::TooLarge { limit: 8 })
         ));
     }
 }
 
+#[rstest]
+#[case::declared("Content-Length: 1000000")]
+#[case::chunked("Transfer-Encoding: chunked")]
 #[tokio::test]
-async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_draining() {
-    let prefix = "x".repeat(4 * (crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS + 1));
-    for headers in ["Content-Length: 1000000", "Transfer-Encoding: chunked"] {
-        let body = if headers.starts_with("Transfer") {
-            format!("{:x}\r\n{prefix}\r\n", prefix.len())
-        } else {
-            prefix.clone()
-        };
-        let response = format!("HTTP/1.1 429 Too Many Requests\r\n{headers}\r\n\r\n{body}");
-        let error = read_bounded_response(response.into_bytes(), 4096)
-            .await
-            .unwrap_err();
-        match error {
-            super::error::OcrError::Transport(crate::transport::Error::Http { status, body }) => {
-                assert_eq!(status, 429);
-                assert_eq!(
-                    body,
-                    format!(
-                        "{}... (truncated)",
-                        "x".repeat(crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS)
-                    )
-                );
-            }
-            error => panic!("unexpected error: {error}"),
+async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_draining(
+    #[case] headers: &str,
+) {
+    let prefix = "x".repeat(4096);
+    let body = if headers.starts_with("Transfer") {
+        format!("{:x}\r\n{prefix}\r\n", prefix.len())
+    } else {
+        prefix.clone()
+    };
+    let response = format!("HTTP/1.1 429 Too Many Requests\r\n{headers}\r\n\r\n{body}");
+    let error = read_bounded_response(response.into_bytes(), prefix.len())
+        .await
+        .unwrap_err();
+    match error {
+        super::Error::Transport(crate::transport::Error::Http { status, body }) => {
+            assert_eq!(status, 429);
+            assert_eq!(body, prefix);
         }
+        error => panic!("unexpected error: {error}"),
     }
 }
 
@@ -716,7 +989,7 @@ fn response_limit_is_validated_and_not_forwarded_to_the_provider() {
         "http://localhost",
         json!({"max_response_bytes": 123}),
     );
-    assert_eq!(request.connection.max_response_bytes, 123);
+    assert_eq!(request.transport.max_response_bytes, 123);
     assert!(!request.optional_params.contains_key("max_response_bytes"));
     for value in [
         json!(0),
@@ -764,19 +1037,20 @@ impl litellm_auth::TokenProvider for PendingToken {
 
 #[tokio::test]
 async fn cancellation_waits_for_provider_capture_drop_even_when_acknowledgement_is_cancelled() {
-    use crate::call_lifecycle::host::HostFailure;
     use std::future::Future;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::Poll;
+
+    use crate::call_lifecycle::host::HostFailure;
 
     for interrupt_acknowledgement in [false, true] {
         let entered = Arc::new(tokio::sync::Notify::new());
         let dropped = Arc::new(AtomicBool::new(false));
         let request = wire_request("azure_ai/mistral-ocr", "https://example.invalid", json!({}));
         let request = super::LiteLLMOcrRequest {
-            connection: super::OcrConnection {
+            transport: super::OcrTransportConfig {
                 extra_headers: vec![("authorization".into(), "Bearer test-key".into())],
-                ..request.connection
+                ..request.transport
             },
             azure_ad_token_provider: Some(litellm_auth::TokenProviderHandle::new(Arc::new(
                 PendingToken {
@@ -826,7 +1100,9 @@ async fn cancellation_waits_for_provider_capture_drop_even_when_acknowledgement_
         )
         .await
         .unwrap();
-        assert!(matches!(result, Err(error) if error == selected));
+        assert!(
+            matches!(result, Err(crate::ocr::Error::InvalidRequest(message)) if message == "cancelled")
+        );
         assert!(
             dropped.load(Ordering::SeqCst),
             "cancellation returned while provider captures were still alive"

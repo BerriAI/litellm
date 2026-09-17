@@ -844,9 +844,13 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        # update_team resolves proxy/org/team admin itself and filters team admins
+        # through the team_admin_editable_team_fields setting
+        "/team/update",
         "/team/member_add",
         "/team/member_delete",
         "/management/v1/teams/{team_id}/members/bulk_delete",
+        "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/member_update",
         "/team/{team_id}/member/{user_id}/reset_spend",
         "/team/permissions_list",
@@ -2004,6 +2008,13 @@ RouterSettingsDict = Annotated[
 class NewTeamRequest(TeamBase):
     router_settings: RouterSettingsDict | None = None
     model_aliases: dict | None = None
+    model_max_budget: GenericBudgetConfigType | None = Field(
+        default=None,
+        description=(
+            "Max budget per model for every key on the team, overridable per key "
+            "(e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})"
+        ),
+    )
     tags: list | None = None
     guardrails: list[str] | None = None
     policies: list[str] | None = None
@@ -2105,6 +2116,13 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     access_group_ids: list[str] | None = None
     budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
     default_team_member_models: list[str] | None = None  # default allowed_models seeded onto new team members
+    model_max_budget: GenericBudgetConfigType | None = Field(
+        default=None,
+        description=(
+            "Max budget per model for every key on the team, overridable per key "
+            "(e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '1d'}})"
+        ),
+    )
 
 
 class PatchTeamRequest(UpdateTeamRequest):
@@ -3032,6 +3050,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_tpd_limit: int | None = None
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
+    team_model_max_budget: dict[str, object] | None = None
     team_models: list = []
     team_blocked: bool = False
     soft_budget: float | None = None
@@ -3710,6 +3729,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
             "AWS_REGION_NAME",
+            "S3_LOG_PROMPTS_ONLY",
         ],
     )
 
@@ -4451,6 +4471,29 @@ class TeamInfoMember(Member):
     user_alias: str | None = None
 
 
+class TeamEditUnrestricted(BaseModel):
+    kind: Literal["unrestricted"] = "unrestricted"
+
+
+class TeamEditAsTeamAdmin(BaseModel):
+    kind: Literal["team_admin"] = "team_admin"
+    editable_fields: tuple[str, ...]
+
+
+class TeamEditAsTeamAdminDisabled(BaseModel):
+    kind: Literal["team_admin_disabled"] = "team_admin_disabled"
+
+
+class TeamEditNone(BaseModel):
+    kind: Literal["none"] = "none"
+
+
+TeamEditAccess = Annotated[
+    TeamEditUnrestricted | TeamEditAsTeamAdmin | TeamEditAsTeamAdminDisabled | TeamEditNone,
+    Field(discriminator="kind"),
+]
+
+
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     members_with_roles: tuple[TeamInfoMember, ...] = ()
     team_member_budget_table: LiteLLM_BudgetTableFull | None = None
@@ -4462,6 +4505,8 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     # Parent org's model ceiling, reported only to callers who can manage the team.
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
     organization_models: list[str] | None = None
+    model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    caller_edit_access: TeamEditAccess = Field(default_factory=TeamEditNone)
 
 
 class TeamInfoResponseObject(TypedDict):
