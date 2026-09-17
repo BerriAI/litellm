@@ -232,7 +232,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
                 name="skillUrl"
                 label={labelWithHint(
                   "Source URL",
-                  "Paste an HTTPS git repository URL from GitHub, GitLab, Bitbucket, or a self-hosted host (e.g. github.com/org/repo or github.com/org/repo/tree/main/my-skill), or an HTTPS link to a .zip archive of the skill hosted on S3 or any static file server.",
+                  "Paste an HTTPS git repository URL from GitHub, GitLab, Bitbucket, or a self-hosted host (e.g. github.com/org/repo or github.com/org/repo/tree/main/my-skill), or an HTTPS link to a .zip archive of the skill hosted on S3 or any static file server. For a private repository use its SSH clone URL (git@ghe.example.com:org/repo.git) so Claude Code clones it with your own SSH key.",
                 )}
               >
                 {({ ref, onChange, ...field }) => (

@@ -14,7 +14,7 @@ from typing import (
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
-from pydantic import ConfigDict, JsonValue, ValidationError, create_model
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model
 from pydantic.fields import FieldInfo
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -28,6 +28,10 @@ from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
     SSO_SECRET_FIELDS,
     resolve_sso_config,
+)
+from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import invalidate_config_param
@@ -212,6 +216,9 @@ class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
 
 
+_TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS))
+
+
 class UISettings(BaseModel):
     """Configuration for UI-specific flags"""
 
@@ -304,6 +311,18 @@ class UISettings(BaseModel):
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
 
+    team_admin_editable_team_fields: Sequence[str] = Field(
+        default=(),
+        description=(
+            "Team settings fields a team admin may change on the teams they administer. "
+            "Empty means team admins cannot edit team settings at all. "
+            "Proxy admins and org admins are not affected."
+        ),
+        json_schema_extra={  # mutable-ok: pydantic only merges json_schema_extra when it is a plain dict
+            "items": {"type": "string", "enum": [*_TEAM_ADMIN_FIELD_ENUM]},  # mutable-ok: nested in the dict above
+        },
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -326,6 +345,7 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
+    TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 }
 
 ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"
@@ -360,6 +380,7 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
     "disable_key_generate_for_org_admin",
+    TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 ]
 
 # Extension point: packages outside OSS (e.g. litellm_enterprise) can
@@ -1457,6 +1478,42 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
     return ui_settings
 
 
+_UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def apply_runtime_general_settings_flags(ui_settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    """Copy the UI settings that gate runtime behavior into ``general_settings``. Returns what was applied."""
+    from litellm.proxy.proxy_server import general_settings
+
+    flags: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
+    if flags:
+        general_settings.update(flags)
+    return MappingProxyType(flags)
+
+
+async def sync_ui_settings_to_general_settings(prisma_client: object) -> Mapping[str, JsonValue]:
+    """Re-read the persisted UI settings and apply the runtime flags to ``general_settings``.
+
+    Runs on startup and on every periodic config reload: the PATCH handler only updates the pod
+    that served it, so every other pod needs its own read to pick up a change without a restart.
+    Never raises. A read that fails leaves this pod on the flags it already had.
+    """
+    try:
+        db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
+            where={"id": "ui_settings"}
+        )
+        stored: Final = (db_record.ui_settings if db_record else None) or "{}"
+        parsed: Final = (
+            _UI_SETTINGS_OBJECT.validate_json(stored)
+            if isinstance(stored, str)
+            else _UI_SETTINGS_OBJECT.validate_python(stored)
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning("Could not refresh UI settings from the database: %s", e)
+        return MappingProxyType({})
+    return apply_runtime_general_settings_flags(parsed)
+
+
 @router.get(
     "/get/ui_settings",
     tags=["UI Settings"],
@@ -1485,13 +1542,7 @@ async def get_ui_settings():
     # Sanitize any unexpected keys from persisted config before returning
     ui_settings: Final = {k: v for k, v in parsed.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
-    # Sync runtime flags into general_settings so the proxy picks them up
-    # at runtime (covers server restart scenarios).
-    _flags_to_sync: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
-    if _flags_to_sync:
-        from litellm.proxy.proxy_server import general_settings
-
-        general_settings.update(_flags_to_sync)
+    apply_runtime_general_settings_flags(ui_settings)
 
     # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
     from litellm.proxy.proxy_server import user_api_key_cache
@@ -1571,6 +1622,20 @@ async def update_ui_settings(
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=e.errors())
 
+    unsupported_team_fields: Final = sorted(
+        frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+    )
+    if unsupported_team_fields:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
+                "error": (
+                    f"{TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING} does not support {unsupported_team_fields}. "
+                    f"Supported fields: {sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS)}."
+                )
+            },
+        )
+
     # Only include fields the caller actually sent (not Pydantic defaults).
     settings_dict: Final[Mapping[str, JsonValue]] = settings.model_dump(exclude_unset=True)
 
@@ -1616,13 +1681,7 @@ async def update_ui_settings(
         },
     )
 
-    # Sync runtime flags to general_settings so the proxy picks them up
-    # at runtime (general_settings is checked in pre-call utils).
-    _flags_to_sync: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
-    if _flags_to_sync:
-        from litellm.proxy.proxy_server import general_settings
-
-        general_settings.update(_flags_to_sync)
+    apply_runtime_general_settings_flags(ui_settings)
 
     # Invalidate + set DualCache so subsequent reads see the new values immediately
     from litellm.proxy.proxy_server import user_api_key_cache
