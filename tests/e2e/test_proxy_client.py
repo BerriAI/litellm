@@ -26,8 +26,6 @@ from typing import Final, cast
 import pytest
 from e2e_config import parse_replica_urls
 from e2e_http import NoBody, Result, Success, without_retries
-from fixture_bundle import slug_for_test
-from fixture_mode import current_test_key
 from idp import Keycloak
 from lifecycle import ResourceManager
 from management.jwt_actors import ActorFactory
@@ -40,7 +38,6 @@ from models import (
     KeyInfoResponse,
     KeyUpdateBody,
     LiteLLMParamsBody,
-    ModelNewBody,
     McpServerCreateBody,
     McpServerUpdateBody,
     ModelListEntry,
@@ -584,36 +581,3 @@ def test_partial_updates_preserve_explicit_null_at_the_http_boundary(operation: 
         )
         assert json.loads(bodies.get_nowait()) == expected
         assert bodies.empty()
-
-
-@pytest.mark.parametrize("provider_live", (False, True))
-def test_registration_binds_the_deployment_to_this_test_unless_it_is_provider_live(
-    provider_live: bool, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """With the shared cache on, a deployment registered from inside a test carries
-    this test's segment in its api_base, which is how the edge knows whose recording
-    a call belongs to. `provider_live` is the opt-out for a deployment no single test
-    owns: it goes to the proxy exactly as written."""
-    from provider_cache_redis import configured_cache
-
-    monkeypatch.setenv("E2E_PROVIDER_CACHE", "1")
-    monkeypatch.setenv("E2E_PROVIDER_CACHE_REDIS_URL", "redis://127.0.0.1:1/0")
-    monkeypatch.setenv("E2E_PROVIDER_CACHE_HMAC_KEY", "synthetic-cache-hmac-key-for-tests")
-    monkeypatch.setenv("E2E_PROVIDER_CACHE_NAMESPACE", "registration-seam")
-    configured_cache.cache_clear()
-    bodies: Final[SimpleQueue[bytes]] = SimpleQueue()
-    try:
-        with caller_boundary(status=401, bodies=bodies) as (bootstrap, _), without_retries():
-            with pytest.raises(AssertionError):
-                bootstrap.proxy.create_model(
-                    "owned", LiteLLMParamsBody(model="openai/synthetic"), provider_live=provider_live
-                )
-    finally:
-        configured_cache.cache_clear()
-    sent: Final = ModelNewBody.model_validate_json(bodies.get_nowait())
-    assert bodies.empty()
-    if provider_live:
-        assert sent.litellm_params.api_base is None
-        return
-    assert sent.litellm_params.api_base is not None
-    assert sent.litellm_params.api_base.endswith(f"/openai/t/{slug_for_test(current_test_key())}/v1")

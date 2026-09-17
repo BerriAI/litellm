@@ -8,6 +8,7 @@ import shutil
 import socket
 import subprocess
 import struct
+import sys
 import threading
 import time
 import uuid
@@ -17,13 +18,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
 
 import pytest
-from pydantic import JsonValue
-from e2e_http import NetworkError, PreparedForward, RawResponse, StreamChunk, StreamHead, forward, prepare_forward
-from models import LiteLLMParamsBody, ModelMode
+from pydantic import JsonValue, TypeAdapter
+from e2e_http import NetworkError, PreparedForward, RawResponse, StreamChunk, StreamHead, forward, prepare_forward, without_retries
+from models import LiteLLMParamsBody, ModelMode, ModelNewBody
 from botocore.credentials import Credentials
 from botocore.eventstream import EventStreamBuffer
 from fixture_bundle import slug_for_test
@@ -49,7 +51,7 @@ from provider_cache_routing import (
     bedrock_region,
     route_cache_model,
 )
-from fixture_mode import SESSION_TEST_KEY
+from fixture_mode import SESSION_TEST_KEY, current_test_key, registration_owner
 from provider_edge import (
     EDGE_MOUNTS,
     configured_cache_backend,
@@ -58,6 +60,7 @@ from provider_edge import (
     start_provider_edge,
 )
 from provider_edge_bedrock import bedrock_signer
+from proxy_client import build_proxy_client
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 SECRET: Final = b"synthetic-cache-hmac-key-for-tests"
@@ -580,6 +583,97 @@ def test_the_cache_edge_base_is_scoped_to_the_registering_test(
         assert base_for(TEST_KEY) is None
     finally:
         configured_cache.cache_clear()
+
+
+@pytest.mark.parametrize("provider_live", (False, True))
+def test_a_registration_carries_its_owners_segment_unless_it_is_provider_live(
+    provider_live: bool, provider: Provider, redis_url: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("E2E_PROVIDER_CACHE", "1")
+    monkeypatch.setenv("E2E_PROVIDER_CACHE_REDIS_URL", redis_url)
+    monkeypatch.setenv("E2E_PROVIDER_CACHE_HMAC_KEY", SECRET.decode())
+    monkeypatch.setenv("E2E_PROVIDER_CACHE_NAMESPACE", "registration-" + uuid.uuid4().hex)
+    configured_cache.cache_clear()
+    provider.status = 401
+    provider.response = b"{}"
+    url: Final = f"http://127.0.0.1:{provider.server_port}"
+    proxy: Final = build_proxy_client(base_url=url, control_plane_base_url=url, replica_urls=(url,), master_key="owner")
+    try:
+        with without_retries(), pytest.raises(AssertionError):
+            proxy.create_model("owned", LiteLLMParamsBody(model="openai/synthetic"), provider_live=provider_live)
+    finally:
+        configured_cache.cache_clear()
+    ((path, body),) = provider.hits
+    assert path == "/model/new"
+    sent: Final = ModelNewBody.model_validate_json(body)
+    if provider_live:
+        assert sent.litellm_params.api_base is None
+        return
+    assert sent.litellm_params.api_base is not None
+    assert sent.litellm_params.api_base.endswith(f"/openai/t/{slug_for_test(current_test_key())}/v1")
+
+
+OWNER_PROBE: Final = """
+import json
+import os
+
+import pytest
+from fixture_mode import registration_owner
+
+
+@pytest.fixture(scope="session")
+def session_owner() -> str:
+    return registration_owner()
+
+
+@pytest.fixture(scope="module")
+def module_owner() -> str:
+    return registration_owner()
+
+
+@pytest.fixture(scope="class")
+def class_owner() -> str:
+    return registration_owner()
+
+
+@pytest.fixture
+def function_owner() -> str:
+    return registration_owner()
+
+
+class TestOwners:
+    def test_probe(self, session_owner: str, module_owner: str, class_owner: str, function_owner: str) -> None:
+        owners = {
+            "session": session_owner,
+            "module": module_owner,
+            "class": class_owner,
+            "function": function_owner,
+            "call": registration_owner(),
+        }
+        with open(os.environ["OWNER_PROBE_OUT"], "w") as out:
+            json.dump(owners, out)
+"""
+
+
+def test_a_fixture_owns_what_it_registers_at_the_node_it_is_scoped_to(tmp_path: Path) -> None:
+    probe: Final = tmp_path / "test_owner_probe.py"
+    probe.write_text(OWNER_PROBE)
+    out: Final = tmp_path / "owners.json"
+    run: Final = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "fixture_mode", "--noconftest",
+         "-o", "addopts=", probe.name],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "e2e"), "OWNER_PROBE_OUT": str(out)},
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert TypeAdapter(dict[str, str]).validate_json(out.read_text()) == {
+        "session": SESSION_TEST_KEY,
+        "module": "test_owner_probe.py",
+        "class": "test_owner_probe.py::TestOwners",
+        "function": "test_owner_probe.py::TestOwners::test_probe",
+        "call": "test_owner_probe.py::TestOwners::test_probe",
+    }
 
 
 def test_counters_attribute_every_outcome_to_its_mount(
