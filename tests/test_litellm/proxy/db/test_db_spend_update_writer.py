@@ -1176,6 +1176,33 @@ async def test_batch_database_updates_without_project_id_touches_no_project_row(
 
 
 @pytest.mark.asyncio
+async def test_project_enqueue_failure_does_not_stop_sibling_spend_updates():
+    db_writer: Final = DBSpendUpdateWriter()
+    db_writer._update_project_db = AsyncMock(side_effect=RuntimeError("project queue boom"))
+    db_writer._update_tag_db = AsyncMock()
+    db_writer._update_agent_db = AsyncMock()
+    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
+
+    await db_writer._batch_database_updates(
+        response_cost=0.1,
+        user_id="u1",
+        hashed_token="t1",
+        team_id="team-1",
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload={"request_id": "req-1", "model": "gpt-4o-mini", "spend": 0.1, "request_tags": ["t"]},
+        project_id="proj-1",
+    )
+
+    db_writer._update_project_db.assert_awaited_once()
+    db_writer._update_tag_db.assert_awaited_once()
+    db_writer._update_agent_db.assert_awaited_once()
+    db_writer.add_spend_log_transaction_to_daily_user_transaction.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_id():
     """
     Test that add_spend_log_transaction_to_daily_tag_transaction correctly processes request_id.
