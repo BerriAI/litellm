@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from starlette.routing import WebSocketRoute
 from starlette.websockets import WebSocketDisconnect
 
+import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._lazy_features import LAZY_FEATURES
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
@@ -330,6 +331,7 @@ def test_deepgram_listen_authorizes_the_model_it_will_actually_send_upstream(que
     """A key allowed only ``nova-2`` must not reach ``nova-3`` by leaving ``model`` out and letting the proxy fill
     in its default: the real key auth path must see the same model the upstream target will carry."""
     monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "max_budget", 0.0)
     cache = asyncio.run(_cache_restricted_key("sk-only-nova-2", ["nova-2"]))
     relay = _FakeRelay()
     client = TestClient(_app_with_relay(relay))
