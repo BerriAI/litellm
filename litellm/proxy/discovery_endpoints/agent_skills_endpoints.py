@@ -75,7 +75,7 @@ async def archive_caller(request: Request) -> UserAPIKeyAuth | None:
 
 async def stored_skill(
     skill_id: str,
-    caller: UserAPIKeyAuth | None = Depends(archive_caller),
+    caller: UserAPIKeyAuth | None = Depends(archive_caller),  # noqa: B008  # FastAPI dependency injection
 ) -> LiteLLM_SkillsTable | None:
     from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
