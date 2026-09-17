@@ -1,4 +1,4 @@
-use litellm_callback_protocol::LoggedMarker;
+use super::vocabulary::LoggedMarker;
 
 pub const fn marker_key(marker: LoggedMarker) -> &'static str {
     match marker {

@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use litellm_callback_protocol::{
+use super::vocabulary::{
     CallbackId, CallbackInvocation, CallbackMethod, Delivery, InvocationOutcome, LoggedMarker,
 };
 

@@ -1,4 +1,4 @@
-use litellm_callback_protocol::{CallbackInvocation, InvocationOutcome, LoggedMarker};
+use super::vocabulary::{CallbackInvocation, InvocationOutcome, LoggedMarker};
 use pyo3::prelude::*;
 
 pub trait DispatchHost {

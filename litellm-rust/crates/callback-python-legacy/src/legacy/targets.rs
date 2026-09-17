@@ -1,4 +1,4 @@
-use litellm_callback_protocol::CallbackId;
+use super::vocabulary::CallbackId;
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::PyString;
