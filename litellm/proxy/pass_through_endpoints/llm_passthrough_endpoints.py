@@ -36,7 +36,10 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.llms.deepgram.common_utils import deepgram_listen_websocket_target
+from litellm.llms.deepgram.common_utils import (
+    deepgram_listen_callback_params,
+    deepgram_listen_websocket_target,
+)
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
@@ -2694,6 +2697,7 @@ async def openai_websocket_proxy_route(
 _DEEPGRAM_WS_MISSING_KEY_REASON: Final = (
     "Required 'DEEPGRAM_API_KEY' in environment to make pass-through calls to Deepgram."
 )
+_DEEPGRAM_WS_CALLBACK_REASON: Final = "Deepgram callback delivery is not supported through the proxy: remove {params}"
 
 
 @router.websocket("/deepgram/v1/listen")
@@ -2712,6 +2716,14 @@ async def deepgram_listen_websocket_route(
         return
 
     await websocket.accept(subprotocol=_negotiated_websocket_subprotocol(websocket))
+    callback_params: Final = deepgram_listen_callback_params(websocket.url.query)
+    if callback_params:
+        await websocket.close(
+            code=1008,
+            reason=_DEEPGRAM_WS_CALLBACK_REASON.format(params=", ".join(callback_params)),
+        )
+        return
+
     await relay(
         websocket=websocket,
         target=deepgram_listen_websocket_target(
