@@ -1309,7 +1309,7 @@ def _ensure_litellm_received_at_on_request_state(request: Request) -> datetime:
     received_at: Final = datetime.now(timezone.utc)
     try:
         request.state.litellm_received_at = received_at
-    except Exception:  # noqa: BLE001  # organization lookup must not fail authentication
+    except Exception:
         pass
     return received_at
 
@@ -2634,7 +2634,7 @@ async def _inherit_org_identity(
             proxy_logging_obj=proxy_logging_obj,
             include_budget_table=True,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001  # organization lookup must not fail authentication
         verbose_proxy_logger.debug("org lookup failed for org_id=%s", user_api_key_auth_obj.org_id, exc_info=True)
         return
     if org_object is None:
