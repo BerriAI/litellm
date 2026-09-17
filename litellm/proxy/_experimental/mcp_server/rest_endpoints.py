@@ -329,7 +329,7 @@ if MCP_AVAILABLE:
         virtual_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         _request_start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the tool start time below
         try:
-            (_, virtual_logging_obj) = await virtual_processor.common_processing_pre_call_logic(
+            (virtual_data, virtual_logging_obj) = await virtual_processor.common_processing_pre_call_logic(
                 request=request,
                 user_api_key_dict=user_api_key_dict,
                 proxy_config=proxy_config,
@@ -348,6 +348,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=virtual_oauth2_headers,
                 raw_headers=virtual_raw_headers,
                 litellm_logging_obj=virtual_logging_obj,
+                guardrail_context=MCPRequestContext.resolve_guardrail_context(virtual_data),
             )
         except Exception as e:
             virtual_request_data: Final = virtual_processor.data

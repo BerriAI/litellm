@@ -3022,7 +3022,7 @@ class TestCallToolRestAPI:
                 self.data = data
 
             async def common_processing_pre_call_logic(self, **kwargs):
-                return None, MagicMock()
+                return self.data, MagicMock()
 
         monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
         monkeypatch.setattr(tool_search_mod, "handle_mcp_tool_call", fake_handle_mcp_tool_call, raising=False)
@@ -3104,6 +3104,82 @@ class TestCallToolRestAPI:
         assert user_api_key_auth is user_api_key_dict
         assert logging_obj is request_data.get("litellm_logging_obj")
         assert logging_obj is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("virtual", [False, True])
+@pytest.mark.parametrize("selected", [False, True])
+@pytest.mark.parametrize("action", ["block", "modify"])
+async def test_request_selected_tool_specific_guardrail_applies_to_virtual_execution(
+    monkeypatch: pytest.MonkeyPatch, virtual: bool, selected: bool, action: str,
+) -> None:
+    import litellm
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager, server, tool_registry
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeGuardrail
+    from litellm.proxy.utils import ProxyLogging
+
+    guardrail: Final = CustomCodeGuardrail(
+        guardrail_name="block-resolved-tool", event_hook="pre_mcp_call", default_on=False,
+        custom_code='def apply_guardrail(inputs, request_data, input_type):\n'
+        '    if inputs.get("tools", [{}])[0].get("function", {}).get("name") == "execute":\n'
+        f'        return {{"action": "{action}", "reason": "resolved tool blocked", "texts": ["redacted"]}}\n'
+        '    return allow()\n',
+    )
+    manager: Final = mcp_server_manager.MCPServerManager()
+    managed_server: Final = MCPServer(
+        server_id="observer", name="observer", server_name="observer", transport="http",
+        url="https://observer.example/mcp", spec_path="observer.json", auth_type="none",
+    )
+    manager.registry = {"observer": managed_server}
+    manager.tool_name_to_mcp_server_name_mapping = {"observer-execute": "observer"}
+    upstream: Final = AsyncMock(return_value={"executed": True})
+    registry: Final = tool_registry.MCPToolRegistry()
+    registry.register_tool("observer-execute", "Execute", {"type": "object"}, upstream)
+
+    async def passthrough_request_data(data: dict[str, object], **kwargs: object) -> dict[str, object]:
+        return data
+
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(server, "global_mcp_tool_registry", registry)
+    monkeypatch.setattr(server, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(server, "_get_allowed_mcp_servers", AsyncMock(return_value=[managed_server]))
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", passthrough_request_data)
+    monkeypatch.setattr(proxy_server, "proxy_config", {})
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    caller: Final = UserAPIKeyAuth(
+        api_key="hashed-key", request_route="/mcp-rest/tools/call",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="virtual-test", mcp_servers=["observer"], mcp_tool_search_enabled=True,
+        ),
+    )
+    request: Final = _build_request(
+        path="/mcp-rest/tools/call", method="POST",
+        json_body={
+            "name": "mcp_tool_call" if virtual else "observer-execute",
+            "server_id": "observer",
+            "arguments": {"tool_name": "observer-execute", "arguments": {"q": "confidential"}}
+            if virtual else {"q": "confidential"},
+            "guardrails": ["block-resolved-tool"] if selected else [],
+        },
+    )
+    if selected and action == "block":
+        with pytest.raises(HTTPException) as error:
+            await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=caller)
+        assert error.value.status_code == 400
+        assert error.value.detail["message"] == "resolved tool blocked"
+        upstream.assert_not_awaited()
+    else:
+        result: Final = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=caller)
+        assert result.isError is False
+        upstream.assert_awaited_once()
+        assert upstream.await_args.kwargs == {"q": "redacted" if selected else "confidential"}
 
 
 class TestGetToolsForSingleServer:
