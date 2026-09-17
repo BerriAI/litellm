@@ -1,15 +1,18 @@
 use std::collections::BTreeMap;
+use std::convert::Infallible;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::registry::{OcrAdapterKind, resolve_wire_adapter};
-use crate::Error;
-use crate::auth::{InputSource, TokenProviderHandle};
 use crate::constants::OCR_HTTP_TIMEOUT_SECS;
+use crate::ocr::Error;
+use litellm_auth::{InputSource, TokenProviderHandle};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -48,6 +51,35 @@ impl OcrDocument {
             },
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum OcrDocumentInput {
+    Document(OcrDocument),
+    Path {
+        path: PathBuf,
+        mime_type: Option<String>,
+    },
+    Bytes {
+        bytes: Bytes,
+        file_name: Option<String>,
+        mime_type: Option<String>,
+    },
+    HostReader {
+        mime_type: Option<String>,
+    },
+}
+
+impl From<OcrDocument> for OcrDocumentInput {
+    fn from(document: OcrDocument) -> Self {
+        Self::Document(document)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OcrFileContent {
+    pub bytes: Bytes,
+    pub file_name: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,9 +121,9 @@ impl Default for OcrConnection {
     }
 }
 
-pub struct LiteLLMOcrRequest {
+pub struct LiteLLMOcrRequest<D = OcrDocument> {
     pub model: String,
-    pub document: OcrDocument,
+    pub document: D,
     pub connection: OcrConnection,
     pub hooks: Arc<dyn OcrHooks>,
     pub litellm_call_id: Option<String>,
@@ -101,10 +133,10 @@ pub struct LiteLLMOcrRequest {
     pub(crate) adapter: OcrAdapterKind,
 }
 
-impl LiteLLMOcrRequest {
+impl<D> LiteLLMOcrRequest<D> {
     pub fn new(
         model: String,
-        document: OcrDocument,
+        document: D,
         custom_llm_provider: Option<&str>,
         optional_params: Map<String, Value>,
     ) -> Result<Self, Error> {
@@ -150,6 +182,36 @@ impl LiteLLMOcrRequest {
             litellm_call_id,
             ..self
         }
+    }
+
+    pub fn map_document<T, E>(
+        self,
+        map: impl FnOnce(D) -> Result<T, E>,
+    ) -> Result<LiteLLMOcrRequest<T>, E> {
+        Ok(LiteLLMOcrRequest {
+            model: self.model,
+            document: map(self.document)?,
+            connection: self.connection,
+            hooks: self.hooks,
+            litellm_call_id: self.litellm_call_id,
+            optional_params: self.optional_params,
+            input_sources: self.input_sources,
+            azure_ad_token_provider: self.azure_ad_token_provider,
+            adapter: self.adapter,
+        })
+    }
+
+    pub fn with_document<T>(self, document: T) -> LiteLLMOcrRequest<T> {
+        let Ok(request) = self.map_document(|_| Ok::<T, Infallible>(document));
+        request
+    }
+}
+
+impl From<LiteLLMOcrRequest> for LiteLLMOcrRequest<OcrDocumentInput> {
+    fn from(request: LiteLLMOcrRequest) -> Self {
+        let Ok(request) = request
+            .map_document(|document| Ok::<_, Infallible>(OcrDocumentInput::Document(document)));
+        request
     }
 }
 

@@ -586,7 +586,7 @@ class MessageBlockDelta(TypedDict):
 
     type: Literal["message_delta"]
     delta: MessageDelta
-    usage: UsageDelta
+    usage: NotRequired[ReadOnly[UsageDelta]]
     context_management: NotRequired[ContextManagementResponse]
 
 
@@ -746,6 +746,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
     ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
+    PER_TURN_CONTROL_2026_07_01 = "per-turn-control-2026-07-01"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
