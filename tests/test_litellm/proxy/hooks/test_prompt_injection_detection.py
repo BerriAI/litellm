@@ -1,5 +1,6 @@
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi import HTTPException
@@ -12,6 +13,8 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+
+LONG_SAFE_PROMPT = "Summarize the quarterly revenue report for the finance team. " * 3
 
 
 def _moderation_detector(verdict: str) -> _OPTIONAL_PromptInjectionDetection:
@@ -93,8 +96,7 @@ async def test_heuristics_check_keeps_event_loop_responsive():
     detector = _OPTIONAL_PromptInjectionDetection(
         prompt_injection_params=LiteLLMPromptInjectionParams(heuristics_check=True)
     )
-    long_safe_prompt = "Summarize the quarterly revenue report for the finance team. " * 3
-    data = {"model": "test-model", "messages": [{"role": "user", "content": long_safe_prompt}]}
+    data = {"model": "test-model", "messages": [{"role": "user", "content": LONG_SAFE_PROMPT}]}
     ticks_during_scan: list[float] = []
     scan_done = asyncio.Event()
 
@@ -118,6 +120,36 @@ async def test_heuristics_check_keeps_event_loop_responsive():
     assert result == data
     ticks_before_finish = [tick for tick in ticks_during_scan if tick < finished]
     assert len(ticks_before_finish) >= int((finished - started) / 0.05)
+
+
+@pytest.mark.asyncio
+async def test_heuristics_check_does_not_occupy_default_executor():
+    detector = _OPTIONAL_PromptInjectionDetection(
+        prompt_injection_params=LiteLLMPromptInjectionParams(heuristics_check=True)
+    )
+    data = {"model": "test-model", "messages": [{"role": "user", "content": LONG_SAFE_PROMPT}]}
+    loop = asyncio.get_running_loop()
+    single_worker_default_executor = ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(single_worker_default_executor)
+
+    scan = asyncio.create_task(
+        detector.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            cache=DualCache(),
+            data=data,
+            call_type="acompletion",
+        )
+    )
+    await asyncio.sleep(0.05)
+    started = time.perf_counter()
+    await loop.run_in_executor(None, time.sleep, 0)
+    unrelated_work_wait = time.perf_counter() - started
+    result = await scan
+    scan_wall = time.perf_counter() - started
+    single_worker_default_executor.shutdown(wait=False)
+
+    assert result == data
+    assert unrelated_work_wait < scan_wall / 4
 
 
 @pytest.mark.asyncio
