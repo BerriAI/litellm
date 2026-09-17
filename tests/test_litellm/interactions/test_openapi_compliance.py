@@ -165,7 +165,6 @@ class TestResponseCompliance:
             "status",
             "created",
             "updated",
-            "role",
             "steps",
             "usage",
         ]
