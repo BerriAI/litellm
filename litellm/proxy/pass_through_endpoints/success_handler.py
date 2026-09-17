@@ -61,7 +61,7 @@ class PassThroughEndpointLogging:
         self.transcribe_passthrough_logging_handler: Final = (
             transcribe_handler if transcribe_handler is not None else TranscribePassthroughLoggingHandler()
         )
-        self._log_dispatch: Final = log_dispatch if log_dispatch is not None else self._handle_logging
+        self._injected_log_dispatch: Final = log_dispatch
         self.TRACKED_VERTEX_METHOD_ROUTES = (
             "generateContent",
             "streamGenerateContent",
@@ -102,6 +102,10 @@ class PassThroughEndpointLogging:
 
         # Vertex AI Live API WebSocket
         self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
+
+    @property
+    def _log_dispatch(self) -> PassThroughLogDispatch:
+        return self._injected_log_dispatch if self._injected_log_dispatch is not None else self._handle_logging
 
     async def _handle_logging(
         self,
