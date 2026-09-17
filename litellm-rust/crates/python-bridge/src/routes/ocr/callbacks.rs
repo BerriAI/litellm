@@ -3,55 +3,142 @@ use pyo3::types::PyDict;
 use serde_json::Value;
 
 use litellm_core::ocr::LiteLLMOcrResponse;
-use litellm_core::ocr::hooks::OcrDuringCallRequest;
+use litellm_core::ocr::hooks::OcrPreCallRequest;
 use litellm_python_interop::to_py_preserving_errors as to_py;
 
-use super::host::PythonPayload;
 use crate::lifecycle::PythonLogger;
 
-pub(super) fn update_logging(
+pub(super) struct OcrLoggingFields {
+    model: String,
+    custom_llm_provider: String,
+    optional_params: Value,
+}
+
+impl From<&OcrPreCallRequest> for OcrLoggingFields {
+    fn from(request: &OcrPreCallRequest) -> Self {
+        Self {
+            model: request.model.clone(),
+            custom_llm_provider: request.custom_llm_provider.clone(),
+            optional_params: request.optional_params.clone(),
+        }
+    }
+}
+
+impl PythonLogger {
+    pub(super) fn update_ocr(
+        &self,
+        py: Python<'_>,
+        kwargs: &Py<PyDict>,
+        pre_call: &OcrLoggingFields,
+        secret_fields: &[&str],
+        url: &str,
+    ) -> PyResult<()> {
+        let update = PyDict::new(py);
+        update.set_item("kwargs", redact(py, kwargs.bind(py), secret_fields)?)?;
+        update.set_item("model", &pre_call.model)?;
+        update.set_item(
+            "optional_params",
+            redact(
+                py,
+                &to_py(py, &pre_call.optional_params)?
+                    .into_bound(py)
+                    .cast_into::<PyDict>()?,
+                secret_fields,
+            )?,
+        )?;
+        let params = PyDict::new(py);
+        params.set_item(
+            "litellm_call_id",
+            kwargs.bind(py).get_item("litellm_call_id")?,
+        )?;
+        params.set_item("api_base", url)?;
+        for name in ["logger_fn", "litellm_request_debug"] {
+            if let Some(value) = kwargs.bind(py).get_item(name)? {
+                params.set_item(name, value)?;
+            }
+        }
+        for name in custom_pricing_fields(py)? {
+            if let Some(value) = kwargs.bind(py).get_item(&name)?
+                && !value.is_none()
+            {
+                params.set_item(name, value)?;
+            }
+        }
+        update.set_item("litellm_params", params)?;
+        update.set_item("custom_llm_provider", &pre_call.custom_llm_provider)?;
+        self.object(py)
+            .call_method("update_from_kwargs", (), Some(&update))?;
+        Ok(())
+    }
+
+    pub(crate) fn pre_ocr(
+        &self,
+        py: Python<'_>,
+        api_key: Option<&str>,
+        body: &Bound<'_, PyDict>,
+        headers: &Bound<'_, PyDict>,
+        url: &str,
+    ) -> PyResult<()> {
+        let additional = PyDict::new(py);
+        additional.set_item("complete_input_dict", body)?;
+        additional.set_item("headers", headers)?;
+        additional.set_item("api_base", url)?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("input", "OCR document processing")?;
+        kwargs.set_item("api_key", api_key)?;
+        kwargs.set_item("additional_args", &additional)?;
+        self.object(py).call_method("pre_call", (), Some(&kwargs))?;
+        Ok(())
+    }
+
+    pub(crate) fn post_ocr(
+        &self,
+        py: Python<'_>,
+        original_response: &Value,
+        body: Option<&Py<PyDict>>,
+        headers: Option<&Py<PyDict>>,
+    ) -> PyResult<()> {
+        let additional = PyDict::new(py);
+        additional.set_item("complete_input_dict", body)?;
+        additional.set_item("headers", headers)?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("original_response", to_py(py, original_response)?)?;
+        kwargs.set_item("additional_args", &additional)?;
+        self.object(py)
+            .call_method("post_call", (), Some(&kwargs))?;
+        Ok(())
+    }
+}
+
+fn custom_pricing_fields(py: Python<'_>) -> PyResult<Vec<String>> {
+    py.import("litellm.types.utils")?
+        .getattr("CustomPricingLiteLLMParams")?
+        .getattr("model_fields")?
+        .cast_into::<PyDict>()?
+        .keys()
+        .iter()
+        .map(|name| name.extract::<String>())
+        .collect()
+}
+
+fn redact(
     py: Python<'_>,
-    logger: &PythonLogger,
-    kwargs: &Py<PyDict>,
-    request: &OcrDuringCallRequest,
+    params: &Bound<'_, PyDict>,
     secret_fields: &[&str],
-) -> PyResult<()> {
-    py.import("litellm.rust_bridge.ocr")?
-        .getattr("update_logging")?
-        .call1((
-            logger.object(py),
-            kwargs,
-            &request.model,
-            &request.custom_llm_provider,
-            to_py(py, &request.optional_params)?,
-            secret_fields,
-            &request.url,
-        ))?;
-    Ok(())
-}
-
-pub(super) fn pre_call(
-    py: Python<'_>,
-    logger: &PythonLogger,
-    request: &OcrDuringCallRequest,
-    payload: &PythonPayload,
-) -> PyResult<()> {
-    py.import("litellm.rust_bridge.ocr")?
-        .getattr("pre_call")?
-        .call1((logger.object(py), request.api_key.as_deref(), &payload.body, &payload.headers, &request.url))?;
-    Ok(())
-}
-
-pub(super) fn post_call(
-    py: Python<'_>,
-    logger: &PythonLogger,
-    original_response: &Value,
-    payload: &PythonPayload,
-) -> PyResult<()> {
-    py.import("litellm.rust_bridge.ocr")?
-        .getattr("post_call")?
-        .call1((logger.object(py), to_py(py, original_response)?, &payload.body, &payload.headers))?;
-    Ok(())
+) -> PyResult<Py<PyDict>> {
+    let redacted = PyDict::new(py);
+    for (name, value) in params {
+        let name = name.extract::<String>()?;
+        if name == "proxy_server_request" {
+            continue;
+        }
+        if secret_fields.contains(&name.as_str()) {
+            redacted.set_item(name, "****")?;
+        } else {
+            redacted.set_item(name, value)?;
+        }
+    }
+    Ok(redacted.unbind())
 }
 
 pub(super) fn response(py: Python<'_>, response: &LiteLLMOcrResponse) -> PyResult<Py<PyAny>> {

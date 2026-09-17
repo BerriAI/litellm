@@ -738,8 +738,7 @@ mod tests {
             "result":{"chunks":[]}
         }))])
         .await;
-        let request =
-            crate::ocr::test_support::with_source(wire_request(model, &base, options), source);
+        let request = crate::ocr::test_support::with_source(wire_request(model, &base, options), source);
 
         perform_ocr(request).await.unwrap();
         server.await.unwrap();
@@ -858,9 +857,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_invalid_document_sources_before_network(#[case] source: &str) {
         let request = crate::ocr::test_support::with_source(
-            wire_request("reducto/parse-v3", "http://127.0.0.1:1", json!({})),
-            source,
-        );
+            wire_request("reducto/parse-v3", "http://127.0.0.1:1", json!({})), source);
         assert!(perform_ocr(request).await.is_err());
     }
 
@@ -916,9 +913,7 @@ mod tests {
         let raw = json!({"job_id":"job-1","result":{"chunks":[]}});
         let (base, seen, server) = mock_server(vec![MockResponse::json(raw)]).await;
         let mut request = crate::ocr::test_support::with_source(
-            wire_request("reducto/parse-v3", &base, json!({})),
-            "reducto://ready.pdf",
-        );
+            wire_request("reducto/parse-v3", &base, json!({})), "reducto://ready.pdf");
         request.transport.extra_headers = vec![("authorization".into(), "Bearer existing".into())];
 
         let response = perform_ocr(request).await.unwrap();
@@ -989,7 +984,6 @@ mod tests {
             request: OcrDuringCallRequest,
         ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
             Box::pin(async move {
-                assert_eq!(request.optional_params["use_cache"], json!(true));
                 assert_eq!(
                     request.body["document_url"],
                     "data:application/pdf;base64,YWJj"
@@ -1006,7 +1000,7 @@ mod tests {
     async fn guardrail_rewrites_document_before_upload() {
         let (base, seen, server) =
             mock_server(vec![MockResponse::json(json!({"result":{"chunks":[]}}))]).await;
-        let mut request = wire_request("reducto/parse-v3", &base, json!({"use_cache":true}));
+        let mut request = wire_request("reducto/parse-v3", &base, json!({}));
         request.hooks = Arc::new(RewriteDocument);
 
         perform_ocr(request).await.unwrap();

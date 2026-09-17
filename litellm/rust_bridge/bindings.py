@@ -47,8 +47,3 @@ def native_exception_types() -> tuple[type[BaseException], type[BaseException]] 
     if not isinstance(declined, type) or not isinstance(upstream, type):
         return None
     return declined, upstream
-
-
-def native_decline_types() -> tuple[type[BaseException], ...]:
-    exceptions: Final = native_exception_types()
-    return (exceptions[0],) if exceptions is not None else ()

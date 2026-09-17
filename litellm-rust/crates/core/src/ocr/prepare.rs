@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use super::OcrClient;
 use super::hooks::OcrDuringCallRequest;
-use super::types::{OcrConnection, OcrDocument, PreparedOcrRequest, ResolvedOcrRequest};
+use super::types::{ResolvedOcrRequest, OcrConnection, OcrDocument, PreparedOcrRequest};
 
 pub(crate) async fn transform_request_body<B>(
     client: &OcrClient,
@@ -28,7 +28,6 @@ where
             .during_call(OcrDuringCallRequest {
                 model: request.model.clone(),
                 custom_llm_provider: request.provider_name().into(),
-                optional_params: Value::Object(request.optional_params.clone().into()),
                 api_key: request.connection.api_key.clone(),
                 url: url.into(),
                 headers: headers.to_vec(),
@@ -79,7 +78,6 @@ pub(crate) async fn guardrail_document(
         .during_call(OcrDuringCallRequest {
             model: request.model.clone(),
             custom_llm_provider: request.provider_name().into(),
-            optional_params: Value::Object(request.optional_params.clone().into()),
             api_key: request.connection.api_key.clone(),
             url: url.into(),
             headers: headers.to_vec(),

@@ -68,7 +68,7 @@ fn call(
         kwargs.copy()?.unbind(),
         asynchronous,
         signature.name,
-    )?, signature);
+    )?);
     run_call(py, call, host)
 }
 

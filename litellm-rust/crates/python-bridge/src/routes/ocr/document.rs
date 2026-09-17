@@ -36,10 +36,10 @@ fn extract_bytes(value: &Bound<'_, PyAny>) -> PyResult<Bytes> {
         return Ok(Bytes::from_owner(value.extract::<PyBackedBytes>()?));
     }
     // Bytes subclasses may retain GC edges that a native Bytes owner cannot traverse.
-    Ok(Bytes::copy_from_slice(
-        value.extract::<PyBackedBytes>()?.as_ref(),
-    ))
+    Ok(Bytes::copy_from_slice(value.extract::<PyBackedBytes>()?.as_ref()))
 }
+
+
 
 pub(super) struct FileDocumentInput {
     pub input: OcrDocumentInput,
@@ -56,11 +56,9 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
             Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => None,
             Err(error) => return Err(error),
         };
-        let missing = || {
-            PyValueError::new_err(
-                "document with type='file' must include a 'file' field containing a pathlib.Path, file-like object, or bytes",
-            )
-        };
+        let missing = || PyValueError::new_err(
+            "document with type='file' must include a 'file' field containing a pathlib.Path, file-like object, or bytes",
+        );
         let file = document.get_item("file").map_err(|error| {
             if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) {
                 missing()
@@ -95,9 +93,7 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
                 reader: None,
             });
         }
-        let reader = file
-            .getattr_opt("read")?
-            .filter(|value| value.is_callable());
+        let reader = file.getattr_opt("read")?.filter(|value| value.is_callable());
         let Some(reader) = reader else {
             return Err(PyValueError::new_err(format!(
                 "Unsupported file input type: {}. Expected pathlib.Path, bytes, or a file-like object.",
@@ -111,10 +107,7 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
             .transpose()?;
         Ok(Self {
             input: OcrDocumentInput::HostReader { mime_type },
-            reader: Some(PythonFileReader {
-                reader: reader.unbind(),
-                name,
-            }),
+            reader: Some(PythonFileReader { reader: reader.unbind(), name }),
         })
     }
 }
@@ -134,21 +127,12 @@ mod tests {
                 let error = document.extract::<FileDocumentInput>().err().unwrap();
                 assert!(error.is_instance_of::<PyValueError>(py));
             }
-            for expression in [
-                c"{'file': b'abc', 'mime_type': None}",
-                c"{'file': b'abc', 'mime_type': 7}",
-            ] {
-                let error = py
-                    .eval(expression, None, None)
-                    .unwrap()
-                    .extract::<FileDocumentInput>()
-                    .err()
-                    .unwrap();
+            for expression in [c"{'file': b'abc', 'mime_type': None}", c"{'file': b'abc', 'mime_type': 7}"] {
+                let error = py.eval(expression, None, None).unwrap().extract::<FileDocumentInput>().err().unwrap();
                 assert!(error.is_instance_of::<PyTypeError>(py));
             }
             let locals = PyDict::new(py);
-            py.run(
-                c"from pathlib import Path
+            py.run(c"from pathlib import Path
 failure = KeyError('reader failed')
 class Reader:
     def __init__(self):
@@ -159,31 +143,12 @@ class Reader:
 reader = Reader()
 document = {'file': reader}
 path_document = {'file': Path('/nonexistent/ocr-projection-test.pdf')}
-",
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
+", Some(&locals), Some(&locals)).unwrap();
             let document = locals.get_item("document").unwrap().unwrap();
             let input: FileDocumentInput = document.extract().unwrap();
-            assert_eq!(
-                locals
-                    .get_item("reader")
-                    .unwrap()
-                    .unwrap()
-                    .getattr("reads")
-                    .unwrap()
-                    .extract::<usize>()
-                    .unwrap(),
-                0
-            );
+            assert_eq!(locals.get_item("reader").unwrap().unwrap().getattr("reads").unwrap().extract::<usize>().unwrap(), 0);
             assert!(input.reader.is_some());
-            let path: FileDocumentInput = locals
-                .get_item("path_document")
-                .unwrap()
-                .unwrap()
-                .extract()
-                .unwrap();
+            let path: FileDocumentInput = locals.get_item("path_document").unwrap().unwrap().extract().unwrap();
             assert!(matches!(path.input, OcrDocumentInput::Path { .. }));
         });
     }

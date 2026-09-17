@@ -10,34 +10,54 @@ use litellm_core::ocr::{
 };
 use litellm_python_interop::from_py_preserving_errors as from_py;
 
-use super::document::FileDocumentInput;
 use super::errors::to_pyerr as ocr_error_to_pyerr;
-use super::host::OcrRetained;
+use super::document::{FileDocumentInput, PythonFileReader};
+use crate::auth::PythonTokenProvider;
 use crate::lifecycle::BoundArguments;
-use crate::marshal::{BoundRouteInputs, Projection};
+use crate::marshal::BoundRouteInputs;
 
 /// Positional parameters of `ocr()` that are never projected into
 /// `optional_params`.
 const BOUND_FIELDS: &[&str] = &["model", "document", "timeout", "input_sources"];
 
-fn project_document(document: &Bound<'_, PyAny>) -> PyResult<Result<FileDocumentInput, litellm_core::ocr::Error>> {
+pub(super) struct ProjectedOcrCall {
+    pub request: LiteLLMOcrRequest,
+    pub azure_ad_token_provider: Option<PythonTokenProvider>,
+    pub secret_fields: Vec<&'static str>,
+    pub reader: Option<PythonFileReader>,
+}
+
+enum ProjectedDocument {
+    File(FileDocumentInput),
+    Url(serde_json::Value),
+}
+
+impl ProjectedDocument {
+    fn into_native(self) -> Result<FileDocumentInput, litellm_core::ocr::Error> {
+        match self {
+            Self::File(file) => Ok(file),
+            Self::Url(value) => Ok(FileDocumentInput {
+                input: OcrDocument::try_from(value)?.into(),
+                reader: None,
+            }),
+        }
+    }
+}
+
+fn project_document(document: &Bound<'_, PyAny>) -> PyResult<ProjectedDocument> {
     let kind: String = document.get_item("type")?.extract()?;
     if kind != "file" {
-        let value: serde_json::Value = from_py(document)?;
-        return Ok(OcrDocument::try_from(value).map(|document| FileDocumentInput {
-            input: document.into(),
-            reader: None,
-        }));
+        return Ok(ProjectedDocument::Url(from_py(document)?));
     }
-    document.extract().map(Ok)
+    document.extract().map(ProjectedDocument::File)
 }
 
 /// Pure core assembly; every failure here is a typed `ocr::Error`.
 fn build_request(
     inputs: BoundRouteInputs,
-    document: Result<FileDocumentInput, litellm_core::ocr::Error>,
-) -> Result<Projection<LiteLLMOcrRequest, OcrRetained>, litellm_core::ocr::Error> {
-    let document = document?;
+    document: ProjectedDocument,
+) -> Result<ProjectedOcrCall, litellm_core::ocr::Error> {
+    let document = document.into_native()?;
     let BoundRouteInputs {
         model,
         custom_llm_provider,
@@ -63,23 +83,18 @@ fn build_request(
             input_sources,
         },
     )?;
-    Ok(Projection {
-        retained: OcrRetained {
-            model: request.model.clone(),
-            provider: request.provider_name(),
-            azure_ad_token_provider,
-            secret_fields,
-            reader: document.reader,
-            payload: None,
-        },
-        native: request,
+    Ok(ProjectedOcrCall {
+        request,
+        azure_ad_token_provider,
+        secret_fields,
+        reader: document.reader,
     })
 }
 
 pub(super) fn project(
     py: Python<'_>,
     arguments: &BoundArguments<'_>,
-) -> PyResult<Projection<LiteLLMOcrRequest, OcrRetained>> {
+) -> PyResult<ProjectedOcrCall> {
     let model: String = arguments.extract("model")?;
     let custom_llm_provider: Option<String> = arguments.optional("custom_llm_provider")?;
     let document = project_document(&arguments.required("document")?)?;
@@ -127,7 +142,7 @@ mod tests {
                 )
                 .unwrap();
             assert!(matches!(
-                project_document(&file).unwrap().unwrap().input,
+                project_document(&file).unwrap().into_native().unwrap().input,
                 litellm_core::ocr::OcrDocumentInput::Bytes { bytes, mime_type, .. }
                     if bytes == b"%PDF-1.4"[..] && mime_type.as_deref() == Some("application/pdf")
             ));
@@ -140,7 +155,7 @@ mod tests {
                 )
                 .unwrap();
             assert!(matches!(
-                project_document(&original).unwrap().unwrap().input,
+                project_document(&original).unwrap().into_native().unwrap().input,
                 litellm_core::ocr::OcrDocumentInput::Document(OcrDocument::DocumentUrl { document_url, .. })
                     if document_url == "https://example.com/a.pdf"
             ));
@@ -154,10 +169,7 @@ mod tests {
             let document = py
                 .eval(c"{'type': 'mystery', 'mystery': 'x'}", None, None)
                 .unwrap();
-            let error = project_document(&document)
-                .unwrap()
-                .err()
-                .unwrap();
+            let error = project_document(&document).unwrap().into_native().err().unwrap();
             assert!(error.to_string().contains("document"));
         });
     }
@@ -169,16 +181,14 @@ mod tests {
             let missing = py.eval(c"{}", None, None).unwrap();
             assert!(
                 project_document(&missing)
-                    .err()
-                    .unwrap()
+                    .err().unwrap()
                     .is_instance_of::<PyKeyError>(py)
             );
 
             let non_string = py.eval(c"{'type': 1}", None, None).unwrap();
             assert!(
                 project_document(&non_string)
-                    .err()
-                    .unwrap()
+                    .err().unwrap()
                     .is_instance_of::<PyTypeError>(py)
             );
 
@@ -192,9 +202,8 @@ class Document:
 document = Document()
 ",
             );
-            let error = project_document(&locals.get_item("document").unwrap().unwrap())
-                .err()
-                .unwrap();
+            let error =
+                project_document(&locals.get_item("document").unwrap().unwrap()).err().unwrap();
             assert!(
                 error
                     .value(py)
@@ -223,11 +232,8 @@ document = Document()
 ",
             );
             let document = locals.get_item("document").unwrap().unwrap();
-            let projected = project_document(&document).unwrap().unwrap();
-            assert!(matches!(
-                projected.input,
-                litellm_core::ocr::OcrDocumentInput::Bytes { .. }
-            ));
+            let projected = project_document(&document).unwrap().into_native().unwrap();
+            assert!(matches!(projected.input, litellm_core::ocr::OcrDocumentInput::Bytes { .. }));
             let reads: Vec<String> = document.getattr("reads").unwrap().extract().unwrap();
             assert_eq!(reads, ["type", "mime_type", "file"]);
         });

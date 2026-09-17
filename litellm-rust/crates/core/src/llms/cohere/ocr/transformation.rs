@@ -361,12 +361,10 @@ mod tests {
                 }
             }),
         );
-        let request = request.with_document(
-            serde_json::from_value(json!({
-                "type":"image_url","image_url":"https://example.com/original.png"
-            }))
-            .unwrap(),
-        );
+        let request = request.with_document(serde_json::from_value(json!({
+            "type":"image_url","image_url":"https://example.com/original.png"
+        }))
+        .unwrap());
         let request = crate::ocr::prepare::prepare_request(request);
         let http = CohereParseConfig
             .prepare_request(&request, &crate::ocr::test_support::ocr_client())
@@ -505,12 +503,10 @@ mod tests {
             "https://example.com",
             json!({"output_format":null,"req_format":null}),
         );
-        let request = request.with_document(
-            serde_json::from_value(
+        let request = request.with_document(serde_json::from_value(
                 json!({"type":"image_url","image_url":"https://example.com/a.png"}),
             )
-            .unwrap(),
-        );
+            .unwrap());
         assert_eq!(
             request.response_format().unwrap(),
             crate::ocr::types::OcrResponseFormat::Litellm

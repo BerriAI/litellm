@@ -816,8 +816,7 @@ mod tests {
             "type":"document_url",
             "document_url":"https://example.com/document.pdf"
         }))
-        .unwrap()
-        .into();
+        .unwrap().into();
 
         perform_ocr(request).await.unwrap();
         server.await.unwrap();

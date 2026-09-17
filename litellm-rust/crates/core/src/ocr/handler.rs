@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::OcrClient;
 use super::hooks::{OcrHooks, OcrLifecycleHooks, OcrPostCallRequest};
-use super::types::{LiteLLMOcrResponse, PreparedOcrRequest, ResolvedOcrRequest};
+use super::types::{ResolvedOcrRequest, LiteLLMOcrResponse, PreparedOcrRequest};
 use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
 use crate::llms::base_llm::ocr::transformation::OcrResponseContext;
 

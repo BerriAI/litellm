@@ -103,13 +103,9 @@ pub(super) fn public_exception(
             std::io::ErrorKind::PermissionDenied => 13,
             _ => 5,
         });
-        return Ok(PyErr::from_value(
-            py.import("builtins")?.getattr("OSError")?.call1((
-                errno,
-                source.to_string(),
-                path.into_pyobject(py)?.call_method0("__fspath__")?,
-            ))?,
-        ));
+        return Ok(PyErr::from_value(py.import("builtins")?.getattr("OSError")?.call1((
+            errno, source.to_string(), path,
+        ))?));
     }
     raise_public(py, classify(error), model, provider, None)
 }
