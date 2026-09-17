@@ -1061,11 +1061,6 @@ class TestTokenCaching:
             assert guardrail._token_cache is None
 
 
-# ---------------------------------------------------------------
-# Sovereign cloud resolution
-# ---------------------------------------------------------------
-
-
 class TestSovereignCloud:
     @pytest.mark.parametrize(
         "authority_host, expected_authority, expected_graph_base",
