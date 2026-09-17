@@ -317,6 +317,25 @@ async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) 
         await response.aclose()
 
 
+_DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
+
+
+def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
+    """
+    `aiter_bytes` yields the decoded body, so the upstream transfer headers only
+    describe the bytes on the wire when no content-encoding was applied.
+    """
+    if response.headers.get("content-encoding", "identity").lower() == "identity":
+        return response.headers
+    return httpx.Headers(
+        [
+            (name, value)
+            for name, value in response.headers.multi_items()
+            if name.lower() not in _DECODED_BODY_STALE_HEADERS
+        ]
+    )
+
+
 def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
     """Duck-type discover proxy hooks exposing per-frame project ITPM/OTPM
     enforcement, so the Responses WebSocket loop can charge every
@@ -5312,7 +5331,7 @@ class BaseLLMHTTPHandler:
 
         return await provider_config.transform_file_content_stream(
             stream_iterator=_aiter_bytes_then_close(response, chunk_size=chunk_size),
-            headers=response.headers,
+            headers=_decoded_body_headers(response),
             request_url=str(response.request.url),
             logging_obj=logging_obj,
             litellm_params=litellm_params,
