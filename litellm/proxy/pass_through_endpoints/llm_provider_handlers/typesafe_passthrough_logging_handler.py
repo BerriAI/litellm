@@ -88,7 +88,7 @@ class TypeSafePassthroughLoggingHandler:
             completion_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
         )
-        updated_kwargs: Final = {
+        updated_kwargs: Final = {  # mutable-ok: pass-through logging contract requires mutable kwargs
             **kwargs,
             "model": model_name,
             "custom_llm_provider": "typesafe",
@@ -108,7 +108,10 @@ class TypeSafePassthroughLoggingHandler:
             logging_obj=logging_obj,
             status="success",
         )
-        return {
+        return {  # mutable-ok: pass-through logging contract requires mutable result
             "result": StandardPassThroughResponseObject(response=result),
-            "kwargs": {**updated_kwargs, "standard_logging_object": standard_logging_object},
+            "kwargs": {  # mutable-ok: pass-through logging contract requires mutable kwargs
+                **updated_kwargs,
+                "standard_logging_object": standard_logging_object,
+            },
         }
