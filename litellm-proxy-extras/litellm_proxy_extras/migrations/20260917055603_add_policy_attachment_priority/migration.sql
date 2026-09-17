@@ -1,1 +1,1 @@
-ALTER TABLE "LiteLLM_PolicyAttachmentTable" ADD COLUMN "priority" INTEGER;
+ALTER TABLE "LiteLLM_PolicyAttachmentTable" ADD COLUMN IF NOT EXISTS "priority" INTEGER;
