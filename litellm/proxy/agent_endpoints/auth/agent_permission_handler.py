@@ -48,6 +48,22 @@ def _to_stable_ids(agent_ids: frozenset[str]) -> frozenset[str]:
     return frozenset(global_agent_registry.stable_agent_id(agent_id) for agent_id in agent_ids)
 
 
+def _restricted_ids(access: AgentAccess) -> frozenset[str] | None:
+    if isinstance(access, UnrestrictedAgentAccess):
+        return None
+    return _to_stable_ids(access.agent_ids)
+
+
+def _intersect_agent_access(key_access: AgentAccess, team_access: AgentAccess) -> AgentAccess:
+    key_ids: Final = _restricted_ids(key_access)
+    team_ids: Final = _restricted_ids(team_access)
+    if key_ids is None:
+        return UnrestrictedAgentAccess() if team_ids is None else RestrictedAgentAccess(team_ids)
+    if team_ids is None:
+        return RestrictedAgentAccess(key_ids)
+    return RestrictedAgentAccess(key_ids & team_ids)
+
+
 class AgentRequestHandler:
     """
     Class to handle agent permission checking, including:
@@ -83,19 +99,10 @@ class AgentRequestHandler:
         try:
             key_access: Final = await AgentRequestHandler._get_allowed_agents_for_key(user_api_key_auth)
             team_access: Final = await AgentRequestHandler._get_allowed_agents_for_team(user_api_key_auth)
-
-            match (key_access, team_access):
-                case (UnrestrictedAgentAccess(), UnrestrictedAgentAccess()):
-                    return UnrestrictedAgentAccess()
-                case (UnrestrictedAgentAccess(), RestrictedAgentAccess(team_ids)):
-                    return RestrictedAgentAccess(_to_stable_ids(team_ids))
-                case (RestrictedAgentAccess(key_ids), UnrestrictedAgentAccess()):
-                    return RestrictedAgentAccess(_to_stable_ids(key_ids))
-                case (RestrictedAgentAccess(key_ids), RestrictedAgentAccess(team_ids)):
-                    return RestrictedAgentAccess(_to_stable_ids(key_ids) & _to_stable_ids(team_ids))
         except Exception as e:
             verbose_logger.warning("Failed to get allowed agents: %s", e)
             return UnrestrictedAgentAccess()
+        return _intersect_agent_access(key_access, team_access)
 
     @staticmethod
     async def _agent_access_group_ceiling(
