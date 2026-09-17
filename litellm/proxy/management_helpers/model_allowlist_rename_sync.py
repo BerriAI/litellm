@@ -95,6 +95,8 @@ async def sync_model_allowlists_for_renamed_model(
     llm_router: Router | None,
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
+    if old_name == new_name:
+        return
     executor: Final = raw_executor(prisma_client)
     old_name_still_backed: Final = await still_backed(executor, llm_router, old_name, model_id)
     for allowlist in _ALLOWLIST_TABLES:
