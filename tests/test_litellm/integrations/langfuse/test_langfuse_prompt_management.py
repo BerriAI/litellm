@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -21,9 +20,7 @@ class TestLangfusePromptManagement:
         # This also prevents test-ordering issues when earlier tests remove sys.modules["langfuse"].
         self._mock_langfuse = MagicMock()
         self._mock_langfuse.version.__version__ = "3.0.0"
-        self._langfuse_patcher = patch.dict(
-            "sys.modules", {"langfuse": self._mock_langfuse}
-        )
+        self._langfuse_patcher = patch.dict("sys.modules", {"langfuse": self._mock_langfuse})
         self._langfuse_patcher.start()
 
     def teardown_method(self):
@@ -35,9 +32,7 @@ class TestLangfusePromptManagement:
             patch.object(
                 langfuse_prompt_management, "should_run_prompt_management"
             ) as mock_should_run_prompt_management,
-            patch.object(
-                langfuse_prompt_management, "_get_prompt_from_id"
-            ) as mock_get_prompt_from_id,
+            patch.object(langfuse_prompt_management, "_get_prompt_from_id") as mock_get_prompt_from_id,
         ):
             mock_should_run_prompt_management.return_value = True
             langfuse_prompt_management.get_chat_completion_prompt(
@@ -55,9 +50,7 @@ class TestLangfusePromptManagement:
 
     def test_log_failure_event_runs_async_logger(self):
         langfuse_prompt_management = LangfusePromptManagement()
-        with patch(
-            "litellm.integrations.langfuse.langfuse_prompt_management.run_async_function"
-        ) as mock_run_async:
+        with patch("litellm.integrations.langfuse.langfuse_prompt_management.run_async_function") as mock_run_async:
             kwargs = {"standard_callback_dynamic_params": {}}
             start_time, end_time = 1, 2
 
@@ -69,10 +62,7 @@ class TestLangfusePromptManagement:
             )
 
             mock_run_async.assert_called_once()
-            assert (
-                mock_run_async.call_args[0][0]
-                == langfuse_prompt_management.async_log_failure_event
-            )
+            assert mock_run_async.call_args[0][0] == langfuse_prompt_management.async_log_failure_event
 
     def test_langfuse_client_init_passes_dedicated_httpx_client(self):
         import httpx
@@ -91,13 +81,14 @@ class TestLangfusePromptManagement:
                 "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseLogger._get_langfuse_flush_interval",
                 return_value=1,
             ),
-            patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", mock_langfuse_class),  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
+            patch(
+                "litellm.integrations.langfuse.langfuse_sdk.Langfuse", mock_langfuse_class
+            ),  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
             patch(
                 "litellm.llms.custom_httpx.http_handler.get_ssl_configuration",
                 return_value=False,
             ) as mock_get_ssl,
         ):
-
             langfuse_client_init(
                 langfuse_public_key="pk-1234",
                 langfuse_secret="sk-1234",
@@ -118,7 +109,9 @@ class TestLangfusePromptManagement:
 class _RecordingLangfuseForEnv:
     last_environment: str | None = None
 
-    def __init__(self, *, environment: str | None = None, **parameters: object) -> None:  # kwargs-ok: records only environment out of whatever langfuse_client_init forwards
+    def __init__(
+        self, *, environment: str | None = None, **parameters: object
+    ) -> None:  # kwargs-ok: records only environment out of whatever langfuse_client_init forwards
         type(self).last_environment = environment
 
 
@@ -132,7 +125,9 @@ def test_langfuse_client_init_resolves_deployment_environment(monkeypatch, env_v
     monkeypatch.setenv("LANGFUSE_HOST", "https://test.langfuse.com")
     monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", env_value)
     monkeypatch.setattr(_RecordingLangfuseForEnv, "last_environment", None)
-    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuseForEnv):  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
+    with patch(
+        "litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuseForEnv
+    ):  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
         langfuse_client_init.cache_clear()
         langfuse_client_init()
     langfuse_client_init.cache_clear()
@@ -200,3 +195,41 @@ def test_langfuse_client_init_mock_mode_makes_no_network_calls(monkeypatch):
         LangfuseResourceManager._instances.pop("pk-pm-mock-egress", None)
 
     assert received == [], f"LANGFUSE_MOCK still sent spans to the configured host: {received}"
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_records_trace_id_for_alerting(monkeypatch):
+    from langfuse._client.resource_manager import LangfuseResourceManager
+
+    from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
+    from litellm.litellm_core_utils.specialty_caches.service_trace_id_cache import in_memory_trace_id_cache
+
+    monkeypatch.setenv("LANGFUSE_MOCK", "true")
+    monkeypatch.setenv("LANGFUSE_HOST", "http://127.0.0.1:1")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-pm-trace-cache")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-pm-trace-cache")
+    LangfuseResourceManager._instances.pop("pk-pm-trace-cache", None)
+    langfuse_client_init.cache_clear()
+    call_id: Final = "call-trace-cache-1"
+    now: Final = datetime.now(timezone.utc)
+    kwargs: Final = {
+        "litellm_call_id": call_id,
+        "model": "gpt-5.4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_params": {"metadata": {"trace_id": "alert-trace-1"}},
+        "optional_params": {},
+        "standard_callback_dynamic_params": {},
+        "exception": RuntimeError("provider down"),
+    }
+
+    try:
+        await LangfusePromptManagement().async_log_failure_event(
+            kwargs=kwargs, response_obj=None, start_time=now, end_time=now
+        )
+    finally:
+        langfuse_client_init.cache_clear()
+        LangfuseResourceManager._instances.pop("pk-pm-trace-cache", None)
+
+    assert in_memory_trace_id_cache.get_cache(litellm_call_id=call_id, service_name="langfuse") == resolve_trace_id(
+        "alert-trace-1"
+    )

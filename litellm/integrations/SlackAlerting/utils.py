@@ -66,11 +66,11 @@ async def _add_langfuse_trace_id_to_alert(
     -> trace_id
     -> litellm_call_id
     """
-    if "langfuse" not in litellm.logging_callback_manager._get_all_callbacks():
+    from litellm.integrations.langfuse.langfuse import LangFuseLogger
+
+    callbacks: Final = litellm.logging_callback_manager._get_all_callbacks()
+    if not any(callback == "langfuse" or isinstance(callback, LangFuseLogger) for callback in callbacks):
         return None
-    #########################################################
-    # Only run if langfuse is added as a callback
-    #########################################################
 
     if request_data is not None and request_data.get("litellm_logging_obj", None) is not None:
         trace_id: str | None = None
@@ -81,8 +81,8 @@ async def _add_langfuse_trace_id_to_alert(
             if trace_id is not None:
                 break
             await asyncio.sleep(3)  # wait 3s before retrying for trace id
-        #########################################################
-        from litellm.integrations.langfuse.langfuse import LangFuseLogger
+        if trace_id is None:
+            return None
 
         langfuse_object: Final = litellm_logging_obj._get_callback_object(service_name="langfuse")
         if isinstance(langfuse_object, LangFuseLogger):

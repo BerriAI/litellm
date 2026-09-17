@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -55,5 +55,45 @@ async def test_langfuse_trace_url_skips_non_langfuse_callback(monkeypatch):
     logging_obj = MagicMock()
     logging_obj._get_trace_id.return_value = "abc123"
     logging_obj._get_callback_object.return_value = object()
+
+    assert await _add_langfuse_trace_id_to_alert({"litellm_logging_obj": logging_obj}) is None
+
+
+@pytest.mark.asyncio
+async def test_langfuse_trace_url_when_callback_registered_as_logger_instance(monkeypatch):
+    from litellm.integrations.langfuse.langfuse import LangFuseLogger
+
+    logger = LangFuseLogger(
+        langfuse_public_key="pk-slack-instance",
+        langfuse_secret="sk-slack-instance",
+        langfuse_host="http://127.0.0.1:1",
+    )
+    monkeypatch.setattr(litellm, "success_callback", [logger])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    logging_obj = MagicMock()
+    logging_obj._get_trace_id.return_value = "trace-from-instance"
+    logging_obj._get_callback_object.return_value = logger
+
+    result = await _add_langfuse_trace_id_to_alert({"litellm_logging_obj": logging_obj})
+
+    assert result == "http://127.0.0.1:1/trace/trace-from-instance"
+
+
+@pytest.mark.asyncio
+async def test_langfuse_trace_url_absent_when_trace_id_never_arrives(monkeypatch):
+    from litellm.integrations.langfuse.langfuse import LangFuseLogger
+
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    monkeypatch.setattr("litellm.integrations.SlackAlerting.utils.asyncio.sleep", AsyncMock())
+    logging_obj = MagicMock()
+    logging_obj._get_trace_id.return_value = None
+    logging_obj._get_callback_object.return_value = LangFuseLogger(
+        langfuse_public_key="pk-slack-none",
+        langfuse_secret="sk-slack-none",
+        langfuse_host="http://127.0.0.1:1",
+    )
 
     assert await _add_langfuse_trace_id_to_alert({"litellm_logging_obj": logging_obj}) is None

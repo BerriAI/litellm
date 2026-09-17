@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.types.integrations.langfuse import LangfuseLoggedEvent
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
@@ -16,6 +17,7 @@ from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPa
 from ...litellm_core_utils.specialty_caches.dynamic_logging_cache import (
     DynamicLoggingCache,
 )
+from ...litellm_core_utils.specialty_caches.service_trace_id_cache import in_memory_trace_id_cache
 from ..prompt_management_base import PromptManagementBase
 from .langfuse import (
     LangFuseLogger,
@@ -130,6 +132,13 @@ def langfuse_client_init(
     )
 
     return client
+
+
+def _remember_trace_id(litellm_call_id: object, logged: LangfuseLoggedEvent) -> None:
+    trace_id: Final = logged["trace_id"]
+    if not isinstance(litellm_call_id, str) or trace_id is None:
+        return
+    in_memory_trace_id_cache.set_cache(litellm_call_id=litellm_call_id, service_name="langfuse", trace_id=trace_id)
 
 
 class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogger):
@@ -321,13 +330,14 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
                 standard_callback_dynamic_params=standard_callback_dynamic_params,
                 in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
             )
-            langfuse_logger_to_use.log_event_on_langfuse(
+            logged: Final = langfuse_logger_to_use.log_event_on_langfuse(
                 kwargs=kwargs,
                 response_obj=response_obj,
                 start_time=start_time,
                 end_time=end_time,
                 user_id=kwargs.get("user", None),
             )
+            _remember_trace_id(litellm_call_id=kwargs.get("litellm_call_id"), logged=logged)
         except Exception as e:
             from litellm._logging import verbose_logger
 
@@ -349,7 +359,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             status_message = str(kwargs.get("exception", "Unknown error"))
             if standard_logging_object is not None:
                 status_message = standard_logging_object.get("error_str", None) or status_message
-            langfuse_logger_to_use.log_event_on_langfuse(
+            logged: Final = langfuse_logger_to_use.log_event_on_langfuse(
                 start_time=start_time,
                 end_time=end_time,
                 response_obj=None,
@@ -358,6 +368,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
                 level="ERROR",
                 kwargs=kwargs,
             )
+            _remember_trace_id(litellm_call_id=kwargs.get("litellm_call_id"), logged=logged)
         except Exception as e:
             from litellm._logging import verbose_logger
 
