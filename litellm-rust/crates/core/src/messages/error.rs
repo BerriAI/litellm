@@ -28,6 +28,22 @@ pub enum Error {
     InvalidBedrockBase64(String),
 }
 
+impl From<litellm_providers::messages::Error> for Error {
+    fn from(error: litellm_providers::messages::Error) -> Self {
+        match error {
+            litellm_providers::messages::Error::MissingField(field) => Self::MissingField(field),
+            litellm_providers::messages::Error::InvalidRequest(message) => {
+                Self::InvalidRequest(message)
+            }
+            litellm_providers::messages::Error::InvalidResponse(message) => {
+                Self::InvalidResponse(message)
+            }
+            litellm_providers::messages::Error::Unsupported(reason) => Self::Unsupported(reason),
+            litellm_providers::messages::Error::Auth(error) => Self::Auth(error),
+        }
+    }
+}
+
 impl Error {
     pub fn is_request(&self) -> bool {
         match self {
