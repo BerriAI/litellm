@@ -67,6 +67,7 @@ class _TagRecord(Protocol):
     description: str | None
     models: Sequence[str]
     model_info: object
+    spend: float
     budget_id: str | None
     created_at: datetime
     updated_at: datetime
