@@ -591,16 +591,12 @@ async def _upsert_budget_and_membership(
         "updated_by": user_api_key_dict.user_id or "",
     }
 
-    if team_default_budget_id is not None:
-        default_budget_row: Final = await tx.litellm_budgettable.find_unique(
-            where={"budget_id": team_default_budget_id}
-        )
+    if is_shared_default:
+        default_budget_row: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
         if default_budget_row is not None:
             default_budget_dict: Final = default_budget_row.model_dump()
             for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS:
                 value = default_budget_dict.get(field)
-                if field == "max_budget" and value == 0 and not is_shared_default:
-                    continue
                 if _is_set_budget_value(value):
                     create_data[field] = value
 
