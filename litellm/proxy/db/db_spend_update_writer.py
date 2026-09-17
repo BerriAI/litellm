@@ -706,11 +706,17 @@ class DBSpendUpdateWriter:
                 traceback.format_exc(),
             )
 
-        await self._update_project_db(
-            response_cost=response_cost,
-            project_id=project_id,
-            prisma_client=prisma_client,
-        )
+        try:
+            await self._update_project_db(
+                response_cost=response_cost,
+                project_id=project_id,
+                prisma_client=prisma_client,
+            )
+        except Exception:  # noqa: BLE001  # a project enqueue failure must not skip the sibling spend writes
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _update_project_db failed: %s",
+                traceback.format_exc(),
+            )
 
         try:
             await self._update_tag_db(
