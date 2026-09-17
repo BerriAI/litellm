@@ -12,6 +12,29 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 CUSTOM_PROVIDER: Final = "test-onprem-llm"
 
 
+@pytest.mark.parametrize("model", ("groq/compound", "groq/compound-mini"))
+def test_get_llm_provider_keeps_groq_prefix_for_compound_models(model: str) -> None:
+    """
+    https://github.com/BerriAI/litellm/issues/32467
+
+    Groq's own model ids for these two models include a "groq/" segment
+    (confirmed via Groq's /v1/models endpoint), unlike every other Groq
+    model where "groq/" is purely litellm's routing prefix. Stripping it
+    here sent Groq a model id it doesn't recognize.
+    """
+    resolved_model, provider, _, _ = get_llm_provider(model=model)
+
+    assert resolved_model == model
+    assert provider == "groq"
+
+
+def test_get_llm_provider_strips_groq_prefix_for_regular_models() -> None:
+    resolved_model, provider, _, _ = get_llm_provider(model="groq/llama-3.3-70b-versatile")
+
+    assert resolved_model == "llama-3.3-70b-versatile"
+    assert provider == "groq"
+
+
 @pytest.fixture
 def registered_custom_provider(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": CUSTOM_PROVIDER, "custom_handler": CustomLLM()}])

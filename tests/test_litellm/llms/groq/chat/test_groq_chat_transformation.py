@@ -237,3 +237,33 @@ class TestGroqWebSearchCost:
             model_info=litellm.get_model_info(model=model, custom_llm_provider="groq"),
         )
         assert cost == 0.005
+
+
+class TestGroqCompoundModelInfo:
+    """
+    https://github.com/BerriAI/litellm/issues/32467
+
+    Compound models had parameter-mapping support (see TestGroqWebSearchOptions
+    above) but no model_prices_and_context_window.json entry, so anything that
+    depends on model_info - cost calculation, max_tokens lookups, capability
+    checks like litellm.supports_web_search() - silently failed for them.
+    """
+
+    @pytest.mark.usefixtures("local_model_cost_map")
+    @pytest.mark.parametrize("model", ("groq/compound", "groq/compound-mini"))
+    def test_model_info_is_registered(self, model: str):
+        model_info = litellm.get_model_info(model=model)
+        assert model_info["max_input_tokens"] == 131072
+        assert model_info["max_output_tokens"] == 8192
+        assert model_info["input_cost_per_token"] > 0
+        assert model_info["output_cost_per_token"] > 0
+
+    @pytest.mark.usefixtures("local_model_cost_map")
+    @pytest.mark.parametrize("model", ("groq/compound", "groq/compound-mini"))
+    @pytest.mark.parametrize("search_context_size", ["low", "medium", "high"])
+    def test_web_search_priced_per_search(self, model: str, search_context_size: str):
+        cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
+            web_search_options={"search_context_size": search_context_size},
+            model_info=litellm.get_model_info(model=model, custom_llm_provider="groq"),
+        )
+        assert cost == 0.005

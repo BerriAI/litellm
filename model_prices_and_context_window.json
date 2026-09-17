@@ -34842,6 +34842,42 @@
         "supports_tool_choice": true,
         "supports_web_search": true
     },
+    "groq/compound": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "groq",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.005,
+            "search_context_size_low": 0.005,
+            "search_context_size_medium": 0.005
+        },
+        "supports_function_calling": false,
+        "supports_response_schema": false,
+        "supports_tool_choice": false,
+        "supports_web_search": true
+    },
+    "groq/compound-mini": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "groq",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.005,
+            "search_context_size_low": 0.005,
+            "search_context_size_medium": 0.005
+        },
+        "supports_function_calling": false,
+        "supports_response_schema": false,
+        "supports_tool_choice": false,
+        "supports_web_search": true
+    },
     "groq/canopylabs/orpheus-v1-english": {
         "input_cost_per_character": 2.2e-05,
         "litellm_provider": "groq",
