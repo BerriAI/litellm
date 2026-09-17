@@ -1,5 +1,4 @@
 import json
-import os
 import time
 from collections.abc import Sequence
 from copy import deepcopy
@@ -38,10 +37,6 @@ class _TokenEncoding(Protocol):
     """Tokenizer handle the caller passes in; only `encode` is used, to count completion tokens."""
 
     def encode(self, text: str, /) -> Sequence[object]: ...
-
-
-tgi_models_cache = None
-conv_models_cache = None
 
 
 class HuggingFaceEmbeddingConfig(BaseConfig):
@@ -147,64 +142,6 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
     def get_hf_api_key(self) -> str | None:
         return get_secret_str("HUGGINGFACE_API_KEY")
-
-    def read_tgi_conv_models(self):
-        try:
-            global tgi_models_cache, conv_models_cache
-            # Check if the cache is already populated
-            # so we don't keep on reading txt file if there are 1k requests
-            if (tgi_models_cache is not None) and (conv_models_cache is not None):
-                return tgi_models_cache, conv_models_cache
-            # If not, read the file and populate the cache
-            tgi_models: Final = set()
-            script_directory = os.path.dirname(os.path.abspath(__file__))
-            script_directory = os.path.dirname(script_directory)
-            # Construct the file path relative to the script's directory
-            file_path = os.path.join(
-                script_directory,
-                "huggingface_llms_metadata",
-                "hf_text_generation_models.txt",
-            )
-
-            with open(file_path, "r") as file:
-                for line in file:
-                    tgi_models.add(line.strip())
-
-            # Cache the set for future use
-            tgi_models_cache = tgi_models
-
-            # If not, read the file and populate the cache
-            file_path = os.path.join(
-                script_directory,
-                "huggingface_llms_metadata",
-                "hf_conversational_models.txt",
-            )
-            conv_models: Final = set()
-            with open(file_path, "r") as file:
-                for line in file:
-                    conv_models.add(line.strip())
-            # Cache the set for future use
-            conv_models_cache = conv_models
-            return tgi_models, conv_models
-        except Exception:
-            return set(), set()
-
-    def get_hf_task_for_model(self, model: str) -> tuple[hf_tasks, str]:
-        # read text file, cast it to set
-        # read the file called "huggingface_llms_metadata/hf_text_generation_models.txt"
-        if model.split("/")[0] in hf_task_list:
-            split_model: Final = model.split("/", 1)
-            return split_model[0], split_model[1]
-        tgi_models, conversational_models = self.read_tgi_conv_models()
-
-        if model in tgi_models:
-            return "text-generation-inference", model
-        elif model in conversational_models:
-            return "conversational", model
-        elif "roneneldan/TinyStories" in model:
-            return "text-generation", model
-        else:
-            return "text-generation-inference", model  # default to tgi
 
     def transform_request(
         self,
