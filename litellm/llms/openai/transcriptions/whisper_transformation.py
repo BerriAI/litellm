@@ -109,6 +109,16 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if "response_format" not in data:
             data["response_format"] = "verbose_json"  # ensures 'duration' is received - used for cost calculation
 
+        # OpenAI's multipart form API expects array params as repeated
+        # bracketed fields (`timestamp_granularities[]=segment` +
+        # `timestamp_granularities[]=word`). Sending the list under the bare
+        # `timestamp_granularities` key makes OpenAI keep only the last value,
+        # so a combined `["segment", "word"]` request silently returns just one
+        # granularity. Rename the key so the list is encoded as `[]` fields.
+        granularities = data.pop("timestamp_granularities", None)
+        if granularities is not None:
+            data["timestamp_granularities[]"] = granularities
+
         return AudioTranscriptionRequestData(
             data=data,
         )
