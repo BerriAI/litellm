@@ -708,8 +708,6 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.end_user_rpm_limit = end_user_params["end_user_rpm_limit"]
     if end_user_params.get("end_user_tpd_limit") is not None:
         valid_token.end_user_tpd_limit = end_user_params["end_user_tpd_limit"]
-    if end_user_params.get("end_user_max_budget") is not None:
-        valid_token.end_user_max_budget = end_user_params["end_user_max_budget"]
     if end_user_params.get("allowed_model_region") is not None:
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
     if end_user_params.get("end_user_model_max_budget") is not None:
@@ -2874,6 +2872,7 @@ async def _run_centralized_common_checks(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
+            keep_token_limits=user_custom_auth is not None,
         )
 
     skip_budget_checks: Final = _should_skip_budget_checks(
@@ -2971,10 +2970,14 @@ async def _apply_key_end_user_default_budget_to_token(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
+    keep_token_limits: bool,
 ) -> None:
     """The builder's end-user pass runs before the key is resolved, so only here can the key's
     ``end_user_budget_id`` win over the proxy-wide default on the token that reservation reads.
-    The budget replaces the proxy-wide one wholesale: a key budget with no cap also lifts the cap."""
+    On the virtual-key path the token's end-user limits are the builder's proxy-wide defaults and
+    the key budget replaces them wholesale. With ``keep_token_limits`` (custom auth) the token's
+    limits are caps the custom auth callable set, so the key budget only fills the ones it left
+    unset."""
     default_budget: Final = (
         end_user_object.litellm_budget_table
         if end_user_object is not None
@@ -2988,11 +2991,16 @@ async def _apply_key_end_user_default_budget_to_token(
     if default_budget is None:
         return
 
-    valid_token.end_user_max_budget = default_budget.max_budget
-    valid_token.end_user_tpm_limit = default_budget.tpm_limit
-    valid_token.end_user_rpm_limit = default_budget.rpm_limit
-    valid_token.end_user_tpd_limit = default_budget.tpd_limit
-    valid_token.end_user_model_max_budget = default_budget.model_max_budget
+    if not keep_token_limits or valid_token.end_user_max_budget is None:
+        valid_token.end_user_max_budget = default_budget.max_budget
+    if not keep_token_limits or valid_token.end_user_tpm_limit is None:
+        valid_token.end_user_tpm_limit = default_budget.tpm_limit
+    if not keep_token_limits or valid_token.end_user_rpm_limit is None:
+        valid_token.end_user_rpm_limit = default_budget.rpm_limit
+    if not keep_token_limits or valid_token.end_user_tpd_limit is None:
+        valid_token.end_user_tpd_limit = default_budget.tpd_limit
+    if not keep_token_limits or valid_token.end_user_model_max_budget is None:
+        valid_token.end_user_model_max_budget = default_budget.model_max_budget
 
 
 async def _reserve_budget_after_common_checks(
@@ -3465,6 +3473,8 @@ async def _lookup_end_user_and_apply_budget(
                 valid_token = update_valid_token_with_end_user_params(
                     valid_token=valid_token, end_user_params=end_user_params
                 )
+                if valid_token.end_user_max_budget is None:
+                    valid_token.end_user_max_budget = default_budget.max_budget
     except Exception as e:
         if isinstance(e, litellm.BudgetExceededError):
             raise e

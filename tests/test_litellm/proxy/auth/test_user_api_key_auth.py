@@ -4387,8 +4387,11 @@ async def _run_centralized_checks_with_key_end_user_budget(
     budgets: Mapping[str, float],
     request_user: str | None = None,
     user_api_key_cache: DualCache | None = None,
+    custom_auth: bool = False,
 ) -> UserAPIKeyAuth:
-    """Run the centralized checks with a fake DB and return the token handed to budget reservation."""
+    """Run the centralized checks with a fake DB and return the token handed to budget reservation.
+    With ``custom_auth`` the token stands for one a custom auth callable returned and the checks
+    run under ``custom_auth_run_common_checks``."""
     from fastapi import Request
     from starlette.datastructures import URL
 
@@ -4408,7 +4411,9 @@ async def _run_centralized_checks_with_key_end_user_budget(
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
     attrs = {
-        **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
+        **_proxy_attrs_for_centralized_checks(
+            user_custom_auth=AsyncMock() if custom_auth else None, flag=custom_auth
+        ),
         "prisma_client": prisma_client,
         "user_api_key_cache": user_api_key_cache if user_api_key_cache is not None else DualCache(),
         "proxy_logging_obj": proxy_logging_obj,
@@ -4509,6 +4514,45 @@ async def test_centralized_common_checks_keeps_an_end_users_own_budget_over_the_
     )
 
     assert reserved_token.end_user_max_budget == 500.0
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_keeps_a_stricter_custom_auth_cap_over_the_key_default(monkeypatch):
+    """A custom auth callable that caps the end user tighter than the key's default budget keeps
+    its cap and its rate limit. The key default only fills the limits the callable left unset."""
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed",
+        end_user_id="cust-new",
+        end_user_max_budget=0.1,
+        end_user_rpm_limit=3,
+        metadata={"service_account_id": "svc-a", "end_user_budget_id": "svc-a-budget"},
+    )
+
+    reserved_token = await _run_centralized_checks_with_key_end_user_budget(
+        token, end_user_row=None, budgets={"svc-a-budget": 0.5}, custom_auth=True
+    )
+
+    assert reserved_token.end_user_max_budget == 0.1
+    assert reserved_token.end_user_rpm_limit == 3
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_fills_a_custom_auth_token_without_a_cap_from_the_key_default(monkeypatch):
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed",
+        end_user_id="cust-new",
+        metadata={"service_account_id": "svc-a", "end_user_budget_id": "svc-a-budget"},
+    )
+
+    reserved_token = await _run_centralized_checks_with_key_end_user_budget(
+        token, end_user_row=None, budgets={"svc-a-budget": 0.5}, custom_auth=True
+    )
+
+    assert reserved_token.end_user_max_budget == 0.5
 
 
 class _RecordingTeamModelBudgetLimiter:
