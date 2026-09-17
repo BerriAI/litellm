@@ -1,33 +1,41 @@
-"""
-Ceiling that an agent's attached access groups place on requests made with that agent's key.
-
-Keys and teams use access groups as grants. An agent uses them the way it already uses its
-``object_permission``: the union of the attached groups caps what the agent's key can reach,
-on top of whatever the key and team allow. A group that cannot be loaded contributes nothing,
-so a missing or unreadable group can only narrow the agent, never widen it.
-"""
-
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Final, TypeAlias
+from typing import Final, Protocol, TypeAlias
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LiteLLM_AccessGroupTable
-from litellm.types.agents import AgentResponse
+from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 
-AgentLoader: TypeAlias = Callable[[str], Awaitable[AgentResponse | None]]  # mutable-ok: Callable parameter syntax
+
+class _AgentAccessGroupsRecord(Protocol):
+    @property
+    def access_group_ids(self) -> Sequence[str] | None: ...
+
+
+class _AgentIdWhere(TypedDict):
+    agent_id: ReadOnly[str]
+
+
+AccessGroupIds: TypeAlias = tuple[str, ...]
+AccessGroupIdsLoader: TypeAlias = Callable[[str], Awaitable[AccessGroupIds]]  # mutable-ok: Callable params
+AgentRecordFinder: TypeAlias = Callable[[str], Awaitable[_AgentAccessGroupsRecord | None]]  # mutable-ok: Callable
 LoadedAccessGroup: TypeAlias = LiteLLM_AccessGroupTable | None
 AccessGroupLoader: TypeAlias = Callable[[str], Awaitable[LoadedAccessGroup]]  # mutable-ok: Callable parameter syntax
+
+_CACHED_IDS: Final = TypeAdapter(list[str])
 
 
 @dataclass(frozen=True, slots=True)
 class AgentAccessGroupCeiling:
     """Everything the agent's attached access groups allow. An empty set denies that resource kind."""
 
-    access_group_ids: tuple[str, ...]
+    access_group_ids: AccessGroupIds
     models: frozenset[str]
     mcp_server_ids: frozenset[str]
     agent_ids: frozenset[str]
@@ -36,10 +44,69 @@ class AgentAccessGroupCeiling:
 CeilingResolver: TypeAlias = Callable[[str], Awaitable[AgentAccessGroupCeiling | None]]  # mutable-ok: Callable params
 
 
-async def _load_agent(agent_id: str) -> AgentResponse | None:
+def agent_access_group_ids_cache_key(agent_id: str) -> str:
+    return f"agent_access_group_ids:{agent_id}"
+
+
+def _cached_access_group_ids(cached: object) -> AccessGroupIds | None:
+    if cached is None:
+        return None
+    try:
+        return tuple(_CACHED_IDS.validate_python(cached))
+    except ValidationError:
+        return None
+
+
+async def _registry_access_group_ids(agent_id: str) -> AccessGroupIds:
     from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
 
-    return await get_agent_with_read_through(agent_id)
+    agent: Final = await get_agent_with_read_through(agent_id)
+    return tuple(agent.access_group_ids or ()) if agent is not None else ()
+
+
+async def load_agent_access_group_ids(
+    agent_id: str,
+    cache: DualCache,
+    find_agent: AgentRecordFinder,
+    fallback: AccessGroupIdsLoader,
+) -> AccessGroupIds:
+    """The agent row's groups, cached for the management-object TTL and evicted on every agent write."""
+    cache_key: Final = agent_access_group_ids_cache_key(agent_id)
+    cached: Final = _cached_access_group_ids(await cache.async_get_cache(key=cache_key))
+    if cached is not None:
+        return cached
+    try:
+        record: Final = await find_agent(agent_id)
+    except Exception as e:  # noqa: BLE001  # prisma raises many error types; the registry snapshot answers instead
+        verbose_proxy_logger.warning("Failed to read access groups for agent %r, using registry: %s", agent_id, e)
+        return await fallback(agent_id)
+    access_group_ids: Final = tuple(record.access_group_ids or ()) if record is not None else ()
+    await cache.async_set_cache(key=cache_key, value=access_group_ids, ttl=get_management_object_ttl(cache))
+    return access_group_ids
+
+
+async def _load_agent_access_group_ids(agent_id: str) -> AccessGroupIds:
+    from litellm.proxy.agent_endpoints.agent_registry import agents_table
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if prisma_client is None:
+        return await _registry_access_group_ids(agent_id)
+    db: Final = prisma_client
+
+    async def find_agent(row_agent_id: str) -> _AgentAccessGroupsRecord | None:
+        return await agents_table(db).find_unique(where=_AgentIdWhere(agent_id=row_agent_id))
+
+    return await load_agent_access_group_ids(agent_id, user_api_key_cache, find_agent, _registry_access_group_ids)
+
+
+async def evict_agent_access_group_ids(agent_ids: Sequence[str]) -> None:
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    await evict_and_broadcast(
+        cache_keys=tuple(agent_access_group_ids_cache_key(agent_id) for agent_id in agent_ids),
+        user_api_key_cache=user_api_key_cache,
+    )
 
 
 async def _load_access_group(access_group_id: str) -> LoadedAccessGroup:
@@ -65,12 +132,11 @@ async def _load_access_group(access_group_id: str) -> LoadedAccessGroup:
 
 async def resolve_agent_access_group_ceiling(
     agent_id: str,
-    load_agent: AgentLoader = _load_agent,
+    load_access_group_ids: AccessGroupIdsLoader = _load_agent_access_group_ids,
     load_access_group: AccessGroupLoader = _load_access_group,
 ) -> AgentAccessGroupCeiling | None:
     """``None`` when the agent has no access groups attached, so nothing is capped."""
-    agent: Final = await load_agent(agent_id)
-    access_group_ids: Final = tuple(agent.access_group_ids or ()) if agent is not None else ()
+    access_group_ids: Final = await load_access_group_ids(agent_id)
     if not access_group_ids:
         return None
 
