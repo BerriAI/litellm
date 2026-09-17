@@ -799,6 +799,7 @@ _EXPECTED_CUSTOMER = {
         "budget_id": "b1",
         "soft_budget": None,
         "max_budget": 10.0,
+        "rollover_max_budget": None,
         "max_parallel_requests": None,
         "tpm_limit": None,
         "rpm_limit": None,
