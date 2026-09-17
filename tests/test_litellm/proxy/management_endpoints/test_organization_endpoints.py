@@ -691,7 +691,14 @@ async def test_organization_member_update_budget_omission_and_null_preserve_exis
     from litellm.proxy._types import LitellmUserRoles, OrganizationMemberUpdateRequest, UserAPIKeyAuth
     from litellm.proxy.management_endpoints import organization_endpoints
 
-    budget_state = {"max_budget": 100.0}
+    class BudgetState:
+        def __init__(self) -> None:
+            self.max_budget: float | None = 100.0
+
+        def store(self, max_budget: float | None) -> None:
+            self.max_budget = max_budget
+
+    budget_state = BudgetState()
 
     def membership_row():
         row = MagicMock()
@@ -705,14 +712,14 @@ async def test_organization_member_update_budget_omission_and_null_preserve_exis
                 "budget_id": "budget-1",
                 "created_at": datetime(2024, 1, 1),
                 "updated_at": datetime(2024, 1, 1),
-                "litellm_budget_table": {"budget_id": "budget-1", **budget_state},
+                "litellm_budget_table": {"budget_id": "budget-1", "max_budget": budget_state.max_budget},
             }
 
         row.model_dump.side_effect = dump
         return row
 
     async def update_budget(*, budget_obj, user_api_key_dict):
-        budget_state["max_budget"] = budget_obj.max_budget
+        budget_state.store(budget_obj.max_budget)
 
     mock_db = SimpleNamespace(
         litellm_organizationtable=SimpleNamespace(find_unique=AsyncMock(return_value=SimpleNamespace())),

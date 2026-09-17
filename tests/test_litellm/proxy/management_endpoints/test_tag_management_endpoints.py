@@ -1,7 +1,8 @@
 import inspect
 import json
 from collections.abc import Sequence
-from typing import Optional
+from types import MappingProxyType, SimpleNamespace
+from typing import Mapping, Optional
 
 import pytest
 from fastapi import HTTPException
@@ -18,6 +19,20 @@ from litellm.proxy.proxy_server import app
 from litellm.types.tag_management import TagDeleteRequest, TagInfoRequest, TagNewRequest
 
 client = TestClient(app)
+
+
+class _BudgetState:
+    def __init__(self, values: Mapping[str, object]) -> None:
+        self._values: Mapping[str, object] = MappingProxyType(dict(values))
+
+    def store(self, values: Mapping[str, object]) -> None:
+        self._values = MappingProxyType({**self._values, **values})
+
+    def get(self, field: str) -> object:
+        return self._values[field]
+
+    def row(self) -> SimpleNamespace:
+        return SimpleNamespace(**self._values)
 
 
 class FakeVerificationTokenTable:
@@ -219,11 +234,10 @@ async def test_update_tag():
 @pytest.mark.asyncio
 async def test_new_tag_persists_a_budget():
     from datetime import datetime
-    from types import SimpleNamespace
 
     from litellm.proxy.management_endpoints.tag_management_endpoints import new_tag
 
-    budget_state = {"budget_id": "budget-1", "max_budget": None}
+    budget_state = _BudgetState({"budget_id": "budget-1", "max_budget": None})
     created_tag = SimpleNamespace(
         tag_name="budget-tag",
         description=None,
@@ -238,8 +252,8 @@ async def test_new_tag_persists_a_budget():
     mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
 
     async def create_budget(data, **_):
-        budget_state.update(data)
-        return SimpleNamespace(**budget_state)
+        budget_state.store(data)
+        return budget_state.row()
 
     async def create_tag(data, **_):
         created_tag.budget_id = data["budget_id"]
@@ -266,7 +280,7 @@ async def test_new_tag_persists_a_budget():
             user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
         )
 
-    assert budget_state["max_budget"] == 25.0
+    assert budget_state.get("max_budget") == 25.0
     assert created_tag.budget_id == "budget-1"
 
 
@@ -277,20 +291,21 @@ async def test_new_tag_persists_a_budget():
 )
 async def test_update_tag_explicit_null_preserves_general_budget_fields(field):
     from datetime import datetime
-    from types import SimpleNamespace
 
     from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
     from litellm.types.tag_management import TagUpdateRequest
 
-    budget_state = {
-        "budget_id": "budget-1",
-        "max_budget": 100.0,
-        "soft_budget": 80.0,
-        "model_max_budget": {"model-a": {"max_budget": 50.0}},
-        "tpm_limit": 1000,
-        "rpm_limit": 100,
-        "budget_duration": "30d",
-    }
+    budget_state = _BudgetState(
+        {
+            "budget_id": "budget-1",
+            "max_budget": 100.0,
+            "soft_budget": 80.0,
+            "model_max_budget": {"model-a": {"max_budget": 50.0}},
+            "tpm_limit": 1000,
+            "rpm_limit": 100,
+            "budget_duration": "30d",
+        }
+    )
     existing_tag = SimpleNamespace(budget_id="budget-1")
     updated_tag = SimpleNamespace(
         tag_name="budget-tag",
@@ -307,8 +322,8 @@ async def test_update_tag_explicit_null_preserves_general_budget_fields(field):
     mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
 
     async def update_budget(where, data, **_):
-        budget_state.update(data)
-        return SimpleNamespace(**budget_state)
+        budget_state.store(data)
+        return budget_state.row()
 
     mock_db.litellm_budgettable.update = update_budget
     with (
@@ -334,18 +349,17 @@ async def test_update_tag_explicit_null_preserves_general_budget_fields(field):
         "tpm_limit": 1000,
         "rpm_limit": 100,
     }
-    assert budget_state[field] == expected_values[field]
+    assert budget_state.get(field) == expected_values[field]
 
 
 @pytest.mark.asyncio
 async def test_update_tag_explicit_null_clears_budget_duration():
     from datetime import datetime
-    from types import SimpleNamespace
 
     from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
     from litellm.types.tag_management import TagUpdateRequest
 
-    budget_state = {"budget_id": "budget-1", "budget_duration": "30d"}
+    budget_state = _BudgetState({"budget_id": "budget-1", "budget_duration": "30d"})
     existing_tag = SimpleNamespace(budget_id="budget-1")
     updated_tag = SimpleNamespace(
         tag_name="budget-tag",
@@ -362,8 +376,8 @@ async def test_update_tag_explicit_null_clears_budget_duration():
     mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
 
     async def update_budget(where, data, **_):
-        budget_state.update(data)
-        return SimpleNamespace(**budget_state)
+        budget_state.store(data)
+        return budget_state.row()
 
     mock_db.litellm_budgettable.update = update_budget
     with (
@@ -382,7 +396,7 @@ async def test_update_tag_explicit_null_clears_budget_duration():
             user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
         )
 
-    assert budget_state["budget_duration"] is None
+    assert budget_state.get("budget_duration") is None
 
 
 @pytest.mark.asyncio
