@@ -2637,10 +2637,15 @@ async def _inherit_org_identity(
         )
     except OrganizationNotFoundError:
         return
-    except Exception:  # noqa: BLE001  # DB outage handling is decided by allow_requests_on_db_unavailable
-        if not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable():
+    except Exception as e:  # noqa: BLE001  # only a DB outage may fail auth here, anything else degrades to no org limits
+        if (
+            PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e)
+            and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+        ):
             raise
         verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
+        return
+    if org_object is None:
         return
     user_api_key_auth_obj.organization_alias = org_object.organization_alias
     user_api_key_auth_obj.organization_metadata = org_object.metadata
