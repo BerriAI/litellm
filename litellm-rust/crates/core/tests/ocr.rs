@@ -744,6 +744,86 @@ async fn cancellation_at_provider_hook_prevents_execution_and_further_resumption
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn cancellation_acknowledges_blocking_preparation_completion() {
+    use std::future::Future;
+    use std::io::Write;
+    use std::task::Poll;
+
+    use crate::call_lifecycle::host::HostFailure;
+
+    let path = std::env::temp_dir().join(format!("litellm-ocr-{}.fifo", rand::random::<u64>()));
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let request = wire_request("mistral/model", "http://127.0.0.1:1", json!({})).with_document(
+        super::OcrDocumentInput::Path {
+            path: path.clone(),
+            mime_type: Some("application/pdf".into()),
+        },
+    );
+    let NativeOutcome::Completed(mut call) =
+        OcrCall::admit(super::test_support::ocr_client(), OcrAdmission::all())
+    else {
+        panic!("supported call declined")
+    };
+    let mut request = Some(request);
+    let mut result = None;
+    loop {
+        match call.resume(result.take()).await.unwrap() {
+            OcrCallStep::Host(OcrHostOperation::ProjectRequest) => break,
+            OcrCallStep::Host(operation) => result = Some(NoopOcrHost.invoke(operation).await),
+            OcrCallStep::Complete(_) => panic!("provider executed before request projection"),
+        }
+    }
+    let mut preparation = Box::pin(call.resume(Some(OcrHostResult::Request(Ok((
+        Box::new(request.take().unwrap()),
+        false,
+    ))))));
+    std::future::poll_fn(|cx| {
+        assert!(preparation.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    drop(preparation);
+
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let writer_path = path.clone();
+    let writer = tokio::task::spawn_blocking(move || {
+        let mut fifo = std::fs::File::options()
+            .write(true)
+            .open(writer_path)
+            .unwrap();
+        entered_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+        fifo.write_all(b"document").unwrap();
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let selected = crate::ocr::Error::InvalidRequest("cancelled".into());
+    let mut acknowledgement = Box::pin(call.interrupt(HostFailure::Cancelled(selected.clone())));
+    std::future::poll_fn(|cx| {
+        assert!(acknowledgement.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    release_tx.send(()).unwrap();
+    assert!(
+        matches!(acknowledgement.await, Err(crate::ocr::Error::InvalidRequest(message)) if message == "cancelled")
+    );
+    writer.await.unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
 #[tokio::test]
 async fn missing_host_result_preserves_pending_operation() {
     use crate::call_lifecycle::host::HostPhase;
