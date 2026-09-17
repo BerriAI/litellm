@@ -20,7 +20,10 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
     LiteLLMCompletionStreamingIterator,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponsesAPIStreamEvents
+from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     Delta,
@@ -975,24 +978,21 @@ def _reasoning_chunk(reasoning: str, finish_reason: str | None = None) -> ModelR
     )
 
 
-async def _collect_events(iterator: LiteLLMCompletionStreamingIterator, sync_mode: bool) -> list:
+async def _collect_events(
+    iterator: LiteLLMCompletionStreamingIterator, sync_mode: bool
+) -> list[BaseLiteLLMOpenAIResponseObject]:
     if sync_mode:
         return list(iterator)
     return [event async for event in iterator]
 
 
-def _is_message_item(event) -> bool:
+def _is_message_item(event: BaseLiteLLMOpenAIResponseObject) -> bool:
     return getattr(getattr(event, "item", None), "type", None) == "message"
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_tool_only_stream_emits_no_message_item_events(sync_mode):
-    """
-    A turn that only calls tools must not announce or close a message output item:
-    Vercel AI SDK clients reject text/item events that reference a message id they
-    never saw in response.output_item.added.
-    """
+async def test_tool_only_stream_emits_no_message_item_events(sync_mode: bool):
     iterator: Final = _build_iterator([_tool_call_chunk(), _chunk("", finish_reason="tool_calls")])
 
     events: Final = await _collect_events(iterator, sync_mode)
@@ -1017,12 +1017,7 @@ async def test_tool_only_stream_emits_no_message_item_events(sync_mode):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_reasoning_then_text_announces_message_item_before_text_events(sync_mode):
-    """
-    When reasoning is announced first, a later text delta still has to be preceded by
-    the message output_item.added/content_part.added, and every text-scoped event must
-    reference that announced message item id.
-    """
+async def test_reasoning_then_text_announces_message_item_before_text_events(sync_mode: bool):
     iterator: Final = _build_iterator(
         [
             _reasoning_chunk("let me think"),
@@ -1065,7 +1060,7 @@ async def test_reasoning_then_text_announces_message_item_before_text_events(syn
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_tool_then_reasoning_then_text_gives_message_its_own_output_index(sync_mode):
+async def test_tool_then_reasoning_then_text_gives_message_its_own_output_index(sync_mode: bool):
     iterator: Final = _build_iterator(
         [
             _tool_call_chunk(),
@@ -1093,7 +1088,7 @@ async def test_tool_then_reasoning_then_text_gives_message_its_own_output_index(
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode):
+async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode: bool):
     iterator: Final = _build_iterator([_chunk("Hel"), _chunk("lo", finish_reason="stop")])
 
     events: Final = await _collect_events(iterator, sync_mode)
