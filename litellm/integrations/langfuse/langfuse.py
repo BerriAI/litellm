@@ -45,14 +45,13 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from langfuse import Langfuse
-    from opentelemetry.context import Context
+    from langfuse import Langfuse, LangfuseGeneration
 
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 else:
-    Context = Any
     DynamicLoggingCache = Any
     Langfuse = Any
+    LangfuseGeneration = Any
 
 
 _DENIED_STEERING_KEYS: Final = frozenset({"headers", "endpoint", "caching_groups", "previous_models"})
@@ -984,18 +983,6 @@ class LangFuseLogger:
                     parent_observation_id=resolve_observation_id(parent_observation_id),  # pyright: ignore[reportArgumentType]  # metadata value, str or None at runtime
                     existing_trace=existing_trace_id is not None,
                 )
-                log_provider_specific_information_as_span(
-                    client=self.Langfuse,
-                    context=trace_context,
-                    enrichments=enrichments,
-                    claim_trace_root=claim_trace_root,
-                )
-                self._log_guardrail_information_as_span(
-                    client=self.Langfuse,
-                    context=trace_context,
-                    standard_logging_object=standard_logging_object,
-                    claim_trace_root=claim_trace_root,
-                )
                 generation: Final = start_generation(
                     client=self.Langfuse,
                     context=trace_context,
@@ -1014,6 +1001,12 @@ class LangFuseLogger:
                         input=trace_params.get("input") if "input" in update_trace_keys else None,
                         output=trace_params.get("output") if "output" in update_trace_keys else None,
                     )
+                log_provider_specific_information_as_span(
+                    client=self.Langfuse, parent=generation, enrichments=enrichments
+                )
+                self._log_guardrail_information_as_span(
+                    client=self.Langfuse, parent=generation, standard_logging_object=standard_logging_object
+                )
                 generation.end(end_time=to_unix_nanos(end_time))
 
             # log_event_on_langfuse tuple-unpacks this and re-wraps it in the dict callers cache.
@@ -1158,9 +1151,8 @@ class LangFuseLogger:
     def _log_guardrail_information_as_span(
         self,
         client: "Langfuse",
-        context: "Context",
+        parent: "LangfuseGeneration",
         standard_logging_object: StandardLoggingPayload | None,
-        claim_trace_root: bool,
     ):
         """
         Log guardrail information as a span
@@ -1193,10 +1185,9 @@ class LangFuseLogger:
 
             span = start_child_span(
                 client=client,
-                context=context,
+                parent=parent,
                 name="guardrail",
                 start_time=guardrail_entry.get("start_time", None),
-                claim_trace_root=claim_trace_root,
                 attributes={  # mutable-ok: langfuse serializes this payload, a proxy is not json-encodable
                     "input": guardrail_entry.get("guardrail_request", None),
                     "output": guardrail_entry.get("guardrail_response", None),
@@ -1288,20 +1279,10 @@ def _add_prompt_to_generation_params(
 def log_provider_specific_information_as_span(
     *,
     client: "Langfuse",
-    context: "Context",
+    parent: "LangfuseGeneration",
     enrichments: Mapping[str, Any],
-    claim_trace_root: bool,
 ):
-    """
-    Logs provider-specific information as spans.
-
-    Parameters:
-        trace: The tracing object used to log spans.
-        enrichments: The litellm-computed fields on the emitted payload.
-
-    Returns:
-        None
-    """
+    """Logs provider-specific information as spans under the generation."""
 
     _hidden_params: Final[Mapping[str, object] | None] = enrichments.get("hidden_params", None)
     if _hidden_params is None:
@@ -1314,38 +1295,23 @@ def log_provider_specific_information_as_span(
             for elem in vertex_ai_grounding_metadata:
                 if isinstance(elem, dict):
                     for key, value in elem.items():
-                        _end_grounding_span(
-                            client=client, context=context, name=key, value=value, claim_trace_root=claim_trace_root
-                        )
+                        _end_grounding_span(client=client, parent=parent, name=key, value=value)
                 else:
-                    _end_grounding_span(
-                        client=client,
-                        context=context,
-                        name="vertex_ai_grounding_metadata",
-                        value=elem,
-                        claim_trace_root=claim_trace_root,
-                    )
+                    _end_grounding_span(client=client, parent=parent, name="vertex_ai_grounding_metadata", value=elem)
         else:
             _end_grounding_span(
-                client=client,
-                context=context,
-                name="vertex_ai_grounding_metadata",
-                value=vertex_ai_grounding_metadata,
-                claim_trace_root=claim_trace_root,
+                client=client, parent=parent, name="vertex_ai_grounding_metadata", value=vertex_ai_grounding_metadata
             )
 
 
-def _end_grounding_span(
-    *, client: "Langfuse", context: "Context", name: str, value: object, claim_trace_root: bool
-) -> None:
+def _end_grounding_span(*, client: "Langfuse", parent: "LangfuseGeneration", name: str, value: object) -> None:
     from litellm.integrations.langfuse.langfuse_sdk import start_child_span
 
     start_child_span(
         client=client,
-        context=context,
+        parent=parent,
         name=name,
         start_time=None,
-        claim_trace_root=claim_trace_root,
         attributes={"input": value},  # mutable-ok: langfuse serializes this payload
     ).end()
 

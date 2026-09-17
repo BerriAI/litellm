@@ -557,11 +557,13 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.logger.Langfuse.flush()
         return [span for span in self.span_exporter.get_finished_spans() if span.name == name]
 
-    def _drive_with_canary(self, extra_metadata=None, hidden_params=None):
+    def _drive_with_canary(self, extra_metadata=None, hidden_params=None, guardrail_information=None):
         metadata = {**self._canary_request_metadata(), **(extra_metadata or {})}
         payload = self._build_standard_logging_payload(trace_id="canary-trace-id")
         if hidden_params is not None:
             payload["hidden_params"] = hidden_params
+        if guardrail_information is not None:
+            payload["guardrail_information"] = guardrail_information
         kwargs = {**self._build_langfuse_kwargs(payload), "response_cost": 0.25}
         self.use_real_langfuse_client()
 
@@ -640,6 +642,36 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         ]
         assert span_inputs == ["ground-a", "ground-b"]
         assert self.CANARY not in self._emitted_payload_text()
+
+    def test_only_the_generation_claims_the_trace_root(self):
+        """
+        Langfuse v4 derives trace name and I/O from every observation marked root, and
+        the one with the latest start wins. A post-call guardrail starts after the model
+        call, so it must nest under the generation instead of claiming root itself, or
+        the trace shows the guardrail's request instead of the model's.
+        """
+        self._drive_with_canary(
+            hidden_params={"vertex_ai_grounding_metadata": ["ground-a"]},
+            guardrail_information=[
+                {
+                    "guardrail_name": "pii-post",
+                    "guardrail_mode": "post_call",
+                    "guardrail_request": {"texts": ["post-call scan"]},
+                    "guardrail_response": {"flagged": False},
+                    "start_time": 1704110402.0,
+                    "end_time": 1704110403.0,
+                }
+            ],
+        )
+
+        [generation] = [span for span in self.span_exporter.get_finished_spans() if span.name.startswith("litellm-")]
+        [guardrail] = self.exported_spans_named("guardrail")
+        [grounding] = self.exported_spans_named("vertex_ai_grounding_metadata")
+        assert generation.attributes.get("langfuse.internal.as_root") is True
+        for child in (guardrail, grounding):
+            assert child.parent.span_id == generation.context.span_id
+            assert child.context.trace_id == generation.context.trace_id
+            assert "langfuse.internal.as_root" not in child.attributes
 
     def test_caller_cannot_spoof_an_allowlisted_identity_field(self):
         """

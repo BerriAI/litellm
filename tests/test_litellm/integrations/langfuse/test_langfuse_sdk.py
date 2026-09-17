@@ -110,17 +110,17 @@ def test_guardrail_span_with_float_timestamps_does_not_break_the_generation(clie
     lf, exporter = client
     context, claim_root = open_trace_context(client=lf, trace_id="9" * 32, parent_observation_id=None)
     guardrail_start = 1709294400.0
+    generation = start_generation(
+        client=lf, context=context, name="gen", start_time=CALL_START, claim_trace_root=claim_root, attributes={}
+    )
     start_child_span(
         client=lf,
-        context=context,
+        parent=generation,
         name="guardrail",
         start_time=guardrail_start,
-        claim_trace_root=claim_root,
         attributes={},
     ).end(end_time=to_unix_nanos(guardrail_start + 2))
-    start_generation(
-        client=lf, context=context, name="gen", start_time=CALL_START, claim_trace_root=claim_root, attributes={}
-    ).end(end_time=to_unix_nanos(CALL_END))
+    generation.end(end_time=to_unix_nanos(CALL_END))
     lf.flush()
 
     guardrail = _only_span(exporter, "guardrail")
@@ -152,30 +152,35 @@ def test_generation_claims_trace_root_only_without_a_real_parent(client):
     assert _only_span(exporter, "child-gen").attributes.get(AS_ROOT_ATTRIBUTE) is None
 
 
-def test_child_span_keeps_its_own_window_and_stays_a_sibling(client):
+def test_child_span_keeps_its_own_window_and_only_the_generation_claims_root(client):
+    """The server takes trace name and I/O from every root observation, latest start wins.
+
+    A post-call guardrail starts after the model call, so if it also claimed root the
+    trace would show the guardrail's I/O instead of the model's.
+    """
     lf, exporter = client
     context, claim_root = open_trace_context(client=lf, trace_id="d" * 32, parent_observation_id=None)
-    guardrail_start = CALL_START + timedelta(seconds=1)
+    generation = start_generation(
+        client=lf, context=context, name="gen", start_time=CALL_START, claim_trace_root=claim_root, attributes={}
+    )
+    guardrail_start = CALL_END + timedelta(seconds=1)
     start_child_span(
         client=lf,
-        context=context,
+        parent=generation,
         name="guardrail",
         start_time=guardrail_start,
-        claim_trace_root=claim_root,
         attributes={},
     ).end(end_time=to_unix_nanos(guardrail_start + timedelta(seconds=2)))
-    start_generation(
-        client=lf, context=context, name="gen", start_time=CALL_START, claim_trace_root=claim_root, attributes={}
-    ).end(end_time=to_unix_nanos(CALL_END))
+    generation.end(end_time=to_unix_nanos(CALL_END))
     lf.flush()
 
     guardrail = _only_span(exporter, "guardrail")
-    generation = _only_span(exporter, "gen")
+    exported_generation = _only_span(exporter, "gen")
     assert (guardrail.end_time - guardrail.start_time) == 2 * 1_000_000_000
-    assert guardrail.context.trace_id == generation.context.trace_id
-    # the shared remote parent is fabricated and never exported, so both must claim trace root
-    assert guardrail.attributes.get(AS_ROOT_ATTRIBUTE) is True
-    assert generation.attributes.get(AS_ROOT_ATTRIBUTE) is True
+    assert guardrail.context.trace_id == exported_generation.context.trace_id
+    assert guardrail.parent.span_id == exported_generation.context.span_id
+    assert AS_ROOT_ATTRIBUTE not in guardrail.attributes
+    assert exported_generation.attributes.get(AS_ROOT_ATTRIBUTE) is True
 
 
 def test_release_is_carried_on_the_root_observation(client):

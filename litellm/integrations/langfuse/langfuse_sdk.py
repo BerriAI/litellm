@@ -168,23 +168,22 @@ def start_generation(
 def start_child_span(
     *,
     client: Langfuse,
-    context: Context,
+    parent: LangfuseGeneration,
     name: str,
     start_time: datetime | float | None,
-    claim_trace_root: bool,
     attributes: Mapping[str, object],
 ) -> LangfuseSpan:
-    """Create a sibling observation inside the same trace, keeping its own window.
+    """Create an observation under the generation, keeping its own time window.
 
-    When the shared parent is the fabricated remote span, every observation must
-    claim trace root itself — the SDK's own remote-parent paths stamp each span —
-    or it exports with a parent id that is never exported.
+    The server derives the trace's name and I/O from every observation marked
+    root, last start time wins, so only the generation may claim root. Nesting
+    the rest under it keeps a post-call guardrail from rewriting the trace.
     """
     otel_span: Final = client._otel_tracer.start_span(  # pyright: ignore[reportPrivateUsage]  # only route to a historical start time
-        name=name, context=context, start_time=to_unix_nanos(start_time)
+        name=name,
+        context=otel_trace.set_span_in_context(parent._otel_span),  # pyright: ignore[reportPrivateUsage]  # the wrapper exposes no public span handle
+        start_time=to_unix_nanos(start_time),
     )
-    if claim_trace_root:
-        otel_span.set_attribute(AS_ROOT_ATTRIBUTE, True)
     return LangfuseSpan(otel_span=otel_span, langfuse_client=client, **attributes)  # pyright: ignore[reportArgumentType]  # kwargs-ok: callback-built params, v2 accepted the same shapes
 
 
