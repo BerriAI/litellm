@@ -9318,7 +9318,7 @@ def _request_with_headers(**headers: str) -> Request:
 def _response_with_usage(**usage_kwargs: object):
     from litellm.types.utils import ModelResponse, Usage
 
-    return ModelResponse(usage=Usage(**usage_kwargs))  # type: ignore[arg-type]
+    return ModelResponse(usage=Usage(**usage_kwargs))
 
 
 class TestIncludeCostInUsage:
@@ -9351,7 +9351,7 @@ class TestIncludeCostInUsage:
     def test_cost_is_recorded_on_usage(self):
         response: Final = _response_with_usage(prompt_tokens=11, completion_tokens=5, total_tokens=16)
         ProxyBaseLLMRequestProcessing._set_usage_cost(response, 5.85e-06)
-        assert response.usage.cost == 5.85e-06  # type: ignore[attr-defined]
+        assert response.model_dump()["usage"]["cost"] == 5.85e-06
 
     def test_a_provider_supplied_cost_is_replaced(self):
         """
@@ -9361,7 +9361,17 @@ class TestIncludeCostInUsage:
         """
         response: Final = _response_with_usage(prompt_tokens=11, completion_tokens=5, total_tokens=16, cost=8.775e-06)
         ProxyBaseLLMRequestProcessing._set_usage_cost(response, 5.85e-06)
-        assert response.usage.cost == 5.85e-06  # type: ignore[attr-defined]
+        assert response.model_dump()["usage"]["cost"] == 5.85e-06
+
+    @pytest.mark.parametrize("unpriced", ["", None, "None"])
+    def test_an_unpriced_deployment_drops_a_provider_supplied_cost(self, unpriced):
+        """
+        An upstream's own figure must not survive as the answer when the gateway has no
+        price of its own, or an opted-in caller reads a number the gateway never charged.
+        """
+        response: Final = _response_with_usage(prompt_tokens=11, completion_tokens=5, total_tokens=16, cost=8.775e-06)
+        ProxyBaseLLMRequestProcessing._set_usage_cost(response, unpriced)
+        assert "cost" not in response.model_dump()["usage"]
 
     @pytest.mark.parametrize("unpriced", ["", None, "None"])
     def test_an_unpriced_deployment_leaves_the_field_absent(self, unpriced):
