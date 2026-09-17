@@ -2642,3 +2642,18 @@ async def test_handle_stream_message_is_untouched_while_keepalives_are_unconfigu
 
     assert not any(chunk.startswith(":") for chunk in chunks)
     assert json.loads(chunks[-1].removeprefix("data: "))["result"]["kind"] == "task"
+
+
+def test_forwarding_headers_minted_bearer_replaces_a_forwarded_authorization_of_any_case():
+    """A client header the admin chose to forward keeps the casing the config named it with, so a forwarded
+    `authorization` must not travel next to the minted `Authorization` as a second header line."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _forwarding_headers
+
+    merged = _forwarding_headers(
+        caller_identity={},
+        request_data={},
+        agent_extra_headers={"authorization": "Bearer client-token", "X-Custom": "kept"},
+        backend_auth_header={"Authorization": "Bearer minted-token"},
+    )
+
+    assert merged == {"X-Custom": "kept", "Authorization": "Bearer minted-token"}

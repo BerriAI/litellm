@@ -75,10 +75,29 @@ def test_a2a_registry_integration():
     assert post.call_args.kwargs["headers"]["X-Agent"] == "static"
 
 
-def test_streaming_chat_to_an_agent_whose_card_declines_streaming_uses_a_blocking_send():
+def _foundry_card_stored_through_the_agents_api() -> dict:
+    from litellm.proxy.a2a.agent_card import merge_agent_card
+
+    return merge_agent_card(
+        {"name": "Foundry", "url": "https://foundry.example.com/a2a", "capabilities": {"streaming": False}},
+        proxy_url="http://localhost:4000/a2a/foundry-agent",
+        proxy_base_url="http://localhost:4000",
+    )
+
+
+@pytest.mark.parametrize(
+    "agent_card_params",
+    [
+        {"url": "https://foundry.example.com/a2a", "capabilities": {"streaming": False}},
+        _foundry_card_stored_through_the_agents_api(),
+    ],
+    ids=["card registered verbatim from config.yaml", "card stored through POST /v1/agents"],
+)
+def test_streaming_chat_to_an_agent_whose_card_declines_streaming_uses_a_blocking_send(agent_card_params: dict):
     """Microsoft Foundry agents publish `capabilities.streaming: false` and answer message/stream with a
     JSON-RPC error. A streaming chat call to such an agent must post a blocking message/send and hand the
-    caller the answer as a stream, and an agent whose card is silent about streaming keeps message/stream."""
+    caller the answer as a stream, whether the card was registered verbatim from config.yaml or stored
+    through POST /v1/agents, which keeps only truthy capabilities and so drops the `false` itself."""
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
     from litellm.types.agents import AgentResponse
@@ -86,7 +105,7 @@ def test_streaming_chat_to_an_agent_whose_card_declines_streaming_uses_a_blockin
     foundry_agent = AgentResponse(
         agent_id="foundry-id",
         agent_name="foundry-agent",
-        agent_card_params={"url": "https://foundry.example.com/a2a", "capabilities": {"streaming": False}},
+        agent_card_params=agent_card_params,
         litellm_params={"api_key": "registry-key"},
     )
     client = HTTPHandler()
@@ -126,14 +145,22 @@ def test_streaming_chat_to_an_agent_whose_card_declines_streaming_uses_a_blockin
     assert chunks[-1].choices[0].finish_reason == "stop"
 
 
-def test_registry_lookup_leaves_streaming_alone_when_the_card_does_not_decline_it():
+@pytest.mark.parametrize(
+    "agent_card_params",
+    [
+        {"url": "https://agent.example.com/a2a"},
+        {"url": "https://agent.example.com/a2a", "capabilities": {"streaming": True}},
+    ],
+    ids=["card without a capabilities block", "card says streaming true"],
+)
+def test_registry_lookup_leaves_streaming_alone_when_the_card_does_not_decline_it(agent_card_params: dict):
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
     from litellm.types.agents import AgentResponse
 
     silent_agent = AgentResponse(
         agent_id="silent-id",
         agent_name="silent-agent",
-        agent_card_params={"url": "https://agent.example.com/a2a"},
+        agent_card_params=agent_card_params,
         litellm_params={"api_key": "registry-key"},
     )
     original_agents = global_agent_registry.agent_list.copy()
