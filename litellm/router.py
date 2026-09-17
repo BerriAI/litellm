@@ -112,6 +112,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
+    MODEL_INFO_DISCOVERY_PROVIDERS,
     MODEL_INFO_REFRESH_CONCURRENCY,
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
@@ -10357,7 +10358,7 @@ class Router:
             )
         )
         model, provider, dynamic_api_key, api_base = litellm.get_llm_provider(model=params.model, litellm_params=params)
-        if provider not in ("hosted_vllm", "openai", "text-completion-openai", "openai_like"):
+        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
             return
         if api_base is None or "*" in model or params.get("use_clientside_credentials"):
             return
