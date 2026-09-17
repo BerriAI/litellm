@@ -21,3 +21,8 @@ thiserror.workspace = true
 [dev-dependencies]
 rstest.workspace = true
 tokio.workspace = true
+
+[[bench]]
+name = "allocations"
+harness = false
+required-features = ["aws", "sse"]
