@@ -7981,7 +7981,10 @@ async def test_fire_mcp_tool_call_logging_applies_hook_content():
         isError=False,
     )
 
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_mock):
+    with patch(  # test-quality-ok: [TQ008] inject proxy logging collaborator
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        proxy_logging_mock,
+    ):
         hooked_result = await _fire_mcp_tool_call_logging(
             logging_obj=logging_obj,
             result=result,
