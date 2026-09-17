@@ -574,6 +574,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
         self.log_raw_request_response = log_raw_request_response
         self._native_callback_fast_path: bool = False
+        self._litellm_internal_model_credentials: Mapping[str, object] | None = None
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks

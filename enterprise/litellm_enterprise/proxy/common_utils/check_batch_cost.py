@@ -867,11 +867,7 @@ class CheckBatchCost:
             optional_params={},
             custom_llm_provider=str(llm_provider) if llm_provider else None,
         )
-        # deployment credentials stay off litellm_params because every callback sees those; the
-        # line-item logger reads them back off this private attribute to fetch the batch files
-        setattr(  # noqa: B010  # Logging has no declared attribute for trusted credentials transport
-            logging_obj, "_litellm_internal_model_credentials", MappingProxyType(dict(credentials))
-        )
+        logging_obj._litellm_internal_model_credentials = MappingProxyType(dict(credentials))  # pyright: ignore[reportPrivateUsage]  # trusted credentials transport, consumed by batch_line_item_logging
 
         if not await self._claim_job_for_costing(job):
             verbose_proxy_logger.info(
