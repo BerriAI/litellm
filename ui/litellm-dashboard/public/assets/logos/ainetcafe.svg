@@ -6,6 +6,5 @@
     </linearGradient>
   </defs>
   <rect width="256" height="256" rx="48" fill="#0B0F0E"/>
-  <!-- bolt fills ~85% of the box so it reads at 24-32px -->
   <path d="M152 14 L44 150 H118 L104 242 L212 106 H138 Z" fill="url(#g)"/>
 </svg>
