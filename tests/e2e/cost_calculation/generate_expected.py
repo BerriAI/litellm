@@ -94,11 +94,22 @@ def expected_breakdown(model: FrontierModel, case: Case) -> ExpectedCost:
         or rates.output_cost_per_token
         or 0.0
     )
+    write_rate: Final = (
+        rates.cache_creation_input_token_cost
+        if rates.cache_creation_input_token_cost is not None
+        else in_rate
+    )
     input_cost: Final = (
         u.fresh_input_tokens * in_rate
-        + u.cache_read_tokens * (rates.cache_read_input_token_cost or 0.0)
-        + u.cache_write_5m_tokens * (rates.cache_creation_input_token_cost or 0.0)
-        + u.cache_write_1h_tokens * (rates.cache_creation_input_token_cost_above_1hr or 0.0)
+        + u.cache_read_tokens
+        * (rates.cache_read_input_token_cost if rates.cache_read_input_token_cost is not None else in_rate)
+        + u.cache_write_5m_tokens * write_rate
+        + u.cache_write_1h_tokens
+        * (
+            rates.cache_creation_input_token_cost_above_1hr
+            if rates.cache_creation_input_token_cost_above_1hr is not None
+            else write_rate
+        )
         + u.audio_input_tokens * (rates.input_cost_per_audio_token or 0.0)
     )
     output_cost: Final = (
