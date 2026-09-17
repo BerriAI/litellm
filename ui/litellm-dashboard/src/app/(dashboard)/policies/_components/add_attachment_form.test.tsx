@@ -210,6 +210,23 @@ describe("AddAttachmentForm", () => {
     });
   });
 
+  it("sends a negative priority typed one keystroke at a time", async () => {
+    const user = userEvent.setup();
+    const createAttachment = vi.fn().mockResolvedValue({});
+    renderWithProviders(<AddAttachmentForm {...defaultProps} createAttachment={createAttachment} />);
+    await selectPolicy(user, "policy-alpha");
+    const priority = screen.getByLabelText("Priority");
+    await user.type(priority, "-5");
+    expect(priority).toHaveValue(-5);
+    await submit(user);
+    await waitFor(() => expect(createAttachment).toHaveBeenCalledTimes(1));
+    expect(createAttachment).toHaveBeenCalledWith("test-token", {
+      policy_name: "policy-alpha",
+      scope: "*",
+      priority: -5,
+    });
+  });
+
   it("omits priority from the attachment when the field is left blank", async () => {
     const user = userEvent.setup();
     const createAttachment = vi.fn().mockResolvedValue({});
