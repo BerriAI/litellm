@@ -306,6 +306,9 @@ async def image_edit_api(
         data["image"] = image_files
     if mask_files:
         data["mask"] = mask_files
+    # Without this the raw upload fields go out to the provider, since unknown keys are forwarded as params
+    data.pop("image[]", None)
+    data.pop("mask[]", None)
 
     for _field in ("image", "mask"):
         if _field in data and isinstance(data[_field], str):
