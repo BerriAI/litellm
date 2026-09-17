@@ -80,6 +80,13 @@ def test_falls_back_to_request_model_when_response_model_is_missing():
     assert result["kwargs"]["response_cost"] == pytest.approx(expected_cost)
 
 
+def test_call_naming_no_model_is_logged_as_unknown_and_never_priced_as_a_registry_model():
+    result = _handler_result({"usage": {"input_tokens": 10, "output_tokens": 2}}, {})
+
+    assert result["kwargs"]["model"] == "typesafe/unknown"
+    assert result["kwargs"]["response_cost"] == 0.0
+
+
 def test_missing_usage_is_zero_cost():
     result = _handler_result({"model": "jev-1.13.0"}, {"model": "jev-latest"})
 

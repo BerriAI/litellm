@@ -71,7 +71,7 @@ class TypeSafePassthroughLoggingHandler:
         response_model: Final = response.model
         request_model_value: Final = request_body.get("model")
         request_model: Final = request_model_value if isinstance(request_model_value, str) else None
-        logged_model: Final = response_model or request_model or "jev-latest"
+        logged_model: Final = response_model or request_model or "unknown"
         model_name: Final = f"typesafe/{logged_model}"
         usage: Final = response.usage or _TypeSafeUsage()
         input_tokens: Final = usage.input_tokens
