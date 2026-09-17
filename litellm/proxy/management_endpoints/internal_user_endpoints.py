@@ -2140,6 +2140,9 @@ async def get_users(
     user_ids: str | None = fastapi.Query(default=None, description="Get list of users by user_ids"),
     sso_user_ids: str | None = fastapi.Query(default=None, description="Get list of users by sso_user_id"),
     user_email: str | None = fastapi.Query(default=None, description="Filter users by partial email match"),
+    user_alias: str | None = fastapi.Query(
+        default=None, description="Filter users by partial alias match (case-insensitive)"
+    ),
     search: str | None = fastapi.Query(
         default=None,
         description="Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive).",
@@ -2174,6 +2177,8 @@ async def get_users(
             Get list of users by sso_ids. Comma separated list of sso_ids.
         user_email: Optional[str]
             Filter users by partial email match
+        user_alias: Optional[str]
+            Filter users by partial alias match (case-insensitive)
         search: Optional[str]
             Combined search: matches users whose user_id or user_email contains the value (case-insensitive)
         team: Optional[str]
@@ -2234,6 +2239,9 @@ async def get_users(
             "contains": user_email,
             "mode": "insensitive",  # Case-insensitive search
         }
+
+    if user_alias:
+        where_conditions["user_alias"] = {"contains": user_alias, "mode": "insensitive"}
 
     if team is not None and isinstance(team, str):
         where_conditions["teams"] = {

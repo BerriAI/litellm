@@ -2078,6 +2078,71 @@ def test_get_users_search_matches_user_id_or_email(mocker):
         app.dependency_overrides.pop(user_api_key_auth, None)
 
 
+def test_get_users_filters_by_partial_user_alias(mocker):
+    """
+    `user_alias` filters rows and the total by a case-insensitive contains match, composes with other
+    filters, and an empty value applies no alias filter (a contains-"" match would drop users without an alias).
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    aliased_user_id = "user-with-alias"
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.user_id = aliased_user_id
+    mock_user_row.model_dump.return_value = {
+        "user_id": aliased_user_id,
+        "user_alias": "Jane Doe (Platform Team)",
+        "user_role": "internal_user",
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    find_many_wheres = []
+    count_wheres = []
+
+    async def mock_find_many(*args, **kwargs):
+        find_many_wheres.append(kwargs["where"])
+        return [mock_user_row]
+
+    async def mock_count(*args, **kwargs):
+        count_wheres.append(kwargs["where"])
+        return 1
+
+    async def mock_key_count(*args, **kwargs):
+        return 0
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+    mock_prisma_client.db.litellm_verificationtoken.count = mock_key_count
+    mocker.patch(  # test-quality-ok: /user/list reads prisma_client off proxy_server at call time
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        alias_response = client.get("/user/list", params={"user_alias": "jane DOE"})
+        assert alias_response.status_code == 200, alias_response.text
+        alias_where = {"user_alias": {"contains": "jane DOE", "mode": "insensitive"}}
+        assert find_many_wheres == [alias_where]
+        assert count_wheres == [alias_where]
+        assert [user["user_id"] for user in alias_response.json()["users"]] == [aliased_user_id]
+        assert alias_response.json()["total"] == 1
+
+        combined_response = client.get("/user/list", params={"user_alias": "jane", "role": "internal_user"})
+        assert combined_response.status_code == 200, combined_response.text
+        assert find_many_wheres[-1] == {
+            "user_role": "internal_user",
+            "user_alias": {"contains": "jane", "mode": "insensitive"},
+        }
+
+        empty_response = client.get("/user/list", params={"user_alias": ""})
+        assert empty_response.status_code == 200, empty_response.text
+        assert find_many_wheres[-1] == {}
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
 def test_update_internal_user_params_reset_max_budget_with_none():
     """
     Test that _update_internal_user_params allows setting max_budget to None.
