@@ -89,6 +89,15 @@ def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
     assert kwargs["litellm_metadata"] == {"baz": 123}
 
 
+def test_router_model_group_llm_provider_resolves_chatgpt_without_login(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    params: Final = LiteLLM_Params(model="chatgpt/gpt-5.4")
+
+    assert Router._model_group_llm_provider(params) == ("gpt-5.4", "chatgpt")
+    assert Router._model_group_llm_provider(LiteLLM_Params(model="no-such-provider-model-xyz")) == ("", "")
+    assert not any(tmp_path.iterdir())
+
+
 def test_router_with_model_info_and_model_group():
     """
     Test edge case where user specifies model_group in model_info
