@@ -15445,3 +15445,10 @@ def test_team_member_update_request_temp_budget_fields_must_be_set_together() ->
         TeamMemberUpdateRequest(team_id="team-1", user_id="user-1", temp_budget_increase=50.0)
     with pytest.raises(ValidationError, match="temp_budget_increase and temp_budget_expiry must be set together"):
         TeamMemberUpdateRequest(team_id="team-1", user_id="user-1", temp_budget_expiry="2030-01-01T00:00:00Z")
+
+
+def test_team_member_update_request_rejects_negative_temp_budget_increase() -> None:
+    with pytest.raises(ValidationError, match="greater than or equal to 0"):
+        TeamMemberUpdateRequest(
+            team_id="team-1", user_id="user-1", temp_budget_increase=-1.0, temp_budget_expiry="2030-01-01T00:00:00Z"
+        )

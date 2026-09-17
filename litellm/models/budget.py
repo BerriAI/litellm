@@ -5,7 +5,8 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Final
 
 from pydantic import ConfigDict
 
@@ -34,6 +35,20 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     temp_budget_expiry: datetime | None = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+    def effective_max_budget(self, now: datetime) -> float | None:
+        if self.max_budget is None:
+            return None
+        if self.temp_budget_increase is None or self.temp_budget_expiry is None:
+            return self.max_budget
+        expiry: Final = (
+            self.temp_budget_expiry.replace(tzinfo=timezone.utc)
+            if self.temp_budget_expiry.tzinfo is None
+            else self.temp_budget_expiry
+        )
+        if expiry <= now:
+            return self.max_budget
+        return self.max_budget + self.temp_budget_increase
 
 
 class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):

@@ -690,12 +690,7 @@ async def _get_team_member_budget_counter(
 
     team_member_budget: float | None = None
     if team_membership is not None and team_membership.litellm_budget_table is not None:
-        from litellm.proxy.auth.auth_checks import _effective_team_member_budget
-
-        team_member_budget = _effective_team_member_budget(
-            team_membership.litellm_budget_table,
-            now=datetime.now(timezone.utc),
-        )
+        team_member_budget = team_membership.litellm_budget_table.effective_max_budget(now=datetime.now(timezone.utc))
     else:
         default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
         if isinstance(default_budget_id, str):

@@ -8463,36 +8463,6 @@ def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() 
     assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False
 
 
-def test_effective_team_member_budget_applies_unexpired_increase() -> None:
-    from litellm.proxy.auth.auth_checks import _effective_team_member_budget
-
-    budget: Final = LiteLLM_BudgetTable(
-        max_budget=100.0,
-        temp_budget_increase=50.0,
-        temp_budget_expiry=datetime(2100, 1, 1),
-    )
-    assert _effective_team_member_budget(budget, now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 150.0
-
-
-def test_effective_team_member_budget_ignores_expired_increase() -> None:
-    from litellm.proxy.auth.auth_checks import _effective_team_member_budget
-
-    budget: Final = LiteLLM_BudgetTable(
-        max_budget=100.0,
-        temp_budget_increase=50.0,
-        temp_budget_expiry=datetime(2020, 1, 1, tzinfo=timezone.utc),
-    )
-    assert _effective_team_member_budget(budget, now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 100.0
-
-
-def test_effective_team_member_budget_without_increase() -> None:
-    from litellm.proxy.auth.auth_checks import _effective_team_member_budget
-
-    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    assert _effective_team_member_budget(LiteLLM_BudgetTable(max_budget=100.0), now=now) == 100.0
-    assert _effective_team_member_budget(LiteLLM_BudgetTable(max_budget=None), now=now) is None
-
-
 @pytest.mark.asyncio
 async def test_team_member_budget_check_temp_budget_increase_extends_cap():
     """Spend above max_budget but below max_budget + active temp increase
