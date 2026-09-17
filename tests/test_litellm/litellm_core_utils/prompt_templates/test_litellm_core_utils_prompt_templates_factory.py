@@ -22,11 +22,16 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
+    function_call_prompt,
     make_valid_bedrock_tool_name,
     ollama_pt,
     sanitize_messages_for_tool_calling,
 )
-from litellm.types.llms.openai import ChatCompletionToolMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionSystemMessage,
+    ChatCompletionToolMessage,
+)
 
 
 def _get_gemini_function_response_inline_data_parts(result):
@@ -3821,3 +3826,80 @@ def test_convert_to_anthropic_tool_invoke_keeps_paired_server_tool_use():
         },
         server_result,
     ]
+
+
+@pytest.mark.parametrize(
+    "system_messages",
+    [
+        [],
+        [{"role": "system", "content": "You are helpful."}],
+        [{"role": "system", "content": [{"type": "text", "text": "You are helpful."}]}],
+        [
+            {"role": "system", "content": "You are helpful."},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Use tools.", "cache_control": {"type": "ephemeral"}}],
+            },
+        ],
+    ],
+)
+@pytest.mark.parametrize("validate_messages", [False, True])
+def test_function_call_prompt_does_not_inflate_multi_turn_history(
+    system_messages: list[ChatCompletionSystemMessage], validate_messages: bool
+) -> None:
+    from copy import deepcopy
+    from litellm.utils import validate_and_fix_openai_messages
+
+    functions = [
+        {
+            "name": "read_file",
+            "description": "Read the contents of a file.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+        }
+    ]
+    original_functions = deepcopy(functions)
+    messages: list[AllMessageValues] = [*deepcopy(system_messages), {"role": "user", "content": "Read the files."}]
+    for turn in range(4):
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"call_{turn}",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": json.dumps({"path": f"file_{turn}"})},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": f"call_{turn}", "content": f"File {turn} contents"},
+            ]
+        )
+        original_messages = deepcopy(messages)
+        prepared_messages = validate_and_fix_openai_messages(messages) if validate_messages else messages
+        original_prepared_messages = deepcopy(prepared_messages)
+
+        result = function_call_prompt(prepared_messages, functions)
+
+        assert messages == original_messages
+        assert prepared_messages == original_prepared_messages
+        assert functions == original_functions
+        assert result is not prepared_messages
+        assert result == function_call_prompt(prepared_messages, functions)
+        assert [m for m in result if m["role"] != "system"] == [
+            m for m in prepared_messages if m["role"] != "system"
+        ]
+        result_system_messages = [m for m in result if m["role"] == "system"]
+        assert len(result_system_messages) == max(1, len(system_messages))
+        for index, message in enumerate(result_system_messages):
+            assert json.dumps(message["content"]).count("Produce JSON OUTPUT ONLY!") == 1
+            assert json.dumps(message["content"]).count("Read the contents of a file.") == 1
+            if system_messages:
+                original_content = system_messages[index]["content"]
+                if isinstance(original_content, list):
+                    assert message["content"][:-1] == original_content
+                    assert message["content"] is not prepared_messages[index]["content"]
+                else:
+                    assert message["content"].startswith(original_content + " ")
+

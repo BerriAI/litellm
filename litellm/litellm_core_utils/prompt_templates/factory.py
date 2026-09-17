@@ -5154,19 +5154,22 @@ def function_call_prompt(messages: list, functions: list):
     for function in functions:
         function_prompt += f"""\n{function}\n"""
 
-    function_added_to_prompt = False
-    for message in messages:
-        if "system" in message["role"]:
-            if isinstance(message["content"], str):
-                message["content"] += f""" {function_prompt}"""
-            else:
-                message["content"].append({"type": "text", "text": f""" {function_prompt}"""})
-            function_added_to_prompt = True
-
-    if function_added_to_prompt is False:
-        messages.append({"role": "system", "content": f"""{function_prompt}"""})
-
-    return messages
+    new_messages = [
+        {
+            **message,
+            "content": (
+                f"{message['content']} {function_prompt}"
+                if isinstance(message["content"], str)
+                else [*message["content"], {"type": "text", "text": f" {function_prompt}"}]
+            ),
+        }
+        if "system" in message["role"]
+        else message
+        for message in messages
+    ]
+    if any("system" in message["role"] for message in messages):
+        return new_messages
+    return [*new_messages, {"role": "system", "content": function_prompt}]
 
 
 def response_schema_prompt(model: str, response_schema: dict) -> str:
