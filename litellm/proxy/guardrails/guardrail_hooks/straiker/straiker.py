@@ -380,11 +380,12 @@ class StraikerGuardrail(CustomGuardrail):
         call_id: Final = getattr(logging_obj, "litellm_call_id", None) if logging_obj else None
         event_id: Final = f"{call_id or 'litellm'}:{input_type}"
 
+        is_request: Final = input_type == "request"
         content: Final = StraikerWebhookContent(
             texts=list(inputs.get("texts") or []),
             images=list(inputs.get("images") or []),
-            structured_messages=_opaque_dict_list(inputs.get("structured_messages")),
-            tools=_opaque_dict_list(inputs.get("tools")),
+            structured_messages=_opaque_dict_list(inputs.get("structured_messages")) if is_request else None,
+            tools=_opaque_dict_list(inputs.get("tools")) if is_request else None,
             tool_calls=_opaque_dict_list(inputs.get("tool_calls")),
         )
 

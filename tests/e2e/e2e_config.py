@@ -101,8 +101,6 @@ SLOW_PROVIDER_TIMEOUT_SECONDS = float(os.environ.get("E2E_SLOW_PROVIDER_TIMEOUT"
 # fresh connection and the next call re-rolls. See ProxyClient._await_model_servable.
 PROPAGATION_TIMEOUT = float(os.environ.get("E2E_PROPAGATION_TIMEOUT", "15"))
 
-EXPECT_RUST = os.environ.get("E2E_EXPECT_RUST", "").strip().lower() in ("1", "true", "yes")
-
 # Record/replay fixture selection (see fixture_mode.py and provider_edge.py).
 # The raw mode value is parsed and validated there; "live" (the default, also
 # for empty values) means the harness behaves exactly as before this knob
