@@ -6,10 +6,11 @@ pub enum HostCallStep<O, C> {
     Complete(C),
 }
 
-pub type HostCallFuture<'a, O, C> =
-    Pin<Box<dyn Future<Output = Result<HostCallStep<O, C>, crate::Error>> + Send + 'a>>;
+pub type HostCallFuture<'a, O, C, E> =
+    Pin<Box<dyn Future<Output = Result<HostCallStep<O, C>, E>> + Send + 'a>>;
 
 pub trait HostCall: Send + Sync {
+    type Error: Send + Sync + 'static;
     type Operation: Send + 'static;
     type Result: Send + 'static;
     type Complete: Send + 'static;
@@ -17,12 +18,12 @@ pub trait HostCall: Send + Sync {
     fn resume(
         &mut self,
         result: Option<Self::Result>,
-    ) -> HostCallFuture<'_, Self::Operation, Self::Complete>;
+    ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error>;
 
     fn interrupt(
         &mut self,
-        failure: HostFailure,
-    ) -> HostCallFuture<'_, Self::Operation, Self::Complete>;
+        failure: HostFailure<Self::Error>,
+    ) -> HostCallFuture<'_, Self::Operation, Self::Complete, Self::Error>;
 }
 
 pub enum HostStep<V, S> {
@@ -48,9 +49,9 @@ pub enum HostPhase {
 }
 
 #[derive(Clone, Debug)]
-pub enum HostFailure {
-    Error(crate::Error),
-    Cancelled(crate::Error),
+pub enum HostFailure<E> {
+    Error(E),
+    Cancelled(E),
 }
 
 pub struct HostLifecycle {
@@ -70,7 +71,7 @@ impl HostLifecycle {
         self.phase
     }
 
-    pub fn accept(&mut self, result: Result<(), HostFailure>) -> Option<crate::Error> {
+    pub fn accept<E>(&mut self, result: Result<(), HostFailure<E>>) -> Option<E> {
         if let Err(failure) = result {
             if self.phase == HostPhase::DeploymentFailure {
                 self.phase = HostPhase::Failure;

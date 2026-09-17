@@ -231,7 +231,7 @@ class CacheDetailBlock(TypedDict):
 class ConverseTokenUsageBlock(TypedDict, total=False):
     inputTokens: Required[ReadOnly[int]]
     outputTokens: Required[ReadOnly[int]]
-    totalTokens: Required[ReadOnly[int]]
+    totalTokens: ReadOnly[int]
     cacheReadInputTokenCount: ReadOnly[int]
     cacheReadInputTokens: ReadOnly[int]
     cacheWriteInputTokenCount: ReadOnly[int]

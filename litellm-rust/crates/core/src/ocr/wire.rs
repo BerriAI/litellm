@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use super::types::{LiteLLMOcrRequest, OcrConnection, OcrDocument};
-use crate::Error;
-use crate::auth::InputSource;
+use crate::ocr::Error;
+use litellm_auth::InputSource;
 use serde::{
     Deserialize,
     de::{DeserializeOwned, IntoDeserializer},
@@ -68,9 +68,9 @@ pub struct DecodedOcrResponse<T> {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OcrWireRequest {
+pub struct OcrWireRequest<D = Value> {
     pub model: String,
-    pub document: Value,
+    pub document: D,
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
@@ -141,10 +141,34 @@ pub fn consumed_optional_params(
 }
 
 pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> {
+    let OcrWireRequest {
+        model,
+        document,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers,
+        optional_params,
+        input_sources,
+        timeout_seconds,
+    } = wire;
+    decode_request_input(OcrWireRequest {
+        model,
+        document: decode_document(document)?,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers,
+        optional_params,
+        input_sources,
+        timeout_seconds,
+    })
+}
+
+pub fn decode_request_input<D>(wire: OcrWireRequest<D>) -> Result<LiteLLMOcrRequest<D>, Error> {
     let api_key_source = source_for(&wire.input_sources, "api_key");
     let api_base_source = source_for(&wire.input_sources, "api_base");
     let extra_headers_source = source_for(&wire.input_sources, "extra_headers");
-    let document = decode_document(wire.document)?;
     let headers = wire
         .extra_headers
         .unwrap_or_default()
@@ -183,7 +207,7 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
         .unwrap_or(defaults.max_response_bytes);
     let request = LiteLLMOcrRequest::new(
         wire.model,
-        document,
+        wire.document,
         wire.custom_llm_provider.as_deref(),
         wire.optional_params
             .into_iter()
@@ -209,14 +233,14 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
     })
 }
 
-fn decode_document(value: Value) -> Result<OcrDocument, OcrRequestError> {
+pub fn decode_document(value: Value) -> Result<OcrDocument, Error> {
     let kind = value.get("type").and_then(Value::as_str);
     let missing_url = matches!(kind, Some("document_url")) && value.get("document_url").is_none()
         || matches!(kind, Some("image_url")) && value.get("image_url").is_none();
     if missing_url {
-        return Err(OcrRequestError::MissingDocumentUrl);
+        return Err(OcrRequestError::MissingDocumentUrl.into());
     }
-    decode_request_value(value, "document")
+    Ok(decode_request_value(value, "document")?)
 }
 
 fn source_for(sources: &BTreeMap<String, InputSource>, name: &str) -> InputSource {
@@ -334,10 +358,7 @@ mod tests {
             serde_json::json!({"type": "document_url"}),
             serde_json::json!({"type": "image_url"}),
         ] {
-            assert_eq!(
-                decode_document(document),
-                Err(OcrRequestError::MissingDocumentUrl)
-            );
+            assert_eq!(decode_document(document), Err(Error::MissingDocumentUrl));
         }
     }
 }

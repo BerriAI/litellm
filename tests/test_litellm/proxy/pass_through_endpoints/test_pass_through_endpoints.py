@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
@@ -29,6 +30,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
     websocket_passthrough_request,
+    _with_trace_context,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -44,6 +46,15 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 import litellm
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
+
+
+def test_with_trace_context_without_opentelemetry(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(sys.modules, "litellm.integrations.otel.plumbing.context", None)
+
+    headers = _with_trace_context({"authorization": "x"}, parent_span=None)
+
+    assert headers == {"authorization": "x"}
+    assert "traceparent" not in headers
 
 
 # Test is_multipart
@@ -4271,6 +4282,47 @@ def _relay_client_request(method="GET"):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("span_source", ["auth_parent_span", "ambient_span"])
+async def test_pass_through_request_propagates_active_trace_context(span_source: str):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.trace import get_current_span
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+    captured: dict[str, httpx.Headers] = {}
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        captured["headers"] = upstream_request.headers
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    tracer = TracerProvider().get_tracer("test")
+    try:
+        with ExitStack() as stack:
+            _enter_relay_logging_mocks(stack, {})
+            if span_source == "auth_parent_span":
+                span = tracer.start_span("litellm_request")
+                stack.callback(span.end)
+                user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", parent_otel_span=span)
+            else:
+                span = stack.enter_context(tracer.start_as_current_span("passthrough"))
+                user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+            response = await pass_through_request(
+                request=_relay_client_request(method="POST"),
+                target="http://internal-api.test/v1/generate",
+                custom_headers={},
+                user_api_key_dict=user_api_key_dict,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert response.status_code == 200
+    propagated = get_current_span(TraceContextTextMapPropagator().extract(captured["headers"]))
+    assert propagated.get_span_context().trace_id == span.get_span_context().trace_id
+    assert propagated.get_span_context().span_id == span.get_span_context().span_id
+
+
+@pytest.mark.asyncio
 async def test_pass_through_request_relays_non_json_body_without_buffering():
     """
     Regression (LIT-4009): non-SSE passthrough responses used to be fully
@@ -4864,6 +4916,76 @@ async def test_websocket_passthrough_forwards_non_ascii_first_frame():
     forwarded = json.loads(websocket.send_text.await_args.args[0])
     assert forwarded["session"]["instructions"] == "Hablas español, ¿sí?"
     assert all(call.kwargs.get("code") != 1011 for call in websocket.close.await_args_list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward_headers", [True, False])
+@pytest.mark.parametrize("span_source", ["auth_parent_span", "ambient_span"])
+async def test_websocket_passthrough_propagates_active_trace_context(
+    monkeypatch, forward_headers: bool, span_source: str
+):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.trace import get_current_span
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+    from starlette.websockets import WebSocketState
+
+    captured: dict[str, dict[str, str]] = {}
+    upstream_ws = FakeUpstreamWebSocket(b"{}")
+
+    def fake_connect(target, additional_headers):
+        captured["headers"] = additional_headers
+        return FakeUpstreamConnect(upstream_ws)
+
+    websocket = MagicMock()
+    websocket.accept = AsyncMock()
+    websocket.send_text = AsyncMock()
+    websocket.send_bytes = AsyncMock()
+    websocket.receive = AsyncMock(return_value={"type": "websocket.disconnect"})
+    websocket.close = AsyncMock()
+    websocket.headers = {"authorization": "Bearer client"}
+    websocket.client_state = WebSocketState.CONNECTED
+    websocket.application_state = WebSocketState.CONNECTED
+    tracer = TracerProvider().get_tracer("test")
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+    mock_proxy_logging.post_call_success_hook = AsyncMock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_worker = MagicMock()
+    mock_worker.ensure_initialized_and_enqueue = MagicMock(
+        side_effect=lambda async_coroutine: async_coroutine.close()
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    monkeypatch.setattr(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+        fake_connect,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER",
+        mock_worker,
+    )
+    with ExitStack() as stack:
+        if span_source == "auth_parent_span":
+            span = tracer.start_span("litellm_request")
+            stack.callback(span.end)
+            user_api_key_dict = UserAPIKeyAuth(parent_otel_span=span)
+        else:
+            span = stack.enter_context(tracer.start_as_current_span("websocket_passthrough"))
+            user_api_key_dict = UserAPIKeyAuth()
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://upstream.example.test/v1/realtime",
+            custom_headers={},
+            user_api_key_dict=user_api_key_dict,
+            forward_headers=forward_headers,
+            endpoint="/realtime",
+            accept_websocket=True,
+        )
+
+    propagated = get_current_span(TraceContextTextMapPropagator().extract(captured["headers"]))
+    assert propagated.get_span_context().trace_id == span.get_span_context().trace_id
+    assert propagated.get_span_context().span_id == span.get_span_context().span_id
+    assert captured["headers"].get("authorization") == ("Bearer client" if forward_headers else None)
 
 
 class ClosingUpstreamWebSocket:
@@ -6021,3 +6143,42 @@ async def test_chat_completion_pass_through_endpoint_answers_an_openai_typed_err
         )
 
     assert (raised.value.type, raised.value.param, raised.value.code) == ("invalid_request_error", None, "400")
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_failure_carries_the_callers_litellm_call_id(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    call_id = "lit7836-pass-through-call-id"
+    proxy_logging = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    proxy_logging.post_call_failure_hook = AsyncMock()
+
+    async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+        return kwargs["data"]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", fake_add_litellm_data_to_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    request = MagicMock(spec=Request)
+    request.headers = Headers({"x-litellm-call-id": call_id})
+    request.body = AsyncMock(
+        return_value=json.dumps({"model": "unknown-model", "messages": [{"role": "user", "content": "hi"}]}).encode()
+    )
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"), pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert raised.value.headers["x-litellm-call-id"] == call_id
+    record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
+    assert record.litellm_call_id == call_id
+    assert call_id in record.getMessage()
