@@ -58,7 +58,6 @@ func resourceLiteLLMTeamMemberAddCreate(d *schema.ResourceData, m interface{}) e
 
 	teamID := d.Get("team_id").(string)
 	members := d.Get("member").(*schema.Set)
-	maxBudget := d.Get("max_budget_in_team").(float64)
 
 	// Convert members to the expected format
 	membersList := make([]map[string]interface{}, 0, members.Len())
@@ -77,10 +76,10 @@ func resourceLiteLLMTeamMemberAddCreate(d *schema.ResourceData, m interface{}) e
 	}
 
 	memberData := map[string]interface{}{
-		"member":             membersList,
-		"team_id":            teamID,
-		"max_budget_in_team": maxBudget,
+		"member":  membersList,
+		"team_id": teamID,
 	}
+	addOptionalTeamMemberBudget(d, memberData)
 
 	log.Printf("[DEBUG] Create team members request payload: %+v", memberData)
 
@@ -109,7 +108,6 @@ func resourceLiteLLMTeamMemberAddRead(d *schema.ResourceData, m interface{}) err
 func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 	teamID := d.Get("team_id").(string)
-	maxBudget := d.Get("max_budget_in_team").(float64)
 
 	o, n := d.GetChange("member")
 	oldMembers := o.(*schema.Set)
@@ -142,16 +140,16 @@ func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) e
 
 	// Check if max_budget_in_team has changed
 	if d.HasChange("max_budget_in_team") {
-		log.Printf("[DEBUG] max_budget_in_team changed, updating all existing members with new budget: %f", maxBudget)
+		log.Printf("[DEBUG] max_budget_in_team changed, updating all existing members")
 
 		// Update ALL existing members with the new budget
 		for key, newMember := range newMemberMap {
 			if _, exists := oldMemberMap[key]; exists {
 				updateData := map[string]interface{}{
-					"team_id":            teamID,
-					"role":               newMember["role"].(string),
-					"max_budget_in_team": maxBudget,
+					"team_id": teamID,
+					"role":    newMember["role"].(string),
 				}
+				addOptionalTeamMemberBudget(d, updateData)
 				if userID, ok := newMember["user_id"].(string); ok && userID != "" {
 					updateData["user_id"] = userID
 				}
@@ -216,10 +214,10 @@ func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) e
 			// Check if member attributes have changed
 			if memberAttributesChanged(oldMember, newMember) {
 				updateData := map[string]interface{}{
-					"team_id":            teamID,
-					"role":               newMember["role"].(string),
-					"max_budget_in_team": maxBudget,
+					"team_id": teamID,
+					"role":    newMember["role"].(string),
 				}
+				addOptionalTeamMemberBudget(d, updateData)
 				if userID, ok := newMember["user_id"].(string); ok && userID != "" {
 					updateData["user_id"] = userID
 				}
@@ -261,10 +259,10 @@ func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) e
 
 	if len(membersToAdd) > 0 {
 		memberData := map[string]interface{}{
-			"member":             membersToAdd,
-			"team_id":            teamID,
-			"max_budget_in_team": maxBudget,
+			"member":  membersToAdd,
+			"team_id": teamID,
 		}
+		addOptionalTeamMemberBudget(d, memberData)
 
 		log.Printf("[DEBUG] Adding new team members request payload: %+v", memberData)
 
