@@ -29,12 +29,18 @@ const formatCost = (cost: number | null) => (cost === null ? "-" : `$${cost.toFi
 
 const VERDICT_COPY: Record<
   PromptCachingVerdict,
-  { variant: "success" | "info" | "error"; text: (o: TestOutcome) => string }
+  { variant: "success" | "info" | "warning" | "error"; title?: string; text: (o: TestOutcome) => string }
 > = {
   injected: {
     variant: "success",
     text: (o) =>
       `LiteLLM injected cache_control: call 1 wrote ${o.first.cacheCreationTokens} tokens to the cache and call 2 read ${o.second.cacheReadTokens} tokens.`,
+  },
+  injected_no_read: {
+    variant: "warning",
+    title: "cache_control injected, but the second call missed the cache",
+    text: (o) =>
+      `Call 1 wrote ${o.first.cacheCreationTokens} tokens to the cache but call 2 read 0. LiteLLM is injecting the breakpoints; check the cache TTL or whether both calls reached the same upstream credentials.`,
   },
   cache_hit_only: {
     variant: "info",
@@ -160,7 +166,12 @@ const PromptCachingTestCard: React.FC<PromptCachingTestCardProps> = ({
             </Table>
             {verdict && (
               <Alert variant={verdict.variant} className="mt-4">
-                {outcome.verdict === "not_injected" ? <CircleAlert /> : <CircleCheck />}
+                {outcome.verdict === "injected" || outcome.verdict === "cache_hit_only" ? (
+                  <CircleCheck />
+                ) : (
+                  <CircleAlert />
+                )}
+                {verdict.title && <AlertTitle>{verdict.title}</AlertTitle>}
                 <AlertDescription>{verdict.text(outcome)}</AlertDescription>
               </Alert>
             )}

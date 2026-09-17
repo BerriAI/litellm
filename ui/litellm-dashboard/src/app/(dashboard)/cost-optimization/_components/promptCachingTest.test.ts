@@ -57,8 +57,8 @@ describe("judgePromptCachingTest", () => {
     );
   });
 
-  it("returns not_injected when call 1 writes but call 2 reads nothing", () => {
-    expect(judgePromptCachingTest(callResult({ cacheCreationTokens: 5000 }), callResult())).toBe("not_injected");
+  it("returns injected_no_read when call 1 writes but call 2 reads nothing", () => {
+    expect(judgePromptCachingTest(callResult({ cacheCreationTokens: 5000 }), callResult())).toBe("injected_no_read");
   });
 
   it("returns not_injected with no cache activity at all", () => {

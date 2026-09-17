@@ -41,7 +41,7 @@ export interface PromptCachingCallResult {
   durationMs: number;
 }
 
-export type PromptCachingVerdict = "injected" | "not_injected" | "cache_hit_only";
+export type PromptCachingVerdict = "injected" | "injected_no_read" | "not_injected" | "cache_hit_only";
 
 export const judgePromptCachingTest = (
   first: PromptCachingCallResult,
@@ -49,6 +49,9 @@ export const judgePromptCachingTest = (
 ): PromptCachingVerdict => {
   if (first.cacheCreationTokens > 0 && second.cacheReadTokens > 0) {
     return "injected";
+  }
+  if (first.cacheCreationTokens > 0 && second.cacheReadTokens === 0) {
+    return "injected_no_read";
   }
   if (first.cacheCreationTokens === 0 && second.cacheCreationTokens === 0) {
     if (first.cacheReadTokens > 0 || second.cacheReadTokens > 0) {

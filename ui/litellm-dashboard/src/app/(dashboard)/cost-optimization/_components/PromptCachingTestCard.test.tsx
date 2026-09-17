@@ -54,6 +54,21 @@ describe("PromptCachingTestCard", () => {
     );
   });
 
+  it("shows the injected_no_read verdict when call 2 misses the cache", async () => {
+    const runTest = vi.fn(async () => ({
+      ...successOutcome,
+      second: { ...successOutcome.second, cacheReadTokens: 0 },
+      verdict: "injected_no_read" as const,
+    }));
+    render(<PromptCachingTestCard accessToken="token" enabled={true} runTest={runTest} />);
+
+    fireEvent.click(screen.getByTestId("model-selector"));
+    fireEvent.click(screen.getByRole("button", { name: /run test/i }));
+
+    expect(await screen.findByText(/cache_control injected, but the second call missed the cache/)).toBeInTheDocument();
+    expect(screen.getByText(/Call 1 wrote 5000 tokens to the cache but call 2 read 0/)).toBeInTheDocument();
+  });
+
   it("shows an error alert when the run throws", async () => {
     const runTest = vi.fn(async () => {
       throw new Error("Request failed with status 400: boom");
