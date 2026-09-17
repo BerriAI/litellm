@@ -283,7 +283,7 @@ def build_isolated_tracer_provider(
         }
     )
     provider: Final = TracerProvider(
-        resource=Resource.create(dict(attributes)),
+        resource=Resource.create(attributes),
         sampler=TraceIdHashSampler(sample_rate) if sample_rate < 1 else None,
         id_generator=_RequestedSpanIdGenerator(),
     )
