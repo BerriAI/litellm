@@ -20,6 +20,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.exceptions import GuardrailRaisedException
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
@@ -27,6 +28,7 @@ from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterato
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Usage
 
 
@@ -175,7 +177,7 @@ async def test_wrap_streaming_iterator_with_enrichment_passes_through_chunks(pro
             yield ch
 
     cb = MagicMock(guardrail_name="g", event_hook="pre_call")
-    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(callback=cb, gen=gen())
+    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(callback=cb, gen=gen(), request_data={})
     out = [ch async for ch in wrapped]
     snapshot = {
         "chunks": out,
@@ -201,7 +203,7 @@ async def test_wrap_streaming_iterator_with_enrichment_enriches_http_exception_r
         raise HTTPException(status_code=400, detail=detail)
 
     cb = MagicMock(guardrail_name="presidio", event_hook="post_call")
-    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(callback=cb, gen=boom_gen())
+    wrapped = proxy_logging._wrap_streaming_iterator_with_enrichment(callback=cb, gen=boom_gen(), request_data={})
     with pytest.raises(HTTPException):
         async for _ in wrapped:
             pass
@@ -696,3 +698,35 @@ async def test_post_call_response_headers_hook_swallows_callback_error(proxy_log
         data={}, user_api_key_dict=make_user_api_key_auth(), response=response
     )
     assert out == {}
+
+
+@pytest.mark.asyncio
+async def test_stream_guardrail_block_names_the_blocking_guardrail_in_applied_guardrails(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    class _StreamBlocker(CustomGuardrail):
+        def __init__(self) -> None:
+            super().__init__(guardrail_name="stream-blocker", event_hook=GuardrailEventHooks.post_call, default_on=True)
+
+        async def async_post_call_streaming_iterator_hook(
+            self, user_api_key_dict: UserAPIKeyAuth, response: AsyncIterator[object], request_data: dict[str, object]
+        ) -> AsyncGenerator[object, None]:
+            async for _ in response:
+                raise HTTPException(status_code=400, detail={"error": "blocked"})
+                yield  # pragma: no cover
+
+    monkeypatch.setattr(litellm, "callbacks", [_StreamBlocker()])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+
+    async def upstream():
+        yield "chunk"
+
+    request_data: dict[str, object] = {"metadata": {}}
+    with pytest.raises(HTTPException):
+        async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=upstream(),
+            user_api_key_dict=make_user_api_key_auth(),
+            request_data=request_data,
+        ):
+            pass
+    assert request_data["metadata"]["applied_guardrails"] == ["stream-blocker"]
