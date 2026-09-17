@@ -410,6 +410,7 @@ async def update_tag(
     - description: Optional[str] - Updated description
     - models: List[str] - Updated list of allowed LLM models
     - budget_id: Optional[str] - The id for a budget to associate with the tag
+    - spend: Optional[float] - Set the tag's accumulated spend (e.g. 0 to reset it). Omit to leave unchanged
 
     ### BUDGET UPDATE PARAMS ###
     - max_budget: Optional[float] - Max budget for tag
@@ -451,7 +452,7 @@ async def update_tag(
         model_info: Final = await _get_model_names(prisma_client, tag.models or [])
 
         # Prepare update data
-        update_data: Final = {
+        update_data: Final[dict[str, object]] = {
             "description": tag.description,
             "models": tag.models or [],
             "model_info": json.dumps(model_info),
@@ -461,8 +462,6 @@ async def update_tag(
         if budget_id != existing_tag.budget_id:
             update_data["budget_id"] = budget_id
 
-        # Reset spend if explicitly provided (None means "leave unchanged"), mirroring
-        # /key/update's spend field.
         if tag.spend is not None:
             update_data["spend"] = tag.spend
 
