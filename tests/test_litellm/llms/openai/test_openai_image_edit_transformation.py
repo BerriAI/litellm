@@ -332,3 +332,39 @@ def test_transform_image_edit_request_preserves_bytesio_filename(
     assert files[0][1][0] == "input.png"
     assert files[0][1][1] is buf
     assert isinstance(files[0][1][1], BytesIO)
+
+
+def test_transform_image_edit_request_preserves_bytesio_mask_filename(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    """The mask follows the same BytesIO path as images, so its filename must survive too."""
+    buf = BytesIO(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+    buf.name = "my-edited-mask.png"
+    data, files = image_edit_config.transform_image_edit_request(
+        model="gpt-image-2",
+        prompt="hi",
+        image=b"fake_image_data",
+        image_edit_optional_request_params={"mask": buf},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert "mask" not in data
+    mask_file = next(f for f in files if f[0] == "mask")
+    assert mask_file[1][0] == "my-edited-mask.png"
+    assert mask_file[1][1] is buf
+
+
+def test_transform_image_edit_request_falls_back_when_bytesio_name_missing(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    """A BytesIO without a .name attr still gets a usable filename, not a crash or empty string."""
+    nameless = BytesIO(b"\x89PNG\r\n\x1a\n")
+    data, files = image_edit_config.transform_image_edit_request(
+        model="gpt-image-2",
+        prompt="hi",
+        image=[nameless],
+        image_edit_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert files[0][1][0] == "image.png"
