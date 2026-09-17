@@ -499,18 +499,27 @@ class _AsyncPromptManagementOutcome:
 
 
 def _resolve_responses_api_provider_config(
-    model: str, custom_llm_provider: str, model_info: object
+    model: str, custom_llm_provider: str, model_info: object, api_base: str | None
 ) -> BaseResponsesAPIConfig | None:
     provider_config: Final = ProviderConfigManager.get_provider_responses_api_config(
-        model=model, provider=custom_llm_provider
+        model=model, provider=custom_llm_provider, api_base=api_base
     )
     if provider_config is not None or not _deployment_passes_through_responses(model_info):
         return provider_config
     return OpenAILikeResponsesConfig()
 
 
+def _api_base_kwarg(kwargs: Mapping[str, object]) -> str | None:
+    api_base: Final = kwargs.get("api_base")
+    return api_base if isinstance(api_base, str) else None
+
+
 def _will_bridge_to_chat_completions(
-    model: str, custom_llm_provider: str | None, use_chat_completions_api: bool, model_info: object
+    model: str,
+    custom_llm_provider: str | None,
+    use_chat_completions_api: bool,
+    model_info: object,
+    api_base: str | None,
 ) -> bool:
     """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
@@ -524,7 +533,7 @@ def _will_bridge_to_chat_completions(
     if custom_llm_provider is None:
         return True
     return _bridges_to_chat_completions(
-        _resolve_responses_api_provider_config(normalized_model[0], custom_llm_provider, model_info),
+        _resolve_responses_api_provider_config(normalized_model[0], custom_llm_provider, model_info, api_base),
         use_chat_completions_api or normalized_model[1],
     )
 
@@ -635,6 +644,7 @@ async def aresponses(
                     custom_llm_provider,
                     bool(kwargs.get("use_chat_completions_api")),
                     kwargs.get("model_info"),
+                    _api_base_kwarg(kwargs),
                 ),
             ):
                 (
@@ -800,7 +810,11 @@ def _apply_prompt_management_to_responses_call(
         with _prompt_management_sees_a_provisional_message_list(
             kwargs,
             bridged=_will_bridge_to_chat_completions(
-                model, custom_llm_provider, use_chat_completions_api, kwargs.get("model_info")
+                model,
+                custom_llm_provider,
+                use_chat_completions_api,
+                kwargs.get("model_info"),
+                _api_base_kwarg(kwargs),
             ),
         ):
             (
@@ -1254,7 +1268,7 @@ def responses(
             responses_api_provider_config = None
         else:
             responses_api_provider_config = _resolve_responses_api_provider_config(
-                model, custom_llm_provider, deployment_model_info
+                model, custom_llm_provider, deployment_model_info, litellm_params.api_base
             )
 
         if (
@@ -1513,6 +1527,7 @@ def delete_responses(
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
+                api_base=litellm_params.api_base,
             )
         )
 
@@ -1684,6 +1699,7 @@ def get_responses(
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
+                api_base=litellm_params.api_base,
             )
         )
 
@@ -1828,6 +1844,7 @@ def list_input_items(
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
+                api_base=litellm_params.api_base,
             )
         )
 
@@ -1977,6 +1994,7 @@ def cancel_responses(
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
+                api_base=litellm_params.api_base,
             )
         )
 
@@ -2149,6 +2167,7 @@ def compact_responses(
             ProviderConfigManager.get_provider_responses_api_config(
                 model=model,
                 provider=custom_llm_provider,
+                api_base=litellm_params.api_base,
             )
         )
 
@@ -2287,14 +2306,15 @@ async def _aresponses_websocket(
         custom_llm_provider=_custom_llm_provider,
     )
 
+    resolved_api_base: Final = dynamic_api_base or litellm_params.api_base or litellm.api_base or None
     responses_api_provider_config: BaseResponsesAPIConfig | None = None
     if _custom_llm_provider is not None:
         responses_api_provider_config = ProviderConfigManager.get_provider_responses_api_config(
             model=resolved_model,
             provider=litellm.LlmProviders(_custom_llm_provider),
+            api_base=resolved_api_base,
         )
 
-    resolved_api_base: Final = dynamic_api_base or litellm_params.api_base or litellm.api_base or None
     resolved_api_key: Final = (
         dynamic_api_key
         or litellm_params.api_key
