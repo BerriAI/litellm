@@ -9,6 +9,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     AZURE_SPEECH_BATCH_MODEL,
     AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
+    AZURE_SPEECH_FAST_TRANSCRIPTION_MODEL,
+    AZURE_SPEECH_FAST_TRANSCRIPTION_PATH,
+    AZURE_SPEECH_MILLISECONDS_PER_SECOND,
     AZURE_SPEECH_PRICING_MODEL,
     AZURE_SPEECH_SHORT_AUDIO_MODEL,
     AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX,
@@ -29,9 +32,15 @@ class AzureSpeechPassthroughLoggingHandler:
         return urlparse(url_route).path.startswith(AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX)
 
     @staticmethod
+    def _is_fast_transcription_route(url_route: str) -> bool:
+        return urlparse(url_route).path.endswith(AZURE_SPEECH_FAST_TRANSCRIPTION_PATH)
+
+    @staticmethod
     def _model_from_url_route(url_route: str) -> str:
         if AzureSpeechPassthroughLoggingHandler._is_short_audio_route(url_route):
             return f"{AZURE_SPEECH_CUSTOM_LLM_PROVIDER}/{AZURE_SPEECH_SHORT_AUDIO_MODEL}"
+        if AzureSpeechPassthroughLoggingHandler._is_fast_transcription_route(url_route):
+            return f"{AZURE_SPEECH_CUSTOM_LLM_PROVIDER}/{AZURE_SPEECH_FAST_TRANSCRIPTION_MODEL}"
         return f"{AZURE_SPEECH_CUSTOM_LLM_PROVIDER}/{AZURE_SPEECH_BATCH_MODEL}"
 
     @staticmethod
@@ -45,10 +54,25 @@ class AzureSpeechPassthroughLoggingHandler:
         return (offset + duration) / AZURE_SPEECH_TICKS_PER_SECOND
 
     @staticmethod
-    def _response_cost(url_route: str, response_body: Mapping[str, object] | Sequence[object] | None) -> float:
-        if not AzureSpeechPassthroughLoggingHandler._is_short_audio_route(url_route):
+    def _fast_transcription_audio_seconds(response_body: Mapping[str, object] | Sequence[object] | None) -> float:
+        if not isinstance(response_body, Mapping):
             return 0.0
-        audio_seconds: Final = AzureSpeechPassthroughLoggingHandler._recognized_audio_seconds(response_body)
+        duration_milliseconds: Final = response_body.get("durationMilliseconds")
+        if not isinstance(duration_milliseconds, int):
+            return 0.0
+        return duration_milliseconds / AZURE_SPEECH_MILLISECONDS_PER_SECOND
+
+    @staticmethod
+    def _billed_audio_seconds(url_route: str, response_body: Mapping[str, object] | Sequence[object] | None) -> float:
+        if AzureSpeechPassthroughLoggingHandler._is_short_audio_route(url_route):
+            return AzureSpeechPassthroughLoggingHandler._recognized_audio_seconds(response_body)
+        if AzureSpeechPassthroughLoggingHandler._is_fast_transcription_route(url_route):
+            return AzureSpeechPassthroughLoggingHandler._fast_transcription_audio_seconds(response_body)
+        return 0.0
+
+    @staticmethod
+    def _response_cost(url_route: str, response_body: Mapping[str, object] | Sequence[object] | None) -> float:
+        audio_seconds: Final = AzureSpeechPassthroughLoggingHandler._billed_audio_seconds(url_route, response_body)
         if audio_seconds <= 0.0:
             return 0.0
         try:
