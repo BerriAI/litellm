@@ -2243,7 +2243,7 @@ async def callback(
     encoded_state = _resolve_encoded_oauth_state(request, state)
     try:
         state_data = decode_state_hash(encoded_state)
-    except Exception:
+    except Exception:  # noqa: BLE001  # any decode failure means the session is unusable; surface it, never crash the callback
         cookie_present: Final = _oauth_state_cookie_present(request, state)
         verbose_logger.warning(
             "MCP /callback could not decode OAuth state (state_cookie_present=%s, request_base_url=%s, "
