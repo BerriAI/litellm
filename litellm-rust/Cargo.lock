@@ -2016,6 +2016,7 @@ dependencies = [
  "litellm-callbacks",
  "litellm-python-interop",
  "pyo3",
+ "serde_json",
 ]
 
 [[package]]

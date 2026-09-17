@@ -8,9 +8,9 @@ use litellm_python_interop::{
     from_py_preserving_errors as from_py, to_py_preserving_errors as to_py,
 };
 
-use litellm_callbacks_legacy::legacy::logger::LegacyCallbacks;
+use litellm_callbacks_legacy::{LegacyCallbacks, OcrLogger, OcrLoggingFields};
 
-use super::callbacks::{self, OcrLogger};
+use super::callbacks;
 use super::errors::to_pyerr as ocr_error_to_pyerr;
 use super::project::{ProjectedOcrFields, admitted_call, project_request};
 use crate::lifecycle::{OperationClass, PythonCallState, PythonHost, missing_state, run_call};
@@ -28,7 +28,7 @@ enum OcrHostData {
 
 struct ProjectedOcrHost {
     fields: ProjectedOcrFields,
-    pre_call: Option<callbacks::OcrLoggingFields>,
+    pre_call: Option<OcrLoggingFields>,
     retained_fields: Option<Py<PyDict>>,
     body: Option<Py<PyDict>>,
     headers: Option<Py<PyDict>>,
@@ -74,7 +74,7 @@ impl PythonOcrHost {
         retained_fields.set_item("document", &document)?;
         projected.fields.document = Some(document);
         projected.retained_fields = Some(retained_fields.unbind());
-        projected.pre_call = Some((&request).into());
+        projected.pre_call = Some(callbacks::logging_fields(&request));
         Ok(request)
     }
 
@@ -112,10 +112,7 @@ impl PythonOcrHost {
             &request.url,
         )?;
         if !self.state.logger()?.callbacks_needed(py, "payload")? {
-            self.state
-                .logger()?
-                .object(py)
-                .call_method0("record_api_call_start_time")?;
+            self.state.logger()?.record_api_call_start(py)?;
             return Ok(request);
         }
         if let Some(body) = request.body.as_object_mut() {

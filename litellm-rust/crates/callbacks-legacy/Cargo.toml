@@ -10,3 +10,5 @@ litellm-auth.workspace = true
 litellm-callbacks.workspace = true
 litellm-python-interop.workspace = true
 pyo3.workspace = true
+
+serde_json.workspace = true

@@ -7,7 +7,7 @@ use pyo3::types::{PyDict, PyTuple};
 pub struct PythonLogger(Py<PyAny>);
 
 impl PythonLogger {
-    pub fn object<'py>(&self, py: Python<'py>) -> &Bound<'py, PyAny> {
+    pub(crate) fn object<'py>(&self, py: Python<'py>) -> &Bound<'py, PyAny> {
         self.0.bind(py)
     }
 
@@ -27,7 +27,7 @@ impl PythonLogger {
         end: &Option<Py<PyAny>>,
         asynchronous: bool,
     ) -> PyResult<()> {
-        py.import("litellm.rust_bridge.lifecycle")?
+        py.import("litellm.rust_bridge.legacy_callbacks")?
             .getattr("success_bookkeeping")?
             .call1((self.object(py), response, start, end, asynchronous))?;
         Ok(())
@@ -61,7 +61,7 @@ pub fn setup<'py>(
     start: &Py<PyAny>,
     asynchronous: bool,
 ) -> PyResult<SetupResult<'py>> {
-    py.import("litellm.rust_bridge.lifecycle")?
+    py.import("litellm.rust_bridge.legacy_callbacks")?
         .getattr("setup")?
         .call1((call_type, args, kwargs, start, asynchronous))
         .map(SetupResult)
@@ -75,7 +75,7 @@ pub fn finalize(
     start: &Py<PyAny>,
     end: &Option<Py<PyAny>>,
 ) -> PyResult<()> {
-    py.import("litellm.rust_bridge.lifecycle")?
+    py.import("litellm.rust_bridge.legacy_callbacks")?
         .getattr("finalize")?
         .call1((response, logger.object(py), kwargs, start, end))?;
     Ok(())
@@ -85,7 +85,7 @@ pub struct DeploymentHooks;
 
 impl DeploymentHooks {
     pub fn needed(py: Python<'_>) -> PyResult<bool> {
-        py.import("litellm.rust_bridge.lifecycle")?
+        py.import("litellm.rust_bridge.legacy_callbacks")?
             .getattr("deployment_callbacks_needed")?
             .call0()?
             .extract()

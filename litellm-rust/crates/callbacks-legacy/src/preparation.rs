@@ -23,7 +23,7 @@ pub fn prepare<'py>(
     arguments.set_item("litellm_logging_obj", logger.object(py))?;
     let litellm = py.import("litellm")?;
     inherit_credentials(py, &litellm, &arguments)?;
-    py.import("litellm.rust_bridge.lifecycle")?
+    py.import("litellm.rust_bridge.legacy_callbacks")?
         .getattr("check_limits")?
         .call1((&arguments,))?;
     Ok(arguments)

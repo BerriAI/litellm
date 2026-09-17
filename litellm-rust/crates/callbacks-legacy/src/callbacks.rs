@@ -57,7 +57,7 @@ impl LegacyCallbacks for PythonLogger {
         {
             return Ok(true);
         }
-        py.import("litellm.rust_bridge.lifecycle")?
+        py.import("litellm.rust_bridge.legacy_callbacks")?
             .getattr("callbacks_needed")?
             .call1((self.object(py), phase))?
             .extract()
@@ -105,7 +105,7 @@ impl LegacyCallbacks for PythonLogger {
                 "sync_failure"
             },
         )? {
-            py.import("litellm.rust_bridge.lifecycle")?
+            py.import("litellm.rust_bridge.legacy_callbacks")?
                 .getattr("failure_bookkeeping")?
                 .call1((self.object(py), error, start, end, asynchronous))?;
             return Ok(None);

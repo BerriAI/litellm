@@ -3,7 +3,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge.lifecycle import check_limits
+from litellm.rust_bridge.legacy_callbacks import check_limits
 
 
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])

@@ -8,8 +8,9 @@ use pyo3::types::{PyDict, PyTuple};
 
 use litellm_callbacks::protocol::{HostPhase, HostStep};
 
-use crate::legacy::logger::{LegacyCallbacks, is_internal_call};
-use crate::{DeploymentHooks, PythonLogger, finalize, prepare, setup};
+use crate::{
+    DeploymentHooks, LegacyCallbacks, PythonLogger, finalize, is_internal_call, prepare, setup,
+};
 
 pub fn missing_state() -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err("missing native call state")

@@ -5,7 +5,7 @@ use futures_util::future::{AbortHandle, Abortable};
 #[cfg(test)]
 use litellm_callbacks::protocol::NativeCallFuture;
 use litellm_callbacks::protocol::{HostFailure, HostPhase, HostStep, NativeCall, NativeCallStep};
-pub(crate) use litellm_callbacks_legacy::{PythonCallState, PythonLogger, missing_state};
+pub(crate) use litellm_callbacks_legacy::{PythonCallState, missing_state};
 use pyo3::exceptions::{PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
