@@ -7292,6 +7292,37 @@ async def test_update_general_settings_store_model_in_db_false():
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_store_batch_line_items_in_callbacks():
+    """
+    Verify _update_general_settings sets the litellm module flag when the DB
+    general_settings carries store_batch_line_items_in_callbacks, and that a
+    YAML-explicit value wins over the DB value.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    saved_flag = litellm.store_batch_line_items_in_callbacks
+    try:
+        with patch("litellm.proxy.proxy_server.general_settings", {}):  # test-quality-ok: module-global seam
+            await proxy_config._update_general_settings(
+                db_general_settings={"store_batch_line_items_in_callbacks": True}
+            )
+        assert litellm.store_batch_line_items_in_callbacks is True
+
+        proxy_config._yaml_general_settings_keys = {"store_batch_line_items_in_callbacks"}
+        with patch(  # test-quality-ok: module-global seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"store_batch_line_items_in_callbacks": "false"},
+        ):
+            await proxy_config._update_general_settings(
+                db_general_settings={"store_batch_line_items_in_callbacks": True}
+            )
+        assert litellm.store_batch_line_items_in_callbacks is False
+    finally:
+        litellm.store_batch_line_items_in_callbacks = saved_flag
+
+
+@pytest.mark.asyncio
 async def test_update_general_settings_propagates_apply_user_budget_to_team_keys():
     """The Admin UI toggle writes to the DB config, so the flag has to be in the
     runtime propagation allowlist. The reverted skip_user_budget_on_team_key was

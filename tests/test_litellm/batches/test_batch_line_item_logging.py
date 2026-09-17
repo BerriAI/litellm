@@ -255,3 +255,229 @@ async def test_input_fetch_failure_still_emits_aggregate(recorder):
     assert len(recorder.success_events) == 1
     assert len(recorder.failure_events) == 0
     assert _payload(recorder.success_events[0])["response_cost"] == 1.5
+
+EDGE_INPUT_JSONL = b"\n".join(
+    [
+        json.dumps(
+            {
+                "custom_id": "e",
+                "method": "POST",
+                "url": "/v1/embeddings",
+                "body": {"model": "text-embedding-3-small", "input": "embed me", "encoding_format": "float"},
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "custom_id": "r",
+                "method": "POST",
+                "url": "/v1/responses",
+                "body": {"model": "gpt-4o", "input": "respond to me"},
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "custom_id": "badresp",
+                "method": "POST",
+                "url": "/v1/responses",
+                "body": {"model": "gpt-4o", "input": "unreconstructable"},
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "custom_id": "n",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi n"}]},
+            }
+        ).encode(),
+    ]
+)
+
+EDGE_OUTPUT_JSONL = b"\n".join(
+    [
+        json.dumps(
+            {
+                "custom_id": "e",
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "object": "list",
+                        "data": [{"object": "embedding", "embedding": [0.1], "index": 0}],
+                        "model": "text-embedding-3-small",
+                        "usage": {"prompt_tokens": 3, "total_tokens": 3},
+                    },
+                },
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "custom_id": "r",
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "id": "resp_1",
+                        "object": "response",
+                        "created_at": 1,
+                        "status": "completed",
+                        "output": [],
+                        "model": "gpt-4o",
+                    },
+                },
+            }
+        ).encode(),
+        json.dumps({"custom_id": "badresp", "response": {"status_code": 200, "body": {}}}).encode(),
+        json.dumps({"custom_id": "n", "response": {"body": {"error": {"message": "no status here"}}}}).encode(),
+        json.dumps({"custom_id": "boom", "response": "not-a-dict"}).encode(),
+        json.dumps(
+            {
+                "custom_id": "mi",
+                "modelInput": {"messages": [{"role": "user", "content": "hi mi"}]},
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "mi back"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+                    },
+                },
+            }
+        ).encode(),
+    ]
+)
+
+ANTHROPIC_INPUT_JSONL = json.dumps(
+    {
+        "custom_id": "b2",
+        "params": {"model": "claude-3", "max_tokens": 5, "messages": [{"role": "user", "content": "hi b2"}]},
+    }
+).encode()
+
+ANTHROPIC_OUTPUT_JSONL = json.dumps(
+    {
+        "custom_id": "b2",
+        "result": {
+            "type": "succeeded",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hello b2"}],
+                "model": "claude-3",
+                "usage": {"input_tokens": 1, "output_tokens": 2},
+            },
+        },
+    }
+).encode()
+
+
+def _edge_file_content(file_id: str, **_kwargs):
+    return SimpleNamespace(
+        content={
+            "input-2": EDGE_INPUT_JSONL,
+            "output-2": EDGE_OUTPUT_JSONL,
+            "input-anth": ANTHROPIC_INPUT_JSONL,
+            "output-anth": ANTHROPIC_OUTPUT_JSONL,
+        }[file_id]
+    )
+
+
+def _parent_logging_with_params(litellm_params: dict) -> Logging:
+    logging_obj = _parent_logging()
+    logging_obj.update_environment_variables(
+        litellm_params=litellm_params,
+        optional_params={},
+        custom_llm_provider="openai",
+    )
+    return logging_obj
+
+
+@pytest.mark.asyncio
+async def test_line_items_edge_shapes_and_edge_cases(recorder):
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    batch = LiteLLMBatch(
+        id="batch_edge",
+        object="batch",
+        endpoint="/v1/chat/completions",
+        input_file_id="input-2",
+        output_file_id="output-2",
+        error_file_id=None,
+        status="completed",
+        completion_window="24h",
+        created_at=1,
+    )
+    file_mock: Final = AsyncMock(side_effect=_edge_file_content)
+    parent: Final = _parent_logging_with_params(
+        {
+            "metadata": {"model_info": {"id": "dep-1"}, "model_group": "gpt-4o"},
+            "_litellm_internal_model_credentials": {"api_key": "sk-line-items-marker"},
+        }
+    )
+    with (
+        patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(parent, batch)
+
+    by_custom_id = {_hidden(e).get("batch_custom_id"): e for e in recorder.success_events}
+    aggregate = next(e for e in recorder.success_events if _hidden(e).get("batch_custom_id") is None)
+    assert _payload(aggregate)["response_cost"] == 1.5
+
+    assert by_custom_id["e"]["litellm_params"]["batch_parent_id"] == batch.id
+    assert by_custom_id["e"]["call_type"] == "aembedding"
+    assert _payload(by_custom_id["e"])["response"]["data"][0]["embedding"] == [0.1]
+
+    assert by_custom_id["r"]["call_type"] == "aresponses"
+    assert _payload(by_custom_id["r"])["response"]["id"] == "resp_1"
+
+    assert by_custom_id["mi"]["call_type"] == "acompletion"
+    assert _hidden(by_custom_id["mi"])["batch_line_status_code"] == 200
+
+    assert "badresp" not in by_custom_id
+    assert "boom" not in by_custom_id
+
+    failure = recorder.failure_events[0]
+    assert _hidden(failure)["batch_custom_id"] == "n"
+    assert _hidden(failure)["batch_line_status_code"] is None
+    assert "no status here" in _payload(failure)["error_str"]
+
+    assert "sk-line-items-marker" in str(file_mock.call_args_list)
+    file_ids_fetched = [call.kwargs.get("file_id") or call.args[0] for call in file_mock.call_args_list]
+    assert "input-2" in file_ids_fetched and "output-2" in file_ids_fetched
+    assert not any(file_id is None for file_id in file_ids_fetched)
+
+
+@pytest.mark.asyncio
+async def test_line_items_anthropic_shapes(recorder):
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    batch = LiteLLMBatch(
+        id="batch_anth",
+        object="batch",
+        endpoint="/v1/messages",
+        input_file_id="input-anth",
+        output_file_id="output-anth",
+        error_file_id=None,
+        status="completed",
+        completion_window="24h",
+        created_at=1,
+    )
+    file_mock: Final = AsyncMock(side_effect=_edge_file_content)
+    logging_obj = _parent_logging()
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {"model_info": {"id": "dep-1"}, "model_group": "claude-3"}},
+        optional_params={},
+        custom_llm_provider="anthropic",
+    )
+    with (
+        patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(logging_obj, batch)
+
+    line = next(e for e in recorder.success_events if _hidden(e).get("batch_custom_id") == "b2")
+    assert _hidden(line)["batch_line_status_code"] == 200
+    assert line["litellm_params"]["batch_parent_id"] == batch.id
