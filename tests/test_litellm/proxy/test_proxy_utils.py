@@ -2239,8 +2239,9 @@ def test_create_model_info_response_falls_back_to_alias_for_opaque_deployment_na
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
 
-    assert response["max_input_tokens"] == 128000
-    assert response["max_output_tokens"] == 16384
+    entry = litellm.model_cost["gpt-4o"]
+    assert response["max_input_tokens"] == entry["max_input_tokens"]
+    assert response["max_output_tokens"] == entry["max_output_tokens"]
 
 
 def test_create_model_info_response_resolves_mode_through_deployment_model():

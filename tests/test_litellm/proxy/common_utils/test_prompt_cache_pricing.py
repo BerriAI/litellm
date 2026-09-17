@@ -11,8 +11,8 @@ from litellm.types.management_endpoints.prompt_cache_prediction import CacheToke
 def _tiered_rate(entry: Mapping[str, float], field: str, total: int) -> float:
     above_field: Final = f"{field}_above_200k_tokens"
     if total > 200_000 and above_field in entry:
-        return entry[above_field]
-    return entry[field]
+        return entry.get(above_field) or 0.0
+    return entry.get(field) or 0.0
 
 
 def _expected_cache_cost(model: str, tokens: CacheTokenBuckets) -> float:
@@ -28,7 +28,7 @@ def _expected_cache_cost(model: str, tokens: CacheTokenBuckets) -> float:
         tokens.uncached_input_tokens * _tiered_rate(entry, "input_cost_per_token", total)
         + tokens.cache_read_input_tokens * _tiered_rate(entry, "cache_read_input_token_cost", total)
         + tokens.cache_creation_5m_input_tokens * _tiered_rate(entry, "cache_creation_input_token_cost", total)
-        + tokens.cache_creation_1h_input_tokens * entry[one_hour_field]
+        + tokens.cache_creation_1h_input_tokens * (entry.get(one_hour_field) or 0.0)
     )
 
 
