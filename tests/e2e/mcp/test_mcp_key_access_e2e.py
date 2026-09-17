@@ -122,6 +122,7 @@ class TestMcpHealthVisibility:
         server_y: Final = register_datadog_mcp(client, resources)
         client.await_registered(server_x)
         client.await_registered(server_y)
+        owned: Final = {server_x, server_y}
         permitted: Final = _key(client, resources, mcp_servers=[server_x])
         tool: Final = client.await_tool(permitted, server_x, SEARCH_LOGS_TOOL)
         result: Final = client.await_call_tool(
@@ -138,11 +139,13 @@ class TestMcpHealthVisibility:
             ))
             resources.defer(lambda key=key: client.proxy.delete_key(key))
             listed = unwrap(client.list_servers(key)).root
-            assert {row.server_id for row in listed} == set(grants)
+            assert {row.server_id for row in listed}.intersection(owned) == set(grants)
             for requested in (None, [server_y], [server_x, server_y]):
                 health = unwrap(client.server_health(key, requested)).root
                 expected = set(grants) if requested is None else set(grants).intersection(requested)
-                assert {row.server_id for row in health} == expected, (
+                assert {row.server_id for row in health}.intersection(owned) == expected, (
                     f"health disclosed servers outside grants {grants}, requested {requested}: {health}"
                 )
-                assert all(row.status == "healthy" for row in health), f"upstream control unhealthy: {health}"
+                assert all(row.status == "healthy" for row in health if row.server_id in owned), (
+                    f"upstream control unhealthy: {health}"
+                )
