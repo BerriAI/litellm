@@ -801,29 +801,32 @@ def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
     ]
 
 
-def test_translate_anthropic_to_openai_converts_claude_code_midturn_system_turn():
+_CLAUDE_CODE_MIDTURN_SYSTEM_REQUEST: Final = {
+    "max_tokens": 128,
+    "system": [{"type": "text", "text": "You are Claude Code."}],
+    "messages": [
+        {"role": "user", "content": "say hi"},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "<system-reminder>Keep answers to one sentence.</system-reminder>"}],
+        },
+        {"role": "assistant", "content": "Hi."},
+        {"role": "user", "content": "say bye"},
+    ],
+}
+
+
+@pytest.mark.parametrize("custom_llm_provider", [None, "hosted_vllm"])
+def test_translate_anthropic_to_openai_converts_claude_code_midturn_system_turn(custom_llm_provider: str | None):
     """
-    Claude Code appends a system-role harness reminder after the user turn. On a
-    chat-completions target the outbound request must have exactly one system message,
-    at index 0, and the converted turn must carry the operator note first.
+    Claude Code appends a system-role harness reminder after the user turn. On a chat-completions
+    target that does not declare ``supports_mid_conversation_system`` (a self-hosted model the cost
+    map knows nothing about) the outbound request must have exactly one system message, at index 0,
+    and the converted turn must carry the operator note first.
     """
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-        anthropic_message_request={
-            "model": "qwen3.8-27B",
-            "max_tokens": 128,
-            "system": [{"type": "text", "text": "You are Claude Code."}],
-            "messages": [
-                {"role": "user", "content": "say hi"},
-                {
-                    "role": "system",
-                    "content": [
-                        {"type": "text", "text": "<system-reminder>Keep answers to one sentence.</system-reminder>"}
-                    ],
-                },
-                {"role": "assistant", "content": "Hi."},
-                {"role": "user", "content": "say bye"},
-            ],
-        }
+        anthropic_message_request={"model": "qwen3.8-27B", **_CLAUDE_CODE_MIDTURN_SYSTEM_REQUEST},
+        custom_llm_provider=custom_llm_provider,
     )
 
     roles = [m["role"] for m in openai_request["messages"]]
@@ -831,6 +834,36 @@ def test_translate_anthropic_to_openai_converts_claude_code_midturn_system_turn(
     converted = openai_request["messages"][2]
     assert converted["content"][0]["text"] == CONVERTED_SYSTEM_NOTE
     assert converted["content"][1]["text"] == "<system-reminder>Keep answers to one sentence.</system-reminder>"
+
+
+def test_translate_anthropic_to_openai_keeps_midturn_system_when_target_declares_support(monkeypatch):
+    """
+    A chat-completions target flagged ``supports_mid_conversation_system`` in the cost map accepts
+    the role anywhere, so the harness reminder is forwarded in place with its role and content
+    untouched, the same rule the native Anthropic Messages path applies.
+    """
+    model: Final = "system-role-anywhere-chat-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "openai", "mode": "chat", "supports_mid_conversation_system": True},
+    )
+
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={"model": model, **_CLAUDE_CODE_MIDTURN_SYSTEM_REQUEST},
+        custom_llm_provider="openai",
+    )
+
+    assert openai_request["messages"] == [
+        {"role": "system", "content": [{"type": "text", "text": "You are Claude Code."}]},
+        {"role": "user", "content": "say hi"},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "<system-reminder>Keep answers to one sentence.</system-reminder>"}],
+        },
+        {"role": "assistant", "content": "Hi.", "thinking_blocks": None},
+        {"role": "user", "content": "say bye"},
+    ]
 
 
 def test_translate_anthropic_to_openai_moves_midturn_system_after_tool_result():
