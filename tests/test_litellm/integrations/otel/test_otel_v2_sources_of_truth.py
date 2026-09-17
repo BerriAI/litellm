@@ -12,11 +12,11 @@ import litellm
 from litellm.integrations.otel import (
     BAGGAGE_PROMOTED_KEYS,
     DB,
+    HTTP,
     Error,
     GenAI,
     GenAIOperation,
     GenAIOutputType,
-    HTTP,
     LiteLLM,
     OpenTelemetryV2Config,
     Server,
@@ -29,7 +29,6 @@ from litellm.integrations.otel import (
 from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
 from litellm.integrations.otel.model.metadata import LLMCallEvent
-from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     RequestIdentity,
@@ -43,6 +42,7 @@ from litellm.integrations.otel.model.spans import (
     root_roles,
     validate_registry,
 )
+from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 
 
 @pytest.fixture(autouse=True)
@@ -524,6 +524,141 @@ def test_llm_call_adapter_extracts_all_fields():
     assert data.response_cost == 0.002
     assert data.error is None
     assert data.identity.team_id == "t1"
+
+
+def test_llm_call_adapter_extracts_responses_output_and_finish_reason():
+    payload = _sample_payload(
+        call_type="aresponses",
+        response={
+            "id": "resp_responses",
+            "model": "gpt-5.6-luna",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "The answer."}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_weather",
+                    "name": "get_weather",
+                    "arguments": '{"city":"Paris"}',
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_forecast",
+                    "name": "get_forecast",
+                    "arguments": '{"days":3}',
+                },
+                {"type": "reasoning", "summary": []},
+            ],
+        },
+        messages=[{"role": "user", "content": "What is the weather?"}],
+    )
+
+    data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True)
+
+    assert data.finish_reasons == ("tool_calls",)
+    assert data.choices_out == (
+        {
+            "message": {"role": "assistant", "content": "The answer."},
+        },
+        {
+            "message": {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_weather",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                    },
+                    {
+                        "id": "call_forecast",
+                        "type": "function",
+                        "function": {"name": "get_forecast", "arguments": '{"days":3}'},
+                    },
+                ],
+            },
+        },
+    )
+
+    attrs = GenAIMapper().map(data)
+    assert attrs[GenAI.RESPONSE_FINISH_REASONS] == ["tool_calls"]
+    assert attrs[GenAI.OUTPUT_MESSAGES] == (
+        '[{"role": "assistant", "content": "The answer."}, '
+        '{"role": "assistant", "tool_calls": [{"id": "call_weather", '
+        '"type": "function", "function": {"name": "get_weather", '
+        '"arguments": "{\\"city\\":\\"Paris\\"}"}}, '
+        '{"id": "call_forecast", "type": "function", '
+        '"function": {"name": "get_forecast", "arguments": "{\\"days\\":3}"}}]}]'
+    )
+
+
+def test_llm_call_adapter_maps_incomplete_responses_reason():
+    payload = _sample_payload(
+        call_type="aresponses",
+        response={
+            "id": "resp_incomplete",
+            "model": "gpt-5.6-luna",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Partial"}],
+                }
+            ],
+        },
+    )
+
+    data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True)
+
+    assert data.finish_reasons == ("length",)
+    assert data.choices_out[0]["message"] == {"role": "assistant", "content": "Partial"}
+
+
+def test_llm_call_adapter_maps_content_filter_responses_reason():
+    payload = _sample_payload(
+        call_type="aresponses",
+        response={
+            "id": "resp_filtered",
+            "model": "gpt-5.6-luna",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "content_filter"},
+            "output": [],
+        },
+    )
+
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+
+    assert data.finish_reasons == ("content_filter",)
+
+
+def test_llm_call_adapter_keeps_responses_finish_reason_when_content_is_not_captured():
+    payload = _sample_payload(
+        call_type="aresponses",
+        response={
+            "id": "resp_hidden",
+            "model": "gpt-5.6-luna",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "secret"}],
+                }
+            ],
+        },
+        messages=[{"role": "user", "content": "secret prompt"}],
+    )
+
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+
+    assert data.finish_reasons == ("stop",)
+    assert data.messages_in == ()
+    assert data.choices_out == ()
     assert data.identity.key_hash == "hsh"
 
 

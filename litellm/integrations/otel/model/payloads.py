@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
@@ -372,9 +372,10 @@ class LLMCallSpanData:
     tools: tuple[ToolDefinition, ...] = ()
     # Raw messages and response, needed by vendor mappers (OpenInference,
     # Langfuse, Weave) that stamp message-level attributes. ``messages_in`` is
-    # the request payload; ``choices_out`` mirrors ``response.choices`` from
-    # the StandardLoggingPayload. Both are tuples of immutable mappings so the
-    # dataclass stays hashable and frozen.
+    # the request payload; ``choices_out`` mirrors chat choices from the
+    # StandardLoggingPayload, including normalized Responses API output items.
+    # Both are tuples of immutable mappings so the dataclass stays hashable and
+    # frozen.
     messages_in: tuple[Mapping[str, object], ...] = ()
     choices_out: tuple[Mapping[str, object], ...] = ()
     system_fingerprint: str | None = None
@@ -401,17 +402,23 @@ class LLMCallSpanData:
         # model split, the response model, api base, and identity all come from
         # here rather than being re-derived from the raw payload dicts.
         context: Final = RequestContext.from_standard_logging_payload(payload)
-        # Normalize ``response`` to a dict once so the content/id reads below are a
-        # plain ``.get`` — no repeated ``isinstance`` guards.
-        raw_response: Final = payload.get("response")
-        response: Final = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
-        choices_out: Final = _dicts(response.get("choices"))
+        # Normalize ``response`` to a mapping once so the content/id reads below
+        # are plain ``.get`` calls — no repeated type guards.
+        raw_response: Final[object] = payload.get("response")
+        response: Final = _as_mapping(raw_response) or {}
+        regular_choices: Final = _dicts(response.get("choices"))
+        responses_choices: Final = _responses_choices(response.get("output"))
+        choices_out: Final = regular_choices or responses_choices
         # ``finish_reasons`` is metadata, not content, so derive it from
         # ``choices_out`` before gating. The raw message/choice bodies are only
         # retained when content capture is enabled (see ``capture_span_content``);
         # otherwise the content-bearing mappers receive empty sequences and emit
         # no prompt/response text.
-        finish_reasons: Final = _finish_reasons(choices_out)
+        finish_reasons: Final = (
+            _finish_reasons(regular_choices)
+            if regular_choices
+            else _responses_finish_reasons(response, responses_choices)
+        )
         call_type: Final = as_str(payload.get("call_type"))
         return cls(
             operation=resolve_operation(call_type),
@@ -668,10 +675,97 @@ def _total_masked_entities(value: object) -> int | None:
 
 
 def _dicts(value: object) -> tuple[Mapping[str, object], ...]:
-    """The dict items of ``value`` (when it's a list), as a tuple. Else empty."""
+    """The mapping items of ``value`` (when it's a list), as a tuple. Else empty."""
     if not isinstance(value, list):
         return ()
-    return tuple(item for item in value if isinstance(item, dict))
+    items: Final = cast(list[object], value)
+    return tuple(mapping for item in items if (mapping := _as_mapping(item)) is not None)
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    """Normalize a response item from a dict or a Pydantic response model."""
+    if isinstance(value, Mapping):
+        return cast(Mapping[str, object], value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = cast(Callable[[], object], model_dump)()
+        if isinstance(dumped, Mapping):
+            return cast(Mapping[str, object], dumped)
+    return None
+
+
+def _responses_choices(output: object) -> tuple[Mapping[str, object], ...]:
+    """Convert Responses API output items to the chat-choice shape used by mappers."""
+    if not isinstance(output, list):
+        return ()
+
+    choices: list[Mapping[str, object]] = []
+    tool_calls: list[Mapping[str, object]] = []
+    for raw_item in cast(list[object], output):
+        item = _as_mapping(raw_item)
+        if item is None:
+            continue
+        item_type = as_str(item.get("type"))
+        if item_type == "message":
+            content_parts = item.get("content")
+            if not isinstance(content_parts, list):
+                continue
+            text_parts: list[str] = []
+            for raw_content in cast(list[object], content_parts):
+                content = _as_mapping(raw_content)
+                if content is None or content.get("type") != "output_text":
+                    continue
+                text = as_str(content.get("text"))
+                if text:
+                    text_parts.append(text)
+            choices.append(
+                {
+                    "message": {
+                        "role": as_str(item.get("role")) or "assistant",
+                        "content": "".join(text_parts),
+                    }
+                }
+            )
+        elif item_type in ("function_call", "custom_tool_call"):
+            arguments = item.get("input") if item_type == "custom_tool_call" else item.get("arguments")
+            tool_calls.append(
+                {
+                    "id": as_str(item.get("call_id")) or as_str(item.get("id")) or "",
+                    "type": "function",
+                    "function": {
+                        "name": as_str(item.get("name")) or ("custom_tool" if item_type == "custom_tool_call" else ""),
+                        "arguments": as_str(arguments) or "",
+                    },
+                }
+            )
+    if tool_calls:
+        choices.append(
+            {
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": tool_calls,
+                }
+            }
+        )
+    return tuple(choices)
+
+
+def _responses_finish_reasons(
+    response: Mapping[str, object], choices: tuple[Mapping[str, object], ...]
+) -> tuple[str, ...]:
+    """Map Responses API status fields to GenAI finish-reason values."""
+    status = as_str(response.get("status"))
+    if status == "completed":
+        has_tool_calls = any(
+            (message := _as_mapping(choice.get("message"))) is not None and bool(message.get("tool_calls"))
+            for choice in choices
+        )
+        return ("tool_calls",) if has_tool_calls else ("stop",)
+    details = _as_mapping(response.get("incomplete_details"))
+    reason = as_str(details.get("reason")) if details is not None else None
+    if status == "incomplete" or reason is not None:
+        return ("content_filter",) if reason == "content_filter" else ("length",)
+    return ()
 
 
 def _finish_reasons(choices: tuple[Mapping[str, object], ...]) -> tuple[str, ...]:
