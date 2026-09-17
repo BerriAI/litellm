@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as networking from "./networking";
+import { parseRestrictedSsoGroups } from "./UIAccessControlForm";
 
 // Mock the networking module
 vi.mock("./networking", () => ({
@@ -7,7 +8,13 @@ vi.mock("./networking", () => ({
 }));
 
 // Extract the logic we want to test into a pure function
-const buildApiPayload = (formValues: Record<string, any>) => {
+type TestFormValues = {
+  ui_access_mode_type?: string;
+  restricted_sso_group?: string;
+  sso_group_jwt_field?: string;
+};
+
+const buildApiPayload = (formValues: TestFormValues) => {
   if (formValues.ui_access_mode_type === "all_authenticated_users") {
     // Set ui_access_mode to none when all_authenticated_users is selected
     return {
@@ -17,7 +24,7 @@ const buildApiPayload = (formValues: Record<string, any>) => {
     return {
       ui_access_mode: {
         type: formValues.ui_access_mode_type,
-        restricted_sso_group: formValues.restricted_sso_group,
+        restricted_sso_group: parseRestrictedSsoGroups(formValues.restricted_sso_group),
         sso_group_jwt_field: formValues.sso_group_jwt_field,
       },
     };
@@ -27,6 +34,24 @@ const buildApiPayload = (formValues: Record<string, any>) => {
 describe("UIAccessControlForm Logic", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  describe("parseRestrictedSsoGroups", () => {
+    it("returns a single group string unchanged", () => {
+      expect(parseRestrictedSsoGroups("group-a")).toBe("group-a");
+    });
+
+    it("returns multiple trimmed groups", () => {
+      expect(parseRestrictedSsoGroups(" group-a, group-b ")).toEqual(["group-a", "group-b"]);
+    });
+
+    it("drops trailing empty groups", () => {
+      expect(parseRestrictedSsoGroups("group-a, group-b, ")).toEqual(["group-a", "group-b"]);
+    });
+
+    it("returns undefined for an empty value", () => {
+      expect(parseRestrictedSsoGroups(" , ")).toBeUndefined();
+    });
   });
 
   describe("buildApiPayload", () => {

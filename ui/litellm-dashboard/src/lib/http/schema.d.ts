@@ -22946,7 +22946,7 @@ export interface components {
          */
         AccessControl_UI_AccessMode: {
             /** Restricted Sso Group */
-            restricted_sso_group: string;
+            restricted_sso_group: string | string[];
             /** Sso Group Jwt Field */
             sso_group_jwt_field: string;
             /**

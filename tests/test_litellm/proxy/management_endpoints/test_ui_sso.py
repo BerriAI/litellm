@@ -4,6 +4,7 @@ import logging
 import os
 from contextlib import ExitStack, asynccontextmanager
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7153,6 +7154,90 @@ class TestCliSsoAttributionMetadata:
             get_user_info_mock.call_args.kwargs["user_defined_values"]["user_id"]
             == "cli-test-user"
         )
+
+    def test_verify_user_in_restricted_sso_group_accepts_any_configured_group(self):
+        result: Final = CustomOpenID(
+            id="test-user", email="test@example.com", team_ids=["other-group", "allowed-group"]
+        )
+
+        assert SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
+            general_settings={
+                "ui_access_mode": {
+                    "type": "restricted_sso_group",
+                    "restricted_sso_group": ["required-group", "allowed-group"],
+                }
+            },
+            result=result,
+            received_response={"groups": result.team_ids},
+        )
+
+    def test_verify_user_in_restricted_sso_group_rejects_when_no_configured_group_matches(self):
+        from litellm.proxy._types import ProxyException
+
+        result: Final = CustomOpenID(id="test-user", email="test@example.com", team_ids=["other-group"])
+
+        with pytest.raises(ProxyException) as exc_info:
+            SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
+                general_settings={
+                    "ui_access_mode": {
+                        "type": "restricted_sso_group",
+                        "restricted_sso_group": ["required-group", "allowed-group"],
+                    }
+                },
+                result=result,
+                received_response={"groups": result.team_ids},
+            )
+
+        assert exc_info.value.code == "403"
+        assert "required-group" in exc_info.value.message
+        assert "allowed-group" in exc_info.value.message
+
+    def test_verify_user_in_restricted_sso_group_preserves_string_configuration(self):
+        from litellm.proxy._types import ProxyException
+
+        general_settings: Final = {
+            "ui_access_mode": {
+                "type": "restricted_sso_group",
+                "restricted_sso_group": "required-group",
+            }
+        }
+        allowed_result: Final = CustomOpenID(id="test-user", email="test@example.com", team_ids=["required-group"])
+        denied_result: Final = CustomOpenID(id="test-user", email="test@example.com", team_ids=["other-group"])
+
+        assert SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
+            general_settings=general_settings,
+            result=allowed_result,
+            received_response=None,
+        )
+
+        with pytest.raises(ProxyException):
+            SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
+                general_settings=general_settings,
+                result=denied_result,
+                received_response=None,
+            )
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            None,
+            CustomOpenID(id="test-user", email="test@example.com", team_ids=[]),
+        ],
+    )
+    def test_verify_user_in_restricted_sso_group_rejects_missing_team_ids(self, result):
+        from litellm.proxy._types import ProxyException
+
+        with pytest.raises(ProxyException):
+            SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
+                general_settings={
+                    "ui_access_mode": {
+                        "type": "restricted_sso_group",
+                        "restricted_sso_group": ["required-group", "allowed-group"],
+                    }
+                },
+                result=result,
+                received_response=None,
+            )
 
     @pytest.mark.asyncio
     async def test_cli_sso_callback_rejects_restricted_sso_group(self):

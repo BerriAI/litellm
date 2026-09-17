@@ -3289,12 +3289,12 @@ class SSOAuthenticationHandler:
         """
         when ui_access_mode.type == "restricted_sso_group":
 
-        - result.team_ids should contain the restricted_sso_group
+        - result.team_ids should contain any of the configured groups
         - if not, raise a ProxyException
         - if so, return True
         - if result.team_ids is None, return False
         - if result.team_ids is an empty list, return False
-        - if result.team_ids is a list, return True if the restricted_sso_group is in the list, otherwise return False
+        - if result.team_ids is a list, return True if any configured group is in the list, otherwise return False
         """
 
         ui_access_mode: Final = cast(dict | str | None, general_settings.get("ui_access_mode"))
@@ -3303,13 +3303,16 @@ class SSOAuthenticationHandler:
             return True
         if isinstance(ui_access_mode, str):
             return True
-        team_ids: Final = getattr(result, "team_ids", [])
+        team_ids: Final = getattr(result, "team_ids", None) or []
 
         if ui_access_mode.get("type") == "restricted_sso_group":
             restricted_sso_group: Final = ui_access_mode.get("restricted_sso_group")
-            if restricted_sso_group not in team_ids:
+            restricted_sso_groups: Final = (
+                (restricted_sso_group,) if isinstance(restricted_sso_group, str) else tuple(restricted_sso_group)
+            )
+            if not any(group in team_ids for group in restricted_sso_groups):
                 raise ProxyException(
-                    message=f"User is not in the restricted SSO group: {restricted_sso_group}. User groups: {team_ids}. Received SSO response: {received_response}",
+                    message=f"User is not in any of the restricted SSO groups: {restricted_sso_groups}. User groups: {team_ids}. Received SSO response: {received_response}",
                     type=ProxyErrorTypes.auth_error,
                     param="restricted_sso_group",
                     code=status.HTTP_403_FORBIDDEN,

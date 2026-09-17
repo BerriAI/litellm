@@ -49,6 +49,24 @@ const asRecord = (value: unknown): Record<string, unknown> | null =>
 
 const asString = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 
+const asGroupsString = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    return value;
+  }
+  return Array.isArray(value) && value.every((group) => typeof group === "string") ? value.join(", ") : undefined;
+};
+
+export const parseRestrictedSsoGroups = (value: string | undefined): string | string[] | undefined => {
+  const groups = value
+    ?.split(",")
+    .map((group) => group.trim())
+    .filter((group) => group.length > 0);
+  if (!groups || groups.length === 0) {
+    return undefined;
+  }
+  return groups.length === 1 ? groups[0] : groups;
+};
+
 const toFormValues = (ssoData: unknown): UIAccessControlFormValues | null => {
   const values = asRecord(asRecord(ssoData)?.values);
   if (!values) {
@@ -59,7 +77,7 @@ const toFormValues = (ssoData: unknown): UIAccessControlFormValues | null => {
   if (nestedAccessMode) {
     return {
       ui_access_mode_type: asString(nestedAccessMode.type),
-      restricted_sso_group: asString(nestedAccessMode.restricted_sso_group),
+      restricted_sso_group: asGroupsString(nestedAccessMode.restricted_sso_group),
       sso_group_jwt_field: asString(nestedAccessMode.sso_group_jwt_field),
     };
   }
@@ -68,7 +86,7 @@ const toFormValues = (ssoData: unknown): UIAccessControlFormValues | null => {
   if (legacyAccessMode !== undefined) {
     return {
       ui_access_mode_type: legacyAccessMode,
-      restricted_sso_group: asString(values.restricted_sso_group),
+      restricted_sso_group: asGroupsString(values.restricted_sso_group),
       sso_group_jwt_field: asString(values.team_ids_jwt_field) || asString(values.sso_group_jwt_field),
     };
   }
@@ -124,7 +142,7 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
           : {
               ui_access_mode: {
                 type: formValues.ui_access_mode_type,
-                restricted_sso_group: formValues.restricted_sso_group,
+                restricted_sso_group: parseRestrictedSsoGroups(formValues.restricted_sso_group),
                 sso_group_jwt_field: formValues.sso_group_jwt_field,
               },
             };
@@ -188,9 +206,16 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
             </FormField>
 
             {uiAccessModeType === "restricted_sso_group" && (
-              <FormField control={form.control} name="restricted_sso_group" label="Restricted SSO Group">
+              <FormField
+                control={form.control}
+                name="restricted_sso_group"
+                label={labelWithHint(
+                  "Restricted SSO Groups",
+                  "Comma-separated list of SSO groups. Users in any of these groups may access the UI.",
+                )}
+              >
                 {({ ref, value, ...field }) => (
-                  <Input {...field} ref={ref} value={value ?? ""} placeholder="ui-access-group" />
+                  <Input {...field} ref={ref} value={value ?? ""} placeholder="group-a, group-b" />
                 )}
               </FormField>
             )}

@@ -14,7 +14,7 @@ vi.mock("@/components/networking", () => ({
 const mockGetSSOSettings = vi.mocked(getSSOSettings);
 const mockUpdateSSOSettings = vi.mocked(updateSSOSettings);
 
-const RESTRICTED_GROUP_PLACEHOLDER = "ui-access-group";
+const RESTRICTED_GROUP_PLACEHOLDER = "group-a, group-b";
 const JWT_FIELD_PLACEHOLDER = "groups";
 const SUBMIT_LABEL = "Update UI Access Control";
 
@@ -68,6 +68,26 @@ describe("UIAccessControlForm", () => {
       },
     ]);
     await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+  });
+
+  it("sends multiple trimmed restricted SSO groups as a list", async () => {
+    const { user } = renderForm();
+
+    await chooseAccessMode(user, "Restricted SSO Group");
+    await typeInto(user, RESTRICTED_GROUP_PLACEHOLDER, "a, b");
+    await submit(user);
+
+    await waitFor(() => expect(mockUpdateSSOSettings).toHaveBeenCalledTimes(1));
+    expect(submittedPayload()).toStrictEqual([
+      "sk-test",
+      {
+        ui_access_mode: {
+          type: "restricted_sso_group",
+          restricted_sso_group: ["a", "b"],
+          sso_group_jwt_field: undefined,
+        },
+      },
+    ]);
   });
 
   it('collapses the payload to ui_access_mode "none" for all authenticated users', async () => {
@@ -141,6 +161,21 @@ describe("UIAccessControlForm", () => {
       },
     ]);
     expect(mockGetSSOSettings).toHaveBeenCalledWith("sk-test");
+  });
+
+  it("joins loaded restricted SSO group arrays for the input", async () => {
+    mockGetSSOSettings.mockResolvedValue({
+      values: {
+        ui_access_mode: {
+          type: "restricted_sso_group",
+          restricted_sso_group: ["a", "b"],
+          sso_group_jwt_field: "loaded_field",
+        },
+      },
+    });
+    renderForm();
+
+    expect(await screen.findByDisplayValue("a, b")).toBeInTheDocument();
   });
 
   it("seeds the fields from the legacy flat structure, preferring team_ids_jwt_field", async () => {

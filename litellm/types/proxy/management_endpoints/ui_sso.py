@@ -58,7 +58,7 @@ class AccessControl_UI_AccessMode(LiteLLMPydanticObjectBase):
     """Model for Controlling UI Access Mode via SSO Groups"""
 
     type: Literal["restricted_sso_group"]
-    restricted_sso_group: str
+    restricted_sso_group: str | list[str]
     sso_group_jwt_field: str
 
 
