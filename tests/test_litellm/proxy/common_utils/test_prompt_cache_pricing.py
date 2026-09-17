@@ -8,10 +8,10 @@ from litellm.proxy.common_utils.prompt_cache_pricing import price_cache_tokens
 from litellm.types.management_endpoints.prompt_cache_prediction import CacheTokenBuckets
 
 
-def _tiered_rate(entry: Mapping[str, float], field: str, total: int) -> float:
-    above_field: Final = f"{field}_above_200k_tokens"
-    if total > 200_000 and above_field in entry:
-        return entry.get(above_field) or 0.0
+def _tiered_rate(entry: Mapping[str, float | None], field: str, total: int) -> float:
+    above_rate: Final = entry.get(f"{field}_above_200k_tokens") if total > 200_000 else None
+    if above_rate is not None:
+        return above_rate
     return entry.get(field) or 0.0
 
 
@@ -19,16 +19,12 @@ def _expected_cache_cost(model: str, tokens: CacheTokenBuckets) -> float:
     key: Final = litellm.get_model_info(model=model, custom_llm_provider="anthropic")["key"]
     entry: Final = litellm.model_cost[key]
     total: Final = tokens.total_tokens
-    one_hour_field: Final = (
-        "cache_creation_input_token_cost_above_1hr_above_200k_tokens"
-        if total > 200_000 and "cache_creation_input_token_cost_above_1hr_above_200k_tokens" in entry
-        else "cache_creation_input_token_cost_above_1hr"
-    )
+    one_hour_rate: Final = _tiered_rate(entry, "cache_creation_input_token_cost_above_1hr", total)
     return (
         tokens.uncached_input_tokens * _tiered_rate(entry, "input_cost_per_token", total)
         + tokens.cache_read_input_tokens * _tiered_rate(entry, "cache_read_input_token_cost", total)
         + tokens.cache_creation_5m_input_tokens * _tiered_rate(entry, "cache_creation_input_token_cost", total)
-        + tokens.cache_creation_1h_input_tokens * (entry.get(one_hour_field) or 0.0)
+        + tokens.cache_creation_1h_input_tokens * one_hour_rate
     )
 
 
