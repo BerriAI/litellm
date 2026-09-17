@@ -33,10 +33,12 @@ from litellm.constants import (
     AZURE_SPEECH_BATCH_PATH_PREFIX,
     AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN,
     AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
+    AZURE_SPEECH_FAST_TRANSCRIPTION_PATH,
     AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
     AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX,
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
+    AZURE_SPEECH_UNPRICED_WRITE_METHODS,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
@@ -65,6 +67,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_request_body,
     is_json_content_type,
 )
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
@@ -1357,6 +1360,14 @@ def resolve_azure_speech_base_url(endpoint_path: str, api_base: str | None, regi
     return httpx.URL(f"https://{region}.{domain}")
 
 
+def azure_speech_write_is_unpriced(method: str, endpoint_path: str) -> bool:
+    return (
+        endpoint_path.startswith(AZURE_SPEECH_BATCH_PATH_PREFIX)
+        and endpoint_path != AZURE_SPEECH_FAST_TRANSCRIPTION_PATH
+        and method.upper() in AZURE_SPEECH_UNPRICED_WRITE_METHODS
+    )
+
+
 @router.api_route(
     f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/{{endpoint:path}}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: fastapi route methods must be a list
@@ -1393,6 +1404,17 @@ async def azure_speech_proxy_route(
                 f"Unsupported Azure Speech path: {normalized_endpoint_path}. Supported prefixes are "
                 f"{AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX} and {AZURE_SPEECH_BATCH_PATH_PREFIX}; set "
                 "AZURE_SPEECH_REGION or AZURE_SPEECH_API_BASE in the proxy environment."
+            ),
+        )
+    if azure_speech_write_is_unpriced(
+        method=request.method, endpoint_path=normalized_endpoint_path
+    ) and not is_proxy_admin(user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"{request.method} {normalized_endpoint_path} creates Azure Speech work whose cost is unknown at "
+                "request time, so it is limited to proxy admin keys. Use "
+                f"{AZURE_SPEECH_FAST_TRANSCRIPTION_PATH} for transcription that is priced per request."
             ),
         )
     azure_speech_api_key: Final = passthrough_endpoint_router.get_credentials(
