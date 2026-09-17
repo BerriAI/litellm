@@ -580,7 +580,7 @@ async def test_retained_argument_aliases_and_body_roots_survive_envelope_replace
 
 
 def test_unstarted_native_coroutine_releases_input_without_reading_file(ocr_server: RecordingServer) -> None:
-    from litellm.ocr.main import _public_request
+    from litellm.ocr.dispatch import _public_request
     from litellm.rust_bridge import _native
 
     ocr_server.expected_requests = 0
@@ -594,7 +594,7 @@ def test_unstarted_native_coroutine_releases_input_without_reading_file(ocr_serv
     def create():
         file: Final = File()
         kwargs: Final = {"model": "mistral/mistral-ocr-latest", "document": {"type": "file", "file": file}}
-        coroutine: Final = _native._ocr_lifecycle(_public_request("aocr", (), kwargs), (), kwargs, True)
+        coroutine: Final = _native.aocr(_public_request("aocr", (), kwargs), (), kwargs)
         file.owner = coroutine
         coroutine.close()
         return weakref.ref(file)
