@@ -134,6 +134,26 @@ async def test_static_auth_uses_configured_custom_header(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("credential", ["static-key", ""])
+async def test_static_auth_accepts_api_key_carried_by_static_header(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, credential: str,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    tool: Final = create_tool_function(
+        "/echo", "get", {}, "https://upstream.example", headers={"apikey": credential}, auth_type=MCPAuth.api_key,
+    )
+    destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
+    if credential:
+        assert await tool() == "authenticated"
+        assert destination.calls.last.request.headers["apikey"] == credential
+        assert "x-api-key" not in destination.calls.last.request.headers
+    else:
+        with pytest.raises(HTTPException, match="requires a usable upstream credential"):
+            await tool()
+        assert destination.call_count == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("auth_type,resolved", [
     (MCPAuth.none, None),
     (MCPAuth.oauth2, {"Authorization": "Bearer user-oauth"}),
