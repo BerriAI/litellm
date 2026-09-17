@@ -279,10 +279,12 @@ impl Resolve for PublicDnsResolver {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashSet;
+
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    use super::*;
 
     async fn serve(response: &'static [u8]) -> (Url, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0")

@@ -3,7 +3,7 @@ from typing import Final
 import httpx
 import pytest
 
-from integration._support.client import Gateway, JSON_OBJECT, object_value
+from tests.integration._support.client import Gateway, JSON_OBJECT, object_value
 
 
 @pytest.mark.covers("other.provider_wire.internal_parameters_filtered")
