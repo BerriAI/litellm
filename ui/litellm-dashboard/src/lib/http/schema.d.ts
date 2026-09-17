@@ -10701,6 +10701,8 @@ export interface paths {
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - organization-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
          *     - allowed_models: Optional[List[str]] - List of models the organization is allowed to access. If not set, defaults to the models field.
+         *     - temp_budget_increase: *Optional[float]* - Temporary additive budget increase for the org, active until temp_budget_expiry.
+         *     - temp_budget_expiry: *Optional[str]* - UTC expiry for temp_budget_increase.
          *     Case 1: Create new org **without** a budget_id
          *
          *     ```bash
@@ -29379,6 +29381,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -29414,6 +29420,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -33179,6 +33189,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -33302,6 +33316,10 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id: string;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -38014,6 +38032,16 @@ export interface components {
             /** Team Id */
             team_id: string;
             /**
+             * Temp Budget Expiry
+             * @description UTC expiry for temp_budget_increase
+             */
+            temp_budget_expiry?: string | null;
+            /**
+             * Temp Budget Increase
+             * @description Temporary additive budget increase for this team member, active until temp_budget_expiry
+             */
+            temp_budget_increase?: number | null;
+            /**
              * Tpm Limit
              * @description Tokens per minute limit for this team member
              */
@@ -38035,6 +38063,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Team Id */
             team_id: string;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** User Email */
@@ -39201,6 +39233,10 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
