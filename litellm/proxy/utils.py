@@ -2645,10 +2645,6 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
     ):
-        """
-        Runs the async_moderation_hook() of every CustomGuardrail, and of every
-        CustomLogger that overrides it, in parallel
-        """
         caps: Final = ProxyLogging._callback_capabilities()
         if not caps.has_guardrail and not caps.has_moderation_override:
             return data
