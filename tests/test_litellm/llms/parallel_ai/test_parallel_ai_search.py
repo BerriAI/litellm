@@ -465,9 +465,10 @@ class TestParallelAISearch:
             max_results=max_results,
         )
 
-        rate: Final = litellm.model_cost[
-            {"fast": "parallel_ai/search-fast", "turbo": "parallel_ai/search-turbo"}.get(mode, "parallel_ai/search")
-        ]["input_cost_per_query"]
+        pricing_model: Final = {"fast": "parallel_ai/search-fast", "turbo": "parallel_ai/search-turbo"}.get(
+            mode, "parallel_ai/search"
+        )
+        rate: Final = litellm.model_cost[pricing_model]["input_cost_per_query"]
         request_count: Final = (
             sum(item["count"] for item in usage if item["name"] == "sku_search") if usage is not None else 1
         )
