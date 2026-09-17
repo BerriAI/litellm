@@ -69158,5 +69158,26 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_vision": true
+    },
+    "typesafe/jev-1.13.0": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "typesafe",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.typesafe.ai/models"
+    },
+    "typesafe/jev-latest": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "typesafe",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.typesafe.ai/models"
+    },
+    "typesafe/jev-preview": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "typesafe",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.typesafe.ai/models"
     }
 }

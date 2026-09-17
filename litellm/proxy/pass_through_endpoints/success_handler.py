@@ -256,6 +256,25 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = comprehend_medical_handler_result["result"]  # rebind-ok: elif-chain
             kwargs = comprehend_medical_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+        elif self.is_typesafe_route(custom_llm_provider):
+            from .llm_provider_handlers.typesafe_passthrough_logging_handler import (
+                TypeSafePassthroughLoggingHandler,
+            )
+
+            typesafe_handler_result: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
+                httpx_response=httpx_response,
+                response_body=response_body if isinstance(response_body, dict) else {},
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
+            )
+            standard_logging_response_object = typesafe_handler_result["result"]
+            kwargs = typesafe_handler_result["kwargs"]
         elif self.is_vertex_ai_live_route(url_route):
             from .llm_provider_handlers.vertex_ai_live_passthrough_logging_handler import (
                 VertexAILivePassthroughLoggingHandler,
@@ -388,6 +407,9 @@ class PassThroughEndpointLogging:
 
     def is_comprehend_medical_route(self, custom_llm_provider: str | None) -> bool:
         return custom_llm_provider == "comprehendmedical"
+
+    def is_typesafe_route(self, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == "typesafe"
 
     def is_langfuse_route(self, url_route: str):
         parsed_url: Final = urlparse(url_route)
