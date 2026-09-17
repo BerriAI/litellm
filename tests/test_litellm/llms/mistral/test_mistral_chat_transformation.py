@@ -51,14 +51,12 @@ class TestMistralReasoningSupport:
         assert "reasoning_effort" in supported_params
         assert "thinking" in supported_params
 
-        # Non-magistral reasoning models accept reasoning_effort (forwarded verbatim) but not thinking
         supported_params_reasoning = mistral_config.get_supported_openai_params(
             "mistral/mistral-medium-latest"
         )
         assert "reasoning_effort" in supported_params_reasoning
         assert "thinking" not in supported_params_reasoning
 
-        # Models Mistral rejects reasoning_effort on keep it unsupported, so drop_params still drops it
         supported_params_normal = mistral_config.get_supported_openai_params(
             "mistral/mistral-large-latest"
         )
@@ -80,7 +78,6 @@ class TestMistralReasoningSupport:
 
         assert result.get("_add_reasoning_prompt") is True
 
-        # Test reasoning_effort forwarded verbatim for non-magistral model
         optional_params_normal = {}
         result_normal = mistral_config.map_openai_params(
             non_default_params={"reasoning_effort": "low"},
@@ -97,7 +94,6 @@ class TestMistralReasoningSupport:
         [("mistral-medium-latest", "high"), ("zai-glm-5-2", "xhigh")],
     )
     def test_reasoning_effort_forwarded_verbatim_for_reasoning_models(self, model, reasoning_effort):
-        """Codex sends reasoning_effort to every model; Mistral reasoning models forward it as-is."""
         import litellm
 
         optional_params = litellm.get_optional_params(
@@ -108,7 +104,6 @@ class TestMistralReasoningSupport:
         assert optional_params["reasoning_effort"] == reasoning_effort
 
     def test_reasoning_effort_stays_unsupported_for_non_reasoning_models(self):
-        """Mistral rejects reasoning_effort on codestral, so drop_params keeps dropping it there."""
         import litellm
 
         with pytest.raises(litellm.UnsupportedParamsError):
@@ -127,7 +122,6 @@ class TestMistralReasoningSupport:
         assert "reasoning_effort" not in dropped
 
     def test_client_metadata_stripped_from_request(self):
-        """client_metadata passed by Codex must not reach Mistral, whose schema rejects unknown fields."""
         mistral_config = MistralConfig()
 
         request = mistral_config.transform_request(
