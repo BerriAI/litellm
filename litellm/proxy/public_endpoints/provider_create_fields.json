@@ -2880,6 +2880,34 @@
     "default_model_placeholder": "scx-ai/GLM-5.2"
   },
   {
+    "provider": "AINETCAFE",
+    "provider_display_name": "ainetcafe",
+    "litellm_provider": "ainetcafe",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://microquickjs.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "ainetcafe/Kimi-K3"
+  },
+  {
     "provider": "Snowflake",
     "provider_display_name": "Snowflake",
     "litellm_provider": "snowflake",

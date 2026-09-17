@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#C9FF3A"/>
+      <stop offset="1" stop-color="#32FEA5"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="#0B0F0E"/>
+  <!-- bolt fills ~85% of the box so it reads at 24-32px -->
+  <path d="M152 14 L44 150 H118 L104 242 L212 106 H138 Z" fill="url(#g)"/>
+</svg>
