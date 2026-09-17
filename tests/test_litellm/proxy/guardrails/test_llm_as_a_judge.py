@@ -474,6 +474,27 @@ async def test_apply_guardrail_response_context_does_not_repeat_the_reply_under_
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_response_context_only_drops_a_trailing_assistant_turn():
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.post_call, router_provider=lambda: router)
+    inputs: Final = {
+        "texts": ["It is sunny"],
+        "structured_messages": [
+            {"role": "system", "content": "You are a weather bot"},
+            {"role": "user", "content": "Weather in Paris?"},
+        ],
+    }
+
+    await guardrail.apply_guardrail(inputs, {"messages": [], "metadata": {}}, "response")
+
+    prompt: Final = router.acompletion.call_args.kwargs["messages"][1]["content"]
+    assert (
+        "Conversation:\nSYSTEM: You are a weather bot\nUSER: Weather in Paris?\n\n"
+        "Assistant response to evaluate:\nIt is sunny"
+    ) in prompt
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_request_context_keeps_a_trailing_assistant_prefill():
     router: Final = _judge_router(90.0)
     guardrail: Final = _make_guardrail(router_provider=lambda: router)
