@@ -17,7 +17,6 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache
-from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, NoReturn, Protocol, TypeAlias
 
 from fastapi import Request, status
@@ -27,6 +26,14 @@ from redis.exceptions import RedisError
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
+from litellm.constants import (
+    EMPTY_MAPPING,
+    LOGIN_THROTTLE_CACHE_KEY_PREFIX,
+    LOGIN_THROTTLE_MAX_TRACKED_BLOCKS,
+    LOGIN_THROTTLE_MAX_TRACKED_COUNTERS,
+    LOGIN_THROTTLE_NOT_BLOCKED,
+    LOGIN_THROTTLE_UNKNOWN_SOURCE,
+)
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.network import TrustedProxyConfig, normalize_cidr_ranges, resolve_client_ip
 from litellm.secret_managers.main import get_secret_bool
@@ -45,12 +52,6 @@ WINDOW_KEY: Final = "failed_login_window_seconds"
 BLOCK_KEY: Final = "failed_login_block_seconds"
 TRUSTED_PROXY_RANGES_KEY: Final = "trusted_proxy_ranges"
 
-_CACHE_KEY_PREFIX: Final = "login_fail"
-_UNKNOWN_SOURCE: Final = "unknown"
-_MAX_TRACKED_COUNTERS: Final = 20_000
-_MAX_TRACKED_BLOCKS: Final = 10_000
-_NO_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
-_NOT_BLOCKED: Final = (0, 0)
 _REDIS_FAILURES: Final = (RedisError, RedisCircuitBreakerOpenError, OSError, asyncio.TimeoutError)
 _LOCAL_BLOCK_EXPIRY: Final = TypeAdapter[float | None](float | None)
 _SOURCE_LIMIT_OVERRIDES: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
@@ -94,9 +95,11 @@ _RECORD_FAILURE_LUA: Final = (
 )
 
 _COUNTERS: Final = InMemoryCache(
-    max_size_in_memory=_MAX_TRACKED_COUNTERS, default_ttl=DEFAULT_FAILED_LOGIN_WINDOW_SECONDS
+    max_size_in_memory=LOGIN_THROTTLE_MAX_TRACKED_COUNTERS, default_ttl=DEFAULT_FAILED_LOGIN_WINDOW_SECONDS
 )
-_BLOCKS: Final = InMemoryCache(max_size_in_memory=_MAX_TRACKED_BLOCKS, default_ttl=DEFAULT_FAILED_LOGIN_BLOCK_SECONDS)
+_BLOCKS: Final = InMemoryCache(
+    max_size_in_memory=LOGIN_THROTTLE_MAX_TRACKED_BLOCKS, default_ttl=DEFAULT_FAILED_LOGIN_BLOCK_SECONDS
+)
 
 
 @cache
@@ -249,13 +252,13 @@ class LoginThrottle:
         general_settings: Mapping[str, object] | None,
         redis_cache: RedisCache | None,
     ) -> LoginThrottle:
-        settings: Final = general_settings if general_settings is not None else _NO_SETTINGS
+        settings: Final = general_settings if general_settings is not None else EMPTY_MAPPING
         proxies: Final = declared_proxy_ranges(settings)
         resolved, _ = resolve_client_ip(
             request, TrustedProxyConfig(use_forwarded_for=bool(proxies), trusted_proxy_cidrs=proxies or ())
         )
         return cls(
-            client_ip=resolved or _UNKNOWN_SOURCE,
+            client_ip=resolved or LOGIN_THROTTLE_UNKNOWN_SOURCE,
             source_limit=_source_limit(settings, resolved) if proxies is not None and resolved is not None else None,
             user_limit=_int_setting(settings, USER_LIMIT_KEY, DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_USER),
             window_seconds=_int_setting(settings, WINDOW_KEY, DEFAULT_FAILED_LOGIN_WINDOW_SECONDS),
@@ -270,10 +273,10 @@ class LoginThrottle:
         group: Final = source_group(self.client_ip)
         user: Final = hashlib.sha256(username.casefold().encode("utf-8")).hexdigest()
         return _Keys(
-            pair_counter=f"{_CACHE_KEY_PREFIX}:{{{group}}}:user:{user}",
-            pair_block=f"{_CACHE_KEY_PREFIX}:{{{group}}}:block:user:{user}",
-            source_counter=f"{_CACHE_KEY_PREFIX}:{{{group}}}:source",
-            source_block=f"{_CACHE_KEY_PREFIX}:{{{group}}}:block:source",
+            pair_counter=f"{LOGIN_THROTTLE_CACHE_KEY_PREFIX}:{{{group}}}:user:{user}",
+            pair_block=f"{LOGIN_THROTTLE_CACHE_KEY_PREFIX}:{{{group}}}:block:user:{user}",
+            source_counter=f"{LOGIN_THROTTLE_CACHE_KEY_PREFIX}:{{{group}}}:source",
+            source_block=f"{LOGIN_THROTTLE_CACHE_KEY_PREFIX}:{{{group}}}:block:source",
         )
 
     async def attempt(self, username: str) -> LoginAttempt:
@@ -305,14 +308,14 @@ class LoginThrottle:
 
     async def _shared_block_ttls(self, keys: _Keys) -> _BlockTtls:
         if self.redis_cache is None:
-            return _NOT_BLOCKED
+            return LOGIN_THROTTLE_NOT_BLOCKED
         try:
             return _LUA_BLOCK_TTLS.validate_python(
                 await self.redis_cache.async_register_script(_BLOCK_TTLS_LUA)(keys, ())
             )
         except _REDIS_FAILURES as err:
             self._warn_redis(err)
-            return _NOT_BLOCKED
+            return LOGIN_THROTTLE_NOT_BLOCKED
 
     def _local_block_ttls(self, keys: _Keys) -> _BlockTtls:
         return self._local_block_ttl(keys.pair_block), self._local_block_ttl(keys.source_block)

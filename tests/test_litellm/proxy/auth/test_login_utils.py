@@ -1361,7 +1361,7 @@ class _DownRedis(_FakeRedis):
 @pytest.mark.asyncio
 async def test_redis_is_the_only_counter_while_it_answers(monkeypatch):
     """Every worker must spend the same budget, see the same block, and a success must clear the pair for all."""
-    from litellm.proxy.auth.login_throttle import _CACHE_KEY_PREFIX
+    from litellm.constants import LOGIN_THROTTLE_CACHE_KEY_PREFIX
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
@@ -1371,7 +1371,7 @@ async def test_redis_is_the_only_counter_while_it_answers(monkeypatch):
     second_worker = _throttle(user_limit=2, stores=_stores(), redis_cache=redis)
 
     assert [await _fail(first_worker, username="user@corp.com") for _ in range(3)] == ["401"] * 3
-    assert not [k for k in first_worker.counters.cache_dict if str(k).startswith(_CACHE_KEY_PREFIX)], (
+    assert not [k for k in first_worker.counters.cache_dict if str(k).startswith(LOGIN_THROTTLE_CACHE_KEY_PREFIX)], (
         "with Redis answering, no worker may keep a counter of its own"
     )
     assert not first_worker.blocks.cache_dict
@@ -1437,7 +1437,8 @@ async def test_a_failed_redis_delete_still_clears_this_workers_counter(monkeypat
 async def test_counters_do_not_share_the_key_authentication_cache(monkeypatch):
     """Regression: throttle entries must not evict cached credentials from user_api_key_cache."""
     from litellm.proxy import proxy_server as ps
-    from litellm.proxy.auth.login_throttle import _CACHE_KEY_PREFIX, LoginThrottle
+    from litellm.constants import LOGIN_THROTTLE_CACHE_KEY_PREFIX
+    from litellm.proxy.auth.login_throttle import LoginThrottle
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
@@ -1453,7 +1454,7 @@ async def test_counters_do_not_share_the_key_authentication_cache(monkeypatch):
         assert await _fail(throttle, username=f"made-up-{i}@example.com") == "401"
 
     added = set(ps.user_api_key_cache.in_memory_cache.cache_dict) - auth_cache_keys_before
-    assert not [k for k in added if str(k).startswith(_CACHE_KEY_PREFIX)]
+    assert not [k for k in added if str(k).startswith(LOGIN_THROTTLE_CACHE_KEY_PREFIX)]
 
 
 def test_settings_that_arrive_as_environment_strings_are_honored():
@@ -1557,17 +1558,12 @@ async def test_a_username_spray_cannot_evict_an_active_block(monkeypatch):
     """Counters and blocks live in separate bounded stores, so a flood of made-up pairs fills the counter
     store while the blocks it already earned stay in force."""
     from litellm.caching.in_memory_cache import InMemoryCache
-    from litellm.proxy.auth.login_throttle import (
-        _BLOCKS,
-        _COUNTERS,
-        _MAX_TRACKED_BLOCKS,
-        _MAX_TRACKED_COUNTERS,
-        LoginThrottle,
-    )
+    from litellm.constants import LOGIN_THROTTLE_MAX_TRACKED_BLOCKS, LOGIN_THROTTLE_MAX_TRACKED_COUNTERS
+    from litellm.proxy.auth.login_throttle import _BLOCKS, _COUNTERS, LoginThrottle
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
-    assert _MAX_TRACKED_COUNTERS >= 10_000 and _MAX_TRACKED_BLOCKS >= 10_000
+    assert LOGIN_THROTTLE_MAX_TRACKED_COUNTERS >= 10_000 and LOGIN_THROTTLE_MAX_TRACKED_BLOCKS >= 10_000
     assert _COUNTERS is not _BLOCKS
     counters, blocks = InMemoryCache(max_size_in_memory=50), InMemoryCache(max_size_in_memory=50)
     throttle = LoginThrottle(
