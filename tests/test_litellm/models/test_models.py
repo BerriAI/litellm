@@ -5,7 +5,7 @@ Tests for backend domain models.
 from datetime import datetime
 
 import pytest
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.models.autorouter_session import LiteLLM_AutoRouterSession
@@ -41,7 +41,6 @@ from litellm.models.verification_token import (
     LiteLLM_DeletedVerificationToken,
     LiteLLM_VerificationToken,
 )
-from pydantic import ValidationError
 
 
 class TestBudget:
@@ -438,6 +437,31 @@ class TestEndUserTable:
     def test_end_user_spend_coerced_when_none(self):
         eu = LiteLLM_EndUserTable(user_id="eu2", blocked=True, spend=None)
         assert eu.spend == 0.0
+
+    def test_end_user_from_dict_defaults_none_spend(self):
+        table = LiteLLM_EndUserTable.model_validate({"user_id": "u1", "blocked": False, "spend": None})
+        assert table.user_id == "u1"
+        assert table.spend == 0.0
+        assert table.blocked is False
+
+    def test_end_user_from_existing_instance(self):
+        initial = LiteLLM_EndUserTable(user_id="u2", blocked=True, spend=12.5)
+        table = LiteLLM_EndUserTable.model_validate(initial)
+        assert table.user_id == "u2"
+        assert table.spend == 12.5
+        assert table.blocked is True
+
+    def test_end_user_from_model_instance(self):
+        class MockPrismaRecord(BaseModel):
+            user_id: str
+            blocked: bool
+            spend: float | None = None
+
+        record = MockPrismaRecord(user_id="u3", blocked=True, spend=None)
+        table = LiteLLM_EndUserTable.model_validate(record)
+        assert table.user_id == "u3"
+        assert table.spend == 0.0
+        assert table.blocked is True
 
 
 class TestBudgetTableFull:

@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
@@ -957,6 +958,29 @@ def test_customer_block_invalidates_end_user_and_registry_caches(mock_prisma_cli
         "end_user_id:c2",
         "end_user_restricted_registry",
     ]
+
+
+def test_customer_block_success_serializes_db_model_instance(mock_prisma_client, mock_user_api_key_auth):
+    class MockPrismaEndUser(BaseModel):
+        user_id: str
+        blocked: bool
+        spend: float | None = None
+
+    mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(
+        return_value=MockPrismaEndUser(user_id="c1", blocked=True, spend=None)
+    )
+
+    response = client.post(
+        "/customer/block",
+        json={"user_ids": ["c1"]},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["blocked_users"][0]["user_id"] == "c1"
+    assert body["blocked_users"][0]["blocked"] is True
+    assert body["blocked_users"][0]["spend"] == 0.0
 
 
 def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
