@@ -10,9 +10,8 @@
 //! `_bedrock_converse_messages_pt` for the text-only surface this route
 //! accepts; anything richer is declined upstream by the capability gate.
 
-use crate::constants::EMPTY_TEXT_PLACEHOLDER;
-
 use super::types::{ChatMessage, ChatMessageContent};
+use crate::constants::EMPTY_TEXT_PLACEHOLDER;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurnRole {
@@ -132,8 +131,9 @@ pub fn build_conversation(messages: &[ChatMessage]) -> Conversation {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     fn messages(value: serde_json::Value) -> Vec<ChatMessage> {
         serde_json::from_value(value).expect("valid messages")

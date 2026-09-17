@@ -973,12 +973,11 @@ def test_thinking_and_reasoning_effort_conflict_rejected():
         )
 
 
-def test_minimax_m3_supports_vision_from_model_map():
+def test_llama_vision_supports_vision_from_model_map():
     config = FireworksAIConfig()
 
     for model in [
-        "fireworks_ai/accounts/fireworks/models/minimax-m3",
-        "fireworks_ai/minimax-m3",
+        "fireworks_ai/accounts/fireworks/models/llama-v3p2-11b-vision-instruct",
     ]:
         assert supports_vision(model=model, custom_llm_provider="fireworks_ai") is True
         assert config.get_provider_info(model)["supports_vision"] is True
@@ -1052,7 +1051,7 @@ def test_transform_messages_helper_allows_vision_image_inputs():
     ]
 
     out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
+        messages, model="accounts/fireworks/models/llama-v3p2-11b-vision-instruct", litellm_params={}
     )
     assert out == messages
 
@@ -1117,7 +1116,7 @@ def test_transform_messages_helper_no_transform_inline():
         }
     ]
     out = config._transform_messages_helper(
-        messages, model="accounts/fireworks/models/minimax-m3", litellm_params={}
+        messages, model="accounts/fireworks/models/llama-v3p2-11b-vision-instruct", litellm_params={}
     )
     block = out[0]["content"][0]
     assert block["image_url"] == url

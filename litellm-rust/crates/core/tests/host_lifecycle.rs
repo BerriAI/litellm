@@ -83,10 +83,10 @@ fn failure_handler_errors_do_not_replace_selected_failure_or_suppress_async_disp
         lifecycle.accept::<Error>(Ok(()));
     }
     let selected = Error::InvalidRequest("provider".into());
-    assert_eq!(
+    assert!(matches!(
         lifecycle.accept(Err(HostFailure::Error(selected.clone()))),
-        Some(selected)
-    );
+        Some(Error::InvalidRequest(message)) if message == "provider"
+    ));
     lifecycle.accept::<Error>(Ok(()));
     for phase in [
         HostPhase::DeploymentFailure,
@@ -94,11 +94,12 @@ fn failure_handler_errors_do_not_replace_selected_failure_or_suppress_async_disp
         HostPhase::AsyncFailure,
     ] {
         assert_eq!(lifecycle.phase(), phase);
-        assert_eq!(
-            lifecycle.accept(Err(HostFailure::Error(Error::InvalidRequest(
-                "callback".into()
-            )))),
-            None
+        assert!(
+            lifecycle
+                .accept(Err(HostFailure::Error(Error::InvalidRequest(
+                    "callback".into()
+                ))))
+                .is_none()
         );
     }
     assert_eq!(lifecycle.phase(), HostPhase::Complete);
@@ -108,9 +109,9 @@ fn failure_handler_errors_do_not_replace_selected_failure_or_suppress_async_disp
 fn cancellation_skips_terminal_dispatch() {
     let mut lifecycle = HostLifecycle::new(true);
     let error = Error::InvalidRequest("cancelled".into());
-    assert_eq!(
+    assert!(matches!(
         lifecycle.accept(Err(HostFailure::Cancelled(error.clone()))),
-        Some(error)
-    );
+        Some(Error::InvalidRequest(message)) if message == "cancelled"
+    ));
     assert_eq!(lifecycle.phase(), HostPhase::Complete);
 }
