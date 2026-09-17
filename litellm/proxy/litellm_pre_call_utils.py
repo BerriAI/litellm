@@ -25,6 +25,7 @@ from litellm.constants import (
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
@@ -108,6 +109,37 @@ def _trace_id_from_traceparent(traceparent: str) -> str | None:
     return trace_id if trace_id != "0" * 32 else None
 
 
+def _trace_id_from_otel_span(span: "OtelSpan | None") -> str | None:
+    if span is None:
+        return None
+    try:
+        span_context: Final = span.get_span_context()
+        is_valid: Final = span_context.is_valid
+        trace_id: Final = span_context.trace_id
+    except AttributeError:
+        return None
+    if not is_valid or not isinstance(trace_id, int):
+        return None
+    return format(trace_id, "032x")
+
+
+def add_otel_trace_id_to_request(
+    data: dict[str, object], _metadata_variable_name: str, parent_otel_span: "OtelSpan | None"
+) -> None:
+    if data.get("litellm_trace_id"):
+        return
+    metadata: Final = data.get(_metadata_variable_name)
+    requester_metadata: Final = data.get("metadata")
+    if any(isinstance(m, dict) and m.get("trace_id") for m in (metadata, requester_metadata)):
+        return
+    trace_id: Final = _trace_id_from_otel_span(parent_otel_span)
+    if trace_id is None:
+        return
+    data["litellm_trace_id"] = trace_id  # rebind-ok: data is an out-param
+    if isinstance(metadata, dict):
+        metadata["trace_id"] = trace_id  # rebind-ok: metadata is the request's own out-param dict
+
+
 def _session_id_from_baggage(baggage: str) -> str | None:
     """Extract a session.id entry from a W3C Baggage header
     (https://www.w3.org/TR/baggage/), e.g. "session.id=abc-123,user.id=42"."""
@@ -173,6 +205,8 @@ _ENABLE_TEAM_STALE_ALIAS_BYPASS: bool | None = None
 
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span as OtelSpan
+
     from litellm.integrations.otel.model.destination import OtelDestination
     from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
@@ -336,7 +370,13 @@ _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logg
 # and read by spend logs as fact; a client value has no legitimate meaning and no
 # key or team setting keeps it, so the strip is never gated.
 _ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
-    {"attempted_fallbacks", "original_model_group", "request_retry_count", CLIENT_OUTPUT_CEILING_METADATA_KEY}
+    {
+        "attempted_fallbacks",
+        "original_model_group",
+        "request_retry_count",
+        CLIENT_OUTPUT_CEILING_METADATA_KEY,
+        ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+    }
 )
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_override"
 
@@ -2042,6 +2082,13 @@ async def add_litellm_data_to_request(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
     )
+    add_otel_trace_id_to_request(
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+        parent_otel_span=user_api_key_dict.parent_otel_span
+        if user_api_key_dict.parent_otel_span is not None
+        else getattr(request.state, "parent_otel_span", None),
+    )
     apply_missing_session_id_policy(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
@@ -2287,6 +2334,7 @@ async def add_litellm_data_to_request(
     # Team spend, budget - used by prometheus.py
     data[_metadata_variable_name]["user_api_key_team_max_budget"] = user_api_key_dict.team_max_budget
     data[_metadata_variable_name]["user_api_key_team_spend"] = user_api_key_dict.team_spend
+    data[_metadata_variable_name]["user_api_key_team_model_max_budget"] = user_api_key_dict.team_model_max_budget
     data[_metadata_variable_name]["user_api_key_request_route"] = user_api_key_dict.request_route
 
     # API Key spend, budget - used by prometheus.py

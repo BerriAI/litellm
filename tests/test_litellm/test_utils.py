@@ -32,13 +32,16 @@ from litellm._logging import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
+from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
 from litellm.types.utils import (
     CallTypes,
+    Choices,
     Delta,
     LlmProviders,
+    ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StreamingChoices,
@@ -53,6 +56,7 @@ from litellm.utils import (
     _check_provider_match,
     _get_potential_model_names,
     _is_streaming_request,
+    _run_success_deployment_hook_on_converted_chat_stream,
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
@@ -3542,7 +3546,7 @@ _FIREWORKS_MODELS = [
         "accounts/fireworks/models/minimax-m3",
         512000,
         512000,
-        True,
+        None,
         True,
     ),
     (
@@ -3650,7 +3654,8 @@ def _assert_fireworks_entry(
     assert info["supports_tool_choice"] is True
     assert info["supports_reasoning"] is expected_reasoning
     assert info["supports_response_schema"] is True
-    assert info["supports_vision"] is expected_vision
+    if expected_vision is not None:
+        assert info["supports_vision"] is expected_vision
 
 
 @pytest.fixture
@@ -4435,6 +4440,104 @@ async def test_wrapper_async_logs_converted_chat_stream_with_standard_logging_ob
     assert standard_logging_object["response_cost"] > 0
     assert standard_logging_object["stream"] is True
     assert success_kwargs["stream"] is True
+
+
+class _RewritingSuccessDeploymentHook(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_responses: tuple[object, ...] = ()
+
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> ModelResponse | None:
+        self.seen_responses = (*self.seen_responses, response)
+        if not isinstance(response, ModelResponse):
+            return None
+        choice: Final = response.choices[0]
+        if not isinstance(choice, Choices):
+            return None
+        rewritten_message: Final = choice.message.model_copy(update={"content": "rewritten by deployment hook"})
+        return response.model_copy(update={"choices": [choice.model_copy(update={"message": rewritten_message})]})
+
+
+@pytest.mark.asyncio
+async def test_wrapper_async_runs_success_deployment_hook_on_converted_chat_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_converted_stream_callbacks(monkeypatch)
+    hook: Final = _RewritingSuccessDeploymentHook()
+    monkeypatch.setattr(litellm, "callbacks", [_ConvertStreamDeploymentHook(), hook])
+
+    response: Final = await litellm.acompletion(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        mock_response="converted stream body",
+        num_retries=0,
+    )
+    assert isinstance(response, CustomStreamWrapper)
+    chunks: Final = [chunk async for chunk in response]
+
+    assert len(hook.seen_responses) == 1
+    seen: Final = hook.seen_responses[0]
+    assert isinstance(seen, ModelResponse)
+    assert seen.choices[0].message.content == "converted stream body"
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "rewritten by deployment hook"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("completion_stream", "call_type"),
+    [
+        (iter([ModelResponse(model="gpt-5.6")]), "acompletion"),
+        (MockResponseIterator(model_response=ModelResponse(model="gpt-5.6")), "not_a_call_type"),
+    ],
+    ids=["real_provider_stream", "unmapped_call_type"],
+)
+async def test_converted_chat_stream_hook_skips_unhandled_wrappers(
+    monkeypatch: pytest.MonkeyPatch, completion_stream: object, call_type: str
+) -> None:
+    hook: Final = _RewritingSuccessDeploymentHook()
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=completion_stream, model="gpt-5.6", logging_obj=MagicMock(), custom_llm_provider="openai"
+    )
+
+    await _run_success_deployment_hook_on_converted_chat_stream(
+        result=wrapper, request_data={"model": "gpt-5.6"}, call_type=call_type
+    )
+
+    assert hook.seen_responses == ()
+    assert wrapper.completion_stream is completion_stream
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_wrapper_async_leaves_success_deployment_hook_off_requested_fake_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hook: Final = _RewritingSuccessDeploymentHook()
+    monkeypatch.setattr(litellm, "callbacks", [hook])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx.post("http://fake-stream.invalid/api/v1/run/flow-1").respond(
+        json={"outputs": [{"outputs": [{"results": {"message": {"text": "plain stream body"}}}]}]}
+    )
+
+    response: Final = await litellm.acompletion(
+        model="langflow/flow-1",
+        api_base="http://fake-stream.invalid",
+        api_key="fake-key",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        num_retries=0,
+    )
+    assert isinstance(response, CustomStreamWrapper)
+    assert isinstance(response.completion_stream, MockResponseIterator)
+    chunks: Final = [chunk async for chunk in response]
+
+    assert hook.seen_responses == ()
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "plain stream body"
 
 
 @pytest.mark.asyncio

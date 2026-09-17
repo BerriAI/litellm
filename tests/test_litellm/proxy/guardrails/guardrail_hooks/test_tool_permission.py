@@ -1291,8 +1291,9 @@ class TestToolPermissionGuardrailAnthropicMessages:
     async def test_rewrite_mode_keeps_the_stream_identity_it_had_before_the_shared_helper(self):
         """Well-formed SSE must round-trip exactly as it did before the helpers were shared.
 
-        The shared module can stamp the upstream message id and model onto the assembled response
-        for callers that ask for it; this path never did, and a client reads those bytes.
+        The shared module can stamp the upstream message id onto the assembled response for
+        callers that ask for it; this path never did, and a client reads those bytes. The model,
+        though, is now the upstream's, matching what the untouched passthrough shows clients.
         """
         with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
             out = await self._drain(self.rewriting, self._sse_chunks("Read"))
@@ -1304,7 +1305,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
             if line.startswith("data: ") and json.loads(line[6:]).get("type") == "message_start"
         )["message"]
         assert message_start["id"].startswith("chatcmpl-"), "the rewritten stream must not adopt the upstream message id"
-        assert message_start["model"] == "unknown-model", "the rewritten stream must not adopt the upstream model"
+        assert message_start["model"] == "claude-sonnet-4-5", "the rewritten stream reports the model the upstream served"
 
     @pytest.mark.asyncio
     async def test_message_start_without_a_dict_message_fails_closed(self):
