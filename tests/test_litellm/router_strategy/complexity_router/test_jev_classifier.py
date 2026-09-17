@@ -47,6 +47,22 @@ def test_jev_instructions_reject_blank_values() -> None:
         JevClassifierConfig(instructions=" \t")
 
 
+@pytest.mark.parametrize(
+    ("probabilities", "confidence"),
+    [
+        ({"SIMPLE": -0.1}, 0.9),
+        ({"SIMPLE": 1.1}, 0.9),
+        ({"SIMPLE": 0.9}, -0.1),
+        ({"SIMPLE": 0.9}, 1.1),
+        ({"SIMPLE": float("inf")}, 0.9),
+        ({"SIMPLE": 0.9}, float("nan")),
+    ],
+)
+def test_jev_answer_rejects_invalid_probability_values(probabilities: dict[str, float], confidence: float) -> None:
+    with pytest.raises(ValueError, match=r"(greater than or equal to|less than or equal to|finite)"):
+        JevChoiceAnswer(type="choice", choice="SIMPLE", probabilities=probabilities, confidence=confidence)
+
+
 def test_build_jev_request_includes_system_prompt_and_criteria() -> None:
     criteria: Final[Mapping[str, str]] = {
         "Budget": "Short factual answers",
