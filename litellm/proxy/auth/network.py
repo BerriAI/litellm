@@ -59,10 +59,11 @@ def ip_in_networks(client_ip: str | None, networks: list[TrustedProxyNetwork]) -
     if not client_ip or not networks:
         return False
     try:
-        addr: Final = _unmapped(ipaddress.ip_address(client_ip.strip()))
+        addr: Final = ipaddress.ip_address(client_ip.strip())
     except ValueError:
         return False
-    return any(addr in network for network in networks)
+    candidates: Final = (addr, _unmapped(addr))
+    return any(candidate in network for candidate in candidates for network in networks)
 
 
 def _is_valid_ip(value: str) -> bool:
