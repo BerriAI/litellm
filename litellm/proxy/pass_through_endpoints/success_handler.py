@@ -264,6 +264,7 @@ class PassThroughEndpointLogging:
 
             azure_speech_handler_result: Final = AzureSpeechPassthroughLoggingHandler.azure_speech_passthrough_handler(
                 httpx_response=httpx_response,
+                response_body=response_body,
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,

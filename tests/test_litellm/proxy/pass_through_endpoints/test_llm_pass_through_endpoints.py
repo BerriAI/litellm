@@ -6278,6 +6278,49 @@ class TestAzureSpeechProxyRoute:
             ("azure_speech/batch-transcription", "azure_speech", 0.0)
         ]
 
+    def test_short_audio_spend_is_priced_from_the_recognized_duration(
+        self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class _Recorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.payloads: list[dict[str, object]] = []  # mutable-ok: test recorder accumulates callback payloads
+
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+                self.payloads.append(kwargs["standard_logging_object"])
+
+        recorder: Final = _Recorder()
+        monkeypatch.setattr(litellm, "_async_success_callback", [*litellm._async_success_callback, recorder])
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "azure/speech/azure-stt",
+            {
+                "litellm_provider": "azure",
+                "mode": "audio_transcription",
+                "input_cost_per_second": 0.25,
+                "output_cost_per_second": 0.0,
+            },
+        )
+        transcript: Final = {**AZURE_SPEECH_TRANSCRIPT, "Offset": 10_000_000, "Duration": 30_000_000}
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(f"https://eastus.stt.speech.microsoft.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}").mock(
+                return_value=httpx.Response(200, json=transcript)
+            )
+
+            response = azure_speech_client.post(
+                f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}",
+                content=AZURE_SPEECH_WAV_BYTES,
+                headers={"Content-Type": "audio/wav", "Authorization": "Bearer sk-virtual"},
+            )
+
+        assert response.status_code == 200
+        assert [(p["model"], p["custom_llm_provider"]) for p in recorder.payloads] == [
+            ("azure_speech/short-audio", "azure_speech")
+        ]
+        assert recorder.payloads[0]["response_cost"] == pytest.approx(4.0 * 0.25)
+
     def test_api_base_wins_over_region_for_both_families(
         self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
