@@ -7229,3 +7229,90 @@ def test_add_dynamic_callback_registers_once_per_list_without_touching_the_calle
     assert logging_obj.dynamic_async_failure_callbacks == [callback]
     assert LitellmLogging._with_dynamic_callback(None, callback) == [callback]
     assert LitellmLogging._with_dynamic_callback((callback,), callback) == [callback]
+
+
+_OFF_PEAK_DEPLOYMENT: Final = "off-peak-start-time-dep"
+_OFF_PEAK_BLOCK: Final = {
+    "hours_utc": "02:00-03:00",
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 5e-06,
+}
+
+
+def _off_peak_logging_obj(start_time: object) -> LitellmLogging:
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=start_time,
+        litellm_call_id="off-peak-start-time",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o-mini",
+        user="",
+        optional_params={},
+        litellm_params={
+            "api_base": "",
+            "metadata": {
+                "model_info": {
+                    "id": _OFF_PEAK_DEPLOYMENT,
+                    "off_peak_pricing": _OFF_PEAK_BLOCK,
+                }
+            },
+        },
+        custom_llm_provider="openai",
+    )
+    return logging_obj
+
+
+def test_response_cost_calculator_bills_at_the_request_start_time(monkeypatch):
+    """A request that started inside an off-peak window bills off-peak even when the response lands
+    outside it. Only the request start is under the client's control; reading the clock when the
+    response finishes lets a long stream that crosses the boundary land on the other band."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        _OFF_PEAK_DEPLOYMENT,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 3e-06,
+            "output_cost_per_token": 15e-06,
+            "off_peak_pricing": _OFF_PEAK_BLOCK,
+        },
+    )
+    usage: Final = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+        "total_tokens": 1500,
+    }
+
+    started_off_peak: Final = _off_peak_logging_obj(
+        datetime.datetime(2026, 1, 1, 2, 30, tzinfo=datetime.timezone.utc)
+    )
+    off_peak_cost: Final = started_off_peak._response_cost_calculator(
+        result=ModelResponse(model="gpt-4o-mini", usage=usage)
+    )
+    assert off_peak_cost == pytest.approx(1000 * 1e-06 + 500 * 5e-06)
+
+    started_peak: Final = _off_peak_logging_obj(
+        datetime.datetime(2026, 1, 1, 12, 30, tzinfo=datetime.timezone.utc)
+    )
+    peak_cost: Final = started_peak._response_cost_calculator(
+        result=ModelResponse(model="gpt-4o-mini", usage=usage)
+    )
+    assert peak_cost == pytest.approx(1000 * 3e-06 + 500 * 15e-06)
+
+
+def test_billing_moment_reads_a_naive_start_time_as_local_wall_clock():
+    naive_local: Final = datetime.datetime(2026, 1, 1, 12, 30)
+    assert _off_peak_logging_obj(
+        naive_local
+    )._billing_moment() == naive_local.astimezone(datetime.timezone.utc)
+
+    moment: Final = _off_peak_logging_obj(time.time())._billing_moment()
+    assert moment.tzinfo is datetime.timezone.utc
+    assert (
+        abs((moment - datetime.datetime.now(datetime.timezone.utc)).total_seconds()) < 5
+    )

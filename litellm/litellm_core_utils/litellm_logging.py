@@ -25,6 +25,7 @@ from litellm import (
     json_logs,
     turn_off_message_logging,
 )
+from litellm._internal_context import pinned_billing_time
 from litellm._logging import (
     _is_debugging_on,
     _redact_string,
@@ -1699,6 +1700,13 @@ class Logging(LiteLLMLoggingBaseClass):
         if margin_total_amount is not None:
             self.cost_breakdown["margin_total_amount"] = margin_total_amount
 
+    def _billing_moment(self) -> datetime.datetime:
+        """The request start as an aware UTC instant; a naive start_time is local wall clock, not UTC."""
+        start_time: Final = getattr(self, "start_time", None)
+        if not isinstance(start_time, datetime.datetime):
+            return datetime.datetime.now(datetime.timezone.utc)
+        return start_time.astimezone(datetime.timezone.utc)
+
     def _response_cost_calculator(
         self,
         result: Union[
@@ -1812,7 +1820,8 @@ class Logging(LiteLLMLoggingBaseClass):
             return None
 
         try:
-            response_cost: Final = litellm.response_cost_calculator(**response_cost_calculator_kwargs)
+            with pinned_billing_time(self._billing_moment()):
+                response_cost: Final = litellm.response_cost_calculator(**response_cost_calculator_kwargs)
 
             verbose_logger.debug("response_cost: %s", response_cost)
             additional_response_cost: Final[object] = self.model_call_details.get("additional_response_cost")
