@@ -143,10 +143,9 @@ def _prepare_ocr_request(
         )
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=custom_llm_provider) from error
-    optional_params: Final = {
-        **mapped_params,
-        **({OCR_REQUEST_FORMAT_PARAM: requested_format} if requested_format is not None else {}),
-    }
+    optional_params: Final = (
+        mapped_params if requested_format is None else {**mapped_params, OCR_REQUEST_FORMAT_PARAM: requested_format}
+    )
 
     verbose_logger.debug("OCR optional_params after mapping: %s", optional_params)
 
@@ -185,7 +184,7 @@ def _error_provider(model: str, custom_llm_provider: str | None) -> str | None:
     if custom_llm_provider is not None:
         return custom_llm_provider
     prefix: Final = model.partition("/")[0]
-    if prefix in {"mistral", "azure_ai", "vertex_ai"}:
+    if prefix in ("mistral", "azure_ai", "vertex_ai"):
         return prefix
     return "mistral" if model.startswith("mistral-ocr") else None
 
@@ -224,7 +223,7 @@ async def aocr(
         )
         model = prepared.model
         custom_llm_provider = prepared.custom_llm_provider
-        completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
+        completion_kwargs.update(model=model, custom_llm_provider=custom_llm_provider)
 
         response = base_llm_http_handler.ocr(
             model=prepared.model,
@@ -390,7 +389,7 @@ def ocr(
         )
         model = prepared.model
         custom_llm_provider = prepared.custom_llm_provider
-        completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
+        completion_kwargs.update(model=model, custom_llm_provider=custom_llm_provider)
 
         response: Final = base_llm_http_handler.ocr(
             model=prepared.model,
