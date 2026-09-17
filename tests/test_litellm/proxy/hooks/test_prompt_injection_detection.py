@@ -1,6 +1,5 @@
 import asyncio
 import importlib
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -156,7 +155,7 @@ async def test_heuristics_check_does_not_occupy_default_executor():
 
 @pytest.mark.parametrize(
     ("configured", "expected"),
-    [("3", 3), ("not-an-int", os.cpu_count() or 1)],
+    [("3", 3), ("not-an-int", 1)],
 )
 def test_heuristics_thread_count_config_is_honoured(monkeypatch: pytest.MonkeyPatch, configured: str, expected: int):
     monkeypatch.setenv("PROMPT_INJECTION_HEURISTICS_MAX_THREADS", configured)
