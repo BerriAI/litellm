@@ -79,9 +79,7 @@ vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
   default: ({ topKeys }: { topKeys: { api_key: string; user?: string | null; spend: number }[] }) => (
     <div>
       <span>Top Keys</span>
-      <span>
-        {`top-keys:${topKeys.map((row) => `${row.api_key}=${row.spend}=${row.user ?? "-"}`).join("|")}`}
-      </span>
+      <span>{`top-keys:${topKeys.map((row) => `${row.api_key}=${row.spend}=${row.user ?? "-"}`).join("|")}`}</span>
     </div>
   ),
 }));
