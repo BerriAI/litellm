@@ -49,6 +49,7 @@ async def new_budget(
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
     - max_budget: Optional[float] - The max budget for the budget.
+    - rollover_max_budget: Optional[float] - Absolute ceiling on the allowance the budget can accumulate across resets. Unused budget carries forward as credit, up to this cap.
     - soft_budget: Optional[float] - The soft budget for the budget.
     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
@@ -134,6 +135,7 @@ async def update_budget(
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
     - budget_id: Optional[str] - The id of the budget. If not provided, a new id will be generated.
     - max_budget: Optional[float] - The max budget for the budget.
+    - rollover_max_budget: Optional[float] - Absolute ceiling on the allowance the budget can accumulate across resets. Unused budget carries forward as credit, up to this cap.
     - soft_budget: Optional[float] - The soft budget for the budget.
     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.

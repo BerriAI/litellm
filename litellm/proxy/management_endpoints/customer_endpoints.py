@@ -328,6 +328,7 @@ async def new_end_user(
     - alias: Optional[str] - A human-friendly alias for the user.
     - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
     - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+    - rollover_max_budget: Optional[float] - Absolute ceiling on the allowance a customer can accumulate across resets. Unused budget carries forward as credit, up to this cap.
     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
