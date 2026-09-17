@@ -372,15 +372,17 @@ const isTimed = (e: GuardrailInformation): e is TimedGuardrailInformation =>
 
 const belongsOnLifecycle = (e: GuardrailInformation): boolean => isTimed(e) || getEntryOutcome(e) !== "not_run";
 
+// Sorts a phase's timed entries by start time while leaving its untimed entries in the
+// slots they were recorded in. Applied per phase, never globally: an entry can land in
+// more than one phase bucket, so a global pass can reorder one phase by another's clock.
+const orderWithinPhase = (group: GuardrailInformation[]): GuardrailInformation[] => {
+  const byStart = group.filter(isTimed).sort((a, b) => a.start_time - b.start_time);
+  const timedSlots = new Map(group.flatMap((e, i) => (isTimed(e) ? [i] : [])).map((slot, k) => [slot, byStart[k]]));
+  return group.map((e, i) => timedSlots.get(i) ?? e);
+};
+
 const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
-  const sorted = useMemo(() => {
-    const onLifecycle = entries.filter(belongsOnLifecycle);
-    const byStart = onLifecycle.filter(isTimed).sort((a, b) => a.start_time - b.start_time);
-    const timedSlots = new Map(
-      onLifecycle.flatMap((e, i) => (isTimed(e) ? [i] : [])).map((slot, k) => [slot, byStart[k]]),
-    );
-    return onLifecycle.map((e, i) => timedSlots.get(i) ?? e);
-  }, [entries]);
+  const sorted = useMemo(() => entries.filter(belongsOnLifecycle), [entries]);
 
   const timeline = useMemo(() => {
     if (sorted.length === 0) return [];
@@ -396,11 +398,11 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
 
     // Pre-call guardrails — use modeMatches so array modes (e.g. ["pre_call", "post_call"])
     // place the entry in every matching bucket.
-    const preCalls = sorted.filter((e) => modeMatches(e.guardrail_mode, "pre_call"));
-    const postCalls = sorted.filter(
-      (e) => modeMatches(e.guardrail_mode, "post_call") || modeMatches(e.guardrail_mode, "logging_only"),
+    const preCalls = orderWithinPhase(sorted.filter((e) => modeMatches(e.guardrail_mode, "pre_call")));
+    const postCalls = orderWithinPhase(
+      sorted.filter((e) => modeMatches(e.guardrail_mode, "post_call") || modeMatches(e.guardrail_mode, "logging_only")),
     );
-    const duringCalls = sorted.filter((e) => modeMatches(e.guardrail_mode, "during_call"));
+    const duringCalls = orderWithinPhase(sorted.filter((e) => modeMatches(e.guardrail_mode, "during_call")));
 
     for (const e of preCalls) {
       items.push({
