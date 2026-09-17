@@ -39,7 +39,6 @@ async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: pr
     )
     return await fallback(*args, **kwargs)
 
-
 def _decline_types() -> tuple[type[BaseException], ...]:
     exception_types: Final = native_exception_types()
     return (exception_types[0],) if exception_types is not None else ()
