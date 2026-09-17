@@ -25,6 +25,7 @@ from .langfuse import (
     parse_langfuse_debug,
     raise_if_unsupported_langfuse_version,
     resolve_langfuse_credentials,
+    warn_if_upstream_langfuse_configured,
 )
 from .langfuse_handler import LangFuseHandler
 from .langfuse_mock_client import create_mock_langfuse_client, should_use_langfuse_mock
@@ -103,6 +104,7 @@ def langfuse_client_init(
     }
 
     raise_if_unsupported_langfuse_version(installed_langfuse_version())
+    warn_if_upstream_langfuse_configured()
 
     import httpx
 

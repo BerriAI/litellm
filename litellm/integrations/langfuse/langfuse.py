@@ -307,6 +307,15 @@ def resolve_langfuse_credentials(
     return public_key, secret_key, resolved_host
 
 
+def warn_if_upstream_langfuse_configured() -> None:
+    if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is None:
+        return
+    verbose_logger.warning(
+        "UPSTREAM_LANGFUSE_* is no longer supported: the langfuse callback moved to SDK v4, "
+        "which has no second ingestion client. The values are ignored."
+    )
+
+
 def parse_langfuse_debug(raw_value: str | None) -> bool:
     """Parse the LANGFUSE_DEBUG value into the boolean flag the langfuse client expects."""
     return raw_value is not None and raw_value.strip().lower() in ("true", "1")
@@ -393,11 +402,8 @@ class LangFuseLogger:
             except Exception:
                 verbose_logger.debug("Langfuse project id unavailable, alerting links will omit it")
 
+        warn_if_upstream_langfuse_configured()
         if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
-            verbose_logger.warning(
-                "UPSTREAM_LANGFUSE_* is no longer supported: the langfuse callback moved to SDK v4, "
-                "which has no second ingestion client. The values are ignored."
-            )
             self.upstream_langfuse_secret_key = os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY")
             self.upstream_langfuse_public_key = os.getenv("UPSTREAM_LANGFUSE_PUBLIC_KEY")
             self.upstream_langfuse_host = os.getenv("UPSTREAM_LANGFUSE_HOST")

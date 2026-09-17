@@ -134,6 +134,26 @@ def test_langfuse_client_init_resolves_deployment_environment(monkeypatch, env_v
     assert _RecordingLangfuseForEnv.last_environment == expected
 
 
+def test_langfuse_client_init_warns_that_upstream_langfuse_is_ignored(monkeypatch, caplog):
+    """The YAML `callbacks: ["langfuse"]` path builds its client here, not through LangFuseLogger.__init__,
+    so an operator who still sets UPSTREAM_LANGFUSE_* must get the same startup warning on this path."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://test.langfuse.com")
+    monkeypatch.setenv("UPSTREAM_LANGFUSE_SECRET_KEY", "sk-upstream")
+    monkeypatch.setenv("UPSTREAM_LANGFUSE_HOST", "https://upstream.example")
+    with (
+        patch(
+            "litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuseForEnv
+        ),  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
+        caplog.at_level("WARNING", logger="LiteLLM"),
+    ):
+        langfuse_client_init.cache_clear()
+        langfuse_client_init()
+    langfuse_client_init.cache_clear()
+    assert any("UPSTREAM_LANGFUSE_* is no longer supported" in record.getMessage() for record in caplog.records)
+
+
 def test_langfuse_client_init_mock_mode_makes_no_network_calls(monkeypatch):
     """LANGFUSE_MOCK promises full execution without egress.
 
