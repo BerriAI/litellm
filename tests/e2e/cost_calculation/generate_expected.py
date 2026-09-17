@@ -19,8 +19,6 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import TypeAdapter
-
 from cost_matrix import (
     EXPECTED_PATH,
     FRONTIER_MODELS,
@@ -32,19 +30,11 @@ from cost_matrix import (
     cases_for,
     expected_key,
 )
-
-# Wires whose response surface reports a real web-search call count; the
-# chat-completions wires only expose url_citation annotations, so their billed
-# count floors to one.
-_EXACT_WEB_SEARCH_WIRES: Final = frozenset(
-    {"openai_responses", "anthropic_messages", "gemini_generate", "vertex_generate"}
-)
+from pydantic import TypeAdapter
 
 
-def billed_web_search_calls(model: FrontierModel, case: Case) -> int:
-    if case.usage.web_search_calls == 0:
-        return 0
-    return case.usage.web_search_calls if model.wire in _EXACT_WEB_SEARCH_WIRES else 1
+def _first_present(*rates: float | None) -> float | None:
+    return next((rate for rate in rates if rate is not None), None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,11 +57,14 @@ def expected_breakdown(model: FrontierModel, case: Case) -> ExpectedCost:
 
     Input = fresh*in + read*read + 5m*create + 1h*create_1h + audio_in*audio_in;
     output = text*out + reasoning*reasoning + audio_out*audio_out; plus the
-    billed web-search calls at the medium search-context rate. Above-threshold
-    swaps every input/output rate to its ``_above_200k_tokens`` variant when
-    total prompt tokens exceed the threshold; a service tier swaps input/output
-    to the tier's variants, falling back to the base rate when a variant is
-    unset -- mirroring _get_token_base_cost in litellm's cost calculator.
+    billed web-search calls at the medium search-context rate. Every billed
+    token is a token the provider charged for: a component whose entry has no
+    dedicated rate bills at the ordinary input or output rate, and a present
+    rate (including an explicit 0.0) is authoritative. When the total prompt
+    tokens exceed the threshold, input/output rates come from the
+    ``_above_200k_tokens`` variants; a service tier takes its ``_priority`` or
+    ``_flex`` variant when the entry carries one, and otherwise bills at the
+    base rate.
     """
     rates: Final[CostMapEntry] = model.override_rates if case.response_model_override else model.rates
     u: Final = case.usage
@@ -81,46 +74,53 @@ def expected_breakdown(model: FrontierModel, case: Case) -> ExpectedCost:
     )
     tiered: Final = prompt_tokens > TIER_THRESHOLD_TOKENS
     in_rate: Final = (
-        (rates.input_cost_per_token_above_200k_tokens if tiered else None)
-        or (rates.input_cost_per_token_priority if case.service_tier == "priority" else None)
-        or (rates.input_cost_per_token_flex if case.service_tier == "flex" else None)
-        or rates.input_cost_per_token
+        _first_present(
+            rates.input_cost_per_token_above_200k_tokens if tiered else None,
+            rates.input_cost_per_token_priority if case.service_tier == "priority" else None,
+            rates.input_cost_per_token_flex if case.service_tier == "flex" else None,
+            rates.input_cost_per_token,
+        )
         or 0.0
     )
     out_rate: Final = (
-        (rates.output_cost_per_token_above_200k_tokens if tiered else None)
-        or (rates.output_cost_per_token_priority if case.service_tier == "priority" else None)
-        or (rates.output_cost_per_token_flex if case.service_tier == "flex" else None)
-        or rates.output_cost_per_token
+        _first_present(
+            rates.output_cost_per_token_above_200k_tokens if tiered else None,
+            rates.output_cost_per_token_priority if case.service_tier == "priority" else None,
+            rates.output_cost_per_token_flex if case.service_tier == "flex" else None,
+            rates.output_cost_per_token,
+        )
         or 0.0
     )
-    write_rate: Final = (
-        rates.cache_creation_input_token_cost
-        if rates.cache_creation_input_token_cost is not None
-        else in_rate
+    read_rate: Final = _first_present(rates.cache_read_input_token_cost, in_rate) or 0.0
+    write_rate: Final = _first_present(rates.cache_creation_input_token_cost, in_rate) or 0.0
+    write_1h_rate: Final = (
+        _first_present(rates.cache_creation_input_token_cost_above_1hr, write_rate) or 0.0
     )
+    audio_in_rate: Final = _first_present(rates.input_cost_per_audio_token, in_rate) or 0.0
+    reasoning_rate: Final = _first_present(rates.output_cost_per_reasoning_token, out_rate) or 0.0
+    audio_out_rate: Final = _first_present(rates.output_cost_per_audio_token, out_rate) or 0.0
     input_cost: Final = (
         u.fresh_input_tokens * in_rate
-        + u.cache_read_tokens
-        * (rates.cache_read_input_token_cost if rates.cache_read_input_token_cost is not None else in_rate)
+        + u.cache_read_tokens * read_rate
         + u.cache_write_5m_tokens * write_rate
-        + u.cache_write_1h_tokens
-        * (
-            rates.cache_creation_input_token_cost_above_1hr
-            if rates.cache_creation_input_token_cost_above_1hr is not None
-            else write_rate
-        )
-        + u.audio_input_tokens * (rates.input_cost_per_audio_token or 0.0)
+        + u.cache_write_1h_tokens * write_1h_rate
+        + u.audio_input_tokens * audio_in_rate
     )
     output_cost: Final = (
         u.output_tokens * out_rate
-        + u.reasoning_tokens * (rates.output_cost_per_reasoning_token or out_rate)
-        + u.audio_output_tokens * (rates.output_cost_per_audio_token or out_rate)
+        + u.reasoning_tokens * reasoning_rate
+        + u.audio_output_tokens * audio_out_rate
     )
     search: Final = rates.search_context_cost_per_query
-    tool_cost: Final = billed_web_search_calls(model, case) * (
-        search.search_context_size_medium if search and search.search_context_size_medium else 0.0
+    medium_rate: Final = (
+        search.search_context_size_medium if search is not None else None
     )
+    if u.web_search_calls and medium_rate is None:
+        raise ValueError(
+            f"{model.map_key}: case {case.name} bills {u.web_search_calls} web-search "
+            "calls but the entry has no search_context_cost_per_query medium rate"
+        )
+    tool_cost: Final = u.web_search_calls * (medium_rate if medium_rate is not None else 0.0)
     return ExpectedCost(input_cost=input_cost, output_cost=output_cost, tool_cost=tool_cost)
 
 
