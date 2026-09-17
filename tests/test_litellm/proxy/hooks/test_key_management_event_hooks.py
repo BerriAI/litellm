@@ -416,6 +416,45 @@ class TestRotateVirtualKeyInSecretManager:
             assert call_kwargs["new_secret_name"] == "test-key-alias-new"
             assert call_kwargs["new_secret_value"] == "sk-new-key"
 
+    @pytest.mark.parametrize("key_alias", ["test-key-alias", None])
+    @pytest.mark.asyncio
+    async def test_rotated_hook_without_request_body_syncs_secret_manager(
+        self, monkeypatch: pytest.MonkeyPatch, key_alias: str | None
+    ):
+        import litellm
+        from litellm.proxy._types import GenerateKeyResponse, LiteLLM_VerificationToken
+        from litellm.secret_managers.base_secret_manager import BaseSecretManager
+        from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
+
+        mock_secret_manager: Final = MagicMock(spec=BaseSecretManager)
+        mock_secret_manager.async_rotate_secret = AsyncMock(return_value={"status": "success"})
+        monkeypatch.setattr(litellm, "secret_manager_client", mock_secret_manager)
+        monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.AWS_SECRET_MANAGER)
+        monkeypatch.setattr(
+            litellm,
+            "_key_management_settings",
+            KeyManagementSettings(store_virtual_keys=True, prefix_for_stored_virtual_keys="litellm/"),
+        )
+        monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+        existing_key_row: Final = LiteLLM_VerificationToken(token="hashed-old-token", key_alias=key_alias)
+        response: Final = GenerateKeyResponse(token_id="hashed-new-token", key="sk-new-key", key_alias=key_alias)
+
+        await KeyManagementEventHooks.async_key_rotated_hook(
+            data=None,
+            existing_key_row=existing_key_row,
+            response=response,
+            user_api_key_dict=MagicMock(),
+        )
+
+        expected_secret_name: Final = f"litellm/{key_alias or 'virtual-key-hashed-old-token'}"
+        mock_secret_manager.async_rotate_secret.assert_awaited_once_with(
+            current_secret_name=expected_secret_name,
+            new_secret_name=expected_secret_name,
+            new_secret_value="sk-new-key",
+            optional_params=None,
+        )
+
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_when_store_virtual_keys_disabled(self):
         """Test that rotation is skipped when store_virtual_keys is False."""
@@ -472,6 +511,112 @@ class TestRotateVirtualKeyInSecretManager:
 
         # Verify async_rotate_secret was NOT called
         mock_secret_manager.async_rotate_secret.assert_not_called()
+
+
+class TestKeyUpdatedSecretManagerSync:
+
+    @staticmethod
+    def _configure_secret_manager(
+        monkeypatch: pytest.MonkeyPatch, stored_value: str | None, store_virtual_keys: bool = True
+    ) -> MagicMock:
+        import litellm
+        from litellm.secret_managers.base_secret_manager import BaseSecretManager
+        from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
+
+        mock_secret_manager: Final = MagicMock(spec=BaseSecretManager)
+        mock_secret_manager.async_read_secret = AsyncMock(return_value=stored_value)
+        mock_secret_manager.async_rotate_secret = AsyncMock(return_value={"status": "success"})
+        monkeypatch.setattr(litellm, "secret_manager_client", mock_secret_manager)
+        monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.AWS_SECRET_MANAGER)
+        monkeypatch.setattr(
+            litellm,
+            "_key_management_settings",
+            KeyManagementSettings(store_virtual_keys=store_virtual_keys, prefix_for_stored_virtual_keys="litellm/"),
+        )
+        monkeypatch.setattr(litellm, "store_audit_logs", False)
+        return mock_secret_manager
+
+    @pytest.mark.parametrize("existing_alias", ["old-alias", None])
+    @pytest.mark.asyncio
+    async def test_updated_hook_renames_secret_when_alias_changes(
+        self, monkeypatch: pytest.MonkeyPatch, existing_alias: str | None
+    ):
+        from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+
+        mock_secret_manager: Final = self._configure_secret_manager(monkeypatch, stored_value="sk-stored-key")
+        existing_key_row: Final = LiteLLM_VerificationToken(token="hashed-token", key_alias=existing_alias)
+
+        await KeyManagementEventHooks.async_key_updated_hook(
+            data=UpdateKeyRequest(key="hashed-token", key_alias="new-alias"),
+            existing_key_row=existing_key_row,
+            response=MagicMock(),
+            user_api_key_dict=MagicMock(),
+        )
+
+        current_secret_name: Final = f"litellm/{existing_alias or 'virtual-key-hashed-token'}"
+        mock_secret_manager.async_read_secret.assert_awaited_once_with(
+            secret_name=current_secret_name, optional_params=None
+        )
+        mock_secret_manager.async_rotate_secret.assert_awaited_once_with(
+            current_secret_name=current_secret_name,
+            new_secret_name="litellm/new-alias",
+            new_secret_value="sk-stored-key",
+            optional_params=None,
+        )
+
+    @pytest.mark.parametrize("requested_alias", ["same-alias", None])
+    @pytest.mark.asyncio
+    async def test_updated_hook_leaves_secret_alone_when_alias_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch, requested_alias: str | None
+    ):
+        from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+
+        mock_secret_manager: Final = self._configure_secret_manager(monkeypatch, stored_value="sk-stored-key")
+
+        await KeyManagementEventHooks.async_key_updated_hook(
+            data=UpdateKeyRequest(key="hashed-token", key_alias=requested_alias, max_budget=10.0),
+            existing_key_row=LiteLLM_VerificationToken(token="hashed-token", key_alias="same-alias"),
+            response=MagicMock(),
+            user_api_key_dict=MagicMock(),
+        )
+
+        mock_secret_manager.async_read_secret.assert_not_awaited()
+        mock_secret_manager.async_rotate_secret.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_updated_hook_skips_rename_when_secret_missing(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+
+        mock_secret_manager: Final = self._configure_secret_manager(monkeypatch, stored_value=None)
+
+        await KeyManagementEventHooks.async_key_updated_hook(
+            data=UpdateKeyRequest(key="hashed-token", key_alias="new-alias"),
+            existing_key_row=LiteLLM_VerificationToken(token="hashed-token", key_alias="old-alias"),
+            response=MagicMock(),
+            user_api_key_dict=MagicMock(),
+        )
+
+        mock_secret_manager.async_rotate_secret.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_updated_hook_ignores_alias_change_when_store_virtual_keys_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+
+        mock_secret_manager: Final = self._configure_secret_manager(
+            monkeypatch, stored_value="sk-stored-key", store_virtual_keys=False
+        )
+
+        await KeyManagementEventHooks.async_key_updated_hook(
+            data=UpdateKeyRequest(key="hashed-token", key_alias="new-alias"),
+            existing_key_row=LiteLLM_VerificationToken(token="hashed-token", key_alias="old-alias"),
+            response=MagicMock(),
+            user_api_key_dict=MagicMock(),
+        )
+
+        mock_secret_manager.async_read_secret.assert_not_awaited()
+        mock_secret_manager.async_rotate_secret.assert_not_awaited()
 
 
 class TestKeyUpdatedAuditLogObjectId:
