@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from itertools import groupby
 from types import MappingProxyType
@@ -27,6 +27,7 @@ class _ResolvedDeprecation:
     deprecation_date: date
     litellm_model: str | None
     litellm_provider: str | None
+    successor_model: str | None = None
 
 
 def _parse_deprecation_date(raw_value: object) -> date | None:
@@ -42,20 +43,27 @@ def _parse_deprecation_date(raw_value: object) -> date | None:
         return None
 
 
+def _successor_model(raw_value: object) -> str | None:
+    """A non-empty successor name, or None when the field is missing, blank, or not a string"""
+    return raw_value.strip() or None if isinstance(raw_value, str) else None
+
+
 def _cost_map_lookup(model_key: object) -> _ResolvedDeprecation | None:
     if not isinstance(model_key, str) or not model_key:
         return None
     entry: Final = litellm.model_cost.get(model_key)
     if not isinstance(entry, Mapping):
         return None
-    parsed: Final = _parse_deprecation_date(entry.get("deprecation_date"))
+    fields: Final[Mapping[str, object]] = entry
+    parsed: Final = _parse_deprecation_date(fields.get("deprecation_date"))
     if parsed is None:
         return None
-    provider: Final = entry.get("litellm_provider")
+    provider: Final = fields.get("litellm_provider")
     return _ResolvedDeprecation(
         deprecation_date=parsed,
         litellm_model=model_key,
         litellm_provider=provider if isinstance(provider, str) else None,
+        successor_model=_successor_model(fields.get("successor_model")),
     )
 
 
@@ -67,9 +75,10 @@ def _mapping_field(deployment: Mapping[str, object], key: str) -> Mapping[str, o
 def _resolve_deployment_deprecation(
     deployment: Mapping[str, object],
 ) -> _ResolvedDeprecation | None:
-    """Resolve a deployment's deprecation date, preferring its explicit override"""
+    """Resolve a deployment's deprecation date and successor, preferring its explicit overrides"""
     model_info: Final = _mapping_field(deployment, "model_info")
     raw_model: Final = _mapping_field(deployment, "litellm_params").get("model")
+    explicit_successor: Final = _successor_model(model_info.get("successor_model"))
 
     override: Final = _parse_deprecation_date(model_info.get("deprecation_date"))
     if override is not None:
@@ -78,21 +87,25 @@ def _resolve_deployment_deprecation(
             deprecation_date=override,
             litellm_model=raw_model if isinstance(raw_model, str) else None,
             litellm_provider=provider if isinstance(provider, str) else None,
+            successor_model=explicit_successor,
         )
 
     unprefixed: Final = raw_model.split("/", 1)[1] if isinstance(raw_model, str) and "/" in raw_model else None
-    return next(
+    resolved: Final = next(
         (
-            resolved
-            for resolved in (
+            candidate
+            for candidate in (
                 _cost_map_lookup(model_info.get("base_model")),
                 _cost_map_lookup(raw_model),
                 _cost_map_lookup(unprefixed),
             )
-            if resolved is not None
+            if candidate is not None
         ),
         None,
     )
+    if resolved is None or explicit_successor is None:
+        return resolved
+    return replace(resolved, successor_model=explicit_successor)
 
 
 def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:
@@ -120,14 +133,17 @@ def _build_info(deployment: Mapping[str, object], today: date, warn_within_days:
         days_until_deprecation=days_until,
         status=_classify(days_until, warn_within_days),
         litellm_provider=resolved.litellm_provider,
+        successor_model=resolved.successor_model,
     )
 
 
 def _dedupe(
     models: Sequence[ModelDeprecationInfo],
 ) -> tuple[ModelDeprecationInfo, ...]:
-    """Report a model group carrying the same date on several deployments once"""
-    ordered: Final = sorted(models, key=lambda model: (model.model_name, model.deprecation_date))
+    """Report a model group carrying the same date on several deployments once, keeping one that names a successor"""
+    ordered: Final = sorted(
+        models, key=lambda model: (model.model_name, model.deprecation_date, model.successor_model is None)
+    )
     return tuple(
         next(group) for _, group in groupby(ordered, key=lambda model: (model.model_name, model.deprecation_date))
     )
@@ -186,10 +202,11 @@ def _format_entry(info: ModelDeprecationInfo) -> str:
         if info.days_until_deprecation < 0
         else f"in {info.days_until_deprecation}d"
     )
+    migration: Final = f", migrate to `{_escape_slack_mrkdwn(info.successor_model)}`" if info.successor_model else ""
     return (
         f"• `{_escape_slack_mrkdwn(info.model_name)}` "
         f"(provider: {_escape_slack_mrkdwn(info.litellm_provider) if info.litellm_provider else 'unknown'}, "
-        f"deprecates {info.deprecation_date.isoformat()}, {suffix})"
+        f"deprecates {info.deprecation_date.isoformat()}, {suffix}{migration})"
     )
 
 

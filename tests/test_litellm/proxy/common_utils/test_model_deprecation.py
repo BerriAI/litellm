@@ -357,3 +357,126 @@ class TestFormatDeprecationAlertMessage:
         assert "<https://evil.example|openai>" not in message
         assert "&lt;!channel&gt; pwned" in message
         assert "&lt;https://evil.example|openai&gt; &amp; co" in message
+
+
+class TestSuccessorModel:
+    def test_should_surface_the_successor_set_on_the_deployment(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", {})
+        router = _make_router(
+            [
+                {
+                    "model_name": "old",
+                    "litellm_params": {"model": "openai/old-model"},
+                    "model_info": {"id": "1", "deprecation_date": "2026-06-10", "successor_model": "new"},
+                }
+            ]
+        )
+
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+
+        assert snapshot.imminent[0].successor_model == "new"
+
+    def test_should_take_the_successor_from_the_cost_map_when_the_deployment_has_none(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {"old-model": {"deprecation_date": "2026-06-10", "successor_model": "new-model"}},
+        )
+        router = _make_router(
+            [{"model_name": "old", "litellm_params": {"model": "old-model"}, "model_info": {"id": "1"}}]
+        )
+
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+
+        assert snapshot.imminent[0].successor_model == "new-model"
+
+    def test_should_prefer_the_deployment_successor_over_the_cost_map(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {"old-model": {"deprecation_date": "2026-06-10", "successor_model": "cost-map-pick"}},
+        )
+        router = _make_router(
+            [
+                {
+                    "model_name": "old",
+                    "litellm_params": {"model": "old-model"},
+                    "model_info": {"id": "1", "successor_model": "my-pick"},
+                }
+            ]
+        )
+
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+
+        assert snapshot.imminent[0].successor_model == "my-pick"
+
+    def test_should_ignore_blank_or_non_string_successors(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", {})
+        router = _make_router(
+            [
+                {
+                    "model_name": "blank",
+                    "litellm_params": {"model": "openai/a"},
+                    "model_info": {"id": "1", "deprecation_date": "2026-06-10", "successor_model": "   "},
+                },
+                {
+                    "model_name": "number",
+                    "litellm_params": {"model": "openai/b"},
+                    "model_info": {"id": "2", "deprecation_date": "2026-06-10", "successor_model": 7},
+                },
+            ]
+        )
+
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+
+        assert [m.successor_model for m in snapshot.imminent] == [None, None]
+
+    def test_should_keep_the_deployment_naming_a_successor_when_deduping(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", {})
+        router = _make_router(
+            [
+                {
+                    "model_name": "alias",
+                    "litellm_params": {"model": "openai/a"},
+                    "model_info": {"id": "1", "deprecation_date": "2026-06-10"},
+                },
+                {
+                    "model_name": "alias",
+                    "litellm_params": {"model": "openai/b"},
+                    "model_info": {"id": "2", "deprecation_date": "2026-06-10", "successor_model": "alias-v2"},
+                },
+            ]
+        )
+
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+
+        assert [m.successor_model for m in snapshot.imminent] == ["alias-v2"]
+
+    def test_should_name_the_successor_in_the_slack_entry_and_escape_it(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", {})
+        router = _make_router(
+            [
+                {
+                    "model_name": "old",
+                    "litellm_params": {"model": "openai/old-model"},
+                    "model_info": {
+                        "id": "1",
+                        "deprecation_date": "2026-06-10",
+                        "successor_model": "<https://evil.example|new>",
+                    },
+                },
+                {
+                    "model_name": "orphan",
+                    "litellm_params": {"model": "openai/orphan-model"},
+                    "model_info": {"id": "2", "deprecation_date": "2026-06-10"},
+                },
+            ]
+        )
+
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+        message = format_deprecation_alert_message(snapshot)
+
+        assert message is not None
+        assert "migrate to `&lt;https://evil.example|new&gt;`" in message
+        assert "<https://evil.example|new>" not in message
+        assert message.count("migrate to") == 1
