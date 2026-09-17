@@ -13823,7 +13823,9 @@ async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough()
         ({}, None),
     ],
 )
-async def test_update_general_settings_propagates_mcp_allowed_clients(db_general_settings, expected):
+async def test_update_general_settings_propagates_mcp_allowed_clients(
+    db_general_settings: dict[str, list[str]], expected: list[str] | None
+) -> None:
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
@@ -13839,7 +13841,7 @@ async def test_update_general_settings_propagates_mcp_allowed_clients(db_general
 
 
 @pytest.mark.asyncio
-async def test_update_general_settings_keeps_yaml_mcp_allowed_clients():
+async def test_update_general_settings_keeps_yaml_mcp_allowed_clients() -> None:
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()

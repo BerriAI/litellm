@@ -468,6 +468,8 @@ if MCP_AVAILABLE:
         allowed_mcp_clients_from_general_settings,
         check_mcp_client_allowed,
         oversized_unidentified_request_body,
+        unidentified_sessionless_request_body,
+        unknown_session_request_body,
     )
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
         SERVER_OUTCOMES_META_KEY,
@@ -3845,6 +3847,31 @@ if MCP_AVAILABLE:
         forbidden: Final = JSONResponse(status_code=403, content=oversized_unidentified_request_body())
         await forbidden(scope, receive, send)
 
+    async def _reject_unidentified_sessionless_request(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        client_ip: str | None,
+        stale_session_id: str | None,
+    ) -> None:
+        if stale_session_id is not None:
+            verbose_logger.warning(
+                "Rejecting MCP POST for unknown session '%s' (ip=%s): no stateless fallback while %s is set",
+                stale_session_id,
+                client_ip,
+                MCP_ALLOWED_CLIENTS_SETTING,
+            )
+            not_found: Final = JSONResponse(status_code=404, content=unknown_session_request_body(stale_session_id))
+            await not_found(scope, receive, send)
+            return
+        verbose_logger.warning(
+            "Rejecting sessionless MCP POST (ip=%s): only initialize is accepted without a session while %s is set",
+            client_ip,
+            MCP_ALLOWED_CLIENTS_SETTING,
+        )
+        forbidden: Final = JSONResponse(status_code=403, content=unidentified_sessionless_request_body())
+        await forbidden(scope, receive, send)
+
     async def _reject_initialize_from_disallowed_client(
         scope: Scope,
         receive: Receive,
@@ -4541,6 +4568,7 @@ if MCP_AVAILABLE:
             # - No session ID + initialize → stateful (so client gets mcp-session-id)
             # - No session ID + other → stateless (curl, Inspector, Notion)
             session_id = _get_session_id_from_scope(scope)
+            presented_session_id: Final = session_id
             is_initialize = False
             consumed_messages: list[Message] = []
 
@@ -4593,6 +4621,11 @@ if MCP_AVAILABLE:
                 if is_initialize and await _reject_initialize_from_disallowed_client(
                     scope, receive, send, body, _client_ip, allowed_clients
                 ):
+                    return
+                if allowed_clients is not None and not is_initialize and not session_id:
+                    await _reject_unidentified_sessionless_request(
+                        scope, receive, send, _client_ip, presented_session_id
+                    )
                     return
 
             use_stateful: Final = bool(session_id or is_initialize)
