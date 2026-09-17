@@ -4078,6 +4078,33 @@ def test_get_logging_payload_inferred_provider_never_resolves_declared_authentic
     assert resolution_attempts == []
 
 
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"model": "github_copilot/gpt-4o"},
+        {"model": "gpt-5", "custom_llm_provider": "chatgpt"},
+        {"model": "openai/gpt-4o-mini", "api_key": "sk-a"},
+    ],
+)
+def test_get_logging_payload_inferred_provider_honours_global_litellm_proxy_override(
+    monkeypatch, litellm_params: dict[str, str]
+):
+    def _router_init_stub(model, custom_llm_provider=None, *args, **kwargs):
+        return model.split("/", 1)[-1], custom_llm_provider or model.split("/", 1)[0], None, None
+
+    def _oauth_tripwire(model, *args, **kwargs):
+        raise AssertionError("get_llm_provider would run the OAuth device flow")
+
+    monkeypatch.setattr(litellm, "get_llm_provider", _router_init_stub)
+    llm_router = litellm.Router(model_list=[{"model_name": "proxied-group", "litellm_params": litellm_params}])
+    monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire)
+    monkeypatch.setattr(litellm, "use_litellm_proxy", True)
+
+    payload = _router_rejected_failure_payload("proxied-group", llm_router)
+
+    assert payload["custom_llm_provider"] == "litellm_proxy"
+
+
 def test_get_logging_payload_router_rejected_request_for_unresolvable_deployment_leaves_provider_empty(
     monkeypatch,
 ):
