@@ -8,7 +8,9 @@ Follows the same pattern as MCP permission handling.
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Final, TypeAlias, assert_never
+from typing import Final, TypeAlias
+
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.ui_session_utils import build_effective_auth_contexts
