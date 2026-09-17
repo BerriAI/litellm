@@ -1346,7 +1346,7 @@ def test_gemini_25_implicit_caching_cost():
         model="gemini/gemini-2.5-flash",
     )
 
-    model_info: Final = litellm.model_cost["gemini-2.5-flash"]
+    model_info: Final = litellm.model_cost["gemini/gemini-2.5-flash"]
     expected_cost = (
         14316 * model_info["cache_read_input_token_cost"]
         + (15033 - 14316) * model_info["input_cost_per_token"]

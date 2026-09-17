@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Final
 
 import pytest
@@ -8,27 +9,23 @@ from litellm.proxy.common_utils.prompt_cache_pricing import price_cache_tokens
 from litellm.types.management_endpoints.prompt_cache_prediction import CacheTokenBuckets
 
 
-def _tiered_rate(entry: Mapping[str, float], field: str, total: int) -> float:
-    above_field: Final = f"{field}_above_200k_tokens"
-    if total > 200_000 and above_field in entry:
-        return entry[above_field]
-    return entry[field]
+def _tiered_rate(entry: Mapping[str, float | None], field: str, total: int) -> float:
+    above_rate: Final = entry.get(f"{field}_above_200k_tokens") if total > 200_000 else None
+    rate: Final = above_rate if above_rate is not None else entry[field]
+    assert rate is not None
+    return rate
 
 
 def _expected_cache_cost(model: str, tokens: CacheTokenBuckets) -> float:
     key: Final = litellm.get_model_info(model=model, custom_llm_provider="anthropic")["key"]
     entry: Final = litellm.model_cost[key]
     total: Final = tokens.total_tokens
-    one_hour_field: Final = (
-        "cache_creation_input_token_cost_above_1hr_above_200k_tokens"
-        if total > 200_000 and "cache_creation_input_token_cost_above_1hr_above_200k_tokens" in entry
-        else "cache_creation_input_token_cost_above_1hr"
-    )
     return (
         tokens.uncached_input_tokens * _tiered_rate(entry, "input_cost_per_token", total)
         + tokens.cache_read_input_tokens * _tiered_rate(entry, "cache_read_input_token_cost", total)
         + tokens.cache_creation_5m_input_tokens * _tiered_rate(entry, "cache_creation_input_token_cost", total)
-        + tokens.cache_creation_1h_input_tokens * entry[one_hour_field]
+        + tokens.cache_creation_1h_input_tokens
+        * _tiered_rate(entry, "cache_creation_input_token_cost_above_1hr", total)
     )
 
 
@@ -58,7 +55,7 @@ def test_long_context_tier_starts_above_threshold(total: int) -> None:
 
 
 def test_deployment_tariff_wins_without_proxy_discounts_or_margins(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "model_cost", litellm.model_cost.copy())
+    monkeypatch.setattr(litellm, "model_cost", deepcopy(litellm.model_cost))
     litellm.Router(
         model_list=[
             {
