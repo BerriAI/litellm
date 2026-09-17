@@ -80,12 +80,10 @@ class TestBudget:
         assert budget.effective_max_budget(now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 150.0
 
     def test_effective_max_budget_ignores_expired_increase(self):
-        budget = LiteLLM_BudgetTable(
-            max_budget=100.0,
-            temp_budget_increase=50.0,
-            temp_budget_expiry=datetime(2020, 1, 1, tzinfo=timezone.utc),
-        )
+        expiry = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        budget = LiteLLM_BudgetTable(max_budget=100.0, temp_budget_increase=50.0, temp_budget_expiry=expiry)
         assert budget.effective_max_budget(now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 100.0
+        assert budget.effective_max_budget(now=expiry) == 100.0
 
     def test_effective_max_budget_without_increase(self):
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
