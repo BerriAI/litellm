@@ -24,7 +24,7 @@ from pydantic import ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
-from litellm.llms.azure_ai.common_utils import has_azure_entra_params, resolve_azure_ai_agent_auth_header
+from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
@@ -162,12 +162,9 @@ async def _resolve_backend_auth_header(
     litellm_params: dict[str, object],
     custom_llm_provider: object,
 ) -> Mapping[str, str] | None:
-    """Entra credentials only authenticate the A2A hop; completion-bridge agents pass them to the model provider instead."""
     if litellm_params.get(DATABRICKS_OAUTH_PARAM):
         return await resolve_databricks_app_auth_header(litellm_params)
-    if not custom_llm_provider and has_azure_entra_params(litellm_params):
-        return await resolve_azure_ai_agent_auth_header(litellm_params)
-    return None
+    return await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider)
 
 
 def _forwarding_headers(
