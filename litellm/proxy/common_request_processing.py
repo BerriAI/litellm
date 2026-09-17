@@ -2823,8 +2823,7 @@ class ProxyBaseLLMRequestProcessing:
 
         # Same value the x-litellm-response-cost header carries below, so the body and
         # the header cannot report different costs for one request.
-        if self._should_include_cost_in_usage(request):
-            self._set_usage_cost(response, response_cost_for_headers)
+        self._maybe_set_usage_cost(request, response, response_cost_for_headers)
 
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
@@ -4096,6 +4095,17 @@ class ProxyBaseLLMRequestProcessing:
         if cost_from_logging_obj is not None:
             return cost_from_logging_obj
         return ProxyBaseLLMRequestProcessing._completion_cost_or_none(model_response, model_name, service_tier)
+
+    @staticmethod
+    def _maybe_set_usage_cost(request: Request, response: object, cost: float | str | None) -> None:
+        """
+        Record the gateway's cost on ``usage.cost``, if this request asked for it.
+
+        Kept as one entry point so the decision and the write are exercised together
+        rather than only through a full request.
+        """
+        if ProxyBaseLLMRequestProcessing._should_include_cost_in_usage(request):
+            ProxyBaseLLMRequestProcessing._set_usage_cost(response, cost)
 
     @staticmethod
     def _should_include_cost_in_usage(request: Request) -> bool:

@@ -9384,6 +9384,18 @@ class TestIncludeCostInUsage:
         response: Final = _response_with_usage(prompt_tokens=11, completion_tokens=5, total_tokens=16)
         assert "cost" not in response.model_dump()["usage"]
 
+    def test_opted_in_request_gets_the_cost_recorded(self):
+        """The decision and the write, exercised together as the request path runs them."""
+        response: Final = _response_with_usage(prompt_tokens=11, completion_tokens=5, total_tokens=16)
+        request: Final = _request_with_headers(x_litellm_include_cost_in_usage="true")
+        ProxyBaseLLMRequestProcessing._maybe_set_usage_cost(request, response, 5.85e-06)
+        assert response.model_dump()["usage"]["cost"] == 5.85e-06
+
+    def test_opted_out_request_is_left_untouched(self):
+        response: Final = _response_with_usage(prompt_tokens=11, completion_tokens=5, total_tokens=16)
+        ProxyBaseLLMRequestProcessing._maybe_set_usage_cost(_request_with_headers(), response, 5.85e-06)
+        assert "cost" not in response.model_dump()["usage"]
+
     def test_a_response_without_usage_is_left_alone(self):
         sentinel: Final = SimpleNamespace(usage=None)
         ProxyBaseLLMRequestProcessing._set_usage_cost(sentinel, 5.85e-06)
