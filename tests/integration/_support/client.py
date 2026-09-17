@@ -10,8 +10,9 @@ from hashlib import sha256
 from typing import Final, TypeVar
 
 import httpx
-from integration._support.database import read_rows
 from pydantic import JsonValue, TypeAdapter
+
+from tests.integration._support.database import read_rows
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 T = TypeVar("T")
