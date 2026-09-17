@@ -1,4 +1,3 @@
-import importlib
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from io import BytesIO
@@ -15,9 +14,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging, use_custom_prici
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
 from litellm.llms.custom_httpx import llm_http_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.ocr.legacy import _prepare_ocr_request
-from litellm.rust_bridge import bindings, configuration
-from litellm.rust_bridge.ocr_lifecycle import NATIVE_OCR_LIFECYCLE
+from litellm.ocr.main import _prepare_ocr_request
+from litellm.rust_bridge import bindings, configuration, runtime
+from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
 
 
 @pytest.fixture
@@ -45,7 +44,8 @@ async def provider(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[Mock]:
             monkeypatch.setattr(llm_http_handler, "_get_httpx_client", lambda: sync_handler)
             monkeypatch.setattr(llm_http_handler, "get_async_httpx_client", lambda llm_provider: async_handler)
             yield handler
-    NATIVE_OCR_LIFECYCLE.reset()
+    NATIVE_OCR.reset()
+    NATIVE_AOCR.reset()
     configuration.reset_rust_configuration()
 
 
@@ -60,9 +60,9 @@ async def test_python_request_response_and_callbacks(
 
     if dispatch != "disabled":
         monkeypatch.setenv("LITELLM_RUST", "1")
-        NATIVE_OCR_LIFECYCLE.override(Mock(side_effect=Declined()) if dispatch == "declined" else None)
-        main: Final = importlib.import_module("litellm.ocr.main")
-        monkeypatch.setattr(main, "native_exception_types", lambda: (Declined, RuntimeError))
+        binding: Final = NATIVE_AOCR if mode == "async" else NATIVE_OCR
+        binding.override(Mock(side_effect=Declined()) if dispatch == "declined" else None)
+        monkeypatch.setattr(runtime, "native_exception_types", lambda: (Declined, RuntimeError))
     logger: Final = Mock(spec=CustomLogger)
     monkeypatch.setattr(litellm, "input_callback", [logger])
     arguments: Final = {
@@ -257,3 +257,70 @@ def test_direct_ocr_call_bills_request_level_per_page_pricing() -> None:
     )
 
     assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.05 * 3)
+
+
+def _prepare(model: str, document: object, **kwargs: object) -> object:
+    return _prepare_ocr_request(
+        model=model,
+        document=document,  # pyright: ignore[reportArgumentType]  # exercises the runtime guard for untyped callers
+        api_key="test-key",
+        api_base=None,
+        timeout=None,
+        custom_llm_provider=None,
+        extra_headers=None,
+        kwargs={"litellm_logging_obj": Mock(), **kwargs},
+    )
+
+
+@pytest.mark.parametrize(
+    ("document", "match"),
+    (
+        ("https://example.com/file.pdf", "document must be a dict"),
+        ({"type": "video_url", "video_url": "https://example.com/clip.mp4"}, "Invalid document type: video_url"),
+    ),
+)
+def test_prepare_ocr_request_rejects_malformed_documents(document: object, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        _prepare("mistral/mistral-ocr-latest", document)
+
+
+def test_prepare_ocr_request_rejects_provider_without_ocr_support() -> None:
+    with pytest.raises(ValueError, match="OCR is not supported for provider: openai"):
+        _prepare("openai/gpt-4o", dict(PRICING_DOCUMENT))
+
+
+@pytest.mark.parametrize(
+    ("request_format", "match"),
+    (("markdown", "Invalid `req_format`"), ("native", "`req_format='native'` is not supported")),
+)
+def test_prepare_ocr_request_rejects_unsupported_request_format(request_format: str, match: str) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match=match):
+        _prepare("mistral/mistral-ocr-latest", dict(PRICING_DOCUMENT), req_format=request_format)
+
+
+@pytest.mark.asyncio
+async def test_python_none_provider_response_raises_public_error(
+    provider: Mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.ocr import main
+
+    monkeypatch.setattr(main.base_llm_http_handler, "ocr", Mock(return_value=None))
+
+    with pytest.raises(litellm.APIConnectionError, match="unexpected None response") as error:
+        await litellm.aocr(model="mistral/mistral-ocr-latest", document=dict(PRICING_DOCUMENT), api_key="test-key")
+    assert error.value.llm_provider == "mistral"
+    assert provider.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_provider"),
+    (("mistral-ocr-latest", "mistral"), ("azure_ai/doc-intelligence/prebuilt-layout", "azure_ai")),
+)
+def test_preparation_errors_map_to_public_exception_for_inferred_provider(
+    provider: Mock, model: str, expected_provider: str
+) -> None:
+    with pytest.raises(litellm.APIConnectionError) as error:
+        litellm.ocr(model=model, document="not-a-document")  # pyright: ignore[reportArgumentType]  # exercises the runtime guard
+    assert error.value.llm_provider == expected_provider
+    assert "document must be a dict" in str(error.value)
+    assert provider.call_count == 0
