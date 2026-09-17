@@ -92,18 +92,14 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.proxy_logging_obj", fake_proxy_logger
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", fake_proxy_logger)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
     monkeypatch.setattr(
         "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.get_custom_headers",
         classmethod(lambda *args, **kwargs: {}),
     )
-    monkeypatch.setattr(
-        "litellm.proxy.image_endpoints.endpoints.route_request", fake_route_request
-    )
+    monkeypatch.setattr("litellm.proxy.image_endpoints.endpoints.route_request", fake_route_request)
 
     result = await endpoints.image_generation(
         request=request,
@@ -136,6 +132,60 @@ def _image_edit_client(monkeypatch, captured: Dict[str, Any]) -> TestClient:
     app.include_router(endpoints.router)
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
     return TestClient(app)
+
+
+def test_image_edit_image_array_alias_is_not_forwarded(monkeypatch):
+    """The documented `image[]` alias must reach the provider only as `image`."""
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={"image[]": ("tree.png", b"\x89PNG\r\n\x1a\ntree", "image/png")},
+        data={"model": "gpt-image-1", "prompt": "add a hat"},
+    )
+
+    assert response.status_code == 200
+    assert "image[]" not in captured
+    assert [buffer.getvalue() for buffer in captured["image"]] == [b"\x89PNG\r\n\x1a\ntree"]
+    assert [buffer.name for buffer in captured["image"]] == ["tree.png"]
+
+
+def test_image_edit_mask_array_alias_is_not_forwarded(monkeypatch):
+    """`mask[]` has the same shape as `image[]` and must be dropped the same way."""
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={
+            "image": ("tree.png", b"\x89PNG\r\n\x1a\ntree", "image/png"),
+            "mask[]": ("mask.png", b"\x89PNG\r\n\x1a\nmask", "image/png"),
+        },
+        data={"model": "gpt-image-1", "prompt": "add a hat"},
+    )
+
+    assert response.status_code == 200
+    assert "mask[]" not in captured
+    assert [buffer.getvalue() for buffer in captured["mask"]] == [b"\x89PNG\r\n\x1a\nmask"]
+    assert [buffer.getvalue() for buffer in captured["image"]] == [b"\x89PNG\r\n\x1a\ntree"]
+
+
+def test_image_edit_canonical_file_fields_still_reach_the_provider(monkeypatch):
+    """Dropping the bracketed aliases must not touch the canonical fields."""
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={
+            "image": ("tree.png", b"\x89PNG\r\n\x1a\ntree", "image/png"),
+            "mask": ("mask.png", b"\x89PNG\r\n\x1a\nmask", "image/png"),
+        },
+        data={"model": "gpt-image-1", "prompt": "add a hat"},
+    )
+
+    assert response.status_code == 200
+    assert [buffer.getvalue() for buffer in captured["image"]] == [b"\x89PNG\r\n\x1a\ntree"]
+    assert [buffer.getvalue() for buffer in captured["mask"]] == [b"\x89PNG\r\n\x1a\nmask"]
+    assert captured["prompt"] == "add a hat"
 
 
 def test_image_edit_multipart_n_reaches_the_provider_as_an_int(monkeypatch):
@@ -177,7 +227,9 @@ async def test_a_model_the_router_cannot_serve_answers_an_openai_typed_error(mon
     async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
         return kwargs["data"]
 
-    async def fake_pre_call_hook(*, user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str) -> dict[str, object]:
+    async def fake_pre_call_hook(
+        *, user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str
+    ) -> dict[str, object]:
         return data
 
     async def fake_post_call_failure_hook(**_: object) -> None:
@@ -208,6 +260,8 @@ async def test_a_model_the_router_cannot_serve_answers_an_openai_typed_error(mon
     request = Request({"type": "http", "method": "POST", "path": "/v1/images/generations", "headers": []}, receive)
 
     with pytest.raises(ProxyException) as raised:
-        await endpoints.image_generation(request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth())
+        await endpoints.image_generation(
+            request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+        )
 
     assert (raised.value.type, raised.value.param, raised.value.code) == ("invalid_request_error", None, "404")
