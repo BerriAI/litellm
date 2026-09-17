@@ -48,6 +48,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
+    RequestScanContext,
     StreamingScanKey,
     StreamTransformSink,
 )
@@ -451,6 +452,28 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
         return cast(list[AllMessageValues], messages) if messages else None
 
+    def request_scan_context(
+        self, data: Mapping[str, object], guardrail_to_apply: "CustomGuardrail"
+    ) -> RequestScanContext:
+        raw_tools: Final = data.get("tools")
+        structured_messages: Final = tuple(
+            self.get_structured_messages(
+                dict(data)  # mutable-ok: get_structured_messages takes the request as a dict
+            )
+            or ()
+        )
+        return RequestScanContext(
+            structured_messages=structured_messages,
+            tools=tuple(
+                cast(ChatCompletionToolParam, tool)  # cast-ok: mcp tools ride along in the guardrail's tool list
+                for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(
+                    tuple(raw_tools) if isinstance(raw_tools, list) else ()
+                )
+                for tool in form.chat_tools
+            ),
+            conversation_supplied=bool(structured_messages),
+        )
+
     async def process_input_messages(
         self,
         data: dict,
@@ -754,7 +777,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
             pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-                inputs=inputs,
+                inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
                 request_data=request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
@@ -867,7 +890,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
                 pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
                 guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-                    inputs=inputs,
+                    inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
                     request_data=request_data,
                     input_type="response",
                     logging_obj=litellm_logging_obj,
@@ -926,7 +949,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 if hasattr(model_response_stream, "model") and model_response_stream.model:
                     inputs["model"] = model_response_stream.model
                 await guardrail_to_apply.apply_guardrail(
-                    inputs=inputs,
+                    inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
                     request_data=request_data if request_data is not None else {},
                     input_type="response",
                     logging_obj=litellm_logging_obj,
@@ -949,7 +972,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             if response_model:
                 fallback_inputs["model"] = response_model
             fallback_outputs: Final = await guardrail_to_apply.apply_guardrail(
-                inputs=fallback_inputs,
+                inputs=self.with_response_context(fallback_inputs, request_data, guardrail_to_apply),
                 request_data=request_data if request_data is not None else {},
                 input_type="response",
                 logging_obj=litellm_logging_obj,

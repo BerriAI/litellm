@@ -28,7 +28,8 @@ from litellm.integrations.otel import (
 )
 from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
-from litellm.integrations.otel.model.metadata import LLMCallEvent, caller_trace_name
+from litellm.integrations.otel.model.metadata import LLMCallEvent
+from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     RequestIdentity,
@@ -743,15 +744,62 @@ def test_request_identity_falls_back_to_legacy_team_keys():
     ids=["header", "body", "anthropic-body", "header-beats-body", "blank-header-falls-through", "neither", "empty"],
 )
 def test_caller_trace_name_prefers_the_langfuse_header_over_body_metadata(request_data, expected):
-    assert caller_trace_name({"litellm_params": request_data}) == expected
-    assert LLMCallEvent.from_dict({"litellm_params": request_data}).trace_name == expected
+    assert caller_trace_controls({"litellm_params": request_data}).name == expected
+    assert LLMCallEvent.from_dict({"litellm_params": request_data}).trace.name == expected
 
 
-def test_llm_span_data_carries_the_caller_trace_name():
-    data: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(), trace_name="nightly-eval")
+@pytest.mark.parametrize(
+    ("request_data", "expected"),
+    [
+        (
+            {"metadata": {"trace_user_id": "u-body", "session_id": "s-body", "tags": ["a", "b", "c"]}},
+            TraceControls(user_id="u-body", session_id="s-body", tags=("a", "b", "c")),
+        ),
+        (
+            {
+                "proxy_server_request": {
+                    "headers": {"langfuse_trace_user_id": "u-header", "langfuse_session_id": "s-header"}
+                },
+                "metadata": {"trace_user_id": "u-body", "session_id": "s-body"},
+            },
+            TraceControls(user_id="u-header", session_id="s-header"),
+        ),
+        (
+            {"litellm_metadata": {"trace_user_id": "u-anthropic", "session_id": "s-anthropic", "tags": ["x"]}},
+            TraceControls(user_id="u-anthropic", session_id="s-anthropic", tags=("x",)),
+        ),
+        (
+            {"metadata": {"tags": ["kept", 7, "", None, "also-kept"]}},
+            TraceControls(tags=("kept", "also-kept")),
+        ),
+        ({"metadata": {"tags": "not-a-list", "trace_user_id": "", "session_id": 12}}, TraceControls(session_id="12")),
+        (
+            {
+                "metadata": {
+                    "trace_id": "forced",
+                    "existing_trace_id": "forced",
+                    "update_trace_keys": ["name"],
+                    "trace_metadata": {"team_id": "spoofed"},
+                    "user_api_key_team_id": "t1",
+                }
+            },
+            TraceControls(),
+        ),
+        ({}, TraceControls()),
+    ],
+    ids=["body", "headers-beat-body", "anthropic-body", "non-string-tags-dropped", "scalar-coercion", "mutation-controls-ignored", "empty"],
+)
+def test_caller_trace_controls_carry_user_session_and_tags(request_data, expected):
+    assert caller_trace_controls({"litellm_params": request_data}) == expected
+    assert LLMCallEvent.from_dict({"litellm_params": request_data}).trace == expected
 
-    assert data.trace_name == "nightly-eval"
-    assert LLMCallSpanData.from_standard_logging_payload(_sample_payload()).trace_name is None
+
+def test_llm_span_data_carries_the_caller_trace_controls():
+    controls: Final = TraceControls(name="nightly-eval", user_id="u1", session_id="s1", tags=("a", "b"))
+    data: Final = LLMCallSpanData.from_standard_logging_payload(_sample_payload(), trace=controls)
+
+    assert data.trace == controls
+    assert LLMCallSpanData.from_standard_logging_payload(_sample_payload()).trace == TraceControls()
 
 
 def test_llm_span_carries_proxy_request_route():
