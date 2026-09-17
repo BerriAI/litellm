@@ -1212,7 +1212,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self._add_system_message_to_messages(new_messages, anthropic_message_request)
 
         new_kwargs: Final[ChatCompletionRequest] = {
-            "model": anthropic_message_request["model"],
+            "model": anthropic_message_request.get("model", ""),
             "messages": new_messages,
         }
         ## CONVERT METADATA (user_id + litellm metadata)

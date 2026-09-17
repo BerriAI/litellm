@@ -46,9 +46,7 @@ pub(super) async fn execute_messages_provider_stream(
 ) -> Result<reqwest::Response, Error> {
     let request = prepare_provider_request(request)?;
     if request.provider != ANTHROPIC_MESSAGES_PROVIDER {
-        return Err(Error::InvalidRequest(
-            "streaming messages is not supported for this provider".to_string(),
-        ));
+        return Err(Error::Unsupported("streaming messages for this provider"));
     }
 
     let mut request_builder = http_client().post(&request.url).json(&request.body);

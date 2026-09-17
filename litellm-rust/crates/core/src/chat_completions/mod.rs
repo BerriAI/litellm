@@ -14,6 +14,7 @@ pub mod conversation;
 pub(crate) mod handler;
 mod prepare;
 pub mod response_utils;
+pub mod streaming;
 pub mod transformation;
 pub mod types;
 

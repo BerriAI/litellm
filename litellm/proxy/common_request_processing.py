@@ -7,14 +7,25 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequen
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, TypeAlias, TypeVar, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    NamedTuple,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    overload,
+    runtime_checkable,
+)
 
 import anyio
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 
 import litellm
@@ -34,7 +45,11 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, is_expected_client_error
+from litellm.litellm_core_utils.core_helpers import (
+    get_or_create_metadata_bucket,
+    independent_snapshot,
+    is_expected_client_error,
+)
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
@@ -49,14 +64,21 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
-from litellm.proxy.auth.auth_utils import check_response_size_is_safe
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import (
+    can_key_call_resolved_model,
+    request_skips_budget_checks,
+    tag_max_budget_check_for_tags,
+)
+from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
-from litellm.proxy.common_utils.http_parsing_utils import get_client_requested_model
+from litellm.proxy.common_utils.http_parsing_utils import (
+    get_client_requested_model,
+    get_tags_from_request_body,
+)
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -641,6 +663,48 @@ async def _resolve_per_request_model_group_alias(
         llm_router=llm_router,
     )
     return target
+
+
+_REQUEST_MODEL: Final[TypeAdapter[str | list[str] | None]] = TypeAdapter(str | list[str] | None)
+
+
+def _request_model(data: Mapping[str, object]) -> str | list[str] | None:
+    try:
+        return _REQUEST_MODEL.validate_python(data.get("model"), strict=True)
+    except ValidationError:
+        return None
+
+
+async def _enforce_guardrail_added_tag_budgets(
+    data: Mapping[str, object],
+    tags_before_guardrails: frozenset[str],
+    route: str,
+    llm_router: Router | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    added_tags: Final = tuple(
+        tag for tag in get_tags_from_request_body(request_body=data) if tag not in tags_before_guardrails
+    )
+    if not added_tags or request_skips_budget_checks(route=route, model=_request_model(data), llm_router=llm_router):
+        return
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    try:
+        await tag_max_budget_check_for_tags(
+            tags=added_tags,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=user_api_key_dict,
+        )
+    except litellm.BudgetExceededError as e:
+        raise ProxyException(
+            message=e.message,
+            type=ProxyErrorTypes.budget_exceeded,
+            param=None,
+            code=e.status_code,
+        ) from e
 
 
 async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
@@ -1452,7 +1516,19 @@ def _has_attribute_error_in_chain(exc: Exception) -> bool:
 _CLIENT_DISCONNECT_DETAIL: Final = "Client disconnected the request"
 
 
-def _log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
+@runtime_checkable
+class _CarriesLitellmCallId(Protocol):
+    litellm_call_id: str | None
+
+
+def request_litellm_call_id(data: Mapping[str, object]) -> str | None:
+    logging_obj: Final = data.get("litellm_logging_obj")
+    logged_id: Final = logging_obj.litellm_call_id if isinstance(logging_obj, _CarriesLitellmCallId) else None
+    call_id: Final = logged_id or data.get("litellm_call_id")
+    return call_id if isinstance(call_id, str) else None
+
+
+def log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
     if getattr(e, "status_code", None) == 499 and getattr(e, "detail", None) == _CLIENT_DISCONNECT_DETAIL:
         verbose_proxy_logger.info(
             "litellm.proxy.proxy_server._handle_llm_api_exception(): client disconnected, "
@@ -1531,6 +1607,11 @@ def _timing_values(
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
+        self._tags_before_guardrails: frozenset[str] | None = None
+
+    @property
+    def litellm_call_id(self) -> str | None:
+        return request_litellm_call_id(self.data)
 
     @staticmethod
     def _merge_passthrough_streaming_headers(
@@ -2020,10 +2101,20 @@ class ProxyBaseLLMRequestProcessing:
         # to run below.
         await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
 
+        if self._tags_before_guardrails is None:
+            self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
             call_type=route_type,
+        )
+        await _enforce_guardrail_added_tag_budgets(
+            data=self.data,
+            tags_before_guardrails=self._tags_before_guardrails,
+            route=get_request_route(request=request),
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
         )
         if route_type == "aget_responses":
             attach_post_call_pipelines_to_retrieval(
@@ -2062,6 +2153,13 @@ class ProxyBaseLLMRequestProcessing:
     ) -> tuple[dict, LiteLLMLoggingObj]:
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
+        configured_fallbacks: Final = (
+            self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)
+            if llm_router is not None and not self.data.get("disable_fallbacks")
+            else None
+        )
+        pristine: Final = independent_snapshot(self.data) if configured_fallbacks else None
+
         try:
             return await self.common_processing_pre_call_logic(
                 request=request,
@@ -2080,14 +2178,19 @@ class ProxyBaseLLMRequestProcessing:
                 llm_router=llm_router,
             )
         except ProxyRateLimitError as original_exc:
-            original_model: Final = self.data.get("model")
-            if not original_model or not llm_router or self.data.get("disable_fallbacks"):
+            rate_limited_data: Final = self.data
+            original_model: Final = rate_limited_data.get("model")
+            if (
+                pristine is None
+                or not configured_fallbacks
+                or rate_limited_data.get("disable_fallbacks")
+                or not isinstance(original_model, str)
+            ):
                 raise
 
             fallback_models: Final = self._resolve_fallback_models(
                 model=original_model,
-                llm_router=llm_router,
-                user_api_key_dict=user_api_key_dict,
+                fallbacks=configured_fallbacks,
             )
             if not fallback_models:
                 raise
@@ -2102,6 +2205,7 @@ class ProxyBaseLLMRequestProcessing:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
                         continue
+                    self.data = independent_snapshot(pristine)
                     self.data["model"] = fallback_model
                     try:
                         return await self.common_processing_pre_call_logic(
@@ -2123,39 +2227,30 @@ class ProxyBaseLLMRequestProcessing:
                     except ProxyRateLimitError:
                         continue
             except BaseException:
-                self.data["model"] = original_model
+                self.data = rate_limited_data
                 raise
 
-            self.data["model"] = original_model
+            self.data = rate_limited_data
             raise original_exc
 
-    def _resolve_fallback_models(
-        self,
-        model: str,
-        llm_router: Router,
-        user_api_key_dict: UserAPIKeyAuth,
-    ) -> list | None:
-        from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
-
-        fallbacks = None
-
+    @staticmethod
+    def _configured_fallbacks(llm_router: Router, user_api_key_dict: UserAPIKeyAuth) -> list | None:
         key_router_settings: Final = user_api_key_dict.router_settings
-        if isinstance(key_router_settings, dict) and "fallbacks" in key_router_settings:
-            fallbacks = key_router_settings["fallbacks"]
+        key_fallbacks: Final = key_router_settings.get("fallbacks") if isinstance(key_router_settings, dict) else None
+        fallbacks: Final = key_fallbacks if key_fallbacks is not None else llm_router.fallbacks
+        return fallbacks if isinstance(fallbacks, list) and fallbacks else None
 
-        if fallbacks is None:
-            fallbacks = llm_router.fallbacks
-
-        if not fallbacks:
-            return None
+    @staticmethod
+    def _resolve_fallback_models(model: str, fallbacks: list) -> list | None:
+        from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 
         fallback_model_group, generic_fallback_idx = get_fallback_model_group(
             fallbacks=fallbacks,
             model_group=model,
         )
-        if fallback_model_group is None and generic_fallback_idx is not None:
-            fallback_model_group = fallbacks[generic_fallback_idx]["*"]
-        return fallback_model_group
+        if fallback_model_group is not None:
+            return fallback_model_group
+        return fallbacks[generic_fallback_idx]["*"] if generic_fallback_idx is not None else None
 
     @staticmethod
     def _get_model_id_from_response(hidden_params: Mapping[str, object], data: Mapping[str, object]) -> str:
@@ -3429,11 +3524,7 @@ class ProxyBaseLLMRequestProcessing:
         version: str | None = None,
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
-        logging_obj: Final[LiteLLMLoggingObj | None] = self.data.get("litellm_logging_obj", None)
-        _log_llm_api_exception(
-            e,
-            (logging_obj.litellm_call_id if logging_obj is not None else None) or self.data.get("litellm_call_id"),
-        )
+        log_llm_api_exception(e, self.litellm_call_id)
         # Allow callbacks to transform the error response
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -3463,9 +3554,7 @@ class ProxyBaseLLMRequestProcessing:
 
         custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
-            call_id=(
-                _litellm_logging_obj.litellm_call_id if _litellm_logging_obj else self.data.get("litellm_call_id")
-            ),
+            call_id=self.litellm_call_id,
             model_id=model_id,
             version=version,
             response_cost=0,
