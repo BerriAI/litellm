@@ -855,6 +855,7 @@ async def invoke_agent_a2a(
             # results written by the unified_guardrail hook are captured.
             logging_obj._defer_async_logging = True
             response = await asend_message(
+                model=f"a2a_agent/{agent_name}",
                 request=a2a_request,
                 api_base=agent_url,
                 litellm_params=litellm_params,
