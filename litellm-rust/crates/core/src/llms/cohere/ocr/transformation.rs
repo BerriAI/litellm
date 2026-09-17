@@ -344,6 +344,7 @@ fn invalid_api_base() -> crate::ocr::Error {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use serde_json::json;
 
     use super::*;
@@ -471,10 +472,13 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn provider_options_exclude_response_controls_and_extensions() {
+    #[rstest]
+    fn provider_options_exclude_response_controls_and_extensions(
+        #[values("markdown", "blocks")] output_format: &str,
+        #[values("https://example.com/a.png", "data:image/png;base64,YWJj")] source: &str,
+    ) {
         let arguments = serde_json::from_value(
-            json!({"output_format":"blocks","req_format":"native","unknown":true}),
+            json!({"output_format":output_format,"req_format":"native","unknown":true}),
         )
         .unwrap();
         let params = CohereParseConfig
@@ -482,10 +486,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             serde_json::to_value(&params).unwrap(),
-            json!({"output_format":"blocks"})
+            json!({"output_format":output_format})
         );
         let document = serde_json::from_value(
-            json!({"type":"image_url","image_url":"https://example.com/a.png","ignored":"field"}),
+            json!({"type":"image_url","image_url":source,"ignored":"field"}),
         )
         .unwrap();
         let body = CohereParseConfig
@@ -494,7 +498,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(body).unwrap(),
             json!({
-                "model":"parse", "document":{"type":"image_url","image_url":"https://example.com/a.png"}, "output_format":"blocks"
+                "model":"parse", "document":{"type":"image_url","image_url":source}, "output_format":output_format
             })
         );
     }
@@ -526,9 +530,9 @@ mod tests {
         assert!(body.get("req_format").is_none());
     }
 
-    #[test]
+    #[rstest]
     fn response_normalizes_markdown_images_blocks_and_billed_pages() {
-        let response = serde_json::from_value(json!({
+        let payload = json!({
             "pages": [
                 {
                     "type":"markdown",
@@ -558,17 +562,22 @@ mod tests {
                 {"type":"blocks","blocks":[{"type":"text","text":{"content":"total"}}]}
             ],
             "meta":{"api_version":{"version":"2"},"billed_units":{"pages":3}}
-        }))
-        .unwrap();
+        });
+        let response = serde_json::from_value(payload.clone()).unwrap();
         let normalized = normalize_response("parse-v5.0", response).unwrap();
         assert_eq!(normalized.pages[0].index, 4);
         assert_eq!(normalized.pages[0].markdown, "receipt");
         let image = &normalized.pages[0].images.as_ref().unwrap()[0];
-        assert_eq!(image.bbox.as_ref().unwrap()["top_left_x"], 1);
+        let original_image = &payload["pages"][0]["markdown"]["images"][0];
         assert_eq!(
-            image.extra_fields["bounding_box_normalized"]["bottom_right_x"],
-            0.15
+            serde_json::to_value(&image.bbox).unwrap(),
+            original_image["bounding_box"]
         );
+        assert_eq!(
+            image.extra_fields["bounding_box_normalized"],
+            original_image["bounding_box_normalized"]
+        );
+        assert_eq!(image.extra_fields["id"], original_image["id"]);
         assert_eq!(image.extra_fields["description"], "scan");
         assert_eq!(image.extra_fields["category"], "logo");
         assert_eq!(image.extra_fields["provider_extension"], "preserved");
@@ -609,9 +618,15 @@ mod tests {
         assert!(normalized.pages[0].images.is_none());
     }
 
-    #[test]
-    fn response_types_documented_block_variants() {
-        let response = serde_json::from_value(json!({
+    #[rstest]
+    fn response_types_documented_block_variants(
+        #[values(
+            crate::ocr::types::OcrResponseFormat::Litellm,
+            crate::ocr::types::OcrResponseFormat::Native
+        )]
+        response_format: crate::ocr::types::OcrResponseFormat,
+    ) {
+        let payload = json!({
             "pages": [{
                 "type": "blocks",
                 "index": 0,
@@ -654,21 +669,45 @@ mod tests {
                                 "bottom_right_x": 0.7,
                                 "bottom_right_y": 0.8
                             },
-                            "title": "Totals"
+                            "title": "Totals",
+                            "description": "Invoice totals"
                         }
                     }
                 ]
             }]
-        }))
-        .unwrap();
-        let normalized = normalize_response("parse-v5.0", response).unwrap();
-        let blocks = normalized.pages[0].extra_fields["blocks"]
-            .as_array()
+        });
+        let normalized = CohereParseConfig
+            .transform_ocr_response(
+                "parse-v5.0",
+                &serde_json::to_vec(&payload).unwrap(),
+                response_format,
+            )
             .unwrap();
-        assert_eq!(blocks[0]["text"]["content"], "hello");
-        assert_eq!(blocks[1]["image"]["category"], "logo");
-        assert_eq!(blocks[2]["table"]["type"], "html");
-        assert_eq!(blocks[2]["table"]["title"], "Totals");
+        assert_eq!(
+            normalized.pages[0].extra_fields["blocks"],
+            payload["pages"][0]["blocks"]
+        );
+        assert_eq!(normalized.pages[0].markdown, "");
+        assert_eq!(normalized.pages[0].index, 0);
+        assert_eq!(
+            normalized.usage_info.as_ref().unwrap().pages_processed,
+            Some(1)
+        );
+        match response_format {
+            crate::ocr::types::OcrResponseFormat::Litellm => {
+                assert!(normalized.provider_native_response.is_none());
+            }
+            crate::ocr::types::OcrResponseFormat::Native => {
+                assert_eq!(
+                    normalized.provider_native_response.as_ref(),
+                    payload.as_object()
+                );
+            }
+        }
+        assert_eq!(
+            normalized.into_json()["pages"][0]["blocks"],
+            payload["pages"][0]["blocks"]
+        );
     }
 
     #[test]
