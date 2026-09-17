@@ -1225,6 +1225,31 @@ async def test_new_project_flag_on_missing_rpm_tpm_returns_400(monkeypatch):
     assert "rpm/tpm quota" in str(exc_info.value)
 
 
+@pytest.mark.asyncio
+async def test_new_project_denies_non_admin_before_leaking_team_limits(monkeypatch):
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm_enterprise.proxy.management_endpoints import project_endpoints as pe
+
+    team = LiteLLM_TeamTable(team_id="test-team", models=["secret-model"], max_budget=42.0)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock.MagicMock())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    monkeypatch.setattr(pe, "_validate_team_exists", mock.AsyncMock(return_value=team))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await new_project(
+            data=NewProjectRequest(team_id="test-team", models=["not-in-team"], max_budget=1000.0),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="stranger"
+            ),
+        )
+
+    assert exc_info.value.code == "403"
+    assert "secret-model" not in str(exc_info.value)
+    assert "42" not in str(exc_info.value)
+
+
 def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
     existing_row = mock.MagicMock(
         team_id=None, budget_id=None, object_permission_id=None, metadata=stored_metadata

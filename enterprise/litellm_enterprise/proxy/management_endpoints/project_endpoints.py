@@ -523,16 +523,6 @@ async def new_project(
         # Validate team exists and get team object with budget
         team_object = await _validate_team_exists(team_id=data.team_id, prisma_client=prisma_client)
 
-        # Validate project limits against team limits
-        _check_team_project_limits(
-            team_object=LiteLLM_TeamTable.model_validate(team_object.model_dump()),
-            data=data,
-        )
-
-        # Opt-in (default off): require rpm/tpm for every model added to the project.
-        if general_settings.get("enforce_project_model_quota", False):
-            _raise_on_missing_project_model_quota(data, _router_access_group_names(llm_router))
-
         # Check if user has permission to create projects for this team
         # only team admins can create projects for their team
         has_permission = await _check_user_permission_for_project(
@@ -549,6 +539,16 @@ async def new_project(
                     "error": f"Only admins or team admins can create projects. Your role is {user_api_key_dict.user_role}"
                 },
             )
+
+        # Validate project limits against team limits
+        _check_team_project_limits(
+            team_object=LiteLLM_TeamTable.model_validate(team_object.model_dump()),
+            data=data,
+        )
+
+        # Opt-in (default off): require rpm/tpm for every model added to the project.
+        if general_settings.get("enforce_project_model_quota", False):
+            _raise_on_missing_project_model_quota(data, _router_access_group_names(llm_router))
 
         # Generate project_id if not provided
         if data.project_id is None:
