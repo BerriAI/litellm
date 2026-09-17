@@ -77,4 +77,12 @@ class UpstreamProtocolFault(BaseModel):
     note: str
 
 
-UpstreamOAuthFault: TypeAlias = CallerRejected | GatewayRejected | UpstreamReportedFault | UpstreamProtocolFault
+class UpstreamRegistrationRefused(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    tag: Literal["upstream_registration_refused"] = "upstream_registration_refused"
+    status_code: Literal[401, 403]
+
+
+UpstreamOAuthFault: TypeAlias = (
+    CallerRejected | GatewayRejected | UpstreamReportedFault | UpstreamProtocolFault | UpstreamRegistrationRefused
+)

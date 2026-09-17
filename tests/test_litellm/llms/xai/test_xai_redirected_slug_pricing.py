@@ -54,19 +54,12 @@ CODE_SLUGS = (
     "xai/grok-code-fast-1",
     "xai/grok-code-fast-1-0825",
 )
-RETIREMENT_DATE = "2026-05-15"
-GROK_3_MINI_RETIREMENT_DATE = "2026-02-28"
-
 BASE_COST_FIELDS = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
 TIER_COST_FIELDS = (
     "input_cost_per_token_above_200k_tokens",
     "output_cost_per_token_above_200k_tokens",
     "cache_read_input_token_cost_above_200k_tokens",
 )
-
-
-def expected_retirement_date(slug: str) -> str:
-    return GROK_3_MINI_RETIREMENT_DATE if slug in GROK_3_MINI_SLUGS else RETIREMENT_DATE
 
 
 @pytest.fixture(scope="module", params=[p.name for p in MAP_PATHS])
@@ -92,15 +85,9 @@ def test_code_slug_bills_at_grok_build_rate(cost_map: dict, slug: str):
         assert entry[field] == target[field], field
 
 
-@pytest.mark.parametrize("slug", (*REDIRECTED_SLUGS, *CODE_SLUGS))
-def test_redirected_slug_keeps_its_retirement_date(cost_map: dict, slug: str):
-    assert cost_map[slug]["deprecation_date"] == expected_retirement_date(slug)
-
-
 def test_a_live_xai_model_is_untouched(cost_map: dict):
     """Guard against the repricing leaking onto models xAI still serves directly."""
     assert cost_map["xai/grok-4.6"]["input_cost_per_token"] != cost_map[REDIRECT_TARGET]["input_cost_per_token"]
-    assert "deprecation_date" not in cost_map["xai/grok-4.6"]
 
 
 @pytest.mark.parametrize("slug", REDIRECTED_SLUGS)

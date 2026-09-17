@@ -1,6 +1,6 @@
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from litellm.proxy._types import (
     KeyManagementRoutes,
@@ -8,9 +8,13 @@ from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     Member,
+    MemberDeleteRequest,
 )
+from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
 TeamIdSearchMatch = Literal["exact", "prefix"]
+
+MAX_BULK_TEAM_MEMBER_DELETES: Final = 500
 
 
 class GetTeamMemberPermissionsRequest(BaseModel):
@@ -116,6 +120,39 @@ class BulkTeamMemberAddResponse(BaseModel):
     successful_additions: int
     failed_additions: int
     updated_team: dict[str, Any] | None = None
+
+
+class TeamMemberRef(MemberDeleteRequest):
+    """One member to remove, named by exactly one of `user_id` or `user_email`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def one_identifier(self) -> "TeamMemberRef":
+        if self.user_id is not None and self.user_email is not None:
+            raise ValueError("Each member must be identified by exactly one of user_id or user_email")
+        return self
+
+
+class BulkTeamMemberDeleteRequest(BaseModel):
+    """Body of `POST /management/v1/teams/{team_id}/members/bulk_delete`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    members: tuple[TeamMemberRef, ...] = Field(min_length=1, max_length=MAX_BULK_TEAM_MEMBER_DELETES)
+
+
+class TeamMemberDeleteResult(BaseModel):
+    """Outcome for one requested member, in request order."""
+
+    user_id: str | None = None
+    user_email: str | None = None
+    success: bool
+    error: str | None = None
+
+
+class BulkTeamMemberDeleteResponse(ResourceResponse[tuple[TeamMemberDeleteResult, ...]]):
+    """`{data: [...]}` with one `TeamMemberDeleteResult` per requested member, in request order."""
 
 
 class TeamMemberInfoResponse(LiteLLM_TeamMembership):

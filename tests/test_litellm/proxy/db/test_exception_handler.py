@@ -665,10 +665,47 @@ def test_is_deadlock_error_excludes_non_deadlocks(error):
     assert PrismaDBExceptionHandler.is_deadlock_error(error) is False
 
 
+READ_ONLY_CONNECTOR_ERROR: Final = (
+    "Error occurred during query execution:\nConnectorError(ConnectorError { user_facing_error: None, "
+    'kind: QueryError(PostgresError { code: "25006", message: "cannot execute UPDATE in a read-only transaction", '
+    'severity: "ERROR", detail: None, column: None, hint: None }), transient: false })'
+)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DataError(data={"user_facing_error": {"message": READ_ONLY_CONNECTOR_ERROR}}),
+        RawQueryError(data={"user_facing_error": {"message": "cannot execute INSERT in a read-only transaction"}}),
+        PrismaError(
+            'PostgresError { code: "25006", message: "kann DELETE in einer Read-Only-Transaktion nicht ausführen" }'
+        ),
+    ],
+)
+def test_is_read_only_transaction_error_matches_sqlstate_25006(error):
+    assert PrismaDBExceptionHandler.is_read_only_transaction_error(error) is True
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        UniqueViolationError(data={"user_facing_error": {"error_code": "P2002", "meta": {"table": "t"}}}),
+        PrismaError("can't reach database server"),
+        RawQueryError(data={"user_facing_error": {"message": "deadlock detected", "meta": {"table": "t"}}}),
+        httpx.ConnectError("connection refused"),
+        RuntimeError("cannot execute UPDATE in a read-only transaction"),
+        ValueError('"25006"'),
+    ],
+)
+def test_is_read_only_transaction_error_excludes_other_failures(error):
+    assert PrismaDBExceptionHandler.is_read_only_transaction_error(error) is False
+
+
 MOCKED_PRISMA_PREDICATES: Final = (
     PrismaDBExceptionHandler.is_database_infrastructure_error,
     PrismaDBExceptionHandler.is_database_transport_error,
     PrismaDBExceptionHandler.is_deadlock_error,
+    PrismaDBExceptionHandler.is_read_only_transaction_error,
     PrismaDBExceptionHandler.is_prisma_engine_internal_error,
     PrismaDBExceptionHandler.is_database_service_unavailable_error,
 )

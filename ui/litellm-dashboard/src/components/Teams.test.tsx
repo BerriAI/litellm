@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import { toast } from "@/lib/toast";
 import { fetchAvailableModelsForTeamOrKey } from "./key_team_helpers/fetch_available_models_team_key";
+import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "./key_team_helpers/ModelMaxBudgetEditor";
 import {
   fetchMCPAccessGroups,
   getDefaultTeamSettings,
@@ -29,6 +30,14 @@ vi.mock("./mcp_server_management/MCPServerSelector", () => ({
       onClick={() => onChange({ servers: [], accessGroups: [], toolsets: ["ts-1"] })}
     >
       Select MCP toolset
+    </button>
+  ),
+}));
+
+vi.mock("./skills/SkillSelector", () => ({
+  default: ({ onChange }: { onChange: (selected: string[]) => void }) => (
+    <button type="button" data-testid="select-private-skill" onClick={() => onChange(["private-skill"])}>
+      Select private skill
     </button>
   ),
 }));
@@ -1179,6 +1188,7 @@ describe("Teams - which fields reach the create payload depends on the open sect
       "organization_id",
       "rpm_limit",
       "team_alias",
+      "tpd_limit",
       "tpm_limit",
     ]);
     expect(payload.team_alias).toBe("Closed Sections Team");
@@ -1306,6 +1316,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       budget_duration: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
+      tpd_limit: undefined,
       metadata: undefined,
     });
     expect(wireBody(payload)).toStrictEqual({
@@ -1333,6 +1344,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       budget_duration: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
+      tpd_limit: undefined,
       metadata: undefined,
       team_id: undefined,
       team_member_budget: undefined,
@@ -1357,6 +1369,27 @@ describe("Teams - the exact bytes the create call sends", () => {
       models: ["no-default-models"],
       mcp_tool_permissions: {},
     });
+  });
+
+  it("puts the selected skills into object_permission.skills and drops the form key", async () => {
+    await openCreateModal();
+    await openSection("Skill Settings", /Allowed Skills/);
+    fireEvent.click(screen.getByTestId("select-private-skill"));
+
+    const payload = await submit();
+
+    expect(payload.object_permission).toStrictEqual({ skills: ["private-skill"] });
+    expect(payload).not.toHaveProperty("object_permission_skills");
+  });
+
+  it("sends no object_permission when Skill Settings is opened but nothing is selected", async () => {
+    await openCreateModal();
+    await openSection("Skill Settings", /Allowed Skills/);
+
+    const payload = await submit();
+
+    expect(payload).not.toHaveProperty("object_permission");
+    expect(payload).not.toHaveProperty("object_permission_skills");
   });
 
   it("includes selected MCP toolsets in the create object permission", async () => {
@@ -1484,6 +1517,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       budget_duration: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
+      tpd_limit: undefined,
       metadata: undefined,
       team_id: undefined,
       team_member_budget: undefined,
@@ -1513,6 +1547,36 @@ describe("Teams - the exact bytes the create call sends", () => {
 
     expect(await screen.findByText("Please input a team name")).toBeInTheDocument();
     expect(teamCreateCall).not.toHaveBeenCalled();
+  });
+
+  it("locks the per-model budget editor and says why when the proxy has no enterprise license", async () => {
+    await openCreateModal({ premiumUser: false });
+
+    expect(screen.getByRole("button", { name: /Add Model Budget/i })).toBeDisabled();
+    expect(screen.getByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+  });
+
+  it("sends the per-model budget a licensed operator fills in, keyed by model", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openCreateModal({ premiumUser: true });
+
+    await user.click(screen.getByRole("button", { name: /Add Model Budget/i }));
+    await chooseSelectOption(user, screen.getByPlaceholderText("Select model"), "gpt-4");
+    fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "3" } });
+
+    const payload = await submit();
+
+    expect(payload.model_max_budget).toStrictEqual({ "gpt-4": { budget_limit: 3, time_period: "30d" } });
+  });
+
+  it("leaves model_max_budget out when a started row is removed again", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openCreateModal({ premiumUser: true });
+
+    await user.click(screen.getByRole("button", { name: /Add Model Budget/i }));
+    await user.click(screen.getByRole("button", { name: "Remove model budget" }));
+
+    expect(wireBody(await submit())).not.toHaveProperty("model_max_budget");
   });
 });
 

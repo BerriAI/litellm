@@ -163,6 +163,9 @@ async def test_reset_budget_keys_partial_failure():
     key1, key2, key3, key4, key5, key6 = (
         _attrify(k) for k in [key1, key2, key3, key4, key5, key6]
     )
+    pre_reset_spend = {
+        k["token"]: k["spend"] for k in [key2, key3, key4, key5, key6]
+    }
     prisma_client.get_data = AsyncMock(
         return_value=[key1, key2, key3, key4, key5, key6]
     )
@@ -201,7 +204,7 @@ async def test_reset_budget_keys_partial_failure():
     # And every write must carry only {spend, budget_reset_at} — never the full row.
     for c in key_writes:
         assert set(c["data"].keys()) == {"spend", "budget_reset_at"}
-        assert c["data"]["spend"] == 0
+        assert c["data"]["spend"] == {"decrement": pre_reset_spend[c["where"]["token"]]}
 
     # Verify that the failure logging hook was scheduled (due to the failure for key1)
     failure_hook_calls = (
@@ -252,6 +255,9 @@ async def test_reset_budget_users_partial_failure():
     user1, user2, user3, user4, user5, user6 = (
         _attrify(u) for u in [user1, user2, user3, user4, user5, user6]
     )
+    pre_reset_spend = {
+        u["user_id"]: u["spend"] for u in [user2, user3, user4, user5, user6]
+    }
     prisma_client.get_data = AsyncMock(
         return_value=[user1, user2, user3, user4, user5, user6]
     )
@@ -280,7 +286,9 @@ async def test_reset_budget_users_partial_failure():
     assert written_ids == ["user2", "user3", "user4", "user5", "user6"]
     for c in user_writes:
         assert set(c["data"].keys()) == {"spend", "budget_reset_at"}
-        assert c["data"]["spend"] == 0
+        assert c["data"]["spend"] == {
+            "decrement": pre_reset_spend[c["where"]["user_id"]]
+        }
 
     failure_hook_calls = (
         proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
@@ -401,7 +409,7 @@ async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance()
 
     enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
-    assert enduser_writes[0]["where"]["user_id"]["in"] == [f"user{i}" for i in range(1, 7)]
+    assert enduser_writes[0]["where"] == {"budget_id": {"in": ["budget1"]}, "spend": {"gt": 0}}
     assert enduser_writes[0]["data"] == {"spend": 0}
 
     budget_writes = [c for c in batch_calls if c["table"] == "budget"]
@@ -441,6 +449,7 @@ async def test_reset_budget_teams_partial_failure():
     for t in [team1, team2]:
         t.setdefault("team_id", t["id"])
     team1, team2 = _attrify(team1), _attrify(team2)
+    pre_reset_spend = team2["spend"]
     prisma_client.get_data = AsyncMock(return_value=[team1, team2])
 
     async def fake_reset_team(team, current_time, reset_settings=None):
@@ -465,7 +474,7 @@ async def test_reset_budget_teams_partial_failure():
     assert len(team_writes) == 1
     assert team_writes[0]["where"] == {"team_id": "team2"}
     assert set(team_writes[0]["data"].keys()) == {"spend", "budget_reset_at"}
-    assert team_writes[0]["data"]["spend"] == 0
+    assert team_writes[0]["data"]["spend"] == {"decrement": pre_reset_spend}
 
     failure_hook_calls = (
         proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args_list
@@ -542,6 +551,11 @@ async def test_reset_budget_continues_other_categories_on_failure():
     user1, user2 = _attrify(user1), _attrify(user2)
     team1, team2 = _attrify(team1), _attrify(team2)
     enduser1 = _attrify(enduser1)
+    pre_reset_spend = {
+        **{k["token"]: k["spend"] for k in [key1, key2]},
+        **{u["user_id"]: u["spend"] for u in [user2]},
+        **{t["team_id"]: t["spend"] for t in [team1, team2]},
+    }
     _wire_cascade_reads_for_test(prisma_client)
 
     proxy_logging_obj = MagicMock()
@@ -602,7 +616,7 @@ async def test_reset_budget_continues_other_categories_on_failure():
     assert len([c for c in batch_calls if c["table"] == "team_membership"]) == 1
     enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
-    assert enduser_writes[0]["where"] == {"user_id": {"in": ["user1"]}}
+    assert enduser_writes[0]["where"] == {"budget_id": {"in": ["budget1"]}, "spend": {"gt": 0}}
     assert enduser_writes[0]["data"] == {"spend": 0}
 
     # Check the new batch write path: 2 keys + 1 user (user1 failed) + 2 teams.
@@ -618,7 +632,9 @@ async def test_reset_budget_continues_other_categories_on_failure():
     # Every batched write must carry only the two reset fields, never the full row.
     for c in key_writes + user_writes + team_writes:
         assert set(c["data"].keys()) == {"spend", "budget_reset_at"}
-        assert c["data"]["spend"] == 0
+        assert c["data"]["spend"] == {
+            "decrement": pre_reset_spend[next(iter(c["where"].values()))]
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1031,7 +1047,7 @@ async def test_service_logger_endusers_success():
 
     enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
-    assert enduser_writes[0]["where"] == {"user_id": {"in": ["user1", "user2"]}}
+    assert enduser_writes[0]["where"] == {"budget_id": {"in": ["budget1"]}, "spend": {"gt": 0}}
 
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_called_once()
     (

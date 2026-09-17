@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
+use crate::llms::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth};
 
 /// A `/chat/completions` call as it crosses into the core.
 ///
@@ -24,7 +24,7 @@ pub struct ChatCompletionsRequest<'a> {
 
 pub(super) struct ResolvedChatCompletionsRequest<'a> {
     pub(super) model: String,
-    pub(super) config: &'static dyn ChatCompletionsProviderConfig,
+    pub(super) config: &'static dyn BaseConfig,
     pub(super) messages: Vec<ChatMessage>,
     pub(super) optional_params: Map<String, Value>,
     pub(super) api_key: Option<&'a str>,
@@ -35,12 +35,11 @@ pub(super) struct ResolvedChatCompletionsRequest<'a> {
 
 pub(super) struct ProviderChatCompletionsRequest {
     pub(super) model: String,
-    pub(super) config: &'static dyn ChatCompletionsProviderConfig,
+    pub(super) config: &'static dyn BaseConfig,
     pub(super) url: String,
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,
     pub(super) auth: ChatCompletionsAuth,
-    #[cfg_attr(not(feature = "bedrock-auth"), allow(dead_code))]
     pub(super) optional_params: Map<String, Value>,
     pub(super) timeout: Option<Duration>,
 }
@@ -120,4 +119,84 @@ pub struct ChatCompletionsResponse {
     pub model: String,
     pub choices: Vec<ChatCompletionsChoice>,
     pub usage: ChatCompletionsUsage,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionToolCallFunctionChunk {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub arguments: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_specific_fields: Option<Map<String, Value>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionToolCallChunk {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub function: ChatCompletionToolCallFunctionChunk,
+    pub index: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChatCompletionThinkingBlock {
+    Thinking {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thinking: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<Value>,
+    },
+    RedactedThinking {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<Value>,
+    },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionDelta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ChatCompletionToolCallChunk>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_blocks: Option<Vec<ChatCompletionThinkingBlock>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_specific_fields: Option<Map<String, Value>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionStreamingChoice {
+    pub index: u64,
+    pub delta: ChatCompletionDelta,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logprobs: Option<Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionChunk {
+    pub id: String,
+    pub created: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub object: String,
+    pub choices: Vec<ChatCompletionStreamingChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ChatCompletionsUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_specific_fields: Option<Map<String, Value>>,
 }

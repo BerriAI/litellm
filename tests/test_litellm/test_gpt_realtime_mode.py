@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
+from typing import get_args
 
-from typing_extensions import get_args, get_type_hints
+from typing_extensions import get_type_hints
 
 from litellm.types.utils import ModelInfoBase
 

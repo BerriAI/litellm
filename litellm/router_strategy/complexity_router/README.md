@@ -68,6 +68,117 @@ still resolve to a deployment in `model_list`; this configuration does not creat
             - abc
 ```
 
+### Capability forecasting
+
+Set `classifier_type: capability` to use
+[NVIDIA NeMo Switchyard's packaged capability classifier](https://github.com/NVIDIA-NeMo/Switchyard/blob/main/crates/libsy/src/prompts/capability-classifier/prompt.md).
+The classifier forecasts the probability that an efficient model completes
+the whole task, identifies the capability-card boundary that applies, and leaves the
+route choice to a deterministic threshold policy
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classifier_type: capability
+        classifier_llm_config:
+          model: classifier-model
+        capability_classifier_config:
+          efficient_tier: SIMPLE
+          capable_tier: REASONING
+          base_threshold: 0.5
+          threshold_step: 0.1
+        tiers:
+          SIMPLE:
+            - efficient-model-a
+            - efficient-model-b
+          REASONING: capable-model
+```
+
+The structured classifier verdict contains `crux`, `primary_rule`,
+`capability_boundary`, and `p_solve`. The policy computes the required solve
+probability as follows
+
+- `supported`: `base_threshold`
+- `uncertain` or `unmatched`: `base_threshold + threshold_step`
+- `unsupported`: `base_threshold + 2 * threshold_step`
+
+The efficient tier is selected when `p_solve` is greater than or equal to the
+adjusted threshold. Otherwise the capable tier is selected. A malformed,
+inconsistent, empty, or unavailable verdict always fails closed to the capable
+tier. `base_threshold` is required, `threshold_step` defaults to `0`, and their
+maximum adjusted threshold must not exceed `1`
+
+The classifier receives the packaged Switchyard system prompt, the opening user
+task, and the latest user follow-up when present. Caller system messages,
+assistant turns, and intermediate tool results are not sent. The classifier call
+uses strict JSON Schema output and the existing classifier timeout, circuit
+breaker, attribution, redaction, reasoning-effort, and optional vision settings
+
+`efficient_tier` and `capable_tier` name built-in complexity tiers with configured
+model pools. The forecast still makes one binary quality decision, while the
+ordinary tier pool may contain multiple equivalent deployments. Session affinity,
+keyword overrides, plan-mode floors, modality checks, and other post-classification
+complexity-router controls continue to apply
+
+Routing decisions record the adjusted threshold and the complete valid forecast:
+`classifier_p_solve`, `classifier_capability_boundary`, `classifier_primary_rule`,
+and `classifier_crux`. Prompt redaction removes `classifier_crux` while retaining
+the derived fields needed to audit the decision
+
+#### Calibrating solve probabilities
+
+Supply a fitted monotone logit calibration under `capability_classifier_config`
+to transform the forecast before applying the threshold. Calibration is opt-in;
+without it the router uses the raw probability. Fit coefficients on benchmark
+outcomes from separate training repositories, select thresholds on a validation
+split, and report quality and cost on an untouched evaluation split
+
+```yaml
+capability_classifier_config:
+  efficient_tier: SIMPLE
+  capable_tier: REASONING
+  base_threshold: 0.66
+  threshold_step: 0
+  max_output_tokens: 512
+  response_format: json_object
+  calibration:
+    version: your-benchmark-artifact-v1
+    slope: 1.0
+    intercept: 0.0
+```
+
+The example coefficients are an identity mapping, not a trained calibration.
+The mapping is `sigmoid(slope * logit(clip(p_solve, 1e-6, 1-1e-6)) + intercept)`.
+The slope must be nonnegative, so calibration cannot improve ranking. It can
+make probabilities more accurate and thresholds easier to interpret. The version
+is recorded for auditing; the router does not check whether an artifact matches
+the judge, capability card, efficient solver, or agent harness. Operators must
+keep those aligned and refit when they change
+
+Logs retain `classifier_p_solve` and add `classifier_calibrated_p_solve` and
+`classifier_calibration_version`. `classifier_threshold` is compared to the
+calibrated probability. Invalid verdicts still route to the capable tier
+
+`response_format` defaults to `json_schema`. For endpoints that support JSON
+objects but not strict schemas, `json_object` appends the same schema to the
+unchanged capability prompt and retains strict local validation. Set
+`classifier_llm_config.timeout_ms` to cover the measured judge latency; a local
+judge may need longer than the default 3000 ms. `max_output_tokens` still defaults
+to 4096; 512 is an explicit benchmark setting for a short, non-reasoning judge
+
+For a controlled whole-task benchmark, use `adaptive: false`,
+`session_affinity: true`, and a unique session ID for every task and policy arm.
+Disable keyword, plan-mode, housekeeping, and other optional overrides when
+measuring only the capability policy. When adaptive selection is enabled, it
+cannot select below the capability decision, including a capable-tier fallback
+
+Configure capability forecasting through YAML or the model-management API.
+The dashboard preserves its classifier and calibration on an untouched save;
+it does not provide a capability-card editor
+
 ### Heuristic v2
 
 Set `classifier_type: heuristic_v2` to classify with the bundled calibrated
@@ -270,6 +381,18 @@ change or default takeover records `cause: modality_escalation` with the displac
 pinned by session affinity, and by default a KEPT session pin bypasses the gate: a session pinned
 to a text-only model keeps it even when an image arrives.
 
+Context-window and modality recovery take priority over the default model. If a compatible tier
+cannot serve, the router checks the remaining compatible recovery tiers before using `default_model`.
+A capacity failure without those constraints tries the selected tier's peers, then the default
+
+The default must fit the context and accept the request's modality. It cannot bypass routing plugins
+or a plan-mode floor. Context fit uses the auto-router's existing buffer even when Router-wide pre-call
+checks are off. Missing context metadata retains the existing unknown-window behavior
+
+Health fallback records `cause: health_default_fallback` and `health_displaced:<MODEL>` in `signals`.
+It does not replace the session's tier pin. Adaptive feedback retains the model that actually served,
+but a default outside the adaptive candidate pool does not become a normal candidate
+
 Add `modality_pin_override: true` to lift that last exemption. The image turn is then re-placed
 the same way every other decision is, and records `cause: modality_pin_override` whether or not
 the tier moved, since the model left the pin either way. The pin itself is untouched: the session
@@ -361,6 +484,19 @@ model_list:
 keep the classifier deployment or provider default, or set a supported value such as `none` or
 `low` to override that call.
 
+When the current ask is a Responses API `agent_message` containing `encrypted_content`, LLM
+classification preserves the encrypted task and uses native Responses. This also bypasses the
+local scoring shortcut in `heuristic_first` and `hybrid` modes. The configured classifier must use
+a native OpenAI or Azure OpenAI Responses deployment with access to the encrypted content. The
+provider handles the encrypted task, and the classifier still chooses the tier dynamically
+
+Compatibility is checked after normal deployment selection. A paused incompatible member of the
+classifier group does not prevent an eligible compatible deployment from classifying the task
+
+Unsupported classifier deployments and provider decryption errors use the existing
+`classifier_fallback` policy. No fixed tier is introduced for encrypted tasks. Plaintext asks and
+requests carrying only historical encrypted reasoning retain the existing classifier path
+
 Classifier calls have a one-attempt hard deadline. After a timeout, the router opens a process-local
 circuit for that classifier and sends every session through `classifier_fallback` for
 `classifier_llm_config.circuit_breaker_cooldown_seconds` (30 seconds by default). When the cooldown
@@ -442,11 +578,26 @@ If 2+ reasoning markers are detected in the user message, the request is promote
 
 Reasoning markers in the system prompt do **not** trigger the reasoning override. This prevents system prompts like "Think step by step before answering" from forcing all requests to the reasoning tier.
 
+For requests identified by a `claude-cli/` or `claude-code/` user agent, the LLM classifier omits caller system
+text to avoid classifying environment, agent, and skill catalogs. The current ask, configured prior-turn context,
+and trajectory signal remain unchanged. The routed completion still receives the original system text. This
+also excludes genuine task constraints supplied only in Claude Code system messages. Other clients keep the
+existing system-context behavior. The browser routing preview has no client-identity field and retains that
+generic behavior; use the real client when checking Claude Code routing.
+
 ### Harness Reminder Blocks
 
 Agent harnesses inject their own context into the conversation as ordinary message text. That text is plumbing, not something a human asked for, so the router strips complete reminder blocks before classifying and picking a tier. A turn that is nothing but a reminder block strips to empty and is skipped, and the router falls back to the last real ask instead
 
-By default a block is anything between `<system-reminder>` and `</system-reminder>`. `reminder_markers` replaces that with your harness's own delimiters. Many harnesses use a different envelope per agent type, so list every pair you emit:
+By default the router strips complete `<system-reminder>` blocks. For requests with a Codex user agent, it also strips complete `<environment_context>`, `<recommended_plugins>`, `<user_instructions>`, and `<environments_instructions>` blocks, plus repository instructions from the fixed heading prefix `# AGENTS.md instructions for ` through `</INSTRUCTIONS>`, regardless of the repository path. Other clients keep those tags and their contents
+
+The proxy records the incoming user agent in request metadata. SDK callers can supply `metadata.user_agent` (or `litellm_metadata.user_agent` on Responses requests), or configure `reminder_markers` explicitly when their client identity is unavailable
+
+The Codex `Message Type: NEW_TASK` wrapper and its delegated-task payload remain available for classification. Cleanup applies to the current ask and quoted prior turns; the routed request retains its original content
+
+In `classification_mode: user_turn`, complete text-only reminder tails leave the preceding fresh ask eligible for classification. Assistant turns and tool results still mark continuations, including tool results carried alongside reminder text
+
+`reminder_markers` replaces these defaults with your harness's own delimiters. Many harnesses use a different envelope per agent type, so list every pair you emit:
 
 ```yaml
 model_list:
@@ -461,7 +612,7 @@ model_list:
             close: "[[SUBAGENT_CONTEXT_END]]"
 ```
 
-Setting `reminder_markers` replaces the built-in `<system-reminder>` pair rather than adding to it, so list that pair too if your harness also emits it. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
+Setting `reminder_markers` replaces all built-in pairs, including the Codex heading pair, so include every default your harness still needs. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
 
 ### Code Detection
 
@@ -489,3 +640,11 @@ Technical code keywords are detected case-insensitively and include:
 | Best For | Cost optimization | Intent routing |
 
 Use `complexity_router` when you want to optimize costs by routing simple queries to cheaper models. Use `auto_router` when you need semantic intent matching (e.g., routing "customer support" queries to a specialized model).
+
+## Experimental LLM V2 classifier
+
+LLM V2 combines task demands, available verification, and model capability in one judge call. It forecasts whole-task success for an efficient and a capable solver. The router compares their probabilities against an explicitly configured quality allowance and selects the capable solver when classification fails
+
+This classifier is intended for evaluation. Its probabilities are raw forecasts unless matching per-model calibration is supplied, and an estimated quality allowance is not a measured quality guarantee. It requires two model groups, profiles for both solvers, and a description of their harness and budget. Adaptive selection is disabled for this mode so it cannot override the forecast. Existing user-turn classification can reuse a decision until the user changes the task
+
+V2 reads all human task messages and follow-ups, without the complexity classifier's prior-turn truncation or assistant summaries. Long task histories can therefore increase judge cost or exceed its context window, which falls back to the capable solver. Profiles must describe every deployment behind their model group and calibration must match the prompt, solver settings, and harness being evaluated

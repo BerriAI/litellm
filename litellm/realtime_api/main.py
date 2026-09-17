@@ -30,10 +30,11 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager
 
+from ..litellm_core_utils.credential_accessor import CredentialAccessor
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.common_utils import get_azure_ad_token
-from ..llms.azure.realtime.handler import AzureOpenAIRealtime
+from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..llms.openai.realtime.handler import OpenAIRealtime
@@ -54,6 +55,17 @@ xai_realtime: Final = XAIRealtime()
 vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_AUTH_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def _model_params_with_stored_credentials(model_params: Mapping[str, Any]) -> Mapping[str, Any]:
+    credential_name: Final = model_params.get("litellm_credential_name")
+    credential_values: Final = (
+        CredentialAccessor.get_credential_values(credential_name)
+        if isinstance(credential_name, str)
+        else _EMPTY_MODEL_PARAMS
+    )
+    return MappingProxyType({**credential_values, **model_params})
 
 
 def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
@@ -413,14 +425,14 @@ async def _arealtime(
 
         api_version = api_version or litellm_params.api_version or "2024-10-01-preview"
 
-        realtime_protocol = (
+        configured_realtime_protocol: Final = (
             kwargs.get("realtime_protocol")
             or litellm_params.get("realtime_protocol")
             or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
         )
-        if realtime_protocol is None and (query_params or {}).get("intent") == "transcription":
-            realtime_protocol = "GA"
-        realtime_protocol = realtime_protocol or "beta"
+        realtime_protocol: Final = azure_realtime_protocol_for_client(
+            configured_realtime_protocol, query_params=query_params, websocket=websocket
+        )
         resolved_azure_ad_token: Final = (
             None if api_key else get_azure_ad_token(GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token))
         )
@@ -586,20 +598,20 @@ def _azure_realtime_health_protocol(
     configured: Final = configured_raw if isinstance(configured_raw, str) else None
     if configured is not None:
         return configured, query_params
-    if query_params is not None:
-        return "GA", query_params
-    return "beta", None
+    return "GA", query_params
 
 
 def _realtime_health_check_auth_headers(
     custom_llm_provider: str, api_key: str | None, model_params: Mapping[str, Any]
-) -> Mapping[str, str | None]:
-    if custom_llm_provider != "azure":
-        return MappingProxyType({"api-key": api_key})
-    return azure_realtime.get_auth_headers(
-        api_key=api_key,
-        azure_ad_token=(None if api_key else get_azure_ad_token(GenericLiteLLMParams(**model_params))),
-    )
+) -> Mapping[str, str]:
+    if custom_llm_provider == "azure":
+        return azure_realtime.get_auth_headers(
+            api_key=api_key,
+            azure_ad_token=(None if api_key else get_azure_ad_token(GenericLiteLLMParams(**model_params))),
+        )
+    if api_key is None:
+        return _EMPTY_AUTH_HEADERS
+    return MappingProxyType({"Authorization": f"Bearer {api_key}"})
 
 
 async def _realtime_health_check(
@@ -621,8 +633,8 @@ async def _realtime_health_check(
         api_key: str - api key
         custom_llm_provider: str - custom llm provider
         realtime_protocol: Optional[str] - protocol version ("GA"/"v1" for GA path, "beta" for beta path);
-            None resolves it for Azure from model_params/env, with transcription-only models probing GA
-            plus intent=transcription the way real calls do
+            None resolves it for Azure from model_params/env and otherwise probes GA, the upstream a client
+            without the OpenAI-Beta header is bridged to, with transcription-only models adding intent=transcription
 
     Returns:
         bool - True if connection is successful, False otherwise
@@ -631,34 +643,46 @@ async def _realtime_health_check(
     """
     import websockets
 
+    resolved_params: Final = _model_params_with_stored_credentials(model_params or _EMPTY_MODEL_PARAMS)
+    resolved_api_key: Final = cast(  # cast-ok: provider parameters expose optional string credentials
+        str | None, api_key or resolved_params.get("api_key")
+    )
+    resolved_api_base: Final = cast(  # cast-ok: provider parameters expose optional string endpoints
+        str | None, api_base or resolved_params.get("api_base")
+    )
+    resolved_api_version: Final = cast(  # cast-ok: provider parameters expose optional string versions
+        str | None, api_version or resolved_params.get("api_version")
+    )
     url: str | None = None
     auth_headers: Final = _realtime_health_check_auth_headers(
         custom_llm_provider=custom_llm_provider,
-        api_key=api_key,
-        model_params=model_params or _EMPTY_MODEL_PARAMS,
+        api_key=resolved_api_key,
+        model_params=resolved_params,
     )
     if custom_llm_provider == "azure":
         resolved_protocol, azure_query_params = _azure_realtime_health_protocol(
             model=model,
             realtime_protocol=realtime_protocol,
-            model_params=model_params or _EMPTY_MODEL_PARAMS,
+            model_params=resolved_params,
         )
         url = azure_realtime._construct_url(
-            api_base=api_base or "",
+            api_base=resolved_api_base or "",
             model=model,
-            api_version=api_version or "2024-10-01-preview",
+            api_version=resolved_api_version or "2024-10-01-preview",
             realtime_protocol=resolved_protocol,
             query_params=azure_query_params,
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
-            api_base=api_base or "https://api.openai.com/",
+            api_base=resolved_api_base or "https://api.openai.com/",
             query_params={"model": model},
         )
     elif custom_llm_provider == "xai":
-        url = xai_realtime._construct_url(api_base=api_base or "https://api.x.ai/v1", query_params={"model": model})
+        url = xai_realtime._construct_url(
+            api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}
+        )
     elif custom_llm_provider == "vertex_ai":
-        vertex_model_params: Final = model_params or {}
+        vertex_model_params: Final = dict(resolved_params)
         resolved_location: Final = vertex_llm_base.get_vertex_region(
             vertex_region=VertexBase.safe_get_vertex_ai_location(vertex_model_params),
             model=model,
@@ -677,19 +701,19 @@ async def _realtime_health_check(
             project=resolved_project,
             location=resolved_location,
         )
-        url = vertex_realtime_config.get_complete_url(api_base=api_base, model=model)
-        ssl_context = get_shared_realtime_ssl_context()
+        url = vertex_realtime_config.get_complete_url(api_base=resolved_api_base, model=model)
+        vertex_ssl_context: Final = get_shared_realtime_ssl_context()
         headers: Final = vertex_realtime_config.validate_environment(headers={}, model=model, api_key=None)
         async with websockets.connect(
             url,
             additional_headers=headers,
             max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-            ssl=ssl_context,
+            ssl=vertex_ssl_context,
         ):
             return True
     else:
         raise ValueError(f"Unsupported model: {model}")
-    ssl_context = get_shared_realtime_ssl_context()
+    ssl_context: Final = get_shared_realtime_ssl_context()
     async with websockets.connect(
         url,
         additional_headers=auth_headers,

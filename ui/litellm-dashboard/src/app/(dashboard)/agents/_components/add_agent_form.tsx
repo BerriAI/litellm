@@ -338,6 +338,11 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       return;
     }
 
+    if (keyAssignOption === "existing_key" && !selectedExistingKey) {
+      toast.error("Please select an existing key to assign");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const isValid = await form.trigger();
@@ -406,12 +411,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           selectedTeamId,
         );
         setCreatedKeyValue(keyResponse.key || null);
-      } else if (keyAssignOption === "existing_key") {
-        if (!selectedExistingKey) {
-          toast.error("Please select an existing key to assign");
-          setIsSubmitting(false);
-          return;
-        }
+      } else if (keyAssignOption === "existing_key" && selectedExistingKey) {
         await keyUpdateCall(accessToken, {
           key: selectedExistingKey,
           agent_id: agentId,
@@ -963,8 +963,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                     <SearchSelect
                       inputId="agent-existing-key"
                       placeholder={loadingKeys ? "Loading keys…" : "Search by key name…"}
-                      value={selectedExistingKey ?? ""}
-                      onValueChange={(value) => setSelectedExistingKey(value || null)}
+                      value={selectedExistingKey}
+                      onValueChange={setSelectedExistingKey}
                       options={existingKeys.map((k) => ({
                         label: k.key_alias || k.token?.slice(0, 12) + "…",
                         value: k.token,

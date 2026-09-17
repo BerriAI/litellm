@@ -693,6 +693,38 @@ def test_vertex_cost_and_usage_aggregation(monkeypatch):
     assert result.failed_requests == 0
 
 
+def test_vertex_batch_usage_preserves_modality_token_details(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "vertex_ai/gemini-embedding-2",
+        {
+            "input_cost_per_token_batches": 1e-7,
+            "input_cost_per_audio_token_batches": 3.25e-6,
+            "input_cost_per_image_token_batches": 2.25e-7,
+            "input_cost_per_video_token_batches": 6e-6,
+        },
+    )
+    responses = [
+        {
+            "response": {
+                "usageMetadata": {
+                    "promptTokenCount": 84,
+                    "candidatesTokenCount": 0,
+                    "totalTokenCount": 84,
+                    "promptTokensDetails": [
+                        {"modality": "AUDIO", "tokenCount": 64},
+                        {"modality": "TEXT", "tokenCount": 20},
+                    ],
+                }
+            }
+        }
+    ]
+
+    result = bu.calculate_vertex_ai_batch_cost_and_usage(responses, "gemini-embedding-2")
+
+    assert result.prompt_cost == pytest.approx(64 * 3.25e-6 + 20 * 1e-7)
+
+
 def test_vertex_cost_skips_none_response_body(monkeypatch):
     import litellm.cost_calculator as cc
 

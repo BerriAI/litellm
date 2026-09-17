@@ -18,6 +18,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_tool_message_for_guardrail,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -259,8 +260,11 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         fail_on_error: bool | None = True,
+        streaming_buffer_until_moderated: bool | None = None,
+        streaming_buffer_release_on_scan: bool | None = None,
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> None:
         """
@@ -273,14 +277,20 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             streaming_end_of_stream_only (bool | None): Scan streamed output once at end of stream instead of
                 every streaming_sampling_rate chunks. Defaults to False.
             streaming_sampling_rate (int | None): Scan the accumulated streamed output every Nth chunk. Defaults to 5.
+            async_handler (AsyncHTTPHandler | None): HTTP client to call AI Guard with. Defaults to the shared
+                guardrail-callback client.
             **kwargs: Additional arguments passed to the CustomGuardrail base class.
         """
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.fail_on_error = True if fail_on_error is None else fail_on_error
         self._set_streaming_params(
             CrowdStrikeAIDRGuardrailConfigModelOptionalParams(
                 streaming_end_of_stream_only=streaming_end_of_stream_only,
                 streaming_sampling_rate=streaming_sampling_rate,
+                streaming_buffer_until_moderated=streaming_buffer_until_moderated,
+                streaming_buffer_release_on_scan=streaming_buffer_release_on_scan,
             )
         )
 
@@ -304,6 +314,8 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         )
 
     def _set_streaming_params(self, streaming_params: CrowdStrikeAIDRGuardrailConfigModelOptionalParams) -> None:
+        self.streaming_buffer_until_moderated: bool = streaming_params.streaming_buffer_until_moderated or False
+        self.streaming_buffer_release_on_scan: bool = streaming_params.streaming_buffer_release_on_scan or False
         self.streaming_end_of_stream_only: bool = streaming_params.streaming_end_of_stream_only or False
         self.streaming_sampling_rate: int = streaming_params.streaming_sampling_rate or 5
 
@@ -413,10 +425,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
 
     def _build_guard_input_for_response(self, inputs: GenericGuardrailAPIInputs) -> _GuardInput:
         output_texts: Final[list[str]] = inputs.get("texts", [])
-        return _GuardInput(
-            messages=[_Message(role="assistant", content=text) for text in output_texts],
-            tools=inputs.get("tools", []),
-        )
+        return _GuardInput(messages=[_Message(role="assistant", content=text) for text in output_texts], tools=[])
 
     def _extract_transformed_texts(self, guard_output: _GuardInput, num_assistant_messages: int) -> list[str]:
         tail: Final = guard_output.messages[-num_assistant_messages:] if num_assistant_messages > 0 else []

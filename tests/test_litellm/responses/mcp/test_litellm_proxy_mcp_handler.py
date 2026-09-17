@@ -1077,6 +1077,8 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
         return ([], {"foo": "litellm_proxy"})
 
     async def fake_execute(**kwargs: Any) -> list[dict[str, Any]]:
+        assert kwargs["guardrail_context"]["metadata"]["guardrails"] == ("block-all",)
+        assert kwargs["guardrail_context"]["model"] == "gpt-5"
         return [{"tool_call_id": "call-1", "name": "foo", "result": "done"}]
 
     monkeypatch.setattr(responses_main, "aresponses", fake_aresponses)
@@ -1090,6 +1092,7 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
         input="hi",
         model="gpt-5",
         tools=[{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}],
+        litellm_metadata={"guardrails": ["block-all"]},
         store=store,
         previous_response_id=caller_previous_response_id,
     )

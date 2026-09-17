@@ -323,6 +323,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                         "api_version": api_version,
                         "api_base": api_base,
                         "complete_input_dict": data,
+                        "openai_sdk": True,
                     },
                 )
                 if not isinstance(max_retries, int):
@@ -429,6 +430,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     "api_base": api_base,
                     "acompletion": True,
                     "complete_input_dict": data,
+                    "openai_sdk": True,
                 },
             )
 

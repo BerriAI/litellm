@@ -17,6 +17,7 @@ import {
   formatKeywords,
   parseSkillSource,
   isValidSubPath,
+  isValidSha256,
   buildMarketplaceSettingsSnippet,
 } from "./helpers";
 import { MarketplacePluginEntry } from "./types";
@@ -114,6 +115,12 @@ describe("getSourceDisplayText", () => {
     );
   });
 
+  it("shows the archive url for an archive source", () => {
+    expect(getSourceDisplayText({ source: "archive", url: "https://bucket.s3.amazonaws.com/skill.zip" })).toBe(
+      "https://bucket.s3.amazonaws.com/skill.zip",
+    );
+  });
+
   it("returns unknown for missing data", () => {
     expect(getSourceDisplayText({ source: "github" })).toBe("Unknown source");
   });
@@ -140,8 +147,28 @@ describe("getSourceLink", () => {
     );
   });
 
+  it("returns the archive url for an archive source", () => {
+    expect(getSourceLink({ source: "archive", url: "https://bucket.s3.amazonaws.com/skill.zip" })).toBe(
+      "https://bucket.s3.amazonaws.com/skill.zip",
+    );
+  });
+
   it("returns null when no repo or url", () => {
     expect(getSourceLink({ source: "github" })).toBeNull();
+  });
+
+  it("keeps http and upper-case https urls registered through the api clickable", () => {
+    expect(getSourceLink({ source: "url", url: "http://git.internal.example/org/repo" })).toBe(
+      "http://git.internal.example/org/repo",
+    );
+    expect(getSourceLink({ source: "git-subdir", url: "HTTPS://gitlab.com/org/repo", path: "sub/dir" })).toBe(
+      "HTTPS://gitlab.com/org/repo",
+    );
+  });
+
+  it("returns null for an ssh clone url, which is not browsable", () => {
+    expect(getSourceLink({ source: "url", url: "git@ghe.example.com:org/repo.git" })).toBeNull();
+    expect(getSourceLink({ source: "url", url: "ssh://git@ghe.example.com/org/repo.git" })).toBeNull();
   });
 });
 
@@ -329,6 +356,20 @@ describe("isValidUrl", () => {
   });
 });
 
+describe("isValidSha256", () => {
+  it("accepts an empty digest and a 64-character hex digest in either case", () => {
+    expect(isValidSha256("")).toBe(true);
+    expect(isValidSha256("a".repeat(64))).toBe(true);
+    expect(isValidSha256(" " + "ABCDEF0123456789".repeat(4) + " ")).toBe(true);
+  });
+
+  it("rejects wrong length and non-hex digests", () => {
+    expect(isValidSha256("a".repeat(63))).toBe(false);
+    expect(isValidSha256("a".repeat(65))).toBe(false);
+    expect(isValidSha256("g".repeat(64))).toBe(false);
+  });
+});
+
 describe("parseKeywords", () => {
   it("splits comma-separated keywords", () => {
     expect(parseKeywords("a, b, c")).toEqual(["a", "b", "c"]);
@@ -439,10 +480,107 @@ describe("parseSkillSource", () => {
     expect(parseSkillSource("gitlab.com/org/repo", "a//b")).toBeNull();
   });
 
+  it("keeps an scp-style ssh clone url so private hosts authenticate with the user's key", () => {
+    expect(parseSkillSource("git@ghe.example.com:org/repo.git")?.parsed).toEqual({
+      source: "url",
+      url: "git@ghe.example.com:org/repo.git",
+    });
+    expect(parseSkillSource("git@ghe.example.com:org/repo.git")?.suggestedName).toBe("repo");
+  });
+
+  it("stores an ssh clone url exactly as typed, so a forced .git suffix cannot break azure devops or codecommit", () => {
+    for (const url of [
+      "git@ghe.example.com:org/repo",
+      "git@ssh.dev.azure.com:v3/org/project/repo",
+      "ssh://git@ghe.example.com/org/repo",
+      "ssh://apka1234@git-codecommit.us-east-1.amazonaws.com/v1/repos/my-repo",
+      "ssh://git@ghe.example.com:2222/org/nested/repo.git",
+    ]) {
+      expect(parseSkillSource(url)?.parsed).toEqual({ source: "url", url });
+    }
+    expect(parseSkillSource("git@ssh.dev.azure.com:v3/org/project/repo")?.suggestedName).toBe("repo");
+  });
+
+  it("accepts an internal host whose last label is not alphabetic, matching the https rule", () => {
+    expect(parseSkillSource("git@gitlab.internal.k8s2:org/repo.git")?.parsed).toEqual({
+      source: "url",
+      url: "git@gitlab.internal.k8s2:org/repo.git",
+    });
+    expect(parseSkillSource("https://gitlab.internal.k8s2/org/repo")?.parsed).toEqual({
+      source: "url",
+      url: "https://gitlab.internal.k8s2/org/repo",
+    });
+  });
+
+  it("combines an ssh clone url with an explicit subfolder", () => {
+    expect(parseSkillSource("git@ghe.example.com:org/repo.git", "plugins/my-skill")?.parsed).toEqual({
+      source: "git-subdir",
+      url: "git@ghe.example.com:org/repo.git",
+      path: "plugins/my-skill",
+    });
+    expect(parseSkillSource("git@ghe.example.com:org/repo.git", "../etc")).toBeNull();
+  });
+
+  it("rejects ssh-looking input without a host or repo path", () => {
+    expect(parseSkillSource("git@ghe.example.com:repo.git")).toBeNull();
+    expect(parseSkillSource("git@localhost:org/repo.git")).toBeNull();
+    expect(parseSkillSource("git@:org/repo.git")).toBeNull();
+    expect(parseSkillSource("ssh://ghe.example.com/org/repo.git")).toBeNull();
+  });
+
+  it("rejects ssh remotes with ip hosts or traversal segments", () => {
+    expect(parseSkillSource("git@10.0.0.5:org/repo.git")).toBeNull();
+    expect(parseSkillSource("ssh://git@169.254.169.254/org/repo")).toBeNull();
+    expect(parseSkillSource("git@ghe.example.com:../etc")).toBeNull();
+    expect(parseSkillSource("ssh://git@ghe.example.com/org/../repo")).toBeNull();
+    expect(parseSkillSource("git@ghe.example.com:org/../../etc/passwd")).toBeNull();
+    expect(parseSkillSource("git@ghe.example.com:org/.github")?.parsed).toEqual({
+      source: "url",
+      url: "git@ghe.example.com:org/.github",
+    });
+  });
+
+  it("rejects an ssh remote carrying a password, which would publish a secret on the feed", () => {
+    expect(parseSkillSource("ssh://git:s3cret@ghe.example.com/org/repo.git")).toBeNull();
+  });
+
   it("returns null for empty and garbage input", () => {
     expect(parseSkillSource("")).toBeNull();
     expect(parseSkillSource("   ")).toBeNull();
     expect(parseSkillSource("not a url")).toBeNull();
+  });
+
+  it("parses an S3 zip URL into an archive source and names the skill after the file", () => {
+    expect(parseSkillSource("https://skills-bucket.s3.us-east-1.amazonaws.com/plugins/My_Skill-1.0.0.zip")).toEqual({
+      parsed: { source: "archive", url: "https://skills-bucket.s3.us-east-1.amazonaws.com/plugins/My_Skill-1.0.0.zip" },
+      label: "Zip archive — skills-bucket.s3.us-east-1.amazonaws.com/plugins/My_Skill-1.0.0.zip",
+      suggestedName: "my-skill-1-0-0",
+    });
+  });
+
+  it("keeps the query string of a zip URL so versioned or signed object links still resolve", () => {
+    expect(parseSkillSource("https://bucket.s3.amazonaws.com/skill.ZIP?versionId=abc")?.parsed).toEqual({
+      source: "archive",
+      url: "https://bucket.s3.amazonaws.com/skill.ZIP?versionId=abc",
+    });
+  });
+
+  it("ignores the subfolder for a zip URL since the archive is installed whole", () => {
+    expect(parseSkillSource("https://artifacts.example.com/skill.zip", "plugins/x")?.parsed).toEqual({
+      source: "archive",
+      url: "https://artifacts.example.com/skill.zip",
+    });
+  });
+
+  it("rejects a plain http zip URL", () => {
+    expect(parseSkillSource("http://artifacts.example.com/skill.zip")).toBeNull();
+  });
+
+  it("treats a github zip download URL as an archive rather than a repo path", () => {
+    expect(parseSkillSource("https://github.com/org/repo/releases/download/v1/skill.zip")?.parsed).toEqual({
+      source: "archive",
+      url: "https://github.com/org/repo/releases/download/v1/skill.zip",
+    });
   });
 
   it("suggests a kebab-friendly name from the last path segment", () => {
@@ -508,7 +646,7 @@ describe("parseSkillSource", () => {
 // Skill sources are served on the unauthenticated public feeds and cloned by clients, so the
 // parser must never publish an insecure, credentialed, internal, or malformed clone URL.
 describe("parseSkillSource — security boundary", () => {
-  it("rejects non-https schemes", () => {
+  it("rejects schemes other than https and user-qualified ssh", () => {
     for (const url of [
       "http://gitlab.com/org/repo",
       "HTTP://gitlab.com/org/repo",
