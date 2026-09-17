@@ -4855,6 +4855,37 @@ def test_get_assembled_streaming_response_returns_result_for_streaming():
     assert assembled is result
 
 
+def test_get_assembled_streaming_response_handles_dict_response():
+    """ResponseCompletedEvent.response may hold a plain dict on the streaming
+    /v1/responses spend-log path (#29913). A bare `.usage` access raised
+    AttributeError there, so no LiteLLM_SpendLogs row was written at all."""
+    import datetime
+
+    from litellm.types.llms.openai import ResponseCompletedEvent
+
+    logging_obj = _make_logging_obj(stream=True)
+    event = ResponseCompletedEvent.model_construct(
+        type="response.completed",
+        response={
+            "id": "resp-dict-1",
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        },
+    )
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=event,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=False,
+        streaming_chunks=[],
+    )
+
+    assert assembled == {
+        "id": "resp-dict-1",
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    }
+
+
 def test_streaming_success_handler_includes_vertex_ai_metadata_in_standard_logging():
     """Assembled streaming responses should include Vertex AI metadata in logging payload."""
     import datetime
