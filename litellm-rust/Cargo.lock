@@ -269,6 +269,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-smithy-eventstream"
+version = "0.61.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a9381123ab62d20c13082b151f30f962a3b112b727345394536dfa39a482944"
+dependencies = [
+ "aws-smithy-types",
+ "bytes",
+ "crc32fast",
+]
+
+[[package]]
 name = "aws-smithy-http"
 version = "0.64.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1942,6 +1953,8 @@ dependencies = [
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
+ "aws-smithy-eventstream",
+ "aws-smithy-types",
  "base64 0.22.1",
  "bytes",
  "data-url",
@@ -1950,6 +1963,7 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-auth-azure",
  "litellm-auth-gcp",
+ "litellm-framing",
  "mime_guess",
  "moka",
  "rand 0.8.7",
@@ -1964,10 +1978,25 @@ dependencies = [
  "strum",
  "subtle",
  "thiserror 2.0.19",
+ "time",
  "tokio",
  "tokio-tungstenite",
  "url",
  "veil",
+]
+
+[[package]]
+name = "litellm-framing"
+version = "0.1.0"
+dependencies = [
+ "aws-smithy-eventstream",
+ "aws-smithy-types",
+ "bytes",
+ "futures-util",
+ "rstest",
+ "sse-stream",
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]
@@ -3280,6 +3309,19 @@ dependencies = [
  "nom",
  "serde",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "sse-stream"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c25ac7aff0abd1dbc474536e40416e1102c7dd9bfba0b9861c6d357f835dcfb4"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http-body 1.1.0",
+ "http-body-util",
+ "pin-project-lite",
 ]
 
 [[package]]

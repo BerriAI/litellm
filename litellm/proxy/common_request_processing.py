@@ -25,7 +25,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 
 import litellm
@@ -64,14 +64,21 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
-from litellm.proxy.auth.auth_utils import check_response_size_is_safe
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import (
+    can_key_call_resolved_model,
+    request_skips_budget_checks,
+    tag_max_budget_check_for_tags,
+)
+from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,
 )
-from litellm.proxy.common_utils.http_parsing_utils import get_client_requested_model
+from litellm.proxy.common_utils.http_parsing_utils import (
+    get_client_requested_model,
+    get_tags_from_request_body,
+)
 from litellm.proxy.common_utils.openai_error_payload import (
     attribute_of,
     error_status_code,
@@ -656,6 +663,48 @@ async def _resolve_per_request_model_group_alias(
         llm_router=llm_router,
     )
     return target
+
+
+_REQUEST_MODEL: Final[TypeAdapter[str | list[str] | None]] = TypeAdapter(str | list[str] | None)
+
+
+def _request_model(data: Mapping[str, object]) -> str | list[str] | None:
+    try:
+        return _REQUEST_MODEL.validate_python(data.get("model"), strict=True)
+    except ValidationError:
+        return None
+
+
+async def _enforce_guardrail_added_tag_budgets(
+    data: Mapping[str, object],
+    tags_before_guardrails: frozenset[str],
+    route: str,
+    llm_router: Router | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    added_tags: Final = tuple(
+        tag for tag in get_tags_from_request_body(request_body=data) if tag not in tags_before_guardrails
+    )
+    if not added_tags or request_skips_budget_checks(route=route, model=_request_model(data), llm_router=llm_router):
+        return
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    try:
+        await tag_max_budget_check_for_tags(
+            tags=added_tags,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=user_api_key_dict,
+        )
+    except litellm.BudgetExceededError as e:
+        raise ProxyException(
+            message=e.message,
+            type=ProxyErrorTypes.budget_exceeded,
+            param=None,
+            code=e.status_code,
+        ) from e
 
 
 async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
@@ -1558,6 +1607,7 @@ def _timing_values(
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
+        self._tags_before_guardrails: frozenset[str] | None = None
 
     @property
     def litellm_call_id(self) -> str | None:
@@ -2051,10 +2101,20 @@ class ProxyBaseLLMRequestProcessing:
         # to run below.
         await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
 
+        if self._tags_before_guardrails is None:
+            self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
             call_type=route_type,
+        )
+        await _enforce_guardrail_added_tag_budgets(
+            data=self.data,
+            tags_before_guardrails=self._tags_before_guardrails,
+            route=get_request_route(request=request),
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
         )
         if route_type == "aget_responses":
             attach_post_call_pipelines_to_retrieval(
