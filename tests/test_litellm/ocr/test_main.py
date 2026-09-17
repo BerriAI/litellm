@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.ocr.main import _prepare_ocr_request
 from litellm.rust_bridge import bindings, configuration, runtime
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
+from litellm.utils import ProviderConfigManager
 
 
 @pytest.fixture
@@ -277,11 +278,26 @@ def _prepare(model: str, document: object, **kwargs: object) -> object:
     (
         ("https://example.com/file.pdf", "document must be a dict"),
         ({"type": "video_url", "video_url": "https://example.com/clip.mp4"}, "Invalid document type: video_url"),
+        ({"type": "document_url", "document_url": ""}, "Document URL is required"),
     ),
 )
 def test_prepare_ocr_request_rejects_malformed_documents(document: object, match: str) -> None:
     with pytest.raises(litellm.BadRequestError, match=match):
         _prepare("mistral/mistral-ocr-latest", document)
+
+
+def test_prepare_ocr_request_maps_param_mapping_errors_to_bad_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    config: Final = Mock()
+    config.resolve_connection_params.return_value = ("test-key", None)
+    config.get_supported_ocr_params.return_value = ["pages"]
+    config.map_ocr_params.side_effect = ValueError("pages must be a list")
+    monkeypatch.setattr(ProviderConfigManager, "get_provider_ocr_config", Mock(return_value=config))
+
+    with pytest.raises(litellm.BadRequestError, match="pages must be a list") as error:
+        _prepare("mistral/mistral-ocr-latest", dict(PRICING_DOCUMENT), pages="1")
+
+    assert error.value.llm_provider == "mistral"
+    assert isinstance(error.value.__cause__, ValueError)
 
 
 def test_prepare_ocr_request_rejects_provider_without_ocr_support() -> None:

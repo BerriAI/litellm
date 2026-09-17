@@ -44,7 +44,7 @@ from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
 )
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
-from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
@@ -6060,8 +6060,6 @@ class BaseLLMHTTPHandler:
             error_headers = {}
 
         if provider_config is None:
-            from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
             raise BaseLLMException(
                 status_code=status_code,
                 message=error_text,
@@ -6074,7 +6072,11 @@ class BaseLLMHTTPHandler:
             status_code=status_code,
             headers=error_headers,
         )
-        if isinstance(provider_config, BaseOCRConfig) and isinstance(error_response, httpx.Response):
+        if (
+            isinstance(provider_config, BaseOCRConfig)
+            and isinstance(provider_error, BaseLLMException)
+            and isinstance(error_response, httpx.Response)
+        ):
             provider_error.response = error_response
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
