@@ -34,6 +34,43 @@ if TYPE_CHECKING:
 
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
+_BEDROCK_ROUTE_PREFIXES: Final[tuple[str, ...]] = (
+    "invoke/",
+    "claude_platform/",
+    "converse_like/",
+    "converse/",
+    "agent/",
+    "agentcore/",
+    "async_invoke/",
+    "openai/",
+    "mantle/",
+)
+_BEDROCK_ROUTE_TYPES: Final[
+    tuple[
+        Literal[
+            "invoke",
+            "claude_platform",
+            "converse_like",
+            "converse",
+            "agent",
+            "agentcore",
+            "async_invoke",
+            "openai",
+            "mantle",
+        ],
+        ...,
+    ]
+] = (
+    "invoke",
+    "claude_platform",
+    "converse_like",
+    "converse",
+    "agent",
+    "agentcore",
+    "async_invoke",
+    "openai",
+    "mantle",
+)
 
 
 def error_response_text(response: httpx.Response) -> str:
@@ -1090,6 +1127,10 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return get_bedrock_base_model(model)
 
     @staticmethod
+    def has_explicit_route(model: str) -> bool:
+        return any(BedrockModelInfo._model_has_route_prefix(model, prefix) for prefix in _BEDROCK_ROUTE_PREFIXES)
+
+    @staticmethod
     def _supported_cross_region_inference_region() -> list[str]:
         """Wrapper for standalone function. See get_bedrock_cross_region_inference_regions()."""
         return get_bedrock_cross_region_inference_regions()
@@ -1111,36 +1152,11 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Get the bedrock route for the given model.
         """
-        route_mappings: dict[
-            str,
-            Literal[
-                "invoke",
-                "claude_platform",
-                "converse_like",
-                "converse",
-                "agent",
-                "agentcore",
-                "async_invoke",
-                "openai",
-                "mantle",
-            ],
-        ] = {
-            "invoke/": "invoke",
-            "claude_platform/": "claude_platform",
-            "converse_like/": "converse_like",
-            "converse/": "converse",
-            "agent/": "agent",
-            "agentcore/": "agentcore",
-            "async_invoke/": "async_invoke",
-            "openai/": "openai",
-            "mantle/": "mantle",
-        }
-
         # Check explicit routes first. Match each prefix only as a leading path
         # segment so the `bedrock_mantle/` provider prefix is never mistaken for
         # the `mantle/` invoke route (which would mangle
         # `bedrock_mantle/openai.gpt-5.5` into `bedrock_openai.gpt-5.5`).
-        for prefix, route_type in route_mappings.items():
+        for prefix, route_type in zip(_BEDROCK_ROUTE_PREFIXES, _BEDROCK_ROUTE_TYPES, strict=True):
             if BedrockModelInfo._model_has_route_prefix(model, prefix):
                 return route_type
 
@@ -1292,6 +1308,17 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
             return AmazonMantleMessagesConfig()
 
+        from litellm.utils import model_supports_native_endpoint
+
+        if not BedrockModelInfo.has_explicit_route(model) and model_supports_native_endpoint(
+            "/v1/messages", model, litellm.LlmProviders.BEDROCK
+        ):
+            from litellm.llms.bedrock.messages.native_transformation import (
+                AmazonBedrockNativeMessagesConfig,
+            )
+
+            return AmazonBedrockNativeMessagesConfig()
+
         #########################################################
         # This goes through litellm.AmazonAnthropicClaude3MessagesConfig()
         # Since bedrock Invoke supports Native Anthropic Messages API
@@ -1320,6 +1347,13 @@ def get_bedrock_chat_config(model: str):
     bedrock_route: Final = BedrockModelInfo.get_bedrock_route(model)
     bedrock_invoke_provider: Final = BaseAWSLLM.get_bedrock_invoke_provider(model=model)
     base_model: Final = BedrockModelInfo.get_base_model(model)
+
+    from litellm.utils import model_supports_native_endpoint
+
+    if not BedrockModelInfo.has_explicit_route(model) and model_supports_native_endpoint(
+        "/v1/chat/completions", model, litellm.LlmProviders.BEDROCK
+    ):
+        return litellm.AmazonBedrockOpenAIChatCompletionsConfig()
 
     # Handle explicit routes first
     if bedrock_route == "claude_platform":
