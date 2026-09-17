@@ -1,11 +1,11 @@
 use serde_json::{Map, Value, json};
 
 use crate::audio_transcription::Error;
+use crate::audio_transcription::json_type_name;
 use crate::audio_transcription::types::{
     AudioTranscriptionRequestData, AudioTranscriptionResponseData,
 };
-use crate::http_utils::json_type_name;
-use crate::llms::base_llm::audio_transcription::transformation::{
+use crate::base_llm::audio_transcription::transformation::{
     AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
 };
 use litellm_auth_aws::constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE};

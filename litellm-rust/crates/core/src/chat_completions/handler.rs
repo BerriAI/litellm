@@ -59,6 +59,7 @@ pub(super) async fn execute_chat_completions_provider_call(
     request
         .config
         .transform_response(&request.model, ProviderChatResponseData { body })
+        .map_err(Error::from)
         .map_err(as_response_error)
 }
 

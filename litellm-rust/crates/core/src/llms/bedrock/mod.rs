@@ -1,2 +1,2 @@
-pub mod audio_transcription;
+pub use litellm_providers::bedrock::audio_transcription;
 pub mod chat;

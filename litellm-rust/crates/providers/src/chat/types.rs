@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::llms::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth};
+use crate::base_llm::chat::transformation::{BaseConfig, ChatCompletionsAuth};
 
 /// A `/chat/completions` call as it crosses into the core.
 ///
@@ -22,26 +22,26 @@ pub struct ChatCompletionsRequest<'a> {
     pub timeout: Option<Duration>,
 }
 
-pub(super) struct ResolvedChatCompletionsRequest<'a> {
-    pub(super) model: String,
-    pub(super) config: &'static dyn BaseConfig,
-    pub(super) messages: Vec<ChatMessage>,
-    pub(super) optional_params: Map<String, Value>,
-    pub(super) api_key: Option<&'a str>,
-    pub(super) api_base: Option<&'a str>,
-    pub(super) extra_headers: Option<Map<String, Value>>,
-    pub(super) timeout: Option<Duration>,
+pub struct ResolvedChatCompletionsRequest<'a> {
+    pub model: String,
+    pub config: &'static dyn BaseConfig,
+    pub messages: Vec<ChatMessage>,
+    pub optional_params: Map<String, Value>,
+    pub api_key: Option<&'a str>,
+    pub api_base: Option<&'a str>,
+    pub extra_headers: Option<Map<String, Value>>,
+    pub timeout: Option<Duration>,
 }
 
-pub(super) struct ProviderChatCompletionsRequest {
-    pub(super) model: String,
-    pub(super) config: &'static dyn BaseConfig,
-    pub(super) url: String,
-    pub(super) body: Value,
-    pub(super) upstream_headers: Vec<(String, String)>,
-    pub(super) auth: ChatCompletionsAuth,
-    pub(super) optional_params: Map<String, Value>,
-    pub(super) timeout: Option<Duration>,
+pub struct ProviderChatCompletionsRequest {
+    pub model: String,
+    pub config: &'static dyn BaseConfig,
+    pub url: String,
+    pub body: Value,
+    pub upstream_headers: Vec<(String, String)>,
+    pub auth: ChatCompletionsAuth,
+    pub optional_params: Map<String, Value>,
+    pub timeout: Option<Duration>,
 }
 
 /// The provider-shaped request body a config produces. Named rather than a bare
