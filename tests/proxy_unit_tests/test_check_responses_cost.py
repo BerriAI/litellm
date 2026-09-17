@@ -1050,6 +1050,73 @@ class TestCheckResponsesCost:
         assert _release_calls(mock_prisma_client) == []
 
     @pytest.mark.asyncio
+    async def test_billing_read_includes_managed_row_attribution(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+        from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+
+        attributed_job = MagicMock()
+        attributed_job.unified_object_id = "resp_attributed"
+        attributed_job.model_object_id = _routed_response_id("resp_attributed")
+        attributed_job.created_by = "test-user"
+        attributed_job.org_id = "org-1"
+        attributed_job.request_tags = ["tag-a", "tag-b"]
+        attributed_job.id = "job-attributed"
+        attributed_job.file_object = {"model": "gpt-5", "id": "resp_attributed"}
+
+        unattributed_job = MagicMock()
+        unattributed_job.unified_object_id = "resp_unattributed"
+        unattributed_job.model_object_id = _routed_response_id("resp_unattributed")
+        unattributed_job.created_by = "test-user"
+        unattributed_job.org_id = None
+        unattributed_job.request_tags = []
+        unattributed_job.id = "job-unattributed"
+        unattributed_job.file_object = {"model": "gpt-5", "id": "resp_unattributed"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[attributed_job, unattributed_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+        mock_llm_router.aget_responses = AsyncMock(
+            side_effect=[
+                ResponsesAPIResponse(
+                    id="resp_attributed",
+                    object="response",
+                    status="completed",
+                    created_at=int(datetime.now().timestamp()),
+                    output=[],
+                    usage=None,
+                )
+            ]
+            * 2
+            + [
+                ResponsesAPIResponse(
+                    id="resp_unattributed",
+                    object="response",
+                    status="completed",
+                    created_at=int(datetime.now().timestamp()),
+                    output=[],
+                    usage=None,
+                )
+            ]
+            * 2
+        )
+
+        await check_responses_cost_instance.check_responses_cost()
+
+        billing_metadata = [
+            call.kwargs["litellm_metadata"]
+            for call in mock_llm_router.aget_responses.await_args_list
+            if call.kwargs["litellm_metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+            == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+        ]
+        assert billing_metadata[0]["user_api_key_org_id"] == "org-1"
+        assert billing_metadata[0]["tags"] == ["tag-a", "tag-b"]
+        assert "user_api_key_org_id" not in billing_metadata[1]
+        assert "tags" not in billing_metadata[1]
+
+    @pytest.mark.asyncio
     async def test_non_terminal_probe_does_not_finalize_or_bill(
         self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):

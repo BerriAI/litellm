@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, cast, get_args
@@ -29,6 +29,9 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_set_request_parsed_body,
+)
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+    request_tags_from_metadata,
 )
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -58,6 +61,7 @@ class BackgroundResponseStore(Protocol):
         model_object_id: str,
         file_purpose: Literal["response"],
         user_api_key_dict: UserAPIKeyAuth,
+        request_tags: Sequence[str] | None = None,
         persist_attribution: bool = False,
     ) -> None: ...
 
@@ -80,6 +84,7 @@ async def store_background_response_object(
     response: ResponsesAPIResponse,
     managed_files_obj: BackgroundResponseStore,
     user_api_key_dict: UserAPIKeyAuth,
+    data: Mapping[str, object],
 ) -> None:
     """Record a queued background response so the cost poller can find and bill it.
 
@@ -98,6 +103,7 @@ async def store_background_response_object(
         return
 
     provider_response_id: Final = ResponsesIDSecurity().provider_response_id(response.id)
+    litellm_metadata: Final = data.get("litellm_metadata")
     await managed_files_obj.store_unified_object_id(
         unified_object_id=response.id,
         file_object=response,
@@ -105,6 +111,7 @@ async def store_background_response_object(
         model_object_id=provider_response_id,
         file_purpose="response",
         user_api_key_dict=user_api_key_dict,
+        request_tags=request_tags_from_metadata(litellm_metadata if isinstance(litellm_metadata, dict) else {}),
         persist_attribution=True,
     )
     verbose_proxy_logger.info("Stored background response %s in managed objects table", response.id)
@@ -444,6 +451,7 @@ async def responses_api(
                         response=response,
                         managed_files_obj=managed_files_obj,
                         user_api_key_dict=user_api_key_dict,
+                        data=data,
                     )
                 except Exception as e:
                     verbose_proxy_logger.error("Failed to store background response in managed objects table: %s", e)

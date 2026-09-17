@@ -48,7 +48,7 @@ class CheckResponsesCost:
     async def _get_response(
         self,
         response_id: str,
-        litellm_metadata: dict[str, str],
+        litellm_metadata: dict[str, object],
     ) -> ResponsesAPIResponse:
         """Fetch the upstream response through the deployment that served it.
 
@@ -214,11 +214,17 @@ class CheckResponsesCost:
                 # Decrypts rows written before model_object_id held the provider's own id.
                 responses_id_security = ResponsesIDSecurity().provider_response_id(job.model_object_id)
                 
-                probe_metadata: dict[str, str] = {
+                probe_metadata: dict[str, object] = {
                     "user_api_key_user_id": job.created_by or "default-user-id",
                     **({"user_api_key_team_id": job.team_id} if job.team_id else {}),
                     **({"user_api_key": job.api_key, "user_api_key_hash": job.api_key} if job.api_key else {}),
                     **({"model": model_name, "model_group": model_name} if model_name else {}),
+                    **({"user_api_key_org_id": job.org_id} if job.org_id else {}),
+                    **(
+                        {"tags": [tag for tag in job.request_tags if isinstance(tag, str)]}
+                        if isinstance(job.request_tags, list) and job.request_tags
+                        else {}
+                    ),
                 }
                 
             except Exception as e:
@@ -263,7 +269,7 @@ class CheckResponsesCost:
             verbose_proxy_logger.info(
                 f"Response {unified_object_id} has terminal status {response.status}, marked as complete"
             )
-            billing_metadata: dict[str, str] = {
+            billing_metadata: dict[str, object] = {
                 **probe_metadata,
                 INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
             }

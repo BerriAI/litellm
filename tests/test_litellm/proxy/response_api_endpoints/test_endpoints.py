@@ -1997,7 +1997,12 @@ class TestBackgroundResponseManagedObjectId:
         response._hidden_params = {"model_id": model_id} if model_id else {}
         return response
 
-    async def _stored_kwargs(self, advertised_id: str, model_id: str | None = "deployment-1"):
+    async def _stored_kwargs(
+        self,
+        advertised_id: str,
+        model_id: str | None = "deployment-1",
+        data: dict[str, object] | None = None,
+    ):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.response_api_endpoints.endpoints import (
             store_background_response_object,
@@ -2010,6 +2015,7 @@ class TestBackgroundResponseManagedObjectId:
             response=self._queued_response(advertised_id, model_id),
             managed_files_obj=managed_files_obj,
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", user_id="u-1", team_id="t-1"),
+            data=data if data is not None else {"background": True},
         )
         return managed_files_obj.store_unified_object_id
 
@@ -2069,6 +2075,25 @@ class TestBackgroundResponseManagedObjectId:
         store = await self._stored_kwargs(self._encrypted_id("resp_no_deployment"), model_id=None)
 
         store.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_request_tags_are_forwarded_from_litellm_metadata(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
+
+        tagged_store = await self._stored_kwargs(
+            self._encrypted_id("resp_tagged"),
+            data={
+                "background": True,
+                "litellm_metadata": {"tags": ["tag-a", "tag-b"]},
+            },
+        )
+        untagged_store = await self._stored_kwargs(
+            self._encrypted_id("resp_untagged"),
+            data={"background": True},
+        )
+
+        assert tagged_store.await_args.kwargs["request_tags"] == ("tag-a", "tag-b")
+        assert untagged_store.await_args.kwargs["request_tags"] is None
 
 
 class TestShouldStoreBackgroundResponse:
