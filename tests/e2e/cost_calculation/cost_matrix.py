@@ -27,7 +27,6 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
-
 from scripted_provider import Scenario, ScriptedOutput, ScriptedToolCall, ScriptedUsage, Wire
 
 COST_MAP_PATH: Final = Path(__file__).resolve().parent.parent / "cost_map.json"
@@ -69,9 +68,9 @@ class CostMapEntry(BaseModel):
     web_search_billing_unit: str | None = None
 
 
-_COST_MAP_ADAPTER: Final = TypeAdapter(dict[str, CostMapEntry])
-_COST_MAP: Final[Mapping[str, CostMapEntry]] = MappingProxyType(
-    _COST_MAP_ADAPTER.validate_python(json.loads(COST_MAP_PATH.read_text()))
+COST_MAP_ADAPTER: Final = TypeAdapter(dict[str, CostMapEntry])
+COST_MAP: Final[Mapping[str, CostMapEntry]] = MappingProxyType(
+    COST_MAP_ADAPTER.validate_python(json.loads(COST_MAP_PATH.read_text()))
 )
 
 TIER_THRESHOLD_TOKENS: Final = 200_000
@@ -146,10 +145,10 @@ class _CasesFile(BaseModel):
     cases: tuple[Case, ...] = ()
 
 
-_CASES_FILE: Final = _CasesFile.model_validate(json.loads(CASES_PATH.read_text()))
-CASES: Final[tuple[Case, ...]] = _CASES_FILE.cases
+CASES_FILE: Final = _CasesFile.model_validate(json.loads(CASES_PATH.read_text()))
+CASES: Final[tuple[Case, ...]] = CASES_FILE.cases
 _DEPLOYMENTS: Final[Mapping[str, DeploymentSpec]] = MappingProxyType(
-    {spec.map_key: spec for spec in _CASES_FILE.deployments}
+    {spec.map_key: spec for spec in CASES_FILE.deployments}
 )
 
 
@@ -221,13 +220,13 @@ class FrontierModel:
 
     @property
     def rates(self) -> CostMapEntry:
-        return _COST_MAP[self.map_key]
+        return COST_MAP[self.map_key]
 
     @property
     def override_rates(self) -> CostMapEntry:
         if self.base_model is not None or self.override_map_key is None:
             return self.rates
-        return _COST_MAP[self.override_map_key]
+        return COST_MAP[self.override_map_key]
 
     @property
     def provider_model(self) -> str:
@@ -262,13 +261,13 @@ def _litellm_model_for(map_key: str, wiring: _ProviderWiring) -> str:
 def _frontier() -> tuple[FrontierModel, ...]:
     groups: Final[Mapping[tuple[str, str], tuple[str, ...]]] = MappingProxyType(
         {
-            pair: tuple(sorted(k for k, e in _COST_MAP.items() if (e.litellm_provider, e.mode) == pair))
-            for pair in {(e.litellm_provider, e.mode) for e in _COST_MAP.values()}
+            pair: tuple(sorted(k for k, e in COST_MAP.items() if (e.litellm_provider, e.mode) == pair))
+            for pair in {(e.litellm_provider, e.mode) for e in COST_MAP.values()}
         }
     )
     models: list[FrontierModel] = []  # mutable-ok: accumulated once at import into a tuple
-    for map_key in sorted(_COST_MAP):
-        entry: Final = _COST_MAP[map_key]
+    for map_key in sorted(COST_MAP):
+        entry: Final = COST_MAP[map_key]
         pair: Final = (entry.litellm_provider, entry.mode)
         wiring: Final = _PROVIDER_WIRING.get(pair)
         if wiring is None:
@@ -416,7 +415,7 @@ def image_input_data_url() -> str:
 IMAGE_INPUT_DATA_URL: Final = image_input_data_url()
 
 
-class _ExpectedCell(BaseModel):
+class ExpectedCell(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     spend: float
@@ -426,8 +425,8 @@ class _ExpectedCell(BaseModel):
     completion_tokens: int
 
 
-_EXPECTED_ADAPTER: Final = TypeAdapter(dict[str, _ExpectedCell])
-EXPECTED: Final[Mapping[str, _ExpectedCell]] = MappingProxyType(
+_EXPECTED_ADAPTER: Final = TypeAdapter(dict[str, ExpectedCell])
+EXPECTED: Final[Mapping[str, ExpectedCell]] = MappingProxyType(
     _EXPECTED_ADAPTER.validate_python(json.loads(EXPECTED_PATH.read_text()))
     if EXPECTED_PATH.exists()
     else {}

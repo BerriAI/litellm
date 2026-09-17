@@ -8,11 +8,10 @@ from __future__ import annotations
 from typing import Final
 
 import pytest
-
 from cost_matrix import (
-    _CASES_FILE,
-    _COST_MAP,
     CASES,
+    CASES_FILE,
+    COST_MAP,
     EXPECTED,
     FRONTIER_MODELS,
     CostMapEntry,
@@ -41,7 +40,7 @@ def test_expected_keys_match_derived_exact_cells() -> None:
 
 def test_deployments_reference_existing_map_keys() -> None:
     unknown: Final = sorted(
-        spec.map_key for spec in _CASES_FILE.deployments if spec.map_key not in _COST_MAP
+        spec.map_key for spec in CASES_FILE.deployments if spec.map_key not in COST_MAP
     )
     assert not unknown, f"deployments entries name map keys absent from cost_map.json: {unknown}"
 
@@ -55,9 +54,7 @@ def test_requires_rates_are_cost_map_fields() -> None:
 
 
 def test_no_two_entries_share_input_rate() -> None:
-    rates: Final = [
-        entry.input_cost_per_token for entry in _COST_MAP.values()
-    ]
+    rates: Final = tuple(entry.input_cost_per_token for entry in COST_MAP.values())
     assert len(rates) == len(set(rates)), (
         "two cost_map entries share input_cost_per_token; the suite relies on "
         "distinct rates so a wrong-model bill can never coincidentally match"
