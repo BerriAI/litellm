@@ -19,9 +19,10 @@ class ChatGPTConfig(OpenAIConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         custom_llm_provider: str = "openai",
+        authenticator: Authenticator | None = None,
     ) -> None:
         super().__init__()
-        self.authenticator = Authenticator()
+        self.authenticator = authenticator if authenticator is not None else Authenticator()
 
     def _get_openai_compatible_provider_info(
         self,
@@ -30,9 +31,9 @@ class ChatGPTConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
-        dynamic_api_base: Final = api_base or self.authenticator.get_api_base()
         if api_key:
-            return dynamic_api_base, api_key, custom_llm_provider
+            return api_base or self.authenticator.get_api_base(), api_key, custom_llm_provider
+        dynamic_api_base: Final = self.authenticator.get_api_base()
         try:
             dynamic_api_key: Final = self.authenticator.get_access_token()
         except GetAccessTokenError as e:
