@@ -3906,7 +3906,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "max by (api_provider) (litellm_provider_remaining_budget_metric)",
+          "expr": "min by (api_provider) (litellm_provider_remaining_budget_metric)",
           "legendFormat": "{{api_provider}}",
           "range": true,
           "refId": "A"
