@@ -10,6 +10,7 @@ from litellm.constants import DEEPGRAM_DEFAULT_API_BASE, DEEPGRAM_LISTEN_DEFAULT
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 _WEBSOCKET_SCHEMES: Final = MappingProxyType({"https": "wss", "http": "ws", "wss": "wss", "ws": "ws"})
+DEEPGRAM_LISTEN_CALLBACK_PARAMS: Final = frozenset({"callback", "callback_method"})
 
 
 class DeepgramException(BaseLLMException):
@@ -24,6 +25,10 @@ def deepgram_listen_websocket_target(api_base: str | None, query_string: str) ->
         query_string if params.get("model") else str(params.remove("model").add("model", DEEPGRAM_LISTEN_DEFAULT_MODEL))
     )
     return f"{websocket_url}?{query}"
+
+
+def deepgram_listen_callback_params(query_string: str) -> tuple[str, ...]:
+    return tuple(sorted(DEEPGRAM_LISTEN_CALLBACK_PARAMS.intersection(httpx.QueryParams(query_string).keys())))
 
 
 def deepgram_listen_model(upstream_url: str) -> str:

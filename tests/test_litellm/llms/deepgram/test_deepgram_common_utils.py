@@ -7,6 +7,7 @@ import pytest
 import litellm
 from litellm.llms.deepgram.common_utils import (
     deepgram_listen_audio_seconds,
+    deepgram_listen_callback_params,
     deepgram_listen_model,
     deepgram_listen_transcript,
     deepgram_listen_websocket_target,
@@ -66,6 +67,24 @@ def _metadata(duration: object) -> dict[str, object]:
 )
 def test_deepgram_listen_websocket_target(api_base: str | None, query_string: str, expected: str):
     assert deepgram_listen_websocket_target(api_base=api_base, query_string=query_string) == expected
+
+
+@pytest.mark.parametrize(
+    ("query_string", "expected"),
+    [
+        pytest.param("model=nova-3&encoding=linear16", (), id="no callback"),
+        pytest.param("model=nova-3&callback=https%3A%2F%2Fevil.example%2Fsink", ("callback",), id="callback"),
+        pytest.param(
+            "callback_method=put&model=nova-3&callback=wss%3A%2F%2Fevil.example",
+            ("callback", "callback_method"),
+            id="callback and method",
+        ),
+        pytest.param("model=nova-3&callback_method=put", ("callback_method",), id="method alone"),
+        pytest.param("model=nova-3&callbacks=x&my_callback=y", (), id="only exact names match"),
+    ],
+)
+def test_deepgram_listen_callback_params(query_string: str, expected: tuple[str, ...]):
+    assert deepgram_listen_callback_params(query_string) == expected
 
 
 @pytest.mark.parametrize(

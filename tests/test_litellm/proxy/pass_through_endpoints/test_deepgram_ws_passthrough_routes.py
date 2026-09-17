@@ -207,6 +207,30 @@ async def test_deepgram_listen_closes_cleanly_when_provider_credentials_missing(
     assert relay.calls == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("model=nova-3&callback=https%3A%2F%2Fsink.example%2Fdg", id="http callback"),
+        pytest.param("callback=wss%3A%2F%2Fsink.example&callback_method=put&model=nova-3", id="ws callback"),
+    ],
+)
+async def test_deepgram_listen_rejects_callback_delivery_that_would_go_unbilled(query, monkeypatch):
+    """With ``callback`` set, Deepgram sends every Results and Metadata frame to the caller's URL and only a
+    request id down this socket, so the proxy would meter zero seconds of audio; refuse before contacting Deepgram."""
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    websocket = _FakeWebSocket("/deepgram/v1/listen", query)
+
+    with patch(GET_CREDENTIALS, return_value="dg-provider-key"):
+        relay = await _serve(websocket)
+
+    assert relay.calls == []
+    assert websocket.closed is not None
+    assert websocket.closed[0] == 1008
+    assert "callback" in websocket.closed[1]
+    assert "dg-provider-key" not in websocket.closed[1]
+
+
 def _app_with_relay(relay: _FakeRelay) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -226,6 +250,27 @@ def test_deepgram_listen_rejects_connections_without_a_litellm_key():
     assert disconnect.value.code == 1008
     assert relay.calls == []
     get_credentials.assert_not_called()
+
+
+def test_deepgram_listen_callback_rejection_reaches_the_client_as_a_policy_close(monkeypatch):
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    relay = _FakeRelay()
+    client = TestClient(_app_with_relay(relay))
+
+    with (
+        patch(GET_CREDENTIALS, return_value="dg-provider-key"),
+        patch(USER_API_KEY_AUTH, new=AsyncMock(return_value=UserAPIKeyAuth(api_key="hashed"))),
+    ):
+        with pytest.raises(WebSocketDisconnect) as disconnect:
+            with client.websocket_connect(
+                "/deepgram/v1/listen?model=nova-3&callback=https%3A%2F%2Fsink.example%2Fdg",
+                headers={"Authorization": "Bearer sk-litellm-virtual"},
+            ) as connection:
+                connection.receive_text()
+
+    assert disconnect.value.code == 1008
+    assert "callback" in disconnect.value.reason
+    assert relay.calls == []
 
 
 def test_deepgram_listen_authenticates_the_litellm_key_and_relays_to_deepgram(monkeypatch):
