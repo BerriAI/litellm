@@ -1,9 +1,9 @@
 use base64::Engine;
 use bytes::Buf;
 use futures_util::{Stream, StreamExt};
-use litellm_framing::Framer;
-use litellm_framing::aws_event_stream::{AwsEventStreamFrame, AwsEventStreamFramer};
-use litellm_framing::sse::{SseFrame, SseFramer};
+use litellm_framing::aws_event_stream::Message;
+use litellm_framing::sse::SseFrame;
+use litellm_framing::{aws_event_stream, sse};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -152,14 +152,13 @@ struct BedrockChunkPayload {
 }
 
 pub fn decode_anthropic_sse_frame(frame: SseFrame) -> Result<AnthropicMessagesStreamEvent, Error> {
-    let data = frame.data.ok_or(Error::MissingStreamData)?;
-    serde_json::from_str(&data).map_err(|error| Error::InvalidStreamEvent(error.to_string()))
+    serde_json::from_str(&frame.data).map_err(|error| Error::InvalidStreamEvent(error.to_string()))
 }
 
 pub fn decode_bedrock_anthropic_frame(
-    frame: AwsEventStreamFrame,
+    frame: Message,
 ) -> Result<AnthropicMessagesStreamEvent, Error> {
-    let payload: BedrockChunkPayload = serde_json::from_slice(&frame.payload)
+    let payload: BedrockChunkPayload = serde_json::from_slice(frame.payload())
         .map_err(|error| Error::InvalidBedrockPayload(error.to_string()))?;
     let event = base64::engine::general_purpose::STANDARD
         .decode(payload.bytes)
@@ -175,7 +174,7 @@ where
     B: Buf + Send,
     E: std::error::Error + Send + Sync + 'static,
 {
-    SseFramer.frame(input).map(|frame| {
+    sse::frames(input).map(|frame| {
         let frame = frame.map_err(|error| Error::StreamFraming(error.to_string()))?;
         decode_anthropic_sse_frame(frame)
     })
@@ -189,7 +188,7 @@ where
     B: Buf + Send,
     E: std::error::Error + Send + Sync + 'static,
 {
-    AwsEventStreamFramer.frame(input).map(|frame| {
+    aws_event_stream::frames(input).map(|frame| {
         let frame = frame.map_err(|error| Error::StreamFraming(error.to_string()))?;
         decode_bedrock_anthropic_frame(frame)
     })
@@ -235,10 +234,8 @@ mod tests {
     fn decodes_citations_delta_events() {
         let event = decode_anthropic_sse_frame(SseFrame {
             event: Some("content_block_delta".into()),
-            data: Some(
-                r#"{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"type":"char_location"}}}"#
-                    .into(),
-            ),
+            data: r#"{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"type":"char_location"}}}"#
+                .into(),
             id: None,
             retry: None,
         })

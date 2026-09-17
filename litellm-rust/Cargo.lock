@@ -2048,7 +2048,6 @@ dependencies = [
  "criterion",
  "futures-util",
  "rstest",
- "sse-stream",
  "thiserror 2.0.19",
  "tokio",
 ]
@@ -3439,19 +3438,6 @@ dependencies = [
  "nom",
  "serde",
  "unicode-segmentation",
-]
-
-[[package]]
-name = "sse-stream"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c25ac7aff0abd1dbc474536e40416e1102c7dd9bfba0b9861c6d357f835dcfb4"
-dependencies = [
- "bytes",
- "futures-util",
- "http-body 1.1.0",
- "http-body-util",
- "pin-project-lite",
 ]
 
 [[package]]

@@ -8,9 +8,7 @@ use bytes::Bytes;
 use criterion::measurement::{Measurement, ValueFormatter};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use futures_util::TryStreamExt;
-use litellm_framing::Framer;
-use litellm_framing::aws_event_stream::AwsEventStreamFramer;
-use litellm_framing::sse::SseFramer;
+use litellm_framing::{aws_event_stream, sse};
 use tokio::runtime::Runtime;
 
 struct CountingAllocator;
@@ -157,7 +155,7 @@ fn framing<M: Measurement>(c: &mut Criterion<M>, group_name: &str) {
                         let input =
                             futures_util::stream::iter(chunks.into_iter().map(Ok::<_, io::Error>));
                         runtime
-                            .block_on(AwsEventStreamFramer.frame(input).try_collect::<Vec<_>>())
+                            .block_on(aws_event_stream::frames(input).try_collect::<Vec<_>>())
                             .expect("bedrock frames decode")
                     },
                     BatchSize::SmallInput,
@@ -177,7 +175,7 @@ fn framing<M: Measurement>(c: &mut Criterion<M>, group_name: &str) {
                         let input =
                             futures_util::stream::iter(chunks.into_iter().map(Ok::<_, io::Error>));
                         runtime
-                            .block_on(SseFramer.frame(input).try_collect::<Vec<_>>())
+                            .block_on(sse::frames(input).try_collect::<Vec<_>>())
                             .expect("sse events decode")
                     },
                     BatchSize::SmallInput,

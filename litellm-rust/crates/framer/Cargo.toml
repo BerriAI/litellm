@@ -8,14 +8,13 @@ repository.workspace = true
 [features]
 default = ["aws", "sse"]
 aws = ["dep:aws-smithy-eventstream", "dep:aws-smithy-types"]
-sse = ["dep:sse-stream"]
+sse = []
 
 [dependencies]
 aws-smithy-eventstream = { version = "=0.61.1", optional = true }
 aws-smithy-types = { version = "1.6.1", optional = true }
 bytes = "1"
 futures-util.workspace = true
-sse-stream = { version = "=0.2.6", optional = true }
 thiserror.workspace = true
 
 [dev-dependencies]

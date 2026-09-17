@@ -18,8 +18,6 @@ pub enum Error {
     Headers(#[from] crate::http_utils::HeaderError),
     #[error("stream framing failed: {0}")]
     StreamFraming(String),
-    #[error("Anthropic SSE frame has no data")]
-    MissingStreamData,
     #[error("Anthropic stream event is invalid: {0}")]
     InvalidStreamEvent(String),
     #[error("Bedrock event payload is invalid: {0}")]
@@ -46,7 +44,6 @@ impl Error {
             self,
             Self::InvalidResponse(_)
                 | Self::StreamFraming(_)
-                | Self::MissingStreamData
                 | Self::InvalidStreamEvent(_)
                 | Self::InvalidBedrockPayload(_)
                 | Self::InvalidBedrockBase64(_)
