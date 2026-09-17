@@ -7,7 +7,9 @@ use litellm_core::ocr::LiteLLMOcrResponse;
 use litellm_core::ocr::hooks::OcrPreCallRequest;
 use litellm_python_interop::to_py_preserving_errors as to_py;
 
-use crate::lifecycle::LegacyPythonLogger;
+use litellm_python_api::legacy::logger::LegacyCallbacks;
+
+use crate::lifecycle::PythonLogger;
 
 pub(super) struct OcrLoggingFields {
     model: String,
@@ -53,7 +55,7 @@ pub(super) trait OcrLogger {
     ) -> PyResult<()>;
 }
 
-impl OcrLogger for LegacyPythonLogger {
+impl OcrLogger for PythonLogger {
     fn update_ocr(
         &self,
         py: Python<'_>,

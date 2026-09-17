@@ -4,7 +4,8 @@ use std::task::Poll;
 use futures_util::future::{AbortHandle, Abortable};
 use litellm_python_api as python_api;
 use litellm_python_api::DeploymentHooks;
-pub(crate) use litellm_python_api::LegacyPythonLogger;
+use litellm_python_api::legacy::logger::LegacyCallbacks;
+pub(crate) use litellm_python_api::PythonLogger;
 #[cfg(test)]
 use litellm_bridge::protocol::HostCallFuture;
 use litellm_bridge::protocol::{
@@ -286,7 +287,7 @@ impl<R: PythonRoute> Drop for PythonLifecycle<R> {
 pub(crate) struct PythonCallState {
     pub args: Py<PyTuple>,
     pub kwargs: Py<PyDict>,
-    pub logger: Option<LegacyPythonLogger>,
+    pub logger: Option<PythonLogger>,
     pub start: Py<PyAny>,
     pub end: Option<Py<PyAny>>,
     pub response: Option<Py<PyAny>>,
@@ -398,7 +399,7 @@ impl PythonCallState {
         })
     }
 
-    pub fn logger(&self) -> PyResult<&LegacyPythonLogger> {
+    pub fn logger(&self) -> PyResult<&PythonLogger> {
         self.logger.as_ref().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err("call logging is not initialized")
         })
@@ -406,7 +407,7 @@ impl PythonCallState {
 
     pub fn setup(&mut self, py: Python<'_>) -> PyResult<()> {
         self.start = now(py)?;
-        self.internal = python_api::is_internal_call(py)?;
+        self.internal = python_api::legacy::logger::is_internal_call(py)?;
         let result = python_api::setup(
             py,
             self.call_type,
@@ -532,7 +533,7 @@ impl PythonCallState {
 }
 
 struct PendingSuccess {
-    logger: LegacyPythonLogger,
+    logger: PythonLogger,
     response: Option<Py<PyAny>>,
     start: Py<PyAny>,
     end: Option<Py<PyAny>>,

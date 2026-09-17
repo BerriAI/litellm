@@ -8,6 +8,8 @@ use litellm_python_interop::{
     from_py_preserving_errors as from_py, to_py_preserving_errors as to_py,
 };
 
+use litellm_python_api::legacy::logger::LegacyCallbacks;
+
 use super::callbacks::{self, OcrLogger};
 use super::errors::to_pyerr as ocr_error_to_pyerr;
 use super::project::{ProjectedOcrFields, admitted_call, project_request};

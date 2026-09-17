@@ -4,6 +4,7 @@
 
 pub mod dispatch;
 pub mod execute;
+pub mod logger;
 pub mod markers;
 pub mod targets;
 pub mod vocabulary;

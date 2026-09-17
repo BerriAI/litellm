@@ -17,7 +17,7 @@ impl<'py> CredentialEntry<'py> {
 pub fn prepare<'py>(
     py: Python<'py>,
     kwargs: &Bound<'py, PyDict>,
-    logger: &crate::LegacyPythonLogger,
+    logger: &crate::PythonLogger,
 ) -> PyResult<Bound<'py, PyDict>> {
     let arguments = kwargs.copy()?;
     arguments.set_item("litellm_logging_obj", logger.object(py))?;
