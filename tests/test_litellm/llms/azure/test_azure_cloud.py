@@ -1,7 +1,7 @@
 import pytest
 
 from litellm.constants import DEFAULT_AZURE_AUTHORITY_HOST
-from litellm.litellm_core_utils.azure_cloud import get_azure_cloud, normalize_azure_authority_host
+from litellm.llms.azure.azure_cloud import get_azure_cloud, normalize_azure_authority_host
 
 
 @pytest.mark.parametrize(

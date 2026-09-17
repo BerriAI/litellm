@@ -22,7 +22,7 @@ from fastapi_sso.sso.microsoft import MicrosoftSSO
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_AZURE_AUTHORITY_HOST
-from litellm.litellm_core_utils.azure_cloud import normalize_azure_authority_host
+from litellm.llms.azure.azure_cloud import get_azure_cloud, normalize_azure_authority_host
 
 
 class CustomMicrosoftSSO(MicrosoftSSO):
@@ -30,8 +30,8 @@ class CustomMicrosoftSSO(MicrosoftSSO):
     Microsoft SSO subclass that allows overriding default endpoints via environment variables.
 
     Supports:
-    - AZURE_AUTHORITY_HOST (Entra authority the default authorization and token endpoints are built on,
-      e.g. https://login.microsoftonline.us for Azure Government)
+    - AZURE_AUTHORITY_HOST (Entra authority the default authorization, token and userinfo endpoints are
+      built on, e.g. https://login.microsoftonline.us for Azure Government)
     - MICROSOFT_AUTHORIZATION_ENDPOINT
     - MICROSOFT_TOKEN_ENDPOINT
     - MICROSOFT_USERINFO_ENDPOINT
@@ -71,7 +71,8 @@ class CustomMicrosoftSSO(MicrosoftSSO):
             custom_authorization_endpoint or f"{authority_host}/{self.tenant}/oauth2/v2.0/authorize"
         )
         token_endpoint: Final = custom_token_endpoint or f"{authority_host}/{self.tenant}/oauth2/v2.0/token"
-        userinfo_endpoint: Final = custom_userinfo_endpoint or f"https://graph.microsoft.com/{self.version}/me"
+        graph_base: Final = get_azure_cloud(authority_host).microsoft_graph_base
+        userinfo_endpoint: Final = custom_userinfo_endpoint or f"{graph_base}/{self.version}/me"
 
         if custom_authorization_endpoint or custom_token_endpoint or custom_userinfo_endpoint:
             verbose_proxy_logger.debug(

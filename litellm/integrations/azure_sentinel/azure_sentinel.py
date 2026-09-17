@@ -29,8 +29,8 @@ from litellm.integrations.batch_utils import (
     undelivered_after_http_error,
 )
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.litellm_core_utils.azure_cloud import get_azure_cloud, normalize_azure_authority_host
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.azure.azure_cloud import get_azure_cloud, normalize_azure_authority_host
 from litellm.llms.custom_httpx.http_handler import (
     MaskedHTTPStatusError,
     get_async_httpx_client,

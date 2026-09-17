@@ -6523,19 +6523,23 @@ class TestCustomMicrosoftSSO:
             )
 
     @pytest.mark.parametrize(
-        "authority_host, expected_authority",
+        "authority_host, expected_authority, expected_graph_base",
         [
-            ("https://login.microsoftonline.us", "https://login.microsoftonline.us"),
-            ("login.microsoftonline.us/", "https://login.microsoftonline.us"),
-            ("https://login.chinacloudapi.cn", "https://login.chinacloudapi.cn"),
+            ("https://login.microsoftonline.us", "https://login.microsoftonline.us", "https://graph.microsoft.us"),
+            ("login.microsoftonline.us/", "https://login.microsoftonline.us", "https://graph.microsoft.us"),
+            (
+                "https://login.chinacloudapi.cn",
+                "https://login.chinacloudapi.cn",
+                "https://microsoftgraph.chinacloudapi.cn",
+            ),
         ],
     )
     @pytest.mark.asyncio
     async def test_custom_microsoft_sso_builds_default_endpoints_on_azure_authority_host(
-        self, monkeypatch, authority_host, expected_authority
+        self, monkeypatch, authority_host, expected_authority, expected_graph_base
     ):
-        """One AZURE_AUTHORITY_HOST has to move both Entra endpoints; before, a sovereign tenant had to
-        spell out two full override URLs to stop the login from going to the commercial cloud."""
+        """One AZURE_AUTHORITY_HOST has to move all three endpoints to the same cloud; before, a sovereign
+        tenant had to spell out three full override URLs to stop the login from going to the commercial cloud."""
         for key in ("MICROSOFT_AUTHORIZATION_ENDPOINT", "MICROSOFT_TOKEN_ENDPOINT", "MICROSOFT_USERINFO_ENDPOINT"):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("AZURE_AUTHORITY_HOST", authority_host)
@@ -6550,6 +6554,7 @@ class TestCustomMicrosoftSSO:
 
         assert discovery["authorization_endpoint"] == f"{expected_authority}/test-tenant/oauth2/v2.0/authorize"
         assert discovery["token_endpoint"] == f"{expected_authority}/test-tenant/oauth2/v2.0/token"
+        assert discovery["userinfo_endpoint"] == f"{expected_graph_base}/v1.0/me"
 
     @pytest.mark.asyncio
     async def test_custom_microsoft_sso_explicit_endpoint_outranks_azure_authority_host(self, monkeypatch):

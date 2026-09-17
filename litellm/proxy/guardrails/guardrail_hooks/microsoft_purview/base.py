@@ -10,11 +10,11 @@ from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_AZURE_AUTHORITY_HOST
-from litellm.litellm_core_utils.azure_cloud import get_azure_cloud, normalize_azure_authority_host
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.llms.azure.azure_cloud import get_azure_cloud, normalize_azure_authority_host
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
