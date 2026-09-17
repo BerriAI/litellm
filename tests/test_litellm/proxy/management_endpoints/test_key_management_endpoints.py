@@ -19683,6 +19683,108 @@ async def test_project_detachment_uses_effective_project_for_validation(project_
         assert expected in str(exc.value.detail)
 
 
+def _project_assignment_prisma() -> MagicMock:
+    database = MagicMock()
+    database.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id="team-lit-5823", members=[])
+    )
+    return database
+
+
+@pytest.mark.asyncio
+async def test_project_assignment_to_unassigned_key_on_same_team():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-assign-token", project_id=None, team_id="team-lit-5823", models=["model-orbit"]
+    )
+    cache: Final = await _cache_with_project("project-orbit", ["model-orbit"])
+
+    await _validate_update_key_data(
+        UpdateKeyRequest(key=existing.token, project_id="project-orbit"), existing,
+        UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        None, False, _project_assignment_prisma(), cache,
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_assignment_rejects_project_on_another_team():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-assign-token", project_id=None, team_id="team-other", models=["model-orbit"]
+    )
+    cache: Final = await _cache_with_project("project-orbit", ["model-orbit"])
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            UpdateKeyRequest(key=existing.token, project_id="project-orbit"), existing,
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            None, False, _project_assignment_prisma(), cache,
+        )
+    assert exc.value.status_code == 400
+    assert "team" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_project_assignment_rejects_key_with_no_team():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-assign-token", project_id=None, team_id=None, models=["model-orbit"]
+    )
+    cache: Final = await _cache_with_project("project-orbit", ["model-orbit"])
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            UpdateKeyRequest(key=existing.token, project_id="project-orbit"), existing,
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            None, False, _project_assignment_prisma(), cache,
+        )
+    assert exc.value.status_code == 400
+    assert "team" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_project_assignment_rejects_nonexistent_project():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-assign-token", project_id=None, team_id="team-lit-5823", models=["model-orbit"]
+    )
+    database: Final = _project_assignment_prisma()
+    database.db.litellm_projecttable.find_unique = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            UpdateKeyRequest(key=existing.token, project_id="project-ghost"), existing,
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            None, False, database, UserApiKeyCache(),
+        )
+    assert exc.value.status_code == 404
+    assert "Project not found" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_project_assignment_validates_existing_models_against_project():
+    existing: Final = LiteLLM_VerificationToken(
+        token="project-assign-token", project_id=None, team_id="team-lit-5823", models=["model-elsewhere"]
+    )
+    cache: Final = await _cache_with_project("project-orbit", ["model-orbit"])
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            UpdateKeyRequest(key=existing.token, project_id="project-orbit"), existing,
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            None, False, _project_assignment_prisma(), cache,
+        )
+    assert exc.value.status_code == 400
+    assert "not in project's allowed models" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_includes_new_project_assignment():
+    existing: Final = LiteLLM_VerificationToken(token="project-assign-token", project_id=None)
+
+    result: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest(key=existing.token, project_id="project-orbit"), existing_key_row=existing,
+    )
+
+    assert result["project_id"] == "project-orbit"
+
+
 @pytest.mark.asyncio
 async def test_key_creator_cannot_detach_project_without_admin_access():
     existing: Final = LiteLLM_VerificationToken(

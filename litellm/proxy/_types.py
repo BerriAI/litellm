@@ -1325,7 +1325,7 @@ class UpdateKeyRequest(KeyRequestBase):
 
     project_id: str | None = Field(
         default=None,
-        description="Omit to retain the project, or send null to detach. Assigning a different project is not supported.",
+        description="Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is not supported.",
     )
 
     @model_validator(mode="before")
