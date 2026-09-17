@@ -1,8 +1,17 @@
+"""Tests for scripts/sync_cheaperinference_models.py.
+
+``fixtures/cheaperinference_sync/models.json`` is a recorded ``GET /v1/models``
+response, trimmed to the fields the sync reads, with the gateway's own
+``pricing_version`` and ``pricing_checked_at`` kept for provenance.
+"""
+
 import importlib.util
 import json
 from pathlib import Path
 
 import pytest
+
+from litellm.litellm_core_utils.llm_cost_calc.utils import _parse_above_token_threshold
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "sync_cheaperinference_models.py"
@@ -88,39 +97,44 @@ def test_a_new_catalog_model_is_flagged_but_never_auto_added() -> None:
     assert "cheaperinference/seedance-2.0" not in outcome.cost_map
 
 
-def test_a_model_losing_its_pricing_tier_drops_the_above_272k_fields() -> None:
+def test_a_model_losing_its_pricing_tier_drops_its_above_threshold_fields() -> None:
     with_stale_tier = json.loads(json.dumps(REGISTERED_CHEAPERINFERENCE))
     with_stale_tier["cheaperinference/kimi-k3"]["input_cost_per_token_above_272k_tokens"] = 5.0
     outcome = sync.compute_sync(with_stale_tier, RECORDED_CATALOG)
     assert "input_cost_per_token_above_272k_tokens" not in outcome.cost_map["cheaperinference/kimi-k3"]
 
 
-def test_null_context_length_and_max_output_tokens_do_not_overwrite_curated_limits() -> None:
-    """gpt-oss-120b reports null limits in the live catalog, so the curated ones must survive."""
+def test_a_null_limit_in_the_catalog_never_overwrites_the_registry() -> None:
+    """gpt-oss-120b reports a null max_output_tokens, so no output limit may appear."""
     registered = json.loads(json.dumps(REGISTERED_CHEAPERINFERENCE))
-    assert "cheaperinference/gpt-oss-120b" in registered
-    curated_max_input = registered["cheaperinference/gpt-oss-120b"].get("max_input_tokens")
+    assert "max_output_tokens" not in registered["cheaperinference/gpt-oss-120b"]
+
     outcome = sync.compute_sync(registered, RECORDED_CATALOG)
-    assert outcome.cost_map["cheaperinference/gpt-oss-120b"].get("max_input_tokens") == curated_max_input
+
+    assert "max_output_tokens" not in outcome.cost_map["cheaperinference/gpt-oss-120b"]
+    assert "max_tokens" not in outcome.cost_map["cheaperinference/gpt-oss-120b"]
 
 
 @pytest.mark.parametrize(
     "threshold,band",
     [
         (272_000, "above_272k_tokens"),
-        (271_999, "above_272k_tokens"),
         (200_000, "above_200k_tokens"),
         (128_000, "above_128k_tokens"),
         (512_000, "above_512k_tokens"),
+        (271_999, "above_271999_tokens"),
+        (300_000, "above_300000_tokens"),
     ],
 )
-def test_catalog_thresholds_map_to_the_matching_cost_map_band(threshold: int, band: str) -> None:
+def test_a_catalog_threshold_names_its_own_band(threshold: int, band: str) -> None:
     assert sync.band_for_threshold(threshold) == band
 
 
-@pytest.mark.parametrize("threshold", [0, 100_000, 300_000, 999_999])
-def test_a_threshold_outside_every_band_maps_to_nothing(threshold: int) -> None:
-    assert sync.band_for_threshold(threshold) is None
+@pytest.mark.parametrize("threshold", [100_000, 128_000, 200_000, 271_999, 272_000, 300_000, 512_000, 999_999])
+def test_litellm_reads_back_the_exact_threshold_from_the_generated_field(threshold: int) -> None:
+    field = f"input_cost_per_token_{sync.band_for_threshold(threshold)}"
+
+    assert _parse_above_token_threshold(field) == threshold
 
 
 def _catalog_with_threshold(model_id: str, threshold: int) -> list:
@@ -134,16 +148,14 @@ def _catalog_with_threshold(model_id: str, threshold: int) -> list:
     return sync.load_catalog(json.dumps(entries).encode())
 
 
-def test_a_threshold_with_no_band_leaves_the_entry_untouched_and_is_flagged() -> None:
+def test_a_threshold_outside_the_k_form_bands_is_written_at_its_exact_value() -> None:
     catalog = _catalog_with_threshold("gpt-5.6-luna", 300_000)
-    perturbed = json.loads(json.dumps(REGISTERED_CHEAPERINFERENCE))
-    perturbed["cheaperinference/gpt-5.6-luna"]["input_cost_per_token"] = 999.0
 
-    outcome = sync.compute_sync(perturbed, catalog)
+    outcome = sync.compute_sync(REGISTERED_CHEAPERINFERENCE, catalog)
 
-    assert outcome.unmappable_thresholds == ("cheaperinference/gpt-5.6-luna (threshold 300000)",)
-    assert outcome.updated == ()
-    assert outcome.cost_map["cheaperinference/gpt-5.6-luna"]["input_cost_per_token"] == 999.0
+    entry = outcome.cost_map["cheaperinference/gpt-5.6-luna"]
+    assert entry["input_cost_per_token_above_300000_tokens"] == pytest.approx(0.16e-06)
+    assert "input_cost_per_token_above_271999_tokens" not in entry
 
 
 def test_a_moved_threshold_rewrites_the_band_and_drops_the_old_one() -> None:
@@ -153,8 +165,7 @@ def test_a_moved_threshold_rewrites_the_band_and_drops_the_old_one() -> None:
 
     entry = outcome.cost_map["cheaperinference/gpt-5.6-luna"]
     assert entry["input_cost_per_token_above_200k_tokens"] == pytest.approx(0.16e-06)
-    assert "input_cost_per_token_above_272k_tokens" not in entry
-    assert outcome.unmappable_thresholds == ()
+    assert "input_cost_per_token_above_271999_tokens" not in entry
 
 
 def test_warnings_name_every_kind_of_catalog_drift() -> None:
@@ -162,13 +173,11 @@ def test_warnings_name_every_kind_of_catalog_drift() -> None:
         cost_map={},
         unpriced_new_models=("cheaperinference/brand-new",),
         missing_from_catalog=("cheaperinference/retired",),
-        unmappable_thresholds=("cheaperinference/odd (threshold 300000)",),
     )
 
     assert outcome.warnings == (
         "new in the catalog, not registered: cheaperinference/brand-new",
         "registered but gone from the catalog: cheaperinference/retired",
-        "long-context threshold matches no cost-map band, entry left untouched: cheaperinference/odd (threshold 300000)",
     )
 
 

@@ -7,9 +7,8 @@ generated PR body; ``--write`` applies the changes to the root cost map and its 
 Policy highlights:
 - Only price fields (input/output/cache read/cache write, and their long-context variants) and the two
   limit fields (max_input_tokens, max_output_tokens/max_tokens) are synced from the catalog.
-- The catalog's own long-context threshold picks the cost-map band. A threshold that matches no band
-  litellm understands leaves that entry untouched and is surfaced as a warning, so a moved threshold can
-  never be written out under the wrong band.
+- The catalog's own long-context threshold names the cost-map band, at its exact value, so a moved
+  threshold is never rounded to a neighbouring band.
 - Capability flags (supports_vision, supports_reasoning, supports_tool_choice, and so on), litellm_provider,
   mode, source, and supported_endpoints are curated by hand and are never touched by this script.
 - A catalog model with no matching registry entry is surfaced as a warning for a human to add, never
@@ -82,32 +81,33 @@ BASE_PRICE_FIELDS: Final = (
     "cache_read_input_token_cost",
     "cache_creation_input_token_cost",
 )
-TIERED_BANDS: Final = {
+# litellm takes the threshold from the field name, in either the `_above_128k_tokens`
+# or the `_above_271999_tokens` spelling (litellm/litellm_core_utils/llm_cost_calc/utils.py).
+# The k-form is reused for the thresholds that already have one in the cost map, so a
+# catalog threshold of any size is written out at its exact value.
+CANONICAL_BANDS: Final = {
     128_000: "above_128k_tokens",
     200_000: "above_200k_tokens",
     256_000: "above_256k_tokens",
     272_000: "above_272k_tokens",
     512_000: "above_512k_tokens",
 }
-BAND_TOLERANCE_TOKENS: Final = 1
-TIERED_PRICE_FIELDS: Final = tuple(
-    f"{field}_{band}" for band in TIERED_BANDS.values() for field in BASE_PRICE_FIELDS
-)
-SYNCED_PRICE_FIELDS: Final = BASE_PRICE_FIELDS + TIERED_PRICE_FIELDS
+TIERED_FIELD_PREFIXES: Final = tuple(f"{field}_above_" for field in BASE_PRICE_FIELDS)
 
 
 def per_token(price_per_million: str) -> float:
     return float(f"{float(price_per_million) / 1e6:.6g}")
 
 
-def band_for_threshold(threshold: int) -> str | None:
-    for supported, band in TIERED_BANDS.items():
-        if abs(threshold - supported) <= BAND_TOLERANCE_TOKENS:
-            return band
-    return None
+def band_for_threshold(threshold: int) -> str:
+    return CANONICAL_BANDS.get(threshold, f"above_{threshold}_tokens")
 
 
-def _price_fields(pricing: CatalogPricing) -> tuple[RegistryEntry, int | None]:
+def is_tiered_price_field(name: str) -> bool:
+    return name.endswith("_tokens") and name.startswith(TIERED_FIELD_PREFIXES)
+
+
+def _price_fields(pricing: CatalogPricing) -> RegistryEntry:
     base: Final[RegistryEntry] = {
         "input_cost_per_token": per_token(pricing.input_per_million),
         "output_cost_per_token": per_token(pricing.output_per_million),
@@ -115,18 +115,16 @@ def _price_fields(pricing: CatalogPricing) -> tuple[RegistryEntry, int | None]:
         "cache_creation_input_token_cost": per_token(pricing.cache_write_input_per_million),
     }
     if pricing.above_threshold is None:
-        return base, None
+        return base
     above: Final = pricing.above_threshold
     band: Final = band_for_threshold(above.input_token_price_threshold)
-    if band is None:
-        return base, above.input_token_price_threshold
     return {
         **base,
         f"input_cost_per_token_{band}": per_token(above.input_per_million),
         f"output_cost_per_token_{band}": per_token(above.output_per_million),
         f"cache_read_input_token_cost_{band}": per_token(above.cache_read_input_per_million),
         f"cache_creation_input_token_cost_{band}": per_token(above.cache_write_input_per_million),
-    }, None
+    }
 
 
 def _limit_fields(model: CatalogModel) -> RegistryEntry:
@@ -139,9 +137,8 @@ def _limit_fields(model: CatalogModel) -> RegistryEntry:
     return fields
 
 
-def _synced_fields(model: CatalogModel) -> tuple[RegistryEntry, int | None]:
-    prices, unmappable_threshold = _price_fields(model.pricing)
-    return {**prices, **_limit_fields(model)}, unmappable_threshold
+def _synced_fields(model: CatalogModel) -> RegistryEntry:
+    return {**_price_fields(model.pricing), **_limit_fields(model)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,7 +147,6 @@ class SyncOutcome:
     updated: tuple[str, ...] = ()
     unpriced_new_models: tuple[str, ...] = ()
     missing_from_catalog: tuple[str, ...] = ()
-    unmappable_thresholds: tuple[str, ...] = ()
 
     @property
     def has_changes(self) -> bool:
@@ -161,7 +157,6 @@ class SyncOutcome:
         return (
             tuple(f"new in the catalog, not registered: {key}" for key in self.unpriced_new_models)
             + tuple(f"registered but gone from the catalog: {key}" for key in self.missing_from_catalog)
-            + tuple(f"long-context threshold matches no cost-map band, entry left untouched: {key}" for key in self.unmappable_thresholds)
         )
 
 
@@ -171,7 +166,6 @@ def compute_sync(cost_map: CostMap, catalog: Sequence[CatalogModel]) -> SyncOutc
 
     updated: Final[list[str]] = []
     missing: Final[list[str]] = []
-    unmappable: Final[list[str]] = []
     result: Final[CostMap] = dict(cost_map)
 
     for model_id, key in sorted(registry_ids.items()):
@@ -182,11 +176,8 @@ def compute_sync(cost_map: CostMap, catalog: Sequence[CatalogModel]) -> SyncOutc
         entry = result.get(key)
         if not isinstance(entry, dict):
             continue
-        desired, unmappable_threshold = _synced_fields(model)
-        if unmappable_threshold is not None:
-            unmappable.append(f"{key} (threshold {unmappable_threshold})")
-            continue
-        stale_tiered: Final = tuple(f for f in TIERED_PRICE_FIELDS if f not in desired)
+        desired: Final = _synced_fields(model)
+        stale_tiered: Final = tuple(f for f in entry if is_tiered_price_field(f) and f not in desired)
         changes: Final = tuple(
             f"{name}: {entry.get(name)!r} -> {value!r}" for name, value in desired.items() if entry.get(name) != value
         ) + tuple(f"{name}: {entry[name]!r} removed (not priced in that band any more)" for name in stale_tiered if name in entry)
@@ -205,7 +196,6 @@ def compute_sync(cost_map: CostMap, catalog: Sequence[CatalogModel]) -> SyncOutc
         updated=tuple(updated),
         unpriced_new_models=unpriced_new,
         missing_from_catalog=tuple(sorted(missing)),
-        unmappable_thresholds=tuple(sorted(unmappable)),
     )
 
 
@@ -224,15 +214,13 @@ def render_pr_body(outcome: SyncOutcome) -> str:
         f"{_section_block('New in the catalog, not yet registered (needs a human review for capabilities)', outcome.unpriced_new_models)}"
         "\n"
         f"{_section_block('Registered but missing from the catalog', outcome.missing_from_catalog)}"
-        "\n"
-        f"{_section_block('Long-context threshold with no matching cost-map band (left untouched)', outcome.unmappable_thresholds)}"
     )
 
 
 def render_summary(outcome: SyncOutcome) -> str:
     return (
         f"updated={len(outcome.updated)} new_unregistered={len(outcome.unpriced_new_models)} "
-        f"missing={len(outcome.missing_from_catalog)} unmappable_thresholds={len(outcome.unmappable_thresholds)}"
+        f"missing={len(outcome.missing_from_catalog)}"
     )
 
 
