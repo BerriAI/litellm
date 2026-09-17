@@ -44,7 +44,7 @@ class _BatchLineFailure(Exception):
 
     def __init__(self, error_payload: object) -> None:
         super().__init__(json.dumps(error_payload))
-        self._hidden_params: dict[str, object] = {}  # mutable-ok: mirrors the plain-dict _hidden_params contract on litellm response objects
+        self._hidden_params: dict[str, object] = {}  # mutable-ok: plain-dict contract like response _hidden_params
 
 
 def _as_object_mapping(value: object) -> Mapping[str, object] | None:
@@ -151,7 +151,7 @@ def _new_child_logging(
         dynamic_async_success_callbacks=parent.dynamic_async_success_callbacks,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # same as above
         dynamic_failure_callbacks=parent.dynamic_failure_callbacks,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # same as above
         dynamic_async_failure_callbacks=parent.dynamic_async_failure_callbacks,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # same as above
-        kwargs={"litellm_session_id": parent.litellm_session_id},  # mutable-ok: Logging's kwargs param takes a plain dict
+        kwargs={"litellm_session_id": parent.litellm_session_id},  # mutable-ok: kwargs takes a plain dict
     )
 
 
@@ -169,15 +169,22 @@ def _line_hidden_params(
     }
 
 
-def _optional_params_for_body(request_body: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: update_environment_variables takes a plain dict
+def _optional_params_for_body(
+    request_body: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: update_environment_variables takes a plain dict
     return {  # mutable-ok: same contract
         key: value for key, value in request_body.items() if key not in ("model", "messages", "input")
     }
 
 
+def _metadata_copy(params: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: dict out for litellm_params
+    metadata: Final = _as_object_mapping(params.get("metadata")) or _EMPTY_BODY
+    return {**metadata}  # mutable-ok: plain-dict copy
+
+
 async def _emit_line_event(
     entry: Mapping[str, object],
-    request_line: Mapping[str, object] | None,
+    requests_by_id: Mapping[str, Mapping[str, object]],
     batch: LiteLLMBatch,
     custom_llm_provider: _BatchLineProvider,
     parent: "Logging",
@@ -185,6 +192,7 @@ async def _emit_line_event(
     model_info: ModelInfo | None,
 ) -> bool:
     custom_id: Final = entry.get("custom_id") or entry.get("recordId")
+    request_line: Final = requests_by_id.get(custom_id if isinstance(custom_id, str) else "")
     request_body: Final = _request_body_for_entry(entry, request_line)
     status_code: Final = _line_status_code(entry, custom_llm_provider)
     call_type: Final = _call_type_for_request(request_line)
@@ -204,7 +212,7 @@ async def _emit_line_event(
         litellm_params={  # mutable-ok: update_environment_variables takes a plain dict
             **parent_params,
             "batch_parent_id": batch.id,
-            "metadata": dict(_as_object_mapping(parent_params.get("metadata")) or {}),  # mutable-ok: copy of the parent's metadata dict
+            "metadata": _metadata_copy(parent_params),
         },
         optional_params=_optional_params_for_body(request_body),
         model=child.model,
@@ -295,7 +303,7 @@ async def log_batch_line_items(
             litellm_params.get("_litellm_internal_model_credentials") if litellm_params else None
         )
         internal_mapping: Final = _as_object_mapping(internal_credentials)
-        fetch_params: Final[dict[str, object] | None] = (  # mutable-ok: _fetch_batch_managed_file_content requires a plain dict
+        fetch_params: Final[dict[str, object] | None] = (  # mutable-ok: file fetcher requires a plain dict
             dict(internal_mapping)  # mutable-ok: the file fetcher reads credential kwargs off a plain dict
             if internal_mapping is not None
             else litellm_params
@@ -315,19 +323,15 @@ async def log_batch_line_items(
         for content in (output_content, error_content):
             for entry in _output_entries(content):
                 try:
-                    entry_key = entry.get("custom_id") or entry.get("recordId")  # rebind-ok: per-iteration binding inside a loop cannot carry Final
-                    request_line = requests_by_id.get(entry_key if isinstance(entry_key, str) else "")  # rebind-ok: per-iteration binding inside a loop cannot carry Final
-                    line_emitted = await _emit_line_event(  # rebind-ok: same per-iteration binding
+                    emitted += await _emit_line_event(
                         entry=entry,
-                        request_line=request_line,
+                        requests_by_id=requests_by_id,
                         batch=batch,
                         custom_llm_provider=custom_llm_provider,
                         parent=parent,
                         model_name=model_name,
                         model_info=model_info,
                     )
-                    if line_emitted:
-                        emitted += 1
                 except Exception:  # noqa: BLE001  # one bad line must not drop the rest of the batch's line events
                     verbose_logger.exception(
                         "batch line item logging failed for entry, continuing with remaining lines. batch_id=%s",
