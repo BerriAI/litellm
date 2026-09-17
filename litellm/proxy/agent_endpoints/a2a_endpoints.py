@@ -176,14 +176,15 @@ def _forwarding_headers(
     agent_extra_headers: Mapping[str, str] | None,
     backend_auth_header: Mapping[str, str] | None,
 ) -> dict[str, str] | None:
+    backend_auth: Final = tuple(backend_auth_header.items()) if backend_auth_header else ()
+    minted_names: Final = frozenset(name.lower() for name, _ in backend_auth)
     passthrough: Final = tuple(
         (name, value)
         for name, value in (agent_extra_headers.items() if agent_extra_headers else ())
-        if not name.lower().startswith("x-litellm-")
+        if not name.lower().startswith("x-litellm-") and name.lower() not in minted_names
     )
     trace_id: Final = request_data.get("litellm_trace_id")
     trace: Final = (("X-LiteLLM-Trace-Id", str(trace_id)),) if trace_id else ()
-    backend_auth: Final = backend_auth_header.items() if backend_auth_header else ()
     merged: Final = dict((*passthrough, *caller_identity.items(), *trace, *backend_auth))
     return merged or None
 

@@ -38,7 +38,7 @@ _REGISTRY_PARAMS_KEPT_OUT_OF_OPTIONAL_PARAMS: Final = (
 
 def _card_declares_no_streaming(agent_card_params: Mapping[str, object]) -> bool:
     capabilities: Final = agent_card_params.get("capabilities")
-    return isinstance(capabilities, Mapping) and capabilities.get("streaming") is False
+    return isinstance(capabilities, Mapping) and not capabilities.get("streaming")
 
 
 def _registry_api_key(agent_litellm_params: dict[str, object]) -> str | None:
