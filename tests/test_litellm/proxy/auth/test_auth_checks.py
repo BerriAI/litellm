@@ -7378,6 +7378,29 @@ async def test_project_max_budget_check_reads_live_spend_counter(counter_spend, 
     assert proxy_logging_obj.budget_alerts.await_args.kwargs["type"] == "project_budget"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_budget", [0.0, -1.0])
+async def test_project_max_budget_check_treats_non_positive_budget_as_unbudgeted(max_budget):
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.auth.auth_checks import _project_max_budget_check
+
+    real_spend_counter_cache = DualCache()
+    real_spend_counter_cache.in_memory_cache.set_cache(key="spend:project:p-budget", value=12.5)
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    ):
+        await _project_max_budget_check(
+            project_object=_project_with_budget(spend=12.5, max_budget=max_budget),
+            valid_token=UserAPIKeyAuth(api_key="hashed-key", project_id="p-budget"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    proxy_logging_obj.budget_alerts.assert_not_awaited()
+
+
 def test_is_user_proxy_admin_rejects_view_only_admin():
     """This predicate skips `non_proxy_admin_allowed_routes_check` entirely, so an
     Admin Viewer answering True here would gain every write route. Read parity for
