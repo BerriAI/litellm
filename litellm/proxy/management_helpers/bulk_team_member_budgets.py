@@ -92,7 +92,7 @@ def _result(
         )
     budget: Final = budget_of.get(user_id)
     own_max_budget: Final = budget.max_budget if budget is not None else None
-    inherits: Final = own_max_budget is None and team_default_max_budget is not None
+    inherits: Final = own_max_budget is None and team_default_max_budget is not None and team_default_max_budget > 0
     return TeamMemberBudgetUpdateResult(
         user_id=user_id,
         user_email=member.user_email,
