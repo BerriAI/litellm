@@ -34,6 +34,7 @@ interface UsageExportHeaderProps {
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
+  exportBlockedReason?: string;
 }
 
 const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
@@ -50,13 +51,19 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   customTitle,
   compactLayout = false,
   teams = [],
+  exportBlockedReason,
 }) => {
   const anchor = useComboboxAnchor();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
-  const hasFilters = filterSlot != null || (showFilters && filterOptions.length > 0);
+  const hasFilters = filterSlot != null || showFilters;
   const optionValues = filterOptions.map((option) => option.value);
   const labelOf = (value: string) => filterOptions.find((option) => option.value === value)?.label ?? value;
+  const hasNoOptions = filterOptions.length === 0;
+  const emptyPlaceholder = `No ${entityType}s with usage in this range`;
+  // A selection carried over from a range that did have options still scopes
+  // the data below, so the control has to stay usable long enough to clear it.
+  const isFilterDisabled = hasNoOptions && selectedFilters.length === 0;
 
   const filterList = (
     <ComboboxContent anchor={anchor}>
@@ -74,6 +81,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   const builtInFilter = (
     <Combobox
       multiple
+      disabled={isFilterDisabled}
       items={optionValues}
       value={selectedFilters}
       onValueChange={(next: string[]) => onFiltersChange?.(next)}
@@ -88,7 +96,10 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
             ))
           }
         </ComboboxValue>
-        <ComboboxChipsInput placeholder={filterPlaceholder} aria-label={filterPlaceholder} />
+        <ComboboxChipsInput
+          placeholder={hasNoOptions ? emptyPlaceholder : filterPlaceholder}
+          aria-label={hasNoOptions ? emptyPlaceholder : filterPlaceholder}
+        />
         {selectedFilters.length > 0 && <ComboboxClear aria-label={`Clear ${filterLabel ?? "filters"}`} />}
       </ComboboxChips>
       {filterList}
@@ -112,10 +123,12 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
           )}
 
           <div className="justify-self-end">
-            <Button onClick={() => setIsExportModalOpen(true)}>
-              <Download />
-              Export Data
-            </Button>
+            <span title={exportBlockedReason}>
+              <Button disabled={exportBlockedReason !== undefined} onClick={() => setIsExportModalOpen(true)}>
+                <Download />
+                Export Data
+              </Button>
+            </span>
           </div>
         </div>
       </div>

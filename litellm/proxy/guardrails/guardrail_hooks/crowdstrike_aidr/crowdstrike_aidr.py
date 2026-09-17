@@ -18,14 +18,18 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_tool_message_for_guardrail,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionToolParam
+from litellm.types.proxy.guardrails.guardrail_hooks.crowdstrike_aidr import (
+    CrowdStrikeAIDRGuardrailConfigModelOptionalParams,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -153,6 +157,21 @@ def _merge_metadata_bags(request_data: Mapping[str, Any]) -> Mapping[str, Any] |
     return merged if present else None
 
 
+def streaming_params_from_litellm_params(
+    litellm_params: LitellmParams,
+) -> CrowdStrikeAIDRGuardrailConfigModelOptionalParams:
+    extras: Final[Mapping[str, object]] = litellm_params.model_extra or {}
+    nested: Final = litellm_params.optional_params
+    optional_params: Final[Mapping[str, object]] = {} if nested is None else nested.model_dump()
+    return CrowdStrikeAIDRGuardrailConfigModelOptionalParams.model_validate(
+        {
+            name: value
+            for name in CrowdStrikeAIDRGuardrailConfigModelOptionalParams.model_fields
+            if (value := optional_params.get(name, extras.get(name))) is not None
+        }
+    )
+
+
 def _messages_since_last_assistant(
     messages: Sequence[AllMessageValues],
 ) -> _FilteredMessages:
@@ -241,6 +260,11 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         fail_on_error: bool | None = True,
+        streaming_buffer_until_moderated: bool | None = None,
+        streaming_buffer_release_on_scan: bool | None = None,
+        streaming_end_of_stream_only: bool | None = None,
+        streaming_sampling_rate: int | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ) -> None:
         """
@@ -250,10 +274,25 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             guardrail_name (str): The name of the guardrail instance.
             api_key (str | None): The CrowdStrike AIDR API key. Reads from CS_AIDR_TOKEN env var if None.
             api_base (str | None): The CrowdStrike AIDR API base URL. Reads from CS_AIDR_BASE_URL env var if None.
+            streaming_end_of_stream_only (bool | None): Scan streamed output once at end of stream instead of
+                every streaming_sampling_rate chunks. Defaults to False.
+            streaming_sampling_rate (int | None): Scan the accumulated streamed output every Nth chunk. Defaults to 5.
+            async_handler (AsyncHTTPHandler | None): HTTP client to call AI Guard with. Defaults to the shared
+                guardrail-callback client.
             **kwargs: Additional arguments passed to the CustomGuardrail base class.
         """
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.fail_on_error = True if fail_on_error is None else fail_on_error
+        self._set_streaming_params(
+            CrowdStrikeAIDRGuardrailConfigModelOptionalParams(
+                streaming_end_of_stream_only=streaming_end_of_stream_only,
+                streaming_sampling_rate=streaming_sampling_rate,
+                streaming_buffer_until_moderated=streaming_buffer_until_moderated,
+                streaming_buffer_release_on_scan=streaming_buffer_release_on_scan,
+            )
+        )
 
         self.api_key = api_key or os.environ.get("CS_AIDR_TOKEN")
         if not self.api_key:
@@ -273,6 +312,17 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         verbose_proxy_logger.debug(
             "Initialized CrowdStrike AIDR Guardrail: name=%s, api_base=%s", guardrail_name, self.api_base
         )
+
+    def _set_streaming_params(self, streaming_params: CrowdStrikeAIDRGuardrailConfigModelOptionalParams) -> None:
+        self.streaming_buffer_until_moderated: bool = streaming_params.streaming_buffer_until_moderated or False
+        self.streaming_buffer_release_on_scan: bool = streaming_params.streaming_buffer_release_on_scan or False
+        self.streaming_end_of_stream_only: bool = streaming_params.streaming_end_of_stream_only or False
+        self.streaming_sampling_rate: int = streaming_params.streaming_sampling_rate or 5
+
+    @override
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        super().update_in_memory_litellm_params(litellm_params)
+        self._set_streaming_params(streaming_params_from_litellm_params(litellm_params))
 
     async def _call_crowdstrike_aidr_guard(
         self, payload: dict[str, Any], hook_name: str
@@ -375,17 +425,14 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
 
     def _build_guard_input_for_response(self, inputs: GenericGuardrailAPIInputs) -> _GuardInput:
         output_texts: Final[list[str]] = inputs.get("texts", [])
-        return _GuardInput(
-            messages=[_Message(role="assistant", content=text) for text in output_texts],
-            tools=inputs.get("tools", []),
-        )
+        return _GuardInput(messages=[_Message(role="assistant", content=text) for text in output_texts], tools=[])
 
     def _extract_transformed_texts(self, guard_output: _GuardInput, num_assistant_messages: int) -> list[str]:
         tail: Final = guard_output.messages[-num_assistant_messages:] if num_assistant_messages > 0 else []
         return [_extract_text_from_message(msg) for msg in tail]
 
     async def _call_or_fail_open(
-        self, payload: dict[str, Any], hook_name: str, request_data: dict
+        self, payload: dict[str, Any], hook_name: str, request_data: dict[str, object]
     ) -> _GuardChatCompletionsResult:
         start_time: Final = time.time()
         try:
@@ -421,7 +468,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         structured_messages: list[AllMessageValues],
         guard_output: _GuardInput,
         sent_indices: tuple[int, ...],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> list[AllMessageValues] | None:
         if effective_skip_system_message_for_guardrail(self) or effective_skip_tool_message_for_guardrail(self):
             request_messages: Final = request_data.get("messages")

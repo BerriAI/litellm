@@ -109,7 +109,7 @@ def test_supported_hooks_limited_to_pre_and_post():
 
 
 def test_during_call_mode_rejected_at_init():
-    with pytest.raises(ValueError, match='Event hook GuardrailEventHooks\\.during_call is not in the'):
+    with pytest.raises(ValueError, match="during_call is not in the supported event hooks"):
         StraikerGuardrail(api_key="k", event_hook="during_call")
 
 
@@ -593,6 +593,29 @@ async def test_non_streamed_response_intervention_redacts():
         logging_obj=_logging_obj(),
     )
     assert out["texts"] == ["[redacted]"]
+
+
+@pytest.mark.asyncio
+async def test_response_scan_omits_request_context_from_response_content():
+    g = _make_guardrail()
+    g.async_handler.post.return_value = _mock_response("NONE")
+    request_messages = [{"role": "user", "content": "What is the capital of France?"}]
+    lookup_tool = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
+    await g.apply_guardrail(
+        inputs={
+            "texts": ["Paris."],
+            "structured_messages": [*request_messages, {"role": "assistant", "content": "Paris."}],
+            "tools": [lookup_tool],
+            "model": "gpt-4o-mini",
+        },
+        request_data={"model": "gpt-4o-mini", "messages": request_messages, "tools": [lookup_tool]},
+        input_type="response",
+        logging_obj=_logging_obj(),
+    )
+    payload = _posted_payload(g)
+    assert payload["response"]["texts"] == ["Paris."]
+    assert "structured_messages" not in payload["response"]
+    assert "tools" not in payload["response"]
 
 
 @pytest.mark.asyncio

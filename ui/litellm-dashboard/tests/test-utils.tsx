@@ -44,20 +44,14 @@ const pointerBlocked = (element: HTMLElement): boolean => {
   return false;
 };
 
-/**
- * Opens a Base UI Select and picks an option by its accessible name.
- *
- * The option is in the DOM one render before the popup finishes entering, and until then its
- * positioner still carries `pointer-events: none`, which user-event refuses to click. Waiting on
- * the option text alone is a race that React 19's flush timing loses.
- */
 export const chooseSelectOption = async (
-  user: ReturnType<typeof userEvent.setup>,
+  user: Pick<ReturnType<typeof userEvent.setup>, "click">,
   trigger: HTMLElement,
   optionName: string | RegExp,
+  role: "option" | "menuitem" | "menuitemradio" = "option",
 ) => {
   await user.click(trigger);
-  const option = await screen.findByRole("option", { name: optionName });
+  const option = await screen.findByRole(role, { name: optionName });
   await waitFor(() => expect(pointerBlocked(option)).toBe(false));
   await user.click(option);
 };

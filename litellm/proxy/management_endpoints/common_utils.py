@@ -1,4 +1,5 @@
 import math
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from fastapi import HTTPException, status
@@ -22,7 +23,7 @@ def validate_finite_spend(spend: float | None) -> None:
         )
 
 
-def validate_budget_duration(budget_duration: str | None) -> None:
+def validate_budget_duration(budget_duration: str | None, status_code: int = 400) -> None:
     """Reject budget durations that can't be parsed, are non-positive, or
     overflow date math, so a bad value can't be persisted and later crash the
     budget reset job.
@@ -44,7 +45,7 @@ def validate_budget_duration(budget_duration: str | None) -> None:
         get_budget_reset_time(budget_duration=budget_duration)
     except (ValueError, OverflowError):
         raise HTTPException(
-            status_code=400,
+            status_code=status_code,
             detail={
                 "error": f"Invalid budget_duration '{budget_duration}'. Use a format like '1h', '24h', '7d', or '30d'."
             },
@@ -54,6 +55,7 @@ def validate_budget_duration(budget_duration: str | None) -> None:
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.proxy._types import (
+    CommonProxyErrors,
     KeyRequestBase,
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
@@ -72,10 +74,60 @@ from litellm.proxy._types import (  # noqa: F401  re-exported
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.utils import _premium_user_check
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+
+def validate_team_model_max_budget(
+    model_max_budget: Mapping[str, BudgetConfig] | None,
+    premium_user: bool,
+) -> None:
+    """Reject a team `model_max_budget` the limiter could not enforce (no duration, bad cap, tpm/rpm limits)."""
+    if not model_max_budget:
+        return
+    if premium_user is not True:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Setting model_max_budget on a team is an enterprise feature. {CommonProxyErrors.not_premium_user.value}"
+            },
+        )
+    for model_name, budget_config in model_max_budget.items():
+        if not model_name.strip():
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "model_max_budget keys must be non-empty model names"},
+            )
+        max_budget = budget_config.max_budget
+        if max_budget is None or not math.isfinite(max_budget) or max_budget < 0:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"model_max_budget[{model_name!r}].max_budget must be a non-negative finite number. "
+                        f"Received: {max_budget}"
+                    )
+                },
+            )
+        if budget_config.budget_duration is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"model_max_budget[{model_name!r}] requires a budget_duration, e.g. '1d' or '30d'"},
+            )
+        validate_budget_duration(budget_config.budget_duration)
+        if budget_config.tpm_limit is not None or budget_config.rpm_limit is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"model_max_budget[{model_name!r}] tpm_limit/rpm_limit are not enforced on a team; "
+                        "set per-model rate limits on the key instead"
+                    )
+                },
+            )
 
 
 def require_caller_user_id_for_non_admin(
@@ -438,7 +490,7 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
 )
 
 
-def _is_set_budget_value(value: Any) -> bool:
+def _is_set_budget_value(value: object) -> bool:
     if value is None:
         return False
     if isinstance(value, list) and len(value) == 0:
@@ -446,7 +498,7 @@ def _is_set_budget_value(value: Any) -> bool:
     return True
 
 
-def _has_meaningful_budget_limit(budget_values: dict[str, Any]) -> bool:
+def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     """A budget is meaningful if at least one limit is actually set; an empty
     list (no model restriction) and None both count as unset."""
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
@@ -590,7 +642,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
             updated_kv["metadata"] = {field_name: _value}
 
 
-def _has_non_empty_value(value: Any) -> bool:
+def _has_non_empty_value(value: object) -> bool:
     """Check if a value has real content (not None, not empty list, not blank string)."""
     if value is None:
         return False

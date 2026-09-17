@@ -1,29 +1,301 @@
+use std::collections::BTreeMap;
+use std::convert::Infallible;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
+
+use super::hooks::{NoopOcrHooks, OcrHooks};
+use super::registry::{OcrAdapterKind, resolve_wire_adapter};
+use crate::constants::OCR_HTTP_TIMEOUT_SECS;
+use crate::ocr::Error;
+use litellm_auth::{InputSource, TokenProviderHandle};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct OcrRequestData {
-    pub data: Value,
-    pub files: Option<Value>,
+#[serde(tag = "type")]
+pub enum OcrDocument {
+    #[serde(rename = "document_url")]
+    DocumentUrl {
+        document_url: String,
+        #[serde(flatten)]
+        extra_fields: Map<String, Value>,
+    },
+    #[serde(rename = "image_url")]
+    ImageUrl {
+        image_url: String,
+        #[serde(flatten)]
+        extra_fields: Map<String, Value>,
+    },
+}
+
+impl OcrDocument {
+    pub(crate) fn source(&self) -> &str {
+        match self {
+            Self::DocumentUrl { document_url, .. } => document_url,
+            Self::ImageUrl { image_url, .. } => image_url,
+        }
+    }
+
+    pub(crate) fn with_source(self, source: String) -> Self {
+        match self {
+            Self::DocumentUrl { extra_fields, .. } => Self::DocumentUrl {
+                document_url: source,
+                extra_fields,
+            },
+            Self::ImageUrl { extra_fields, .. } => Self::ImageUrl {
+                image_url: source,
+                extra_fields,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum OcrDocumentInput {
+    Document(OcrDocument),
+    Path {
+        path: PathBuf,
+        mime_type: Option<String>,
+    },
+    Bytes {
+        bytes: Bytes,
+        file_name: Option<String>,
+        mime_type: Option<String>,
+    },
+    HostReader {
+        mime_type: Option<String>,
+    },
+}
+
+impl From<OcrDocument> for OcrDocumentInput {
+    fn from(document: OcrDocument) -> Self {
+        Self::Document(document)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OcrFileContent {
+    pub bytes: Bytes,
+    pub file_name: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OcrResponseFormat {
+    #[default]
+    Litellm,
+    Native,
+}
+
+#[derive(Clone)]
+pub struct OcrConnection {
+    pub api_key: Option<String>,
+    pub api_key_source: InputSource,
+    pub api_base: Option<String>,
+    pub api_base_source: InputSource,
+    pub extra_headers: Vec<(String, String)>,
+    pub extra_headers_source: InputSource,
+    pub timeout: Duration,
+    pub max_download_bytes: u64,
+    pub max_response_bytes: usize,
+    pub poll_timeout: Duration,
+}
+
+impl Default for OcrConnection {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            api_key_source: InputSource::Deployment,
+            api_base: None,
+            api_base_source: InputSource::Deployment,
+            extra_headers: Vec::new(),
+            extra_headers_source: InputSource::Deployment,
+            timeout: Duration::from_secs(OCR_HTTP_TIMEOUT_SECS),
+            max_download_bytes: crate::constants::OCR_DOWNLOAD_MAX_BYTES,
+            max_response_bytes: crate::constants::OCR_RESPONSE_MAX_BYTES,
+            poll_timeout: Duration::from_secs(crate::constants::OCR_POLL_TIMEOUT_SECS),
+        }
+    }
+}
+
+pub struct LiteLLMOcrRequest<D = OcrDocument> {
+    pub model: String,
+    pub document: D,
+    pub connection: OcrConnection,
+    pub hooks: Arc<dyn OcrHooks>,
+    pub litellm_call_id: Option<String>,
+    pub optional_params: Map<String, Value>,
+    pub input_sources: BTreeMap<String, InputSource>,
+    pub azure_ad_token_provider: Option<TokenProviderHandle>,
+    pub(crate) adapter: OcrAdapterKind,
+}
+
+impl<D> LiteLLMOcrRequest<D> {
+    pub fn new(
+        model: String,
+        document: D,
+        custom_llm_provider: Option<&str>,
+        optional_params: Map<String, Value>,
+    ) -> Result<Self, Error> {
+        let (model, adapter_kind) = resolve_wire_adapter(&model, custom_llm_provider)?;
+
+        Ok(Self {
+            model,
+            document,
+            connection: OcrConnection::default(),
+            hooks: Arc::new(NoopOcrHooks),
+            litellm_call_id: None,
+            optional_params,
+            input_sources: BTreeMap::new(),
+            azure_ad_token_provider: None,
+            adapter: adapter_kind,
+        })
+    }
+
+    pub(crate) fn response_format(
+        &self,
+    ) -> Result<OcrResponseFormat, super::error::OcrRequestError> {
+        self.optional_params
+            .get("req_format")
+            .map(|value| {
+                serde_json::from_value(value.clone())
+                    .map_err(|_| super::error::OcrRequestError::RequestFormat)
+            })
+            .transpose()
+            .map(|format| format.unwrap_or_default())
+    }
+
+    pub fn provider_name(&self) -> &'static str {
+        self.adapter.provider().as_str()
+    }
+
+    pub fn with_host_hooks(
+        self,
+        hooks: Arc<dyn OcrHooks>,
+        litellm_call_id: Option<String>,
+    ) -> Self {
+        Self {
+            hooks,
+            litellm_call_id,
+            ..self
+        }
+    }
+
+    pub fn map_document<T, E>(
+        self,
+        map: impl FnOnce(D) -> Result<T, E>,
+    ) -> Result<LiteLLMOcrRequest<T>, E> {
+        Ok(LiteLLMOcrRequest {
+            model: self.model,
+            document: map(self.document)?,
+            connection: self.connection,
+            hooks: self.hooks,
+            litellm_call_id: self.litellm_call_id,
+            optional_params: self.optional_params,
+            input_sources: self.input_sources,
+            azure_ad_token_provider: self.azure_ad_token_provider,
+            adapter: self.adapter,
+        })
+    }
+
+    pub fn with_document<T>(self, document: T) -> LiteLLMOcrRequest<T> {
+        let Ok(request) = self.map_document(|_| Ok::<T, Infallible>(document));
+        request
+    }
+}
+
+impl From<LiteLLMOcrRequest> for LiteLLMOcrRequest<OcrDocumentInput> {
+    fn from(request: LiteLLMOcrRequest) -> Self {
+        let Ok(request) = request
+            .map_document(|document| Ok::<_, Infallible>(OcrDocumentInput::Document(document)));
+        request
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct OcrResponseData {
+pub struct LiteLLMOcrResponse {
     pub pages: Vec<Value>,
     pub model: String,
     pub document_annotation: Option<Value>,
     pub usage_info: Option<Value>,
     pub object: String,
+    #[serde(flatten)]
+    pub extra_fields: Map<String, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_native_response: Option<Value>,
 }
 
-impl OcrResponseData {
+impl LiteLLMOcrResponse {
     pub fn into_json(self) -> Value {
-        serde_json::json!({
-            "pages": self.pages,
-            "model": self.model,
-            "document_annotation": self.document_annotation,
-            "usage_info": self.usage_info,
-            "object": self.object,
-        })
+        serde_json::to_value(self).expect("OCR response fields are JSON-compatible")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn document_variants_preserve_provider_fields_when_rewriting_sources() {
+        for (value, original, replacement, expected) in [
+            (
+                json!({
+                    "type":"document_url",
+                    "document_url":"https://example.com/input.pdf",
+                    "document_name":"input.pdf"
+                }),
+                "https://example.com/input.pdf",
+                "data:application/pdf;base64,AA==",
+                json!({
+                    "type":"document_url",
+                    "document_url":"data:application/pdf;base64,AA==",
+                    "document_name":"input.pdf"
+                }),
+            ),
+            (
+                json!({
+                    "type":"image_url",
+                    "image_url":"https://example.com/input.png",
+                    "detail":"high"
+                }),
+                "https://example.com/input.png",
+                "data:image/png;base64,AA==",
+                json!({
+                    "type":"image_url",
+                    "image_url":"data:image/png;base64,AA==",
+                    "detail":"high"
+                }),
+            ),
+        ] {
+            let document: OcrDocument = serde_json::from_value(value).unwrap();
+            assert_eq!(document.source(), original);
+            assert_eq!(
+                serde_json::to_value(document.with_source(replacement.into())).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn response_serialization_flattens_extra_fields_and_omits_absent_native_response() {
+        let response = LiteLLMOcrResponse {
+            pages: vec![],
+            model: "model".into(),
+            document_annotation: None,
+            usage_info: None,
+            object: "ocr".into(),
+            extra_fields: json!({"provider_field":"kept"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            provider_native_response: None,
+        };
+        let serialized = response.into_json();
+        assert_eq!(serialized["provider_field"], "kept");
+        assert!(serialized.get("provider_native_response").is_none());
     }
 }

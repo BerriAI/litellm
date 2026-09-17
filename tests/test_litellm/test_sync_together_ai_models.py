@@ -105,7 +105,6 @@ def test_added_chat_model_matches_reviewed_registry_shape() -> None:
         "input_cost_per_token": 3e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 1048576,
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
@@ -138,7 +137,35 @@ def test_moderation_type_maps_to_chat_mode() -> None:
     outcome = sync.compute_sync({}, RECORDED_CATALOG, RECORDED_DOC)
     guard = outcome.cost_map["together_ai/meta-llama/Llama-Guard-4-12B"]
     assert guard["mode"] == "chat"
-    assert guard["max_output_tokens"] == 1048576
+    assert "max_output_tokens" not in guard
+
+
+def test_output_ceiling_comes_from_the_rule_never_from_context_length() -> None:
+    glm = next(model for model in RECORDED_CATALOG if model.id == "zai-org/GLM-5.2")
+    fresh = sync.compute_sync({}, [_chat_model("acme/unreviewed", ctx=1048576), glm], _doc({"x": "2026-01-01"}))
+    unreviewed = fresh.cost_map["together_ai/acme/unreviewed"]
+    assert "max_output_tokens" not in unreviewed
+    assert (unreviewed["max_input_tokens"], unreviewed["max_tokens"]) == (1048576, 1048576)
+    reviewed = fresh.cost_map["together_ai/zai-org/GLM-5.2"]
+    assert (reviewed["max_input_tokens"], reviewed["max_output_tokens"], reviewed["max_tokens"]) == (
+        1048575,
+        128000,
+        128000,
+    )
+    inflated = {
+        "together_ai/zai-org/GLM-5.2": {
+            "input_cost_per_token": 1.4e-06,
+            "litellm_provider": "together_ai",
+            "max_input_tokens": 1048575,
+            "max_output_tokens": 1048575,
+            "max_tokens": 1048575,
+            "mode": "chat",
+            "output_cost_per_token": 4.4e-06,
+        }
+    }
+    corrected = sync.compute_sync(inflated, [glm], _doc({"x": "2026-01-01"}))
+    assert corrected.cost_map["together_ai/zai-org/GLM-5.2"]["max_output_tokens"] == 128000
+    assert any("max_output_tokens: 1048575 -> 128000" in line for line in corrected.updated)
 
 
 def test_docs_removed_but_live_model_stays_live_with_warning() -> None:

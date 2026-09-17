@@ -19,9 +19,9 @@ Implements the client-credentials behavior contract for the v2 resolver:
   identity.
 
 The token-endpoint POST is injected (``M2MTokenEndpointPost``) so the grant orchestration is
-testable without a live IdP; ``post_client_credentials_grant`` is the httpx edge and the one
-place the untyped response boundary is contained. Failures are values: the source returns
-``Result[OAuthToken, CredError]``; only the httpx edge touches exceptions.
+testable without a live IdP; ``post_client_credentials_grant`` is the httpx edge. Failures are
+values: the source returns ``Result[OAuthToken, CredError]``; only the httpx edge touches
+exceptions.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     InMemoryTokenCacheBackend,
     OAuthToken,
@@ -95,32 +96,47 @@ async def post_client_credentials_grant(
 ) -> TokenEndpointOutcome:
     """POST the grant to the token endpoint and classify the transport outcome.
 
-    The httpx edge: litellm's handler is partially typed (and raises ``HTTPStatusError`` itself on
-    a 4xx/5xx), so the untyped boundary is contained here and every field the caller reads comes
-    out of a validated ``TokenEndpointOutcome``.
+    The httpx edge: litellm's handler raises ``HTTPStatusError`` itself on a 4xx/5xx, and every
+    field the caller reads comes out of a validated ``TokenEndpointOutcome``.
     """
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415  # defer heavy handler import to call time
-        get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # handler is partially typed
+        get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # handler factory params are coarsely typed
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_debug import (  # noqa: PLC0415  # diagnostics import credential enums through this package
+        describe_upstream_http_failure,
+        describe_upstream_response,
+        safe_upstream_url,
     )
     from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415  # deferred with the handler import
 
     try:
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-        response = await client.post(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # handler is partially typed
+        response: Final = await client.post(  # pyright: ignore[reportUnknownMemberType]  # handler params are coarsely typed
             url, headers={"Accept": "application/json", **headers}, data=form
         )
     except httpx.HTTPStatusError as status_err:
         status_code: Final = status_err.response.status_code
+        verbose_logger.warning(
+            "OAuth2 client_credentials token request denied:\n  upstream exchange: %s",
+            describe_upstream_http_failure(status_err),
+        )
         return TokenEndpointDenied(status_code=status_code, detail=f"token endpoint returned HTTP {status_code}")
     except Exception as exc:  # noqa: BLE001  # any transport failure is the same outcome: unreachable
-        return TokenEndpointUnreachable(detail=str(exc))
-    if not isinstance(response, httpx.Response):
-        return TokenEndpointUnreachable(detail="token endpoint returned no response")
+        verbose_logger.warning(
+            "OAuth2 client_credentials POST %s failed: %s", safe_upstream_url(httpx.URL(url)), type(exc).__name__
+        )
+        return TokenEndpointUnreachable(detail=type(exc).__name__)
     try:
         body: Final = _TOKEN_BODY_ADAPTER.validate_json(response.content)
     except ValidationError:
+        verbose_logger.warning("OAuth2 client_credentials invalid response: %s", describe_upstream_response(response))
         return TokenEndpointDenied(
             status_code=response.status_code, detail="token endpoint returned a non-JSON-object body"
+        )
+    access_token: Final = body.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        verbose_logger.warning(
+            "OAuth2 client_credentials response has no access token | %s", describe_upstream_response(response)
         )
     return TokenEndpointSuccess(body=body)
 

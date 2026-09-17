@@ -43,10 +43,14 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.otel.model.semconv import resolve_operation
-from litellm.integrations.otel.model.utils import as_str, to_seconds
+from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
+from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
+
+REQUESTER_METADATA_KEY: Final = "requester_metadata"
+REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,7 @@ class RequestIdentity:
     # completes (routing has picked a deployment), so it's absent from the
     # auth-time seed and filled only from the payload.
     provider_model: str | None = None
+    request_route: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -75,7 +80,7 @@ class RequestIdentity:
         model, not just the user-facing one.
         """
         raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
-        metadata = {key: str(value) for key, value in raw_meta.items() if isinstance(value, (str, bool, int, float))}
+        metadata: Final = MappingProxyType(dict(flatten_metadata(raw_meta)))
         return cls(
             call_id=as_str(payload.get("litellm_call_id")) or as_str(payload.get("id")),
             # StandardLoggingMetadata's canonical key is ``user_api_key_team_id``;
@@ -87,11 +92,14 @@ class RequestIdentity:
             key_hash=as_str(raw_meta.get("user_api_key_hash")),
             end_user=as_str(payload.get("end_user")) or as_str(raw_meta.get("user_api_key_end_user_id")),
             provider_model=resolve_provider_model(payload),
+            request_route=as_str(raw_meta.get("user_api_key_request_route")),
             metadata=metadata,
         )
 
     @classmethod
-    def from_user_api_key_auth(cls, auth: object) -> RequestIdentity:
+    def from_user_api_key_auth(
+        cls, auth: object, request_metadata: Mapping[str, object] | None = None
+    ) -> RequestIdentity:
         """Identity from a ``UserAPIKeyAuth`` (duck-typed to keep this module
         free of a proxy import).
 
@@ -99,11 +107,13 @@ class RequestIdentity:
         guardrail, or service span is created — so the whole request's spans
         inherit identity, not just the LLM-call span. Metadata sub-keys use the
         ``user_api_key_*`` names that ``baggage.DEFAULT_BAGGAGE_METADATA_KEYS``
-        promotes.
+        promotes; ``request_metadata`` (the caller's ``requester_metadata``
+        snapshot) is flattened to dotted keys so ``requester_metadata.<key>``
+        resolves too.
         """
         get: Final = lambda name: getattr(auth, name, None)  # noqa: E731
-        metadata: Final = {
-            meta_key: str(value)
+        auth_meta: Final = tuple(
+            (meta_key, str(value))
             for meta_key, attr in (
                 ("user_api_key_user_id", "user_id"),
                 ("user_api_key_org_id", "org_id"),
@@ -111,7 +121,9 @@ class RequestIdentity:
                 ("user_api_key_end_user_id", "end_user_id"),
             )
             if (value := get(attr))
-        }
+        )
+        request_meta: Final = flatten_metadata(request_metadata) if request_metadata is not None else ()
+        metadata: Final = MappingProxyType(dict((*request_meta, *auth_meta)))
         return cls(
             team_id=as_str(get("team_id")),
             team_alias=as_str(get("team_alias")),
@@ -213,6 +225,7 @@ class LLMCallEvent:
     # needs to be reasonable for a span that never gets closed (a leak).
     provisional_span_name: str
     time_to_first_chunk_seconds: float | None
+    trace: TraceControls
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, Any]) -> LLMCallEvent:
@@ -229,6 +242,7 @@ class LLMCallEvent:
             upstream_started=kwargs.get("api_call_start_time") is not None,
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
+            trace=caller_trace_controls(kwargs),
         )
 
 
@@ -266,15 +280,8 @@ def auth_metadata(payload: StandardLoggingPayload | None, kwargs: Mapping[str, o
     )
 
 
-def _as_str_mapping(value: object) -> Mapping[str, object] | None:
-    """A read-only view of ``value`` when it is a mapping, else ``None``."""
-    if not isinstance(value, Mapping):
-        return None
-    return cast("Mapping[str, object]", value)  # cast-ok: isinstance-guarded, JSON metadata has str keys
-
-
 def _string_entries(value: object) -> Mapping[str, str] | None:
-    entries: Final = _as_str_mapping(value)
+    entries: Final = as_str_mapping(value)
     if entries is None:
         return None
     typed: Final = MappingProxyType({key: item for key, item in entries.items() if isinstance(item, str)})
@@ -290,18 +297,18 @@ def _metadata_dicts(
     litellm copies it onto ``metadata``, but both are yielded so a route that
     populates only one is still covered.
     """
-    payload_view: Final = _as_str_mapping(payload)
+    payload_view: Final = as_str_mapping(payload)
     if payload_view is not None:
-        payload_metadata: Final = _as_str_mapping(payload_view.get("metadata"))
+        payload_metadata: Final = as_str_mapping(payload_view.get("metadata"))
         if payload_metadata is not None:
             yield payload_metadata
-    params: Final = _as_str_mapping(kwargs.get("litellm_params"))
+    params: Final = as_str_mapping(kwargs.get("litellm_params"))
     if params is None:
         return
     yield from (
         metadata
         for key in ("metadata", "litellm_metadata")
-        if (metadata := _as_str_mapping(params.get(key))) is not None
+        if (metadata := as_str_mapping(params.get(key))) is not None
     )
 
 
@@ -323,6 +330,35 @@ def model_from_request_data(data: object) -> str | None:
     if isinstance(data, Mapping):
         return as_str(data.get("model"))
     return None
+
+
+def metadata_from_request_data(data: object) -> Mapping[str, object] | None:
+    """The caller's ``requester_metadata`` snapshot from a pre-call ``data`` dict, keyed under its wrapper.
+
+    The proxy stores it under ``metadata`` or ``litellm_metadata`` depending on the route;
+    the proxy-owned siblings (``user_api_key_*``, ``requester_ip_address``) are not read.
+    """
+    top: Final = as_str_mapping(data)
+    if top is None:
+        return None
+    snapshots: Final = tuple(
+        snapshot
+        for name in ("metadata", "litellm_metadata")
+        if (nested := as_str_mapping(top.get(name))) is not None
+        and (snapshot := as_str_mapping(nested.get(REQUESTER_METADATA_KEY))) is not None
+    )
+    return MappingProxyType({REQUESTER_METADATA_KEY: snapshots[0]}) if snapshots else None
+
+
+def flatten_metadata(raw: Mapping[str, object]) -> Iterator[tuple[str, str]]:
+    """Scalar leaves of a nested metadata mapping, keyed by their dotted path."""
+    stack: Final = list(tuple(raw.items())[::-1])  # mutable-ok: iterative worklist keeps the walk off the call stack
+    while stack:
+        key, value = stack.pop()
+        if (nested := as_str_mapping(value)) is not None:
+            stack.extend(tuple((f"{key}.{sub_key}", sub_value) for sub_key, sub_value in nested.items())[::-1])
+        elif isinstance(value, (str, bool, int, float)):
+            yield key, str(value)
 
 
 def resolve_provider_model(payload: StandardLoggingPayload) -> str | None:
