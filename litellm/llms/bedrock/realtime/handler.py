@@ -6,11 +6,12 @@ This uses aws_sdk_bedrock_runtime for bidirectional streaming with Nova Sonic.
 
 import asyncio
 import contextlib
+import importlib.metadata
 import json
-from collections.abc import AsyncIterator, Mapping, MutableMapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, NoReturn, Protocol
+from typing import Final, NoReturn, Protocol, runtime_checkable
 
 from pydantic import JsonValue, TypeAdapter
 
@@ -19,6 +20,8 @@ from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.constants import (
     BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY,
     BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY,
+    BEDROCK_REALTIME_SDK_DISTRIBUTION,
+    BEDROCK_REALTIME_SDK_SUPPORTED_RANGE,
     BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
@@ -121,6 +124,38 @@ class BedrockBidirectionalStream(Protocol):
     async def await_output(self) -> tuple[object, BedrockOutputStream]: ...
 
 
+@runtime_checkable
+class ClosableBedrockRuntimeClient(Protocol):
+    async def close(self) -> None: ...
+
+
+def _installed_sdk_version() -> str | None:
+    try:
+        return importlib.metadata.version(BEDROCK_REALTIME_SDK_DISTRIBUTION)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _sdk_import_error(installed_version: str | None, cause: ImportError) -> ImportError:
+    install_hint: Final = "pip install 'litellm[bedrock-realtime]'"
+    requirement: Final = f"{BEDROCK_REALTIME_SDK_DISTRIBUTION}[awscrt]{BEDROCK_REALTIME_SDK_SUPPORTED_RANGE}"
+    verbose_proxy_logger.error("Bedrock Realtime: SDK import failed (installed=%s): %s", installed_version, cause)
+    if installed_version is None:
+        return ImportError(f"Missing aws_sdk_bedrock_runtime: {install_hint} ({requirement})")
+    return ImportError(
+        f"{BEDROCK_REALTIME_SDK_DISTRIBUTION} {installed_version} is installed but Bedrock realtime needs "
+        f"[awscrt]{BEDROCK_REALTIME_SDK_SUPPORTED_RANGE}: {install_hint}"
+    )
+
+
+async def _close_bedrock_client(bedrock_client: object) -> None:
+    if not isinstance(bedrock_client, ClosableBedrockRuntimeClient):
+        return
+    with contextlib.suppress(Exception):
+        await bedrock_client.close()
+        verbose_proxy_logger.debug("Bedrock Realtime: closed SDK client")
+
+
 @dataclass(frozen=True, slots=True)
 class _BridgeOutcome:
     logged_events: tuple[OpenAIRealtimeEvents, ...]
@@ -199,8 +234,9 @@ async def _ack_session_update(
 class BedrockRealtime(BaseAWSLLM):
     """Handler for Bedrock Nova Sonic realtime speech-to-speech API."""
 
-    def __init__(self):
+    def __init__(self, sdk_version_lookup: Callable[[], str | None] = _installed_sdk_version):
         super().__init__()
+        self._sdk_version_lookup: Final = sdk_version_lookup
 
     async def async_realtime(
         self,
@@ -234,14 +270,13 @@ class BedrockRealtime(BaseAWSLLM):
             Various AWS authentication parameters
         """
         try:
-            from aws_sdk_bedrock_runtime.client import (
-                BedrockRuntimeClient,
-                InvokeModelWithBidirectionalStreamOperationInput,
-            )
-            from aws_sdk_bedrock_runtime.config import Config
-            from smithy_aws_core.identity import StaticCredentialsResolver
-        except ImportError:
-            raise ImportError("Missing aws_sdk_bedrock_runtime. Install with: pip install aws-sdk-bedrock-runtime")
+            from aws_sdk_bedrock_runtime.client import AsyncBedrockRuntimeClient
+            from aws_sdk_bedrock_runtime.config import AsyncBedrockRuntimeConfig
+            from aws_sdk_bedrock_runtime.models import InvokeModelWithBidirectionalStreamOperationInput
+            from smithy_aws_core.identity import AWSCredentialsIdentity, StaticCredentialsResolver
+            from smithy_http.aio.crt import AWSCRTHTTPClient
+        except ImportError as e:
+            raise _sdk_import_error(self._sdk_version_lookup(), e) from e
 
         pending_session_update: Final = _pending_session_update(websocket.scope)
 
@@ -285,22 +320,37 @@ class BedrockRealtime(BaseAWSLLM):
             )
         frozen_credentials: Final = await run_aws_signing(credentials.get_frozen_credentials)
 
-        # Initialize Bedrock client with aws_sdk_bedrock_runtime
-        config: Final = Config(
+        credentials_identity: Final = AWSCredentialsIdentity(
+            access_key_id=frozen_credentials.access_key,
+            secret_access_key=frozen_credentials.secret_key,
+            session_token=frozen_credentials.token,
+        )
+        config: Final = await AsyncBedrockRuntimeConfig.resolve(
             endpoint_uri=endpoint_uri,
             region=aws_region_name,
-            aws_access_key_id=frozen_credentials.access_key,
-            aws_secret_access_key=frozen_credentials.secret_key,
-            aws_session_token=frozen_credentials.token,
-            aws_credentials_identity_resolver=StaticCredentialsResolver(),
+            aws_credentials_identity_resolver=StaticCredentialsResolver(identity=credentials_identity),
+            transport=AWSCRTHTTPClient(),
         )
-        bedrock_client: Final = BedrockRuntimeClient(config=config)
+        bedrock_client: Final = AsyncBedrockRuntimeClient(config=config)
 
         async def open_bidirectional_stream() -> BedrockBidirectionalStream:
             return await bedrock_client.invoke_model_with_bidirectional_stream(
                 InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
             )
 
+        try:
+            await self._run_session(websocket, open_bidirectional_stream, model, logging_obj, pending_session_update)
+        finally:
+            await _close_bedrock_client(bedrock_client)
+
+    async def _run_session(
+        self,
+        websocket: RealtimeClientWebSocket,
+        open_bidirectional_stream: Callable[[], Awaitable[BedrockBidirectionalStream]],
+        model: str,
+        logging_obj: LiteLLMLogging,
+        pending_session_update: str | None,
+    ) -> None:
         transformation_config: Final = BedrockRealtimeConfig()
 
         bedrock_stream: Final = await open_bidirectional_stream()

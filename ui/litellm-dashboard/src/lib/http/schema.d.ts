@@ -8620,6 +8620,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/teams/{team_id}/members/bulk_update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Update Team Member Budgets Action
+         * @description Set per-member limits for up to 500 members of one team in one call. Same
+         *     authorization and member addressing as `/team/member_update`: proxy admins, the team's
+         *     admins, and admins of the team's organization, with each member named by exactly one of
+         *     `user_id` or `user_email`. Unknown body fields are a 422 and an unknown team is a 404.
+         *
+         *     Each row is a merge patch of that member's limits: a field left out is untouched, a
+         *     field sent as null is cleared, and clearing the last limit drops the member back to the
+         *     team default. A budget row shared by several memberships, the team default included, is
+         *     copied for the member being patched rather than written in place, so one member's new
+         *     cap never lands on anybody else.
+         *
+         *     `data` holds one result per requested member, in request order, carrying the limits in
+         *     force after the write. A row is `success: false` with an `error` when it names nobody on
+         *     the team or repeats an earlier row. Roles are not part of this route; `/team/member_update`
+         *     still owns them.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_update'         --header 'Authorization: Bearer sk-1234'         --header 'Content-Type: application/json'         --data '{"members": [{"user_id": "user-1", "max_budget_in_team": 10}, {"user_email": "user-2@example.com", "max_budget_in_team": 10, "budget_duration": "30d"}]}'
+         *     ```
+         */
+        post: operations["bulk_update_team_member_budgets_action_management_v1_teams__team_id__members_bulk_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/users/bulk": {
         parameters: {
             query?: never;
@@ -16511,6 +16550,30 @@ export interface paths {
          *     will be rejected with a 403.
          */
         patch: operations["toolset_mcp_route_toolset__toolset_name__mcp_patch"];
+        trace?: never;
+    };
+    "/typesafe/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        get: operations["typesafe_proxy_route_typesafe__endpoint__get"];
+        put?: never;
+        /**
+         * Typesafe Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
+         */
+        post: operations["typesafe_proxy_route_typesafe__endpoint__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/update/default_team_settings": {
@@ -25003,6 +25066,22 @@ export interface components {
             updated_team?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * BulkTeamMemberBudgetUpdateRequest
+         * @description Body of `POST /management/v1/teams/{team_id}/members/bulk_update`.
+         */
+        BulkTeamMemberBudgetUpdateRequest: {
+            /** Members */
+            members: components["schemas"]["TeamMemberBudgetPatch"][];
+        };
+        /**
+         * BulkTeamMemberBudgetUpdateResponse
+         * @description `{data: [...]}` with one `TeamMemberBudgetUpdateResult` per requested member, in request order.
+         */
+        BulkTeamMemberBudgetUpdateResponse: {
+            /** Data */
+            data: components["schemas"]["TeamMemberBudgetUpdateResult"][];
         };
         /**
          * BulkTeamMemberDeleteRequest
@@ -38003,6 +38082,57 @@ export interface components {
             /** User Id */
             user_id?: string | null;
         };
+        /**
+         * TeamMemberBudgetPatch
+         * @description One member's per-member limits, merge-patch style: a field left out of the row is
+         *     untouched, a field sent as null is cleared, and clearing the last limit drops the
+         *     member back to the team default.
+         */
+        TeamMemberBudgetPatch: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget In Team */
+            max_budget_in_team?: number | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /**
+         * TeamMemberBudgetUpdateResult
+         * @description Outcome for one requested member, in request order, carrying the limits in force
+         *     after the write rather than the ones that were asked for.
+         */
+        TeamMemberBudgetUpdateResult: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Budget Source */
+            max_budget_source?: ("member" | "team_default") | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Success */
+            success: boolean;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
         /** TeamMemberDeleteRequest */
         TeamMemberDeleteRequest: {
             /** Team Id */
@@ -38058,7 +38188,7 @@ export interface components {
         };
         /**
          * TeamMemberRef
-         * @description One member to remove, named by exactly one of `user_id` or `user_email`.
+         * @description One member, named by exactly one of `user_id` or `user_email`.
          */
         TeamMemberRef: {
             /** User Email */
@@ -52308,6 +52438,44 @@ export interface operations {
             };
         };
     };
+    bulk_update_team_member_budgets_action_management_v1_teams__team_id__members_bulk_update_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkTeamMemberBudgetUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkTeamMemberBudgetUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     bulk_create_users_route_management_v1_users_bulk_post: {
         parameters: {
             query?: never;
@@ -61647,6 +61815,68 @@ export interface operations {
             header?: never;
             path: {
                 toolset_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    typesafe_proxy_route_typesafe__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
             };
             cookie?: never;
         };

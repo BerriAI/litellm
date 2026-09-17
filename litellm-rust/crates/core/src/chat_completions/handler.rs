@@ -1,15 +1,14 @@
 use serde_json::Value;
 
 use super::Error;
-use crate::http_utils::{http_request, truncate_error_body};
-
 use super::client::http_client;
 use super::prepare::prepare_provider_request;
-use super::transformation::ChatCompletionsAuth;
 use super::types::{
     ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,
     ResolvedChatCompletionsRequest,
 };
+use crate::http_utils::{http_request, truncate_error_body};
+use litellm_providers::base_llm::chat::transformation::ChatCompletionsAuth;
 
 pub(super) async fn execute_chat_completions_provider_call(
     request: ResolvedChatCompletionsRequest<'_>,
@@ -60,6 +59,7 @@ pub(super) async fn execute_chat_completions_provider_call(
     request
         .config
         .transform_response(&request.model, ProviderChatResponseData { body })
+        .map_err(Error::from)
         .map_err(as_response_error)
 }
 
@@ -87,7 +87,7 @@ pub(super) async fn signed_headers(
     use std::collections::BTreeMap;
     use std::time::SystemTime;
 
-    use crate::providers::bedrock::aws_base::{
+    use litellm_auth_aws::{
         aws_auth_config, aws_signature_headers, host_supplied_credentials,
         is_sigv4_computed_header, resolve_credentials, sign_bedrock_post,
     };

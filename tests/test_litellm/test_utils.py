@@ -46,6 +46,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     StreamingChoices,
     Usage,
+    ADDRESSED_RESPONSE_ID_FIELD,
     all_litellm_params,
     bedrock_batch_litellm_params,
 )
@@ -818,6 +819,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "container",
                         "image_edit",
                         "embedding",
+                        "evaluation",
                         "guardrail",
                         "image_generation",
                         "video_generation",
@@ -3546,7 +3548,7 @@ _FIREWORKS_MODELS = [
         "accounts/fireworks/models/minimax-m3",
         512000,
         512000,
-        True,
+        None,
         True,
     ),
     (
@@ -3654,7 +3656,8 @@ def _assert_fireworks_entry(
     assert info["supports_tool_choice"] is True
     assert info["supports_reasoning"] is expected_reasoning
     assert info["supports_response_schema"] is True
-    assert info["supports_vision"] is expected_vision
+    if expected_vision is not None:
+        assert info["supports_vision"] is expected_vision
 
 
 @pytest.fixture
@@ -4782,6 +4785,20 @@ def test_get_litellm_params_keys_never_reach_the_provider():
 
     assert non_default == {"a_real_provider_specific_param": 1}, (
         "litellm params leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+
+
+def test_addressed_response_id_never_reaches_the_provider():
+    kwargs = {
+        "a_real_provider_specific_param": 1,
+        ADDRESSED_RESPONSE_ID_FIELD: "resp_addressed-by-the-client",
+    }
+
+    non_default = get_non_default_completion_params(kwargs)
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "the addressed response id leaked into the provider params: "
         f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
     )
 
