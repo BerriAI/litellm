@@ -5,7 +5,7 @@ from time import monotonic, sleep
 from typing import Final, Protocol
 
 from batch_client import BatchObject, FileDeleteResponse
-from capabilities import is_managed_id
+from capabilities import is_cloud_storage_id, is_managed_id
 from e2e_http import NetworkError, RateLimitedError, Result, Success, UnknownApiError
 from pydantic import BaseModel
 
@@ -18,6 +18,8 @@ BATCH_CANCEL_POLL_SECONDS: Final = 10.0
 
 class BatchCleanupClient(Protocol):
     def delete_file(self, file_id: str, *, key: str, provider: str | None = None) -> Result[FileDeleteResponse]: ...
+
+    def delete_file_as_admin(self, file_id: str, *, provider: str | None = None) -> Result[FileDeleteResponse]: ...
 
     def retrieve_batch(self, batch_id: str, *, key: str, provider: str | None = None) -> Result[BatchObject]: ...
 
@@ -49,7 +51,12 @@ def _require_cleanup_success[R: BaseModel](result: Result[R], operation: str) ->
 
 
 def cleanup_file(client: BatchCleanupClient, file_id: str, *, key: str, provider: str | None = None) -> None:
-    result: Final = cleanup_result(lambda: client.delete_file(file_id, key=key, provider=provider))
+    delete: Final[Callable[[], Result[FileDeleteResponse]]] = (
+        (lambda: client.delete_file_as_admin(file_id, provider=provider))
+        if is_cloud_storage_id(file_id)
+        else (lambda: client.delete_file(file_id, key=key, provider=provider))
+    )
+    result: Final = cleanup_result(delete)
     if isinstance(result, UnknownApiError) and result.status_code == 404:
         return
     deleted: Final = _require_cleanup_success(result, f"Delete file {file_id}")

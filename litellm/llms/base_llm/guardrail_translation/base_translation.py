@@ -1,7 +1,16 @@
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
+
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
+    effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
+    request_tools,
+    response_assistant_turn,
+    scoped_structured_message_indices,
+)
 
 if TYPE_CHECKING:
     from fastapi import HTTPException
@@ -12,7 +21,43 @@ if TYPE_CHECKING:
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+
+@dataclass(frozen=True, slots=True)
+class RequestScanContext:
+    """The scoped request turns and tool definitions a guardrail's request scan sees, in OpenAI chat shape."""
+
+    structured_messages: tuple["AllMessageValues", ...] = ()
+    tools: tuple["ChatCompletionToolParam", ...] = ()
+    conversation_supplied: bool = False
+
+    @staticmethod
+    def scoped(
+        structured_messages: Sequence["AllMessageValues"],
+        tools: Sequence["ChatCompletionToolParam"],
+        guardrail_to_apply: "CustomGuardrail",
+        *,
+        skip_system: bool | None = None,
+    ) -> "RequestScanContext":
+        scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
+        scoped_indices: Final = scoped_structured_message_indices(
+            structured_messages,
+            scan_only_tool_results=scan_only_tool_results,
+            skip_system=(
+                effective_skip_system_message_for_guardrail(guardrail_to_apply) if skip_system is None else skip_system
+            ),
+            skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
+        )
+        return RequestScanContext(
+            structured_messages=tuple(structured_messages[index] for index in scoped_indices),
+            tools=() if scan_only_tool_results else tuple(tools),
+            conversation_supplied=bool(structured_messages),
+        )
+
+
+REQUEST_SCAN_CONTEXT_KEY: Final = "litellm_request_scan_context"
 
 
 @dataclass(slots=True)
@@ -40,11 +85,15 @@ class StreamingScanKey:
     """What a streaming guardrail round would hand to ``apply_guardrail``. Two keys
     compare equal when the round would scan the same content again; ``stream_ended``
     stays out of the comparison and only says whether the handler is on its
-    end-of-stream path, where an empty payload is still scanned today."""
+    end-of-stream path, where an empty payload is still scanned today.
+    ``tool_calls_in_flight`` also stays out of the comparison: it flags that tool
+    calls have streamed which this round cannot scan yet, so a buffered window
+    holding them must stay withheld until the end-of-stream scan covers them."""
 
     texts: tuple[str, ...]
     tool_calls: tuple[str, ...] = ()
     stream_ended: bool = field(default=False, compare=False)
+    tool_calls_in_flight: bool = field(default=False, compare=False)
 
     @property
     def has_nothing_to_scan(self) -> bool:
@@ -252,6 +301,50 @@ class BaseTranslation(ABC):
         Returns None if no convertible content is found.
         """
         return None
+
+    def request_scan_context(
+        self, data: Mapping[str, object], guardrail_to_apply: "CustomGuardrail"
+    ) -> RequestScanContext:
+        """Override wherever ``process_input_messages`` scopes or translates the request differently."""
+        structured_messages: Final = self.get_structured_messages(
+            dict(data)  # mutable-ok: get_structured_messages takes the request as a dict
+        )
+        return RequestScanContext.scoped(
+            structured_messages or (), request_tools(data.get("tools")), guardrail_to_apply
+        )
+
+    def with_response_context(
+        self,
+        inputs: "GenericGuardrailAPIInputs",
+        request_data: Mapping[str, object] | None,
+        guardrail_to_apply: "CustomGuardrail",
+    ) -> "GenericGuardrailAPIInputs":
+        """``inputs`` plus the scoped request conversation, closed by the scanned reply, and the request tools."""
+        if request_data is None:
+            return inputs
+        precomputed: Final = request_data.get(REQUEST_SCAN_CONTEXT_KEY)
+        context: Final = (
+            precomputed
+            if isinstance(precomputed, RequestScanContext)
+            else self.request_scan_context(request_data, guardrail_to_apply)
+        )
+        if not context.conversation_supplied:
+            return inputs
+        assistant_turn: Final = response_assistant_turn(inputs.get("texts") or (), inputs.get("tool_calls") or ())
+        contextual_inputs: Final[GenericGuardrailAPIInputs] = {
+            **inputs,
+            "structured_messages": [  # mutable-ok: GenericGuardrailAPIInputs fields are lists
+                *context.structured_messages,
+                *(() if assistant_turn is None else (assistant_turn,)),
+            ],
+        }
+        if not context.tools:
+            return contextual_inputs
+        with_tools: Final[GenericGuardrailAPIInputs] = {
+            **contextual_inputs,
+            "tools": list(context.tools),  # mutable-ok: GenericGuardrailAPIInputs fields are lists
+        }
+        return with_tools
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """

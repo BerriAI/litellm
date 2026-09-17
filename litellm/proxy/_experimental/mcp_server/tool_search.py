@@ -596,6 +596,7 @@ async def handle_mcp_tool_call(
     raw_headers: dict[str, str] | None = None,
     litellm_logging_obj: LiteLLMLoggingObj | None = None,
     requested_server_id: str | None = None,
+    guardrail_context: Mapping[str, object] | None = None,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.server import (
         _get_allowed_mcp_servers,
@@ -635,4 +636,5 @@ async def handle_mcp_tool_call(
         raw_headers=raw_headers,
         litellm_logging_obj=litellm_logging_obj,
         requested_server_id=requested_server_id,
+        guardrail_context=guardrail_context,
     )
