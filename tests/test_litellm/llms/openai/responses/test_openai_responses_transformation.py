@@ -273,6 +273,79 @@ class TestOpenAIResponsesAPIConfig:
         assert replayed_input[1]["id"] == "toolu_01Foreign"
         assert replayed_input[3]["id"] == "srvtoolu_01Foreign"
 
+    def test_transform_strips_thought_signature_from_tool_call_item_ids(self):
+        """Replayed tool call items containing Gemini thought signatures in their ids
+        (e.g., fc_call_xxx__thought__<base64>) must have the signature stripped so that
+        the resulting id conforms to OpenAI's 64-char maximum, while call_id is preserved."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            THOUGHT_SIGNATURE_SEPARATOR,
+        )
+
+        long_sig: Final = "A" * 900
+        raw_call_id: Final = f"call_gemini_123{THOUGHT_SIGNATURE_SEPARATOR}{long_sig}"
+        replayed_input: Final = [
+            {
+                "type": "function_call",
+                "id": f"fc_{raw_call_id}",
+                "call_id": raw_call_id,
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+            },
+            {
+                "type": "custom_tool_call",
+                "id": f"ctc_{raw_call_id}",
+                "call_id": raw_call_id,
+                "name": "run_terminal",
+                "input": "ls",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": raw_call_id,
+                "output": "sunny",
+            },
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=replayed_input,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["input"][0]["id"] == "fc_call_gemini_123"
+        assert len(result["input"][0]["id"]) <= 64
+        assert result["input"][0]["call_id"] == raw_call_id
+        assert result["input"][1]["id"] == "ctc_call_gemini_123"
+        assert len(result["input"][1]["id"]) <= 64
+        assert result["input"][1]["call_id"] == raw_call_id
+        assert result["input"][2]["call_id"] == raw_call_id
+
+    def test_transform_drops_oversized_tool_call_item_ids(self):
+        """Replayed tool call items with genuine prefixes whose ids exceed OpenAI's 64-char
+        maximum (without thought signatures) must have the id dropped to prevent 400."""
+        oversized_id: Final = "fc_" + "x" * 70
+        replayed_input: Final = [
+            {
+                "type": "function_call",
+                "id": oversized_id,
+                "call_id": "call_123",
+                "name": "get_weather",
+                "arguments": "{}",
+            }
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=replayed_input,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "id" not in result["input"][0]
+        assert result["input"][0]["call_id"] == "call_123"
+
     def test_transform_keeps_foreign_tool_call_item_ids_for_other_providers(self):
         """Providers reusing this config that do not enforce OpenAI's id
         shapes must keep replayed ids untouched."""
