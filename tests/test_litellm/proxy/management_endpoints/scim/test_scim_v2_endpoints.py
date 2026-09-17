@@ -7,7 +7,8 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
 from litellm.proxy._types import (
@@ -21,7 +22,9 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
+    SCIM_MAX_PAGE_SIZE,
     SCIMRosterSyncError,
     UserProvisionerHelpers,
     _apply_group_patch_updates,
@@ -45,9 +48,11 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     patch_group,
     patch_team_membership,
     patch_user,
+    scim_router,
     update_group,
     update_user,
 )
+from litellm.proxy.utils import _premium_user_check
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_USER_SCHEMA,
     SCIM_MANAGED_TEAM_METADATA_KEY,
@@ -596,6 +601,69 @@ async def test_get_users_filters_email_value_by_user_email(mocker):
     mock_prisma_client.db.litellm_usertable.count.assert_awaited_once_with(where=expected_where)
     assert response.totalResults == 1
     assert response.Resources[0].id == "internal-user-id"
+
+
+def _scim_test_client(monkeypatch: pytest.MonkeyPatch, mock_prisma_client: MagicMock) -> TestClient:
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    app: Final = FastAPI()
+    app.include_router(scim_router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    app.dependency_overrides[_premium_user_check] = lambda: None
+    return TestClient(app)
+
+
+@pytest.mark.parametrize(
+    ("path", "table", "rows"),
+    [
+        (
+            "/scim/v2/Users",
+            "litellm_usertable",
+            tuple(LiteLLM_UserTable(user_id=f"user-{i}", teams=[]) for i in range(SCIM_MAX_PAGE_SIZE)),
+        ),
+        (
+            "/scim/v2/Groups",
+            "litellm_teamtable",
+            tuple(LiteLLM_TeamTable(team_id=f"team-{i}", team_alias=f"Team {i}") for i in range(SCIM_MAX_PAGE_SIZE)),
+        ),
+    ],
+)
+def test_list_endpoints_clamp_count_above_max_page_size(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    table: str,
+    rows: tuple[LiteLLM_UserTable, ...] | tuple[LiteLLM_TeamTable, ...],
+):
+    """
+    Okta's SCIM connector paginates with count=200. RFC 7644 section 3.4.2.4 says a
+    server caps oversized pages to its own maximum, so the request must succeed with
+    a page of exactly SCIM_MAX_PAGE_SIZE instead of failing query validation.
+    """
+    mock_table: Final = MagicMock(
+        find_many=AsyncMock(return_value=list(rows)),
+        count=AsyncMock(return_value=SCIM_MAX_PAGE_SIZE * 2),
+    )
+    mock_prisma_client: Final = MagicMock(**{f"db.{table}": mock_table})
+    client: Final = _scim_test_client(monkeypatch, mock_prisma_client)
+
+    response: Final = client.get(path, params={"startIndex": 1, "count": SCIM_MAX_PAGE_SIZE * 2})
+
+    assert response.status_code == 200
+    body: Final = response.json()
+    assert body["itemsPerPage"] == SCIM_MAX_PAGE_SIZE
+    assert body["totalResults"] == SCIM_MAX_PAGE_SIZE * 2
+    assert len(body["Resources"]) == SCIM_MAX_PAGE_SIZE
+    assert mock_table.find_many.await_args.kwargs["take"] == SCIM_MAX_PAGE_SIZE
+
+
+def test_list_users_passes_count_within_max_page_size_through(monkeypatch: pytest.MonkeyPatch):
+    mock_table: Final = MagicMock(find_many=AsyncMock(return_value=[]), count=AsyncMock(return_value=0))
+    mock_prisma_client: Final = MagicMock(**{"db.litellm_usertable": mock_table})
+    client: Final = _scim_test_client(monkeypatch, mock_prisma_client)
+
+    response: Final = client.get("/scim/v2/Users", params={"count": 25})
+
+    assert response.status_code == 200
+    assert mock_table.find_many.await_args.kwargs["take"] == 25
 
 
 @pytest.mark.asyncio

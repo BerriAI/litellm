@@ -1563,6 +1563,13 @@ def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
     return match.group(1).lower(), match.group(3)
 
 
+SCIM_MAX_PAGE_SIZE: Final = 100
+
+
+def _clamp_page_size(count: int) -> int:
+    return min(count, SCIM_MAX_PAGE_SIZE)
+
+
 # User Endpoints
 @scim_router.get(
     "/Users",
@@ -1572,7 +1579,7 @@ def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
 )
 async def get_users(
     startIndex: int = Query(1, ge=1),
-    count: int = Query(10, ge=1, le=100),
+    count: int = Query(10, ge=1),
     filter: str | None = Query(None),
 ):
     """
@@ -1584,6 +1591,7 @@ async def get_users(
         count,
         filter,
     )
+    page_size: Final = _clamp_page_size(count)
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         # Parse filter if provided (basic support)
@@ -1607,7 +1615,7 @@ async def get_users(
         users: Final[Sequence[LiteLLM_UserTable]] = await _table(UserRepository(prisma_client)).find_many(
             where=where_conditions,
             skip=(startIndex - 1),
-            take=count,
+            take=page_size,
             order={"created_at": "desc"},
         )
 
@@ -1623,7 +1631,7 @@ async def get_users(
         return SCIMListResponse(
             totalResults=total_count,
             startIndex=startIndex,
-            itemsPerPage=min(count, len(scim_users)),
+            itemsPerPage=min(page_size, len(scim_users)),
             Resources=scim_users,
         )
 
@@ -2399,7 +2407,7 @@ class _TeamWhereConditions(TypedDict, total=False):
 )
 async def get_groups(
     startIndex: int = Query(1, ge=1),
-    count: int = Query(10, ge=1, le=100),
+    count: int = Query(10, ge=1),
     filter: str | None = Query(None),
 ):
     """
@@ -2411,6 +2419,7 @@ async def get_groups(
         count,
         filter,
     )
+    page_size: Final = _clamp_page_size(count)
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         # Parse filter if provided (basic support)
@@ -2425,7 +2434,7 @@ async def get_groups(
         teams: Final = await _table(TeamRepository(prisma_client)).find_many(
             where=where_conditions,
             skip=(startIndex - 1),
-            take=count,
+            take=page_size,
             order={"created_at": "desc"},
         )
 
@@ -2462,7 +2471,7 @@ async def get_groups(
         return SCIMListResponse(
             totalResults=total_count,
             startIndex=startIndex,
-            itemsPerPage=min(count, len(scim_groups)),
+            itemsPerPage=min(page_size, len(scim_groups)),
             Resources=scim_groups,
         )
 
