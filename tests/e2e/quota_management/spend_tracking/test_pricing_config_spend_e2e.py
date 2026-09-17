@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Iterator
 from typing import Final, Literal
 
 import pytest
-from cost_rows import CostRow, approx_equal, poll_cost_row, register_priced_model
+from cost_rows import CostRow, approx_equal, poll_cost_row
 from e2e_config import settle_propagation, unique_marker
 from e2e_http import NoBody, StreamingResponse, unwrap
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody
+from models import (
+    ChatBody,
+    ChatMessage,
+    ChatResponse,
+    KeyDeleteBody,
+    KeyGenerateBody,
+    LiteLLMParamsBody,
+    ModelDeleteBody,
+)
 from pydantic import BaseModel, RootModel
 from spend_e2e_client import SpendClient
 
@@ -35,23 +44,20 @@ class _MarginConfig(RootModel[dict[str, float | dict[str, float]]]):
     pass
 
 
-class _BedrockChecksCategory(BaseModel):
-    category: Literal["VIOLENCE", "HATE", "SEXUAL", "MISCONDUCT", "INSULTS"]
+class _DiscountConfigResponse(BaseModel):
+    values: dict[str, float]
 
 
-class _BedrockContentFilter(BaseModel):
-    categories: list[_BedrockChecksCategory]
-
-
-class _BedrockChecks(BaseModel):
-    contentFilter: _BedrockContentFilter
+class _MarginConfigResponse(BaseModel):
+    values: dict[str, float | dict[str, float]]
 
 
 class _BedrockParams(BaseModel):
     guardrail: Literal["bedrock"] = "bedrock"
     mode: Literal["pre_call"] = "pre_call"
     default_on: bool = False
-    checks: _BedrockChecks
+    guardrailIdentifier: str
+    guardrailVersion: str
 
 
 class _GuardrailSpec(BaseModel):
@@ -67,7 +73,13 @@ class _GuardrailCreateResponse(BaseModel):
     guardrail_id: str
 
 
-def _register_bedrock_guardrail(client: SpendClient, resources: ResourceManager, name: str) -> None:
+def _register_bedrock_guardrail(
+    client: SpendClient,
+    resources: ResourceManager,
+    name: str,
+    identifier: str,
+    version: str,
+) -> None:
     guardrail_id: Final = unwrap(
         client.proxy.transport.post(
             "/guardrails",
@@ -76,11 +88,8 @@ def _register_bedrock_guardrail(client: SpendClient, resources: ResourceManager,
                 guardrail=_GuardrailSpec(
                     guardrail_name=name,
                     litellm_params=_BedrockParams(
-                        checks=_BedrockChecks(
-                            contentFilter=_BedrockContentFilter(
-                                categories=[_BedrockChecksCategory(category="HATE")]
-                            )
-                        )
+                        guardrailIdentifier=identifier,
+                        guardrailVersion=version,
                     ),
                 )
             ),
@@ -92,11 +101,13 @@ def _register_bedrock_guardrail(client: SpendClient, resources: ResourceManager,
 
 
 def _delete_guardrail(client: SpendClient, guardrail_id: str) -> None:
-    _ = client.proxy.transport.delete(
-        f"/guardrails/{guardrail_id}",
-        headers=client.proxy.transport.master,
-        json=NoBody(),
-        response_type=NoBody,
+    unwrap(
+        client.proxy.transport.delete(
+            f"/guardrails/{guardrail_id}",
+            headers=client.proxy.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
     )
 
 
@@ -135,17 +146,62 @@ def _set_margin(client: SpendClient, values: dict[str, float | dict[str, float]]
     )
 
 
+def _get_discount(client: SpendClient) -> dict[str, float]:
+    return unwrap(
+        client.proxy.transport.get(
+            "/config/cost_discount_config",
+            headers=client.proxy.transport.master,
+            params=NoBody(),
+            response_type=_DiscountConfigResponse,
+        )
+    ).values
+
+
+def _get_margin(client: SpendClient) -> dict[str, float | dict[str, float]]:
+    return unwrap(
+        client.proxy.transport.get(
+            "/config/cost_margin_config",
+            headers=client.proxy.transport.master,
+            params=NoBody(),
+            response_type=_MarginConfigResponse,
+        )
+    ).values
+
+
 def _register_model(client: SpendClient, resources: ResourceManager, prefix: str) -> str:
-    return register_priced_model(
-        client.proxy,
-        resources,
-        prefix,
+    model: Final = f"{prefix}-{unique_marker()}"
+    model_id: Final = client.proxy.create_model(
+        model,
         LiteLLMParamsBody(
             model="openai/gpt-4o-mini",
             api_key="os.environ/OPENAI_API_KEY",
             input_cost_per_token=INPUT_RATE,
             output_cost_per_token=OUTPUT_RATE,
         ),
+    )
+    resources.defer(lambda: _delete_model(client, model_id))
+    return model
+
+
+def _delete_model(client: SpendClient, model_id: str) -> None:
+    unwrap(
+        client.proxy.transport.post(
+            "/model/delete",
+            headers=client.proxy.transport.master,
+            json=ModelDeleteBody(id=model_id),
+            response_type=NoBody,
+        )
+    )
+
+
+def _delete_key(client: SpendClient, key: str) -> None:
+    unwrap(
+        client.proxy.transport.post(
+            "/key/delete",
+            headers=client.proxy.transport.master,
+            json=KeyDeleteBody(keys=[key]),
+            response_type=NoBody,
+        )
     )
 
 
@@ -159,12 +215,33 @@ def _base_cost(row: CostRow, prompt_tokens: int, completion_tokens: int) -> floa
 
 
 @pytest.fixture
+def strict_resources(client: SpendClient) -> Iterator[ResourceManager]:
+    manager: Final = ResourceManager(client=client.proxy, strict_cleanup=True)
+    manager.init()
+    yield manager
+    manager.teardown()
+
+
+@pytest.fixture
+def scoped_key(client: SpendClient, strict_resources: ResourceManager) -> str:
+    key: Final = client.proxy.generate_key(KeyGenerateBody(user_id="e2e-test-user"))
+    strict_resources.defer(lambda: _delete_key(client, key))
+    return key
+
+
+@pytest.fixture
 def restored_pricing_config(client: SpendClient) -> Iterator[None]:
-    _set_discount(client, {})
-    _set_margin(client, {})
-    yield
-    _set_discount(client, {})
-    _set_margin(client, {})
+    discount: Final = _get_discount(client)
+    margin: Final = _get_margin(client)
+    try:
+        _set_discount(client, {})
+        _set_margin(client, {})
+        yield
+    finally:
+        try:
+            _set_discount(client, discount)
+        finally:
+            _set_margin(client, margin)
 
 
 class TestPricingConfigSpend:
@@ -175,12 +252,12 @@ class TestPricingConfigSpend:
     def test_configured_discount_reaches_persisted_spend_row(
         self,
         client: SpendClient,
-        resources: ResourceManager,
+        strict_resources: ResourceManager,
         scoped_key: str,
         restored_pricing_config: None,
     ) -> None:
         _set_discount(client, {"openai": DISCOUNT})
-        model: Final = _register_model(client, resources, "discount-priced")
+        model: Final = _register_model(client, strict_resources, "discount-priced")
         chat: Final = unwrap(client.chat(scoped_key, model, f"reply with one word {unique_marker()}", max_tokens=16))
         assert chat.id and chat.usage and chat.usage.prompt_tokens and chat.usage.completion_tokens
 
@@ -199,12 +276,12 @@ class TestPricingConfigSpend:
     def test_configured_margin_reaches_persisted_spend_row(
         self,
         client: SpendClient,
-        resources: ResourceManager,
+        strict_resources: ResourceManager,
         scoped_key: str,
         restored_pricing_config: None,
     ) -> None:
         _set_margin(client, {"openai": {"percentage": MARGIN_PERCENT, "fixed_amount": MARGIN_FIXED}})
-        model: Final = _register_model(client, resources, "margin-priced")
+        model: Final = _register_model(client, strict_resources, "margin-priced")
         chat: Final = unwrap(client.chat(scoped_key, model, f"reply with one word {unique_marker()}", max_tokens=16))
         assert chat.id and chat.usage and chat.usage.prompt_tokens and chat.usage.completion_tokens
 
@@ -225,13 +302,15 @@ class TestPricingConfigSpend:
     def test_bedrock_guardrail_cost_reaches_persisted_spend_row(
         self,
         client: SpendClient,
-        resources: ResourceManager,
+        strict_resources: ResourceManager,
         scoped_key: str,
         restored_pricing_config: None,
     ) -> None:
+        identifier: Final = os.environ["BEDROCK_GUARDRAIL_IDENTIFIER"]
+        version: Final = os.environ["BEDROCK_GUARDRAIL_VERSION"]
         name: Final = f"e2e-bedrock-cost-{unique_marker()}"
-        _register_bedrock_guardrail(client, resources, name)
-        model: Final = _register_model(client, resources, "guardrail-priced")
+        _register_bedrock_guardrail(client, strict_resources, name, identifier, version)
+        model: Final = _register_model(client, strict_resources, "guardrail-priced")
         result: Final = _guarded_chat(client, scoped_key, model, name)
         assert result.ok, f"guarded request failed with {result.status_code}: {result.body[:400]}"
         assert name in {value.strip() for value in result.headers.get("x-litellm-applied-guardrails", "").split(",")}
