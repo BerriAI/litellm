@@ -222,6 +222,8 @@ def get_supported_openai_params(
         return litellm.PetalsConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "deepinfra":
         return litellm.DeepInfraConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "clf_ai_gateway":
+        return litellm.ClfAiGatewayConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "perplexity":
         return litellm.PerplexityChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "nscale":
