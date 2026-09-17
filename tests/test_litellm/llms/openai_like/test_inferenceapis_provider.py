@@ -3,7 +3,6 @@ Tests for the Inference APIs provider configuration and integration.
 """
 
 import json
-from unittest.mock import patch
 
 import httpx
 
@@ -134,31 +133,32 @@ CHAT_RESPONSE = {
 }
 
 
-def _capture_requests(sent):
-    def fake_send(self, request, **kwargs):
+def _recording_session(sent):
+    def handler(request):
         sent.append(request)
-        return httpx.Response(200, json=CHAT_RESPONSE, request=request)
+        return httpx.Response(200, json=CHAT_RESPONSE)
 
-    return fake_send
+    return httpx.Client(transport=httpx.MockTransport(handler))
 
 
 class TestInferenceAPIsRequests:
-    def test_completion_sends_request_to_inferenceapis(self):
+    def test_completion_sends_request_to_inferenceapis(self, monkeypatch):
         sent = []
-        with patch.object(httpx.Client, "send", _capture_requests(sent)):
-            response = litellm.completion(
-                model="inferenceapis/deepseek-ai/DeepSeek-V4-Flash",
-                messages=[{"role": "user", "content": "ping"}],
-                max_completion_tokens=7,
-                api_key="sk-test",
-            )
+        monkeypatch.setattr(litellm, "client_session", _recording_session(sent))
+
+        response = litellm.completion(
+            model="inferenceapis/deepseek-ai/DeepSeek-V4-Flash",
+            messages=[{"role": "user", "content": "ping"}],
+            max_completion_tokens=7,
+            api_key="sk-test-explicit",
+        )
 
         assert response.choices[0].message.content == "pong"
         assert len(sent) == 1
         request = sent[0]
         assert request.method == "POST"
         assert str(request.url) == "https://api.inferenceapis.com/v1/chat/completions"
-        assert request.headers["authorization"] == "Bearer sk-test"
+        assert request.headers["authorization"] == "Bearer sk-test-explicit"
         body = json.loads(request.content)
         assert body["model"] == "deepseek-ai/DeepSeek-V4-Flash"
         assert body["max_completion_tokens"] == 7
@@ -168,11 +168,12 @@ class TestInferenceAPIsRequests:
         monkeypatch.setenv("INFERENCEAPIS_API_KEY", "sk-from-env")
         monkeypatch.setenv("INFERENCEAPIS_API_BASE", "https://proxy.example.com/v1")
         sent = []
-        with patch.object(httpx.Client, "send", _capture_requests(sent)):
-            litellm.completion(
-                model="inferenceapis/openai/gpt-oss-120b",
-                messages=[{"role": "user", "content": "ping"}],
-            )
+        monkeypatch.setattr(litellm, "client_session", _recording_session(sent))
+
+        litellm.completion(
+            model="inferenceapis/openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": "ping"}],
+        )
 
         assert len(sent) == 1
         request = sent[0]
