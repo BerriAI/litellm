@@ -217,8 +217,8 @@ class McpClient:
             response_type=McpHealthResponse,
         )
 
-    def await_registered(self, server_id: str) -> None:
-        """Poll /v1/mcp/server until `server_id` is listed. Fails at poll_timeout.
+    def await_registered(self, server_id: str) -> McpServerRow:
+        """Poll /v1/mcp/server and return the matching row. Fails at poll_timeout.
 
         The DB row exists the moment registration returns, but a data-plane pod
         answers the listing from a registry it refreshes on a periodic DB sync, so a
@@ -227,14 +227,15 @@ class McpClient:
         """
         deadline = time.monotonic() + self.proxy.poll_timeout
         while True:
-            registered = frozenset(row.server_id for row in self.registered_servers())
-            if server_id in registered:
-                return
+            registered = self.registered_servers()
+            server = next((row for row in registered if row.server_id == server_id), None)
+            if server is not None:
+                return server
             if time.monotonic() >= deadline:
                 raise AssertionError(
                     f"registered server {server_id} still absent from /v1/mcp/server "
                     f"{self.proxy.poll_timeout}s after registration (the data plane never synced "
-                    f"the row): {registered}"
+                    f"the row): {frozenset(row.server_id for row in registered)}"
                 )
             time.sleep(self.proxy.poll_interval)
 
