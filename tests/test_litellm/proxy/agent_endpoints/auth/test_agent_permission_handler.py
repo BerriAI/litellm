@@ -13,6 +13,7 @@ import pytest
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     AgentAccess,
     AgentRequestHandler,
@@ -156,6 +157,88 @@ class TestAgentRequestHandler:
                         )
                         is False
                     ), agent_id
+
+    @staticmethod
+    def _ceiling(agent_ids: frozenset[str]) -> AgentAccessGroupCeiling:
+        return AgentAccessGroupCeiling(
+            access_group_ids=("ag-1",),
+            models=frozenset(),
+            mcp_server_ids=frozenset(),
+            agent_ids=agent_ids,
+        )
+
+    async def test_agent_access_groups_cap_an_otherwise_unrestricted_key(self):
+        """A key with no agent grant of its own may still only reach the agents its
+        agent's attached access groups name."""
+        agent_key: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", agent_id="caller-agent")
+
+        with (
+            patch.object(AgentRequestHandler, "_get_allowed_agents_for_key", return_value=UnrestrictedAgentAccess()),
+            patch.object(AgentRequestHandler, "_get_allowed_agents_for_team", return_value=UnrestrictedAgentAccess()),
+            patch(
+                "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
+                new=AsyncMock(return_value=self._ceiling(frozenset({"agent-beta"}))),
+            ) as mock_ceiling,
+        ):
+            assert await AgentRequestHandler.resolve_agent_access(agent_key) == RestrictedAgentAccess(
+                frozenset({"agent-beta"})
+            )
+            assert await AgentRequestHandler.is_agent_allowed("agent-beta", agent_key) is True
+            assert await AgentRequestHandler.is_agent_allowed("agent-alpha", agent_key) is False
+            mock_ceiling.assert_called_with("caller-agent")
+
+    async def test_agent_access_groups_intersect_with_key_and_team_grants(self):
+        agent_key: Final = UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="test-team", agent_id="caller-agent"
+        )
+
+        with (
+            patch.object(
+                AgentRequestHandler,
+                "_get_allowed_agents_for_key",
+                return_value=RestrictedAgentAccess(frozenset({"agent-alpha", "agent-beta"})),
+            ),
+            patch.object(
+                AgentRequestHandler,
+                "_get_allowed_agents_for_team",
+                return_value=RestrictedAgentAccess(frozenset({"agent-alpha", "agent-beta", "agent-gamma"})),
+            ),
+            patch(
+                "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
+                new=AsyncMock(return_value=self._ceiling(frozenset({"agent-beta", "agent-gamma"}))),
+            ),
+        ):
+            assert await AgentRequestHandler.resolve_agent_access(agent_key) == RestrictedAgentAccess(
+                frozenset({"agent-beta"})
+            )
+
+    async def test_agent_access_groups_naming_no_agent_deny_every_agent(self):
+        agent_key: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", agent_id="caller-agent")
+
+        with (
+            patch.object(AgentRequestHandler, "_get_allowed_agents_for_key", return_value=UnrestrictedAgentAccess()),
+            patch.object(AgentRequestHandler, "_get_allowed_agents_for_team", return_value=UnrestrictedAgentAccess()),
+            patch(
+                "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
+                new=AsyncMock(return_value=self._ceiling(frozenset())),
+            ),
+        ):
+            assert await AgentRequestHandler.resolve_agent_access(agent_key) == RestrictedAgentAccess(frozenset())
+            assert await AgentRequestHandler.is_agent_allowed("agent-alpha", agent_key) is False
+
+    async def test_key_without_agent_never_consults_agent_access_groups(self):
+        plain_key: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+        with (
+            patch.object(AgentRequestHandler, "_get_allowed_agents_for_key", return_value=UnrestrictedAgentAccess()),
+            patch.object(AgentRequestHandler, "_get_allowed_agents_for_team", return_value=UnrestrictedAgentAccess()),
+            patch(
+                "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
+                new=AsyncMock(return_value=self._ceiling(frozenset())),
+            ) as mock_ceiling,
+        ):
+            assert await AgentRequestHandler.resolve_agent_access(plain_key) == UnrestrictedAgentAccess()
+            mock_ceiling.assert_not_called()
 
     async def test_empty_access_group_denies_every_agent(self):
         """LIT-5143: a key restricted to an access group that resolves to no agents is

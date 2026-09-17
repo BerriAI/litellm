@@ -44,6 +44,14 @@ vi.mock("@/components/mcp_server_management/MCPToolPermissions", () => ({
   default: () => null,
 }));
 
+vi.mock("@/components/common_components/AccessGroupSelector", () => ({
+  default: ({ onChange }: { onChange: (value: string[]) => void }) => (
+    <button type="button" data-testid="select-access-group" onClick={() => onChange(["ag-1", "ag-2"])}>
+      Select access group
+    </button>
+  ),
+}));
+
 vi.mock("@/components/common_components/team_dropdown", () => ({
   default: () => null,
 }));
@@ -141,5 +149,27 @@ describe("AddAgentForm logos", () => {
     await vi.waitFor(() => expect(networking.createAgentCall).toHaveBeenCalled());
     const [, payload] = vi.mocked(networking.createAgentCall).mock.calls[0];
     expect(payload.object_permission).toEqual({ mcp_toolsets: ["ts-1"] });
+    expect(payload).not.toHaveProperty("access_group_ids");
+  });
+
+  it("includes selected access groups in the create payload", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    vi.mocked(networking.createAgentCall).mockReset().mockResolvedValue({
+      agent_id: "agent-1",
+      agent_name: "Test Agent",
+    } as never);
+    vi.mocked(networking.keyListCall).mockResolvedValue({ keys: [] });
+
+    renderForm();
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    await user.click(screen.getByTestId("select-access-group"));
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    await user.click(screen.getByText(/Skip for now/));
+    await user.click(screen.getByRole("button", { name: "Create Agent →" }));
+
+    await vi.waitFor(() => expect(networking.createAgentCall).toHaveBeenCalled());
+    const [, payload] = vi.mocked(networking.createAgentCall).mock.calls[0];
+    expect(payload.access_group_ids).toEqual(["ag-1", "ag-2"]);
   });
 });

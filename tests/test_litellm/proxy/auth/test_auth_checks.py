@@ -8461,3 +8461,94 @@ def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
 def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() -> None:
     assert request_skips_budget_checks(route="/v1/models", model=None, llm_router=None) is True
     assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False
+
+
+# Agent access group model ceiling
+
+
+def _agent_model_ceiling(models: frozenset[str]):
+    from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling
+
+    return AgentAccessGroupCeiling(
+        access_group_ids=("ag-1",), models=models, mcp_server_ids=frozenset(), agent_ids=frozenset()
+    )
+
+
+async def _run_common_checks_for_agent_key(model: str, valid_token: UserAPIKeyAuth):
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    return await common_checks(
+        request_body={"model": model, "messages": [{"role": "user", "content": "hi"}]},
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=valid_token,
+        request=MagicMock(spec=Request),
+    )
+
+
+@pytest.mark.asyncio
+async def test_common_checks_agent_access_groups_cap_models_even_when_key_allows_them():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
+
+    with patch(
+        "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
+        new=AsyncMock(return_value=_agent_model_ceiling(frozenset({"gpt-5"}))),
+    ):
+        assert await _run_common_checks_for_agent_key("gpt-5", agent_key) is True
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _run_common_checks_for_agent_key("claude-sonnet", agent_key)
+
+    assert exc_info.value.type == ProxyErrorTypes.agent_model_access_denied
+    assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+
+
+@pytest.mark.asyncio
+async def test_common_checks_agent_access_groups_naming_no_model_deny_every_model():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=[])
+
+    with (
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
+            new=AsyncMock(return_value=_agent_model_ceiling(frozenset())),
+        ),
+        pytest.raises(ProxyException) as exc_info,
+    ):
+        await _run_common_checks_for_agent_key("gpt-5", agent_key)
+
+    assert exc_info.value.type == ProxyErrorTypes.agent_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_common_checks_agent_without_access_groups_adds_no_model_ceiling():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5", "claude-sonnet"])
+
+    with patch(
+        "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
+        new=AsyncMock(return_value=None),
+    ) as mock_ceiling:
+        assert await _run_common_checks_for_agent_key("gpt-5", agent_key) is True
+        assert await _run_common_checks_for_agent_key("claude-sonnet", agent_key) is True
+
+    mock_ceiling.assert_called_with("agent-1")
+
+
+@pytest.mark.asyncio
+async def test_common_checks_key_without_agent_never_consults_agent_access_groups():
+    plain_key: Final = UserAPIKeyAuth(token="plain-token", models=["gpt-5"])
+
+    with patch(
+        "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
+        new=AsyncMock(return_value=_agent_model_ceiling(frozenset())),
+    ) as mock_ceiling:
+        assert await _run_common_checks_for_agent_key("gpt-5", plain_key) is True
+
+    mock_ceiling.assert_not_called()

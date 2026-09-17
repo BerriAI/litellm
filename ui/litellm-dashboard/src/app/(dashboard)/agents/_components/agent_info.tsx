@@ -16,6 +16,8 @@ import { Agent } from "@/components/agents/types";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import AccessGroupSelector from "@/components/common_components/AccessGroupSelector";
 import KeyInfoView from "@/components/templates/key_info_view";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
@@ -26,6 +28,7 @@ import {
   AGENT_FORM_CONFIG,
   buildAgentDataFromForm,
   buildMcpObjectPermission,
+  parseAccessGroupIdsForForm,
   parseAgentForForm,
   parseMcpPermissionsForForm,
 } from "./agent_config";
@@ -122,7 +125,11 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       } else {
         const typeInfo = agentTypeMetadata.find((t) => t.agent_type === agentType);
         if (typeInfo) {
-          form.reset({ ...parseDynamicAgentForForm(data, typeInfo), ...parseMcpPermissionsForForm(data) });
+          form.reset({
+            ...parseDynamicAgentForForm(data, typeInfo),
+            ...parseMcpPermissionsForForm(data),
+            ...parseAccessGroupIdsForForm(data),
+          });
         } else {
           form.reset(parseAgentForForm(data));
         }
@@ -142,7 +149,11 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       if (agentType !== "a2a") {
         const typeInfo = agentTypeMetadata.find((t) => t.agent_type === agentType);
         if (typeInfo) {
-          form.reset({ ...parseDynamicAgentForForm(agent, typeInfo), ...parseMcpPermissionsForForm(agent) });
+          form.reset({
+            ...parseDynamicAgentForForm(agent, typeInfo),
+            ...parseMcpPermissionsForForm(agent),
+            ...parseAccessGroupIdsForForm(agent),
+          });
         }
       }
     }
@@ -153,10 +164,16 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
   const mcpSelection = useWatch({ control: form.control, name: "allowed_mcp_servers_and_groups" });
   const mcpToolPermissions = useWatch({ control: form.control, name: "mcp_tool_permissions" });
   const { data: mcpServers = [] } = useMCPServers();
+  const { data: accessGroups = [] } = useAccessGroups();
 
   const mcpServerLabel = (serverId: string) => {
     const server = mcpServers.find((s) => s.server_id === serverId);
     return server?.server_name ? `${server.server_name} (${serverId})` : serverId;
+  };
+
+  const accessGroupLabel = (accessGroupId: string) => {
+    const group = accessGroups.find((g) => g.access_group_id === accessGroupId);
+    return group ? `${group.access_group_name} (${accessGroupId})` : accessGroupId;
   };
 
   const discoveryRequest = useMemo(
@@ -221,6 +238,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       await patchAgentCall(accessToken, agentId, {
         ...updateData,
         object_permission: buildMcpObjectPermission(values),
+        access_group_ids: values.access_group_ids ?? [],
       });
       toast.success("Agent updated successfully");
       setIsEditing(false);
@@ -350,6 +368,17 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
               <DetailItem label="RPM Limit">{agent.rpm_limit ?? "Unlimited"}</DetailItem>
               <DetailItem label="Session TPM Limit">{agent.session_tpm_limit ?? "Unlimited"}</DetailItem>
               <DetailItem label="Session RPM Limit">{agent.session_rpm_limit ?? "Unlimited"}</DetailItem>
+              <DetailItem label="Access Groups">
+                {agent.access_group_ids?.length ? (
+                  <div className="space-y-1">
+                    {agent.access_group_ids.map((accessGroupId) => (
+                      <div key={accessGroupId}>{accessGroupLabel(accessGroupId)}</div>
+                    ))}
+                  </div>
+                ) : (
+                  "None"
+                )}
+              </DetailItem>
               <DetailItem label="Created At">{formatDate(agent.created_at)}</DetailItem>
               <DetailItem label="Updated At">{formatDate(agent.updated_at)}</DetailItem>
             </DetailList>
@@ -488,6 +517,26 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                           {rateLimitField("session_tpm_limit", "Session TPM Limit")}
                           {rateLimitField("session_rpm_limit", "Session RPM Limit")}
                         </div>
+
+                        <Separator className="my-6" />
+                        <h3 className="text-lg font-medium mb-4">Access Groups</h3>
+                        <FieldGroup>
+                          <AgentFormField
+                            name="access_group_ids"
+                            label={labelWithHint(
+                              "Access Groups",
+                              "Attached groups cap which models, MCP servers, and agents this agent can reach, on top of its key and team permissions. Leave empty to apply no extra cap.",
+                            )}
+                          >
+                            {({ value, onChange }) => (
+                              <AccessGroupSelector
+                                value={Array.isArray(value) ? (value as string[]) : []}
+                                onChange={onChange}
+                                placeholder="Select access groups (optional)"
+                              />
+                            )}
+                          </AgentFormField>
+                        </FieldGroup>
 
                         <Separator className="my-6" />
                         <h3 className="text-lg font-medium mb-4">MCP Servers</h3>

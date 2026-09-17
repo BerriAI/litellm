@@ -1549,10 +1549,18 @@ class MCPRequestHandler:
                 allowed_mcp_servers_for_agent: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_agent(
                     user_api_key_auth
                 )
-                if len(allowed_mcp_servers_for_agent) > 0:
+                agent_access_group_servers: Final = await MCPRequestHandler._get_agent_access_group_server_ceiling(
+                    user_api_key_auth
+                )
+                if len(allowed_mcp_servers_for_agent) > 0 or agent_access_group_servers is not None:
                     has_lower_level_mcp_restrictions = True
-                    # Intersect: agent can only use servers allowed by BOTH key/team AND agent config
-                    allowed_mcp_servers = [s for s in allowed_mcp_servers if s in allowed_mcp_servers_for_agent]
+                    # Intersect: agent can only use servers allowed by key/team AND agent config AND agent access groups
+                    allowed_mcp_servers = [
+                        s
+                        for s in allowed_mcp_servers
+                        if (len(allowed_mcp_servers_for_agent) == 0 or s in allowed_mcp_servers_for_agent)
+                        and (agent_access_group_servers is None or s in agent_access_group_servers)
+                    ]
                     verbose_logger.debug(
                         "Applied agent intersection filter. Final allowed servers: %s", allowed_mcp_servers
                     )
@@ -3136,6 +3144,29 @@ class MCPRequestHandler:
                 raise
             verbose_logger.warning("Failed to get allowed MCP servers for agent: %s", e)
             return []
+
+    @staticmethod
+    async def _get_agent_access_group_server_ceiling(
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> frozenset[str] | None:
+        """
+        Server IDs the agent's attached unified access groups (``LiteLLM_AgentsTable.access_group_ids``)
+        allow, or None when the agent has none attached. Unlike the object_permission path above, an
+        attached group set that names no servers is an empty ceiling and denies every server.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
+            resolve_agent_access_group_ceiling,
+        )
+
+        if not user_api_key_auth.agent_id:
+            return None
+        ceiling: Final = await resolve_agent_access_group_ceiling(user_api_key_auth.agent_id)
+        if ceiling is None:
+            return None
+        return frozenset(global_mcp_server_manager.expand_permission_list(sorted(ceiling.mcp_server_ids)))
 
     @staticmethod
     async def _get_agent_tool_permissions_for_server(

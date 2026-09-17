@@ -990,3 +990,136 @@ async def test_patch_agent_in_db_preserves_secret_when_echoed_back_redacted():
     stored_params: Final = json.loads(mock_update.call_args.kwargs["data"]["litellm_params"])
     assert stored_params["aws_secret_access_key"] == SENTINEL_AWS_SECRET_ACCESS_KEY
     assert stored_params["is_public"] is True
+
+
+def _agent_row_mock(access_group_ids: list[str]) -> MagicMock:
+    row: Final = MagicMock()
+    row.model_dump.return_value = {
+        "agent_id": "agent-123",
+        "agent_name": "Test Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {},
+        "object_permission": None,
+        "access_group_ids": access_group_ids,
+    }
+    row.object_permission = None
+    return row
+
+
+@pytest.mark.asyncio
+async def test_add_agent_to_db_persists_deduplicated_access_group_ids():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_create = AsyncMock(return_value=_agent_row_mock(["ag-1", "ag-2"]))
+    mock_prisma.db.litellm_agentstable.create = mock_create
+
+    result: Final = await registry.add_agent_to_db(
+        agent={
+            "agent_name": "Test Agent",
+            "agent_card_params": _sample_agent_card_params(),
+            "access_group_ids": ["ag-1", "ag-2", "ag-1"],
+        },
+        prisma_client=mock_prisma,
+        created_by="test-user",
+    )
+
+    assert tuple(mock_create.call_args.kwargs["data"]["access_group_ids"]) == ("ag-1", "ag-2")
+    assert result.access_group_ids == ["ag-1", "ag-2"]
+
+
+@pytest.mark.asyncio
+async def test_add_agent_to_db_without_access_group_ids_leaves_column_to_its_default():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_create = AsyncMock(return_value=_agent_row_mock([]))
+    mock_prisma.db.litellm_agentstable.create = mock_create
+
+    await registry.add_agent_to_db(
+        agent={"agent_name": "Test Agent", "agent_card_params": _sample_agent_card_params()},
+        prisma_client=mock_prisma,
+        created_by="test-user",
+    )
+
+    assert "access_group_ids" not in mock_create.call_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("patch_body", "expected"),
+    [
+        ({"access_group_ids": ["ag-2", "ag-3"]}, ["ag-2", "ag-3"]),
+        ({"access_group_ids": []}, []),
+        ({"access_group_ids": None}, []),
+    ],
+)
+async def test_patch_agent_in_db_replaces_access_group_ids_when_provided(patch_body: dict, expected: list[str]):
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value={
+            "agent_id": "agent-123",
+            "agent_name": "Test Agent",
+            "litellm_params": {},
+            "object_permission_id": None,
+            "access_group_ids": ["ag-1"],
+        }
+    )
+    mock_update = AsyncMock(return_value=_agent_row_mock(expected))
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.patch_agent_in_db(
+        agent_id="agent-123", agent=patch_body, prisma_client=mock_prisma, updated_by="test-user"
+    )
+
+    assert tuple(mock_update.call_args.kwargs["data"]["access_group_ids"]) == tuple(expected)
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_in_db_keeps_access_group_ids_when_omitted():
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value={
+            "agent_id": "agent-123",
+            "agent_name": "Old Name",
+            "litellm_params": {},
+            "object_permission_id": None,
+            "access_group_ids": ["ag-1"],
+        }
+    )
+    mock_update = AsyncMock(return_value=_agent_row_mock(["ag-1"]))
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.patch_agent_in_db(
+        agent_id="agent-123", agent={"agent_name": "New Name"}, prisma_client=mock_prisma, updated_by="test-user"
+    )
+
+    assert "access_group_ids" not in mock_update.call_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body_access_group_ids", "expected"),
+    [(["ag-9", "ag-9"], ["ag-9"]), (None, []), ("omitted", [])],
+)
+async def test_update_agent_in_db_always_writes_access_group_ids(body_access_group_ids, expected: list[str]):
+    """PUT is a full replacement: omitting the field clears any previously attached groups."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(litellm_params={}, object_permission_id=None, access_group_ids=["ag-1"])
+    )
+    mock_update = AsyncMock(return_value=_agent_row_mock(expected))
+    mock_prisma.db.litellm_agentstable.update = mock_update
+    body: Final = {
+        "agent_name": "Test Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {"model": "bedrock/agentcore/my-agent"},
+        **({} if body_access_group_ids == "omitted" else {"access_group_ids": body_access_group_ids}),
+    }
+
+    await registry.update_agent_in_db(
+        agent_id="agent-123", agent=body, prisma_client=mock_prisma, updated_by="test-user"
+    )
+
+    assert tuple(mock_update.call_args.kwargs["data"]["access_group_ids"]) == tuple(expected)

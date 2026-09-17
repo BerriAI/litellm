@@ -4208,6 +4208,65 @@ class TestAgentMCPPermissions:
                     assert sorted(result) == ["server_1", "server_2"]
                     mock_agent.assert_called_once_with(user_api_key_auth)
 
+    @pytest.mark.parametrize(
+        ("group_ceiling", "expected"),
+        [
+            (frozenset({"server_1"}), ["server_1"]),
+            (frozenset({"server_1", "server_2", "server_3"}), ["server_1", "server_2"]),
+            (frozenset(), []),
+        ],
+    )
+    async def test_get_allowed_mcp_servers_agent_access_group_ceiling(self, group_ceiling, expected):
+        """The agent's attached access groups cap the key/team servers; groups naming no server deny all."""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user", agent_id="agent-ag")
+        with (
+            patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key", return_value=["server_1", "server_2"]),
+            patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team", return_value=[]),
+            patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", return_value=[]),
+            patch.object(MCPRequestHandler, "_get_agent_access_group_server_ceiling", return_value=group_ceiling),
+        ):
+            access = await MCPRequestHandler.get_mcp_server_access(user_api_key_auth=user_api_key_auth)
+            assert sorted(access.server_ids) == expected
+            assert access.scope == "scoped"
+
+    async def test_get_allowed_mcp_servers_agent_without_access_groups_is_uncapped(self):
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user", agent_id="agent-ag")
+        with (
+            patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key", return_value=["server_1", "server_2"]),
+            patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team", return_value=[]),
+            patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", return_value=[]),
+            patch.object(MCPRequestHandler, "_get_agent_access_group_server_ceiling", return_value=None),
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=user_api_key_auth)
+            assert sorted(result) == ["server_1", "server_2"]
+
+    async def test_agent_access_group_server_ceiling_expands_group_servers(self):
+        from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling
+
+        ceiling = AgentAccessGroupCeiling(
+            access_group_ids=("ag-1",),
+            models=frozenset(),
+            mcp_server_ids=frozenset({"server_1"}),
+            agent_ids=frozenset(),
+        )
+        with (
+            patch(
+                "litellm.proxy.agent_endpoints.auth.agent_access_groups.resolve_agent_access_group_ceiling",
+                new=AsyncMock(return_value=ceiling),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_manager,
+        ):
+            mock_manager.expand_permission_list.return_value = ["server_1"]
+            result = await MCPRequestHandler._get_agent_access_group_server_ceiling(
+                UserAPIKeyAuth(api_key="test-key", agent_id="agent-ag")
+            )
+            assert result == frozenset({"server_1"})
+            mock_manager.expand_permission_list.assert_called_once_with(["server_1"])
+
+        assert await MCPRequestHandler._get_agent_access_group_server_ceiling(UserAPIKeyAuth(api_key="k")) is None
+
     async def test_get_allowed_mcp_servers_key_team_agent_intersection(self):
         """Key allows [1, 2], agent allows [2, 3]. Result = [2]."""
         user_api_key_auth = UserAPIKeyAuth(

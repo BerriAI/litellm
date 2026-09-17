@@ -1003,6 +1003,9 @@ async def common_checks(
                         code=status.HTTP_400_BAD_REQUEST,
                     )
 
+    # 2.4 If the agent behind the key has access groups attached, they cap the models it can call
+    await _check_agent_access_group_model_access(model=_model, valid_token=valid_token, llm_router=llm_router)
+
     ## 2.1 If user can call model (if personal key)
     if _model and team_object is None and user_object is not None:
         with tracer.trace("litellm.proxy.auth.common_checks.can_user_call_model"):
@@ -4126,7 +4129,7 @@ def _can_object_call_model(
     models: list[str],
     team_model_aliases: dict[str, str] | None = None,
     team_id: str | None = None,
-    object_type: Literal["user", "team", "key", "org", "project"] = "user",
+    object_type: Literal["user", "team", "key", "org", "project", "agent"] = "user",
     fallback_depth: int = 0,
 ) -> Literal[True]:
     """
@@ -4189,6 +4192,38 @@ def _can_object_call_model(
         type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
         param="model",
         code=status.HTTP_403_FORBIDDEN,
+    )
+
+
+async def _check_agent_access_group_model_access(
+    model: str | list[str] | None,  # mutable-ok: _can_object_call_model and the client message helper take list[str]
+    valid_token: UserAPIKeyAuth | None,
+    llm_router: Router | None,
+) -> Literal[True]:
+    """Raises when the key's agent has access groups attached and none of them names the model.
+    Attached groups that name no model deny every model; ``_can_object_call_model`` would read
+    an empty allowlist as unrestricted."""
+    from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_agent_access_group_ceiling
+
+    if not model or valid_token is None or not valid_token.agent_id:
+        return True
+    ceiling: Final = await resolve_agent_access_group_ceiling(valid_token.agent_id)
+    if ceiling is None:
+        return True
+    if not ceiling.models:
+        raise ModelAccessDeniedProxyException(
+            message=model_access_denied_client_message(model=model),
+            internal_message=f"agent {valid_token.agent_id} access groups {ceiling.access_group_ids} grant no models",
+            type=ProxyErrorTypes.agent_model_access_denied,
+            param="model",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+    return _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=sorted(ceiling.models),
+        team_id=valid_token.team_id,
+        object_type="agent",
     )
 
 
