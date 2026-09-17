@@ -3,8 +3,6 @@ mod constants;
 mod diagnostics;
 mod errors;
 mod execution;
-#[cfg(feature = "trace-parity")]
-mod function_trace;
 mod lifecycle;
 mod marshal;
 mod routes;
@@ -15,7 +13,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use serde_json::Value;
 
-use crate::errors::core_error_to_pyerr;
+use crate::errors::responses_error_to_pyerr;
 use crate::marshal::{marshal_headers, optional_timeout};
 
 #[pyclass]
@@ -39,7 +37,7 @@ impl ResponsesWebSocketConnection {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
-                .map_err(core_error_to_pyerr)?;
+                .map_err(responses_error_to_pyerr)?;
             Ok(ResponsesWebSocketConnection { inner })
         })
     }
@@ -47,21 +45,24 @@ impl ResponsesWebSocketConnection {
     fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.send_text(text).await.map_err(core_error_to_pyerr)
+            inner
+                .send_text(text)
+                .await
+                .map_err(responses_error_to_pyerr)
         })
     }
 
     fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.recv_text().await.map_err(core_error_to_pyerr)
+            inner.recv_text().await.map_err(responses_error_to_pyerr)
         })
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.close().await.map_err(core_error_to_pyerr)
+            inner.close().await.map_err(responses_error_to_pyerr)
         })
     }
 }
@@ -124,39 +125,6 @@ mod tests {
                 .filter(|name| !name.starts_with('_'))
                 .collect();
             assert_eq!(public_names, expected);
-
-            #[cfg(not(feature = "trace-parity"))]
-            assert!(!module.hasattr("_trace").expect("module lookup should work"));
-
-            #[cfg(feature = "trace-parity")]
-            {
-                let trace = module
-                    .getattr("_trace")
-                    .expect("trace build should expose its diagnostic namespace");
-                let trace_names: Vec<String> = trace
-                    .cast::<PyModule>()
-                    .expect("trace namespace should be a module")
-                    .dict()
-                    .keys()
-                    .extract::<Vec<String>>()
-                    .expect("trace names should be strings")
-                    .into_iter()
-                    .filter(|name| !name.starts_with("__"))
-                    .collect();
-                assert_eq!(
-                    trace_names,
-                    [
-                        "ocr",
-                        "aocr",
-                        "transcription",
-                        "atranscription",
-                        "messages",
-                        "amessages",
-                        "chat_completions",
-                        "achat_completions",
-                    ]
-                );
-            }
         });
     }
 

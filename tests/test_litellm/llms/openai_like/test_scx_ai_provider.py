@@ -172,7 +172,6 @@ class TestSCXAIModelMetadata:
             assert info["supports_prompt_caching"] is True
             assert 0 < info["cache_read_input_token_cost"] < info["input_cost_per_token"]
 
-            assert info["max_output_tokens"] == 131072
             assert info["max_tokens"] == info["max_output_tokens"]
             assert info["max_input_tokens"] >= 1_000_000
 

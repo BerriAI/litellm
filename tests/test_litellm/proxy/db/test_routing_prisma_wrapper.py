@@ -145,6 +145,18 @@ def test_writer_pinned_client_yields_to_routed_reads_when_writer_down():
     assert pinned.db.litellm_proxymodeltable.find_many is reader_inner.litellm_proxymodeltable.find_many
 
 
+def test_writer_wrapper_keeps_raw_sql_on_the_writer_while_writer_flagged_down():
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper, writer_wrapper
+
+    writer, writer_inner, reader, reader_inner = _make_wrappers()
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+    routing._writer_unavailable = True
+
+    assert writer_wrapper(routing).query_raw is writer_inner.query_raw
+    assert writer_wrapper(routing).query_raw is not reader_inner.query_raw
+    assert writer_wrapper(writer) is writer
+
+
 @pytest.mark.asyncio
 async def test_connect_invokes_both_clients():
     from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper

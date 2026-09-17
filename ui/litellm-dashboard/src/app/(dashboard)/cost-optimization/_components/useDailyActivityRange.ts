@@ -20,6 +20,7 @@ export interface DailyActivityRange {
   isFetchingMore: boolean;
   progress: { currentPage: number; totalPages: number };
   cancelled: boolean;
+  failed: boolean;
   cancel: () => void;
 }
 
@@ -64,7 +65,7 @@ export const useScopedDailyActivityRange = (
     args: [accessToken, startTime, endTime, userId, true, apiKey],
     enabled: !!accessToken && !!startTime && !!endTime,
   };
-  const { data, loading, isFetchingMore, progress, cancelled, cancel } =
+  const { data, loading, isFetchingMore, progress, cancelled, failed, cancel } =
     usePaginatedDailyActivity(activityQueryOptions);
 
   return {
@@ -75,6 +76,7 @@ export const useScopedDailyActivityRange = (
     isFetchingMore,
     progress,
     cancelled,
+    failed,
     cancel,
   };
 };

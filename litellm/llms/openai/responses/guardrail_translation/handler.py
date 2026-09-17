@@ -56,6 +56,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
+    unappliable_request_rewrite,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -495,13 +496,13 @@ class OpenAIResponsesHandler(BaseTranslation):
                 data["instructions"] = written_back.instructions  # rebind-ok: data is an out-param
         elif isinstance(input_data, str):
             guardrailed_texts: Final = guardrailed_inputs.get("texts") or ()
+            if len(guardrailed_texts) > 1:
+                raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data  # rebind-ok: data is an out-param
         else:
             rewritten_texts: Final = guardrailed_inputs.get("texts") or ()
             if len(rewritten_texts) != len(extracted.task_mappings):
-                from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
-
-                raise UnappliableRequestRewrite(guardrail_to_apply.guardrail_name or "unknown")
+                raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
             await self._apply_guardrail_responses_to_input(
                 messages=input_data,
                 responses=rewritten_texts,
@@ -1174,11 +1175,22 @@ class OpenAIResponsesHandler(BaseTranslation):
         last_event_type: Final = stream_item_field(last_event, "type")
         if last_event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
             return None
-        if last_event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value:
+        if last_event_type in _TERMINAL_ENVELOPE_EVENT_TYPES:
             return self._completed_response_scan_key(stream_item_field(last_event, "response"))
         return StreamingScanKey(
             texts=(self.get_streaming_string_so_far(responses_so_far),),
-            stream_ended=self._check_streaming_has_ended(responses_so_far),
+            tool_calls_in_flight=self._has_streamed_tool_call_events(responses_so_far),
+        )
+
+    @staticmethod
+    def _has_streamed_tool_call_events(responses_so_far: Sequence[object]) -> bool:
+        return any(
+            stream_item_field(event, "type") in _TOOL_CALL_PAYLOAD_EVENT_TYPES
+            or (
+                stream_item_field(event, "type") in _OUTPUT_ITEM_EVENT_TYPES
+                and stream_item_field(stream_item_field(event, "item"), "type") in _TOOL_CALL_ITEM_TYPES
+            )
+            for event in responses_so_far
         )
 
     @staticmethod

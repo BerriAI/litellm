@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from collections.abc import Mapping, Sequence
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security im
     PromptSecurityGuardrailMissingSecrets,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.types.llms.openai import AllMessageValues
 
 
 def test_prompt_security_guard_config(monkeypatch: pytest.MonkeyPatch):
@@ -172,6 +174,123 @@ async def test_apply_guardrail_modify_request(monkeypatch: pytest.MonkeyPatch):
         )
 
     assert result["texts"] == ["User prompt with PII: SSN [REDACTED]"]
+
+
+def _modify_response(modified_messages: Sequence[Mapping[str, object]]) -> Response:
+    mock_response = Response(
+        json={"result": {"prompt": {"action": "modify", "modified_messages": modified_messages}}},
+        status_code=200,
+        request=Request(method="POST", url="https://test.prompt.security/api/protect"),
+    )
+    mock_response.raise_for_status = lambda: None
+    return mock_response
+
+
+def _tool_replay_messages() -> list[AllMessageValues]:
+    return [
+        {"role": "system", "content": "Never echo an SSN like 123-45-6789."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Look up 123-45-6789"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/id-card.png"}},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"ssn": "123-45-6789"}'},
+        {"role": "user", "content": "Summarize what you found."},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_modify_returns_structured_messages_with_tool_rows_kept(monkeypatch: pytest.MonkeyPatch):
+    """A per-message modify verdict comes back as structured_messages so the
+    endpoint handler can write it back by message, with the rows Prompt Security
+    never saw (tool results) and the non-text parts (images) left in place."""
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    messages = _tool_replay_messages()
+    inputs = {"texts": ["Look up 123-45-6789", "Summarize what you found."], "structured_messages": messages}
+    modified_messages = [
+        {"role": "system", "content": "Never echo an SSN like [REDACTED]."},
+        {"role": "user", "content": [{"type": "text", "text": "Look up [REDACTED]"}]},
+        {"role": "assistant", "content": None},
+        {"role": "user", "content": "Summarize what you found."},
+    ]
+
+    with patch.object(guardrail.async_handler, "post", return_value=_modify_response(modified_messages)):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs, request_data={"messages": messages}, input_type="request"
+        )
+
+    assert result["structured_messages"] == [
+        {"role": "system", "content": "Never echo an SSN like [REDACTED]."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Look up [REDACTED]"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/id-card.png"}},
+            ],
+        },
+        messages[2],
+        messages[3],
+        {"role": "user", "content": "Summarize what you found."},
+    ]
+    assert result["structured_messages"] is not messages
+    assert result["texts"] == [
+        "Never echo an SSN like [REDACTED].",
+        "Look up [REDACTED]",
+        "Summarize what you found.",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_modify_with_unexpected_message_count_keeps_texts_only(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    messages = _tool_replay_messages()
+    inputs = {"texts": ["Look up 123-45-6789", "Summarize what you found."], "structured_messages": messages}
+    modified_messages = [{"role": "user", "content": "Look up [REDACTED]"}]
+
+    with patch.object(guardrail.async_handler, "post", return_value=_modify_response(modified_messages)):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs, request_data={"messages": messages}, input_type="request"
+        )
+
+    assert result["structured_messages"] is messages
+    assert result["texts"] == ["Look up [REDACTED]"]
+
+
+@pytest.mark.asyncio
+async def test_modify_keeps_empty_text_parts_as_slots(monkeypatch: pytest.MonkeyPatch):
+    """The chat handler counts an empty text part as a slot, so a modify verdict
+    that echoes the empty part still lines up with the row and its texts."""
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    messages: list[AllMessageValues] = [
+        {"role": "user", "content": [{"type": "text", "text": "Look up 123-45-6789"}, {"type": "text", "text": ""}]}
+    ]
+    inputs = {"texts": ["Look up 123-45-6789", ""], "structured_messages": messages}
+    modified_messages = [
+        {"role": "user", "content": [{"type": "text", "text": "Look up [REDACTED]"}, {"type": "text", "text": ""}]}
+    ]
+
+    with patch.object(guardrail.async_handler, "post", return_value=_modify_response(modified_messages)):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs, request_data={"messages": messages}, input_type="request"
+        )
+
+    assert result["structured_messages"] == modified_messages
+    assert result["texts"] == ["Look up [REDACTED]", ""]
 
 
 @pytest.mark.asyncio
@@ -495,6 +614,98 @@ async def test_file_sanitization_modify_can_rewrite_when_blocking_disabled(monke
             result = await guardrail._process_document_item(item, None)
 
     assert base64.b64decode(result["file"]["data"]) == b"name,email\nAlice,[REDACTED]\n"
+
+
+@pytest.mark.asyncio
+async def test_file_sanitization_keeps_polling_through_queued_statuses(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+
+    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail.poll_interval = 0
+    upload_response = Response(
+        json={"jobId": "queued-job"},
+        status_code=200,
+        request=Request(method="POST", url="https://test.prompt.security/api/sanitizeFile"),
+    )
+    poll_request = Request(method="GET", url="https://test.prompt.security/api/sanitizeFile")
+    poll_responses = [
+        Response(json={"status": "created"}, status_code=200, request=poll_request),
+        Response(json={"status": "in progress"}, status_code=200, request=poll_request),
+        Response(
+            json={"status": "done", "content": "clean", "metadata": {"action": "allow", "violations": []}},
+            status_code=200,
+            request=poll_request,
+        ),
+    ]
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=upload_response)):
+        with patch.object(guardrail.async_handler, "get", AsyncMock(side_effect=poll_responses)) as poll_mock:
+            result = await guardrail.sanitize_file_content(b"image-content", "image.png")
+
+    assert poll_mock.await_count == 3
+    assert result["action"] == "allow"
+    assert result["content"] == "clean"
+
+
+@pytest.mark.asyncio
+async def test_file_sanitization_never_finishing_job_times_out(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True, file_sanitization_fail_open=False
+    )
+    guardrail.poll_interval = 0
+    guardrail.max_poll_attempts = 3
+    upload_response = Response(
+        json={"jobId": "stuck-job"},
+        status_code=200,
+        request=Request(method="POST", url="https://test.prompt.security/api/sanitizeFile"),
+    )
+    poll_response = Response(
+        json={"status": "created"},
+        status_code=200,
+        request=Request(method="GET", url="https://test.prompt.security/api/sanitizeFile"),
+    )
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=upload_response)):
+        with patch.object(guardrail.async_handler, "get", AsyncMock(return_value=poll_response)) as poll_mock:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.sanitize_file_content(b"file-content", "document.pdf")
+
+    assert poll_mock.await_count == 3
+    assert exc_info.value.status_code == 408
+    assert exc_info.value.detail == "File sanitization timeout"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("poll_body", [{"status": "failed"}, {}])
+async def test_file_sanitization_terminal_failure_does_not_fail_open(monkeypatch: pytest.MonkeyPatch, poll_body):
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+
+    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail.poll_interval = 0
+    upload_response = Response(
+        json={"jobId": "failed-job"},
+        status_code=200,
+        request=Request(method="POST", url="https://test.prompt.security/api/sanitizeFile"),
+    )
+    poll_response = Response(
+        json=poll_body,
+        status_code=200,
+        request=Request(method="GET", url="https://test.prompt.security/api/sanitizeFile"),
+    )
+
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=upload_response)):
+        with patch.object(guardrail.async_handler, "get", AsyncMock(return_value=poll_response)) as poll_mock:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.sanitize_file_content(b"file-content", "document.pdf")
+
+    assert poll_mock.await_count == 1
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == f"Unexpected sanitization status: {poll_body.get('status')}"
 
 
 @pytest.mark.asyncio

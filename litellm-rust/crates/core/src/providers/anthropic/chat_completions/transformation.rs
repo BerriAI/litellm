@@ -1,5 +1,6 @@
 use serde_json::{Map, Value, json};
 
+use crate::chat_completions::Error;
 use crate::chat_completions::conversation::{Conversation, build_conversation};
 use crate::chat_completions::transformation::{
     ChatCompletionsAuth, ChatCompletionsProviderConfig, Unsupported, unsupported_message,
@@ -10,7 +11,6 @@ use crate::chat_completions::types::{
     ProviderChatRequestData, ProviderChatResponseData,
 };
 use crate::constants::ANTHROPIC_OAUTH_TOKEN_PREFIX;
-use crate::error::Error;
 use crate::providers::anthropic::messages::transformation::{
     complete_anthropic_url, resolve_anthropic_api_key,
 };
@@ -117,7 +117,6 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         })
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn supported_openai_params(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
     }
@@ -138,7 +137,6 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
             })
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_request(
         &self,
         model: &str,
@@ -150,7 +148,6 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         })
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_response(
         &self,
         _model: &str,

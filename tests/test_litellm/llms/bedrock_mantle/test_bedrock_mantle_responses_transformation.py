@@ -773,6 +773,12 @@ class TestBedrockMantleCodexAdditionalTools:
         assert body["input"] == codex_agentic_items
         assert "tools" not in body
 
+    def test_input_without_additional_tools_sanitizes_tools_on_the_caller_params_object(self):
+        params = {"tools": [{"type": "function", "name": "wait", "parameters": '{"type": "object"}'}]}
+        body = self._transform(input=[self._USER_MESSAGE], params=params)
+        assert body["tools"][0]["parameters"] == {"type": "object"}
+        assert params["tools"][0]["parameters"] == {"type": "object"}
+
     def test_malformed_additional_tools_item_without_tools_list_is_stripped(self):
         body = self._transform(
             input=[
