@@ -17,7 +17,7 @@ use crate::constants::{
     AZURE_DI_SUBSCRIPTION_HEADER, OCR_POLL_RETRY_SECS,
 };
 use crate::llms::base_llm::ocr::transformation::{
-    BaseOcrConfig, OcrRequestContext, OcrResponseContext,
+    BaseOcrConfig, OcrResponseContext, decode_and_normalize_response,
 };
 use crate::ocr::OcrClient;
 use crate::ocr::client::read_json_response;
@@ -31,6 +31,9 @@ use crate::ocr::types::{
 };
 use crate::serde_compat::{FiniteF64, LaxI64};
 use crate::url_utils::ApiUrl;
+
+const AZURE_DI_API_KEY_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY";
+const AZURE_DI_ENDPOINT_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT";
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct DocumentIntelligenceParams {
@@ -123,7 +126,126 @@ struct AzureDocumentIntelligenceLine {
     pub content: Option<String>,
 }
 
-fn normalize_pages(pages: Option<&Value>) -> Result<Option<String>, crate::ocr::Error> {
+#[derive(Clone, Debug)]
+pub(crate) struct AzureDocumentIntelligenceOcrConfig;
+
+impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
+    type OcrParams = DocumentIntelligenceParams;
+    type ProviderRequest = DocumentIntelligenceRequest;
+    type Environment = Vec<(String, String)>;
+
+    fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
+        &["pages", "features", "req_format"]
+    }
+
+    fn get_api_key_env_var(&self) -> Option<&'static str> {
+        Some(AZURE_DI_API_KEY_ENV)
+    }
+
+    fn resolve_connection_params(&self, inputs: OcrCredentialInputs) -> ResolvedOcrCredentials {
+        ResolvedOcrCredentials {
+            api_key: inputs.api_key.and_then(|key| {
+                inputs
+                    .dynamic_api_key
+                    .filter(|value| !value.value().is_empty())
+                    .or(Some(key))
+            }),
+            api_base: inputs.api_base.and_then(|base| {
+                inputs
+                    .dynamic_api_base
+                    .filter(|value| !value.value().is_empty())
+                    .or(Some(base))
+            }),
+        }
+    }
+
+    fn map_ocr_params(
+        &self,
+        non_default_params: &CallArguments,
+        _model: &str,
+    ) -> Result<DocumentIntelligenceParams, crate::ocr::Error> {
+        Ok(DocumentIntelligenceParams {
+            pages: normalize_pages_param(non_default_params.get("pages"))?,
+            features: normalize_features_param(non_default_params.get("features"))?,
+        })
+    }
+
+    async fn validate_environment(
+        &self,
+        request: &PreparedOcrRequest,
+        _client: &OcrClient,
+    ) -> Result<Self::Environment, crate::ocr::Error> {
+        let config = AzureAuthInputs {
+            azure_ad_token_provider: request.azure_ad_token_provider.clone(),
+            ..AzureAuthInputs::from_sourced_optional_params(
+                &request.optional_params,
+                &request.input_sources,
+            )?
+        };
+        self.resolve_headers(&request.connection, &config, &credential_env)
+            .await
+    }
+
+    fn get_complete_url(
+        &self,
+        request: &PreparedOcrRequest,
+        optional_params: &Self::OcrParams,
+        _environment: &Self::Environment,
+    ) -> Result<String, crate::ocr::Error> {
+        let endpoint = nonblank(request.connection.api_base.clone())
+            .or_else(|| nonblank(credential_env(AZURE_DI_ENDPOINT_ENV)))
+            .ok_or_else(|| crate::ocr::Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into())))?;
+        self.build_ocr_url(&endpoint, &request.model, optional_params)
+    }
+
+    fn transform_ocr_request(
+        &self,
+        _model: &str,
+        document: OcrDocument,
+        _optional_params: &DocumentIntelligenceParams,
+        _headers: &[(String, String)],
+    ) -> Result<DocumentIntelligenceRequest, crate::ocr::Error> {
+        build_request(document)
+    }
+
+    fn transform_ocr_response(
+        &self,
+        model: &str,
+        raw_response: &[u8],
+        request_format: OcrResponseFormat,
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
+        decode_and_normalize_response(
+            model,
+            raw_response,
+            request_format,
+            transform_completed_response,
+        )
+    }
+
+    async fn async_transform_ocr_response(
+        &self,
+        model: &str,
+        raw_response: reqwest::Response,
+        context: OcrResponseContext<'_>,
+    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
+        let decoded = read_operation_response(
+            context.client.polling_http(),
+            raw_response,
+            context.url,
+            context.headers,
+            context.connection,
+            context.request_format == OcrResponseFormat::Native,
+            context.hooks,
+        )
+        .await?;
+        Ok(LiteLLMOcrResponse {
+            provider_native_response: decoded.native,
+            ..transform_completed_response(model, decoded.data)?
+        })
+    }
+}
+
+fn normalize_pages_param(pages: Option<&Value>) -> Result<Option<String>, crate::ocr::Error> {
     let normalized = match pages {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Array(pages)) if pages.is_empty() => return Ok(None),
@@ -186,7 +308,7 @@ fn valid_page_token(token: &str) -> bool {
     }
 }
 
-fn normalize_features(features: Option<&Value>) -> Result<Option<String>, crate::ocr::Error> {
+fn normalize_features_param(features: Option<&Value>) -> Result<Option<String>, crate::ocr::Error> {
     let tokens = match features {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Array(names)) => names
@@ -414,140 +536,8 @@ async fn poll_operation(
     }
 }
 
-const AZURE_DI_API_KEY_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY";
-const AZURE_DI_ENDPOINT_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT";
-
-#[derive(Clone, Debug)]
-pub(crate) struct AzureDocumentIntelligenceOCRConfig;
-
-impl BaseOcrConfig for AzureDocumentIntelligenceOCRConfig {
-    type OcrParams = DocumentIntelligenceParams;
-    type ProviderRequest = DocumentIntelligenceRequest;
-    type Environment = Vec<(String, String)>;
-
-    fn get_api_key_env_var(&self) -> Option<&'static str> {
-        Some(AZURE_DI_API_KEY_ENV)
-    }
-
-    fn resolve_connection_params(&self, inputs: OcrCredentialInputs) -> ResolvedOcrCredentials {
-        ResolvedOcrCredentials {
-            api_key: inputs.api_key.and_then(|key| {
-                inputs
-                    .dynamic_api_key
-                    .filter(|value| !value.value().is_empty())
-                    .or(Some(key))
-            }),
-            api_base: inputs.api_base.and_then(|base| {
-                inputs
-                    .dynamic_api_base
-                    .filter(|value| !value.value().is_empty())
-                    .or(Some(base))
-            }),
-        }
-    }
-
-    async fn validate_environment(
-        &self,
-        request: &PreparedOcrRequest,
-        _client: &OcrClient,
-    ) -> Result<Self::Environment, crate::ocr::Error> {
-        let config = AzureAuthInputs {
-            azure_ad_token_provider: request.azure_ad_token_provider.clone(),
-            ..AzureAuthInputs::from_sourced_optional_params(
-                &request.optional_params,
-                &request.input_sources,
-            )?
-        };
-        self.validate_environment(&request.connection, &config, &credential_env)
-            .await
-    }
-
-    fn get_complete_url(
-        &self,
-        request: &PreparedOcrRequest,
-        params: &Self::OcrParams,
-        _environment: &Self::Environment,
-    ) -> Result<String, crate::ocr::Error> {
-        let endpoint = nonblank(request.connection.api_base.clone())
-            .or_else(|| nonblank(credential_env(AZURE_DI_ENDPOINT_ENV)))
-            .ok_or_else(|| crate::ocr::Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into())))?;
-        self.get_complete_url(&endpoint, &request.model, params)
-    }
-
-    fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
-        &["pages", "features", "req_format"]
-    }
-
-    fn map_ocr_params(
-        &self,
-        arguments: &CallArguments,
-        _model: &str,
-    ) -> Result<DocumentIntelligenceParams, crate::ocr::Error> {
-        Ok(DocumentIntelligenceParams {
-            pages: normalize_pages(arguments.get("pages"))?,
-            features: normalize_features(arguments.get("features"))?,
-        })
-    }
-
-    async fn async_transform_ocr_request(
-        &self,
-        model: &str,
-        document: OcrDocument,
-        optional_params: &DocumentIntelligenceParams,
-        headers: &[(String, String)],
-        _context: OcrRequestContext<'_>,
-    ) -> Result<DocumentIntelligenceRequest, crate::ocr::Error> {
-        self.transform_ocr_request(model, document, optional_params, headers)
-    }
-
-    fn transform_ocr_response(
-        &self,
-        model: &str,
-        raw_response: &[u8],
-        request_format: OcrResponseFormat,
-    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        crate::llms::base_llm::ocr::transformation::decode_and_normalize_response(
-            model,
-            raw_response,
-            request_format,
-            transform_completed_response,
-        )
-    }
-
-    async fn async_transform_ocr_response(
-        &self,
-        model: &str,
-        raw_response: reqwest::Response,
-        context: OcrResponseContext<'_>,
-    ) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-        let decoded = read_operation_response(
-            context.client.polling_http(),
-            raw_response,
-            context.url,
-            context.headers,
-            context.connection,
-            context.request_format == OcrResponseFormat::Native,
-            context.hooks,
-        )
-        .await?;
-        Ok(LiteLLMOcrResponse {
-            provider_native_response: decoded.native,
-            ..transform_completed_response(model, decoded.data)?
-        })
-    }
-    fn transform_ocr_request(
-        &self,
-        _model: &str,
-        document: OcrDocument,
-        _optional_params: &DocumentIntelligenceParams,
-        _headers: &[(String, String)],
-    ) -> Result<DocumentIntelligenceRequest, crate::ocr::Error> {
-        build_request(document)
-    }
-}
-
-impl AzureDocumentIntelligenceOCRConfig {
-    fn get_complete_url(
+impl AzureDocumentIntelligenceOcrConfig {
+    fn build_ocr_url(
         &self,
         endpoint: &str,
         model: &str,
@@ -575,7 +565,7 @@ impl AzureDocumentIntelligenceOCRConfig {
             })
     }
 
-    async fn validate_environment(
+    async fn resolve_headers(
         &self,
         connection: &OcrConnection,
         config: &AzureAuthInputs,
@@ -642,7 +632,7 @@ mod tests {
 
     fn map(value: Value) -> Result<DocumentIntelligenceParams, crate::ocr::Error> {
         let arguments = serde_json::from_value(value).unwrap();
-        AzureDocumentIntelligenceOCRConfig.map_ocr_params(&arguments, "model")
+        AzureDocumentIntelligenceOcrConfig.map_ocr_params(&arguments, "model")
     }
 
     #[test]
@@ -650,7 +640,7 @@ mod tests {
         let overrides =
             serde_json::from_value(json!({"pages":[], "features":null, "req_format":"native"}))
                 .unwrap();
-        let mapped = AzureDocumentIntelligenceOCRConfig
+        let mapped = AzureDocumentIntelligenceOcrConfig
             .map_ocr_params(&overrides, "model")
             .unwrap();
         assert_eq!(serde_json::to_value(mapped).unwrap(), json!({}));
@@ -664,7 +654,7 @@ mod tests {
             "extra_body": {"provider_option": "value"}
         }))
         .unwrap();
-        let mapped = AzureDocumentIntelligenceOCRConfig
+        let mapped = AzureDocumentIntelligenceOcrConfig
             .map_ocr_params(&arguments, "model")
             .unwrap();
         assert_eq!(mapped.pages.as_deref(), Some("1"));
@@ -680,7 +670,7 @@ mod tests {
             "pages":"4", "features":"languages", "extension":true
         }))
         .unwrap();
-        let mapped = AzureDocumentIntelligenceOCRConfig
+        let mapped = AzureDocumentIntelligenceOcrConfig
             .map_ocr_params(&arguments, "model")
             .unwrap();
         assert_eq!(
@@ -694,7 +684,7 @@ mod tests {
 
     #[test]
     fn response_numbers_follow_python_validation_before_dimension_conversion() {
-        let response = AzureDocumentIntelligenceOCRConfig.transform_ocr_response(
+        let response = AzureDocumentIntelligenceOcrConfig.transform_ocr_response(
             "model",
             br#"{"status":"succeeded","analyzeResult":{"pages":[{"pageNumber":2.0,"width":" 8.5 ","height":true}]}}"#,
             OcrResponseFormat::Litellm,
@@ -703,6 +693,10 @@ mod tests {
         let dimensions = response.pages[0].dimensions.as_ref().unwrap();
         assert_eq!(dimensions.width, Some(816));
         assert_eq!(dimensions.height, Some(96));
+    }
+
+    #[test]
+    fn pixel_dimension_rejects_out_of_range_value() {
         assert!(pixel_dimension(9_223_372_036_854_775_808.0, 1.0, "width").is_err());
     }
 
@@ -776,8 +770,8 @@ mod tests {
             ..Default::default()
         };
 
-        let error = AzureDocumentIntelligenceOCRConfig
-            .validate_environment(&connection, &Default::default(), &|name| {
+        let error = AzureDocumentIntelligenceOcrConfig
+            .resolve_headers(&connection, &Default::default(), &|name| {
                 (name == AZURE_DI_API_KEY_ENV).then(|| "environment-key".into())
             })
             .await
@@ -800,8 +794,8 @@ mod tests {
             ..Default::default()
         };
 
-        let headers = AzureDocumentIntelligenceOCRConfig
-            .validate_environment(&connection, &Default::default(), &|_| None)
+        let headers = AzureDocumentIntelligenceOcrConfig
+            .resolve_headers(&connection, &Default::default(), &|_| None)
             .await
             .unwrap();
 

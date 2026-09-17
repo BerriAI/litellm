@@ -2,7 +2,7 @@ use litellm_auth_gcp::{self as vertex, VertexConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::transformation::VertexAIOCRConfig;
+use super::transformation::VertexAiOcrConfig;
 use crate::call_arguments::CallArguments;
 use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrRequestContext};
 use crate::ocr::OcrClient;
@@ -95,7 +95,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
     type Environment = vertex::VertexEnvironment;
 
     fn get_api_key_env_var(&self) -> Option<&'static str> {
-        VertexAIOCRConfig.get_api_key_env_var()
+        VertexAiOcrConfig.get_api_key_env_var()
     }
 
     fn map_ocr_params(
@@ -111,7 +111,9 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<Self::Environment, crate::ocr::Error> {
-        BaseOcrConfig::validate_environment(&VertexAIOCRConfig, request, client).await
+        VertexAiOcrConfig
+            .validate_environment(request, client)
+            .await
     }
 
     fn get_complete_url(

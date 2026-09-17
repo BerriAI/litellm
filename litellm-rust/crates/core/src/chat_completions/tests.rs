@@ -2,8 +2,8 @@ use serde_json::{Map, Value, json};
 
 use super::Error;
 use super::prepare::{prepare_provider_request, resolve_request};
-use super::transformation::ChatCompletionsAuth;
 use super::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
+use crate::llms::base_llm::chat::transformation::ChatCompletionsAuth;
 
 fn prepare_chat_completions_call(
     request: ChatCompletionsRequest<'_>,

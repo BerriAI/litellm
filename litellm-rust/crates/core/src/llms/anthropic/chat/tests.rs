@@ -420,7 +420,7 @@ fn resolves_the_messages_url_and_x_api_key_auth() {
     let config = &ANTHROPIC_CHAT_COMPLETIONS_CONFIG;
     assert_eq!(
         config
-            .complete_url(None, "claude-sonnet-4-5", &Map::new(), &|_| None)
+            .get_complete_url(None, "claude-sonnet-4-5", &Map::new(), &|_| None)
             .expect("url builds"),
         "https://api.anthropic.com/v1/messages"
     );

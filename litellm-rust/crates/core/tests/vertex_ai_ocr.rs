@@ -104,7 +104,7 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
 
     use crate::llms::base_llm::ocr::transformation::BaseOcrConfig;
     use crate::llms::mistral::ocr::transformation::MistralOcrConfig;
-    use crate::llms::vertex_ai::ocr::transformation::VertexAIOCRConfig;
+    use crate::llms::vertex_ai::ocr::transformation::VertexAiOcrConfig;
     use crate::ocr::test_support::ocr_client;
 
     let client = ocr_client();
@@ -129,7 +129,7 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
         .prepare_request(&direct, &client)
         .await
         .unwrap();
-    let vertex_http = VertexAIOCRConfig
+    let vertex_http = VertexAiOcrConfig
         .prepare_request(&vertex, &client)
         .await
         .unwrap();
@@ -165,7 +165,7 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
         )
         .unwrap()
         .into_json();
-    let vertex_response = VertexAIOCRConfig
+    let vertex_response = VertexAiOcrConfig
         .transform_ocr_response(
             &vertex.model,
             &raw,

@@ -1,5 +1,5 @@
+use crate::llms::base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig;
 use crate::messages::Error;
-use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
@@ -9,6 +9,25 @@ const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 pub struct AnthropicMessagesConfig;
 
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
+
+impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        _model: &str,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        Ok(complete_anthropic_url(api_base, env_lookup))
+    }
+
+    fn resolve_api_key(
+        &self,
+        api_key: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        resolve_anthropic_api_key(api_key, env_lookup).map_err(Error::from)
+    }
+}
 
 pub fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
@@ -41,29 +60,6 @@ pub fn complete_anthropic_url(
         return api_base.to_string();
     }
     format!("{api_base}{MESSAGES_PATH_SUFFIX}")
-}
-
-impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
-    fn complete_url(
-        &self,
-        api_base: Option<&str>,
-        _model: &str,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(complete_anthropic_url(api_base, env_lookup))
-    }
-
-    fn resolve_api_key(
-        &self,
-        api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        resolve_anthropic_api_key(api_key, env_lookup).map_err(Error::from)
-    }
-
-    fn auth_strategy(&self) -> MessagesAuthStrategy {
-        MessagesAuthStrategy::Header("x-api-key")
-    }
 }
 
 #[cfg(test)]

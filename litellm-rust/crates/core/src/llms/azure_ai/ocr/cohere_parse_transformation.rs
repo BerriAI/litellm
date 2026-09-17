@@ -18,7 +18,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
     type Environment = Vec<(String, String)>;
 
     fn get_api_key_env_var(&self) -> Option<&'static str> {
-        super::transformation::AzureAIOCRConfig.get_api_key_env_var()
+        super::transformation::AzureAiOcrConfig.get_api_key_env_var()
     }
 
     fn get_health_check_document(&self) -> OcrDocument {
@@ -31,7 +31,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         client: &OcrClient,
     ) -> Result<Self::Environment, crate::ocr::Error> {
         BaseOcrConfig::validate_environment(
-            &super::transformation::AzureAIOCRConfig,
+            &super::transformation::AzureAiOcrConfig,
             request,
             client,
         )
@@ -44,7 +44,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         _params: &Self::OcrParams,
         _environment: &Self::Environment,
     ) -> Result<String, crate::ocr::Error> {
-        let base = super::transformation::AzureAIOCRConfig::resolve_api_base(
+        let base = super::transformation::AzureAiOcrConfig::resolve_api_base(
             request.connection.api_base.as_deref(),
             &crate::ocr::prepare::credential_env,
         )?;

@@ -1,13 +1,15 @@
 use serde_json::{Map, Value};
 
+use crate::llms::anthropic::experimental_pass_through::messages::transformation::{
+    ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
+};
+use crate::llms::base_llm::anthropic_messages::transformation::{
+    BaseAnthropicMessagesConfig, MessagesAuthStrategy,
+};
 use crate::messages::Error;
-use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 use crate::messages::types::{
     AnthropicMessage, AnthropicMessagesRequest, AnthropicMessagesResponse, ContentBlock,
     MessageContent, SystemPrompt,
-};
-use crate::providers::anthropic::messages::transformation::{
-    ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
 };
 
 const AZURE_API_KEY_ENV: &str = "AZURE_API_KEY";
@@ -25,6 +27,61 @@ pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
     AzureAnthropicMessagesConfig {
         anthropic: ANTHROPIC_MESSAGES_CONFIG,
     };
+
+impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        _model: &str,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        complete_azure_anthropic_url(api_base, env_lookup)
+    }
+
+    fn transform_anthropic_messages_request(
+        &self,
+        request: AnthropicMessagesRequest,
+    ) -> Result<AnthropicMessagesRequest, Error> {
+        let mut request = fold_system_role_messages(request);
+        if let Some(system) = request.system.as_mut() {
+            strip_scope_from_system(system);
+        }
+        request
+            .messages
+            .iter_mut()
+            .for_each(strip_scope_from_message);
+        self.anthropic.transform_anthropic_messages_request(request)
+    }
+
+    fn transform_anthropic_messages_response(
+        &self,
+        model: &str,
+        response: AnthropicMessagesResponse,
+    ) -> Result<AnthropicMessagesResponse, Error> {
+        self.anthropic
+            .transform_anthropic_messages_response(model, response)
+    }
+
+    fn resolve_api_key(
+        &self,
+        api_key: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        resolve_azure_api_key(api_key, env_lookup)
+    }
+
+    fn auth_strategy(&self) -> MessagesAuthStrategy {
+        self.anthropic.auth_strategy()
+    }
+
+    fn accepts_bearer_auth(&self) -> bool {
+        true
+    }
+
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        self.anthropic.default_headers()
+    }
+}
 
 pub fn resolve_azure_api_key(
     api_key: Option<&str>,
@@ -133,60 +190,6 @@ fn fold_system_role_messages(request: AnthropicMessagesRequest) -> AnthropicMess
         messages: chat_messages,
         system: (!folded_system.is_empty()).then_some(SystemPrompt::Blocks(folded_system)),
         ..request
-    }
-}
-
-impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
-    fn complete_url(
-        &self,
-        api_base: Option<&str>,
-        _model: &str,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        complete_azure_anthropic_url(api_base, env_lookup)
-    }
-
-    fn resolve_api_key(
-        &self,
-        api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        resolve_azure_api_key(api_key, env_lookup)
-    }
-
-    fn auth_strategy(&self) -> MessagesAuthStrategy {
-        self.anthropic.auth_strategy()
-    }
-
-    fn accepts_bearer_auth(&self) -> bool {
-        true
-    }
-
-    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        self.anthropic.default_headers()
-    }
-
-    fn transform_request(
-        &self,
-        request: AnthropicMessagesRequest,
-    ) -> Result<AnthropicMessagesRequest, Error> {
-        let mut request = fold_system_role_messages(request);
-        if let Some(system) = request.system.as_mut() {
-            strip_scope_from_system(system);
-        }
-        request
-            .messages
-            .iter_mut()
-            .for_each(strip_scope_from_message);
-        self.anthropic.transform_request(request)
-    }
-
-    fn transform_response(
-        &self,
-        model: &str,
-        response: AnthropicMessagesResponse,
-    ) -> Result<AnthropicMessagesResponse, Error> {
-        self.anthropic.transform_response(model, response)
     }
 }
 
@@ -339,7 +342,7 @@ mod tests {
 
         let transformed = to_value(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_request(request)
+                .transform_anthropic_messages_request(request)
                 .expect("request transforms"),
         );
 
@@ -366,10 +369,10 @@ mod tests {
             "messages": [{"role": "user", "content": "hi"}]
         }));
         let once = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .transform_request(request)
+            .transform_anthropic_messages_request(request)
             .expect("request transforms");
         let twice = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .transform_request(once.clone())
+            .transform_anthropic_messages_request(once.clone())
             .expect("request transforms");
         assert_eq!(once, twice);
         assert_eq!(to_value(once)["system"], json!("plain string system"));
@@ -403,7 +406,7 @@ mod tests {
         });
         let transformed = to_value(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_request(request_from(body.clone()))
+                .transform_anthropic_messages_request(request_from(body.clone()))
                 .expect("request transforms"),
         );
         assert_eq!(transformed, body);
@@ -423,7 +426,7 @@ mod tests {
 
         let transformed = to_value(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_request(request)
+                .transform_anthropic_messages_request(request)
                 .expect("request transforms"),
         );
 
@@ -453,7 +456,7 @@ mod tests {
 
         let transformed = to_value(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_request(request)
+                .transform_anthropic_messages_request(request)
                 .expect("request transforms"),
         );
 
@@ -480,7 +483,7 @@ mod tests {
         });
         let transformed = to_value(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .transform_request(request_from(body.clone()))
+                .transform_anthropic_messages_request(request_from(body.clone()))
                 .expect("request transforms"),
         );
         assert_eq!(transformed, body);
@@ -507,7 +510,7 @@ mod tests {
         }))
         .expect("valid response");
         let transformed = AZURE_ANTHROPIC_MESSAGES_CONFIG
-            .transform_response("claude-sonnet-4-5", response)
+            .transform_anthropic_messages_response("claude-sonnet-4-5", response)
             .expect("response transforms");
         let value = serde_json::to_value(transformed).expect("serializable");
         assert_eq!(value["stop_reason"], json!("end_turn"));

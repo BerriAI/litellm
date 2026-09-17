@@ -1,10 +1,16 @@
 use serde_json::{Map, Value};
 
-use super::Error;
-use super::types::{
+use crate::chat_completions::Error;
+use crate::chat_completions::types::{
     ChatCompletionsResponse, ChatMessage, ChatMessageContent, ProviderChatRequestData,
     ProviderChatResponseData,
 };
+
+pub const STREAM_PARAM: &str = "stream";
+
+/// Message fields that carry no meaning for the upstream body, so their
+/// presence does not make a request untranslatable.
+const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
 
 /// How the upstream call is authenticated. API-key strategies are resolved in
 /// `prepare`; SigV4 needs the serialized body, so the handler signs it.
@@ -25,20 +31,30 @@ pub enum ChatCompletionsAuth {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Unsupported(pub &'static str);
 
-pub const STREAM_PARAM: &str = "stream";
+pub trait BaseConfig: Sync {
+    /// Supported OpenAI parameter names paired with their provider names.
+    fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)];
 
-/// Message fields that carry no meaning for the upstream body, so their
-/// presence does not make a request untranslatable.
-const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
-
-pub trait ChatCompletionsProviderConfig: Sync {
-    fn complete_url(
+    fn get_complete_url(
         &self,
         api_base: Option<&str>,
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
+
+    fn transform_request(
+        &self,
+        model: &str,
+        messages: Vec<ChatMessage>,
+        optional_params: Map<String, Value>,
+    ) -> Result<ProviderChatRequestData, Error>;
+
+    fn transform_response(
+        &self,
+        model: &str,
+        response: ProviderChatResponseData,
+    ) -> Result<ChatCompletionsResponse, Error>;
 
     fn auth(
         &self,
@@ -62,9 +78,6 @@ pub trait ChatCompletionsProviderConfig: Sync {
         false
     }
 
-    /// Supported OpenAI parameter names paired with their provider names.
-    fn supported_openai_params(&self) -> &'static [(&'static str, &'static str)];
-
     /// Parameters consumed as call configuration (credentials, endpoints)
     /// rather than placed in the body. Accepted, never serialized.
     fn config_params(&self) -> &'static [&'static str] {
@@ -77,25 +90,12 @@ pub trait ChatCompletionsProviderConfig: Sync {
         optional_params: &Map<String, Value>,
     ) -> Option<Unsupported> {
         unsupported_param(
-            self.supported_openai_params(),
+            self.supported_openai_param_mappings(),
             self.config_params(),
             optional_params,
         )
         .or_else(|| messages.iter().find_map(unsupported_message))
     }
-
-    fn transform_request(
-        &self,
-        model: &str,
-        messages: Vec<ChatMessage>,
-        optional_params: Map<String, Value>,
-    ) -> Result<ProviderChatRequestData, Error>;
-
-    fn transform_response(
-        &self,
-        model: &str,
-        response: ProviderChatResponseData,
-    ) -> Result<ChatCompletionsResponse, Error>;
 }
 
 pub fn unsupported_param(
