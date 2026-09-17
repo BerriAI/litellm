@@ -132,6 +132,18 @@ describe("UIAccessControlForm", () => {
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
+  it("blocks submission when the restricted SSO group contains no usable values", async () => {
+    const { onSuccess, user } = renderForm();
+
+    await chooseAccessMode(user, "Restricted SSO Group");
+    await typeInto(user, RESTRICTED_GROUP_PLACEHOLDER, " , ");
+    await submit(user);
+
+    expect(await screen.findByText("Please enter the restricted SSO group")).toBeInTheDocument();
+    expect(mockUpdateSSOSettings).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
   it("seeds the fields from a nested ui_access_mode object and resubmits them unchanged", async () => {
     mockGetSSOSettings.mockResolvedValue({
       values: {

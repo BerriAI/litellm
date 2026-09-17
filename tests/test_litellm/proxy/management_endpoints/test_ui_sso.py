@@ -7224,7 +7224,7 @@ class TestCliSsoAttributionMetadata:
             CustomOpenID(id="test-user", email="test@example.com", team_ids=[]),
         ],
     )
-    def test_verify_user_in_restricted_sso_group_rejects_missing_team_ids(self, result):
+    def test_verify_user_in_restricted_sso_group_rejects_missing_team_ids(self, result: CustomOpenID | None):
         from litellm.proxy._types import ProxyException
 
         with pytest.raises(ProxyException):

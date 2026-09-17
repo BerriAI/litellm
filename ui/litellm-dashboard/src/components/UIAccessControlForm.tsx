@@ -20,6 +20,17 @@ interface UIAccessControlFormProps {
   onSuccess: () => void;
 }
 
+export const parseRestrictedSsoGroups = (value: string | undefined): string | string[] | undefined => {
+  const groups = value
+    ?.split(",")
+    .map((group) => group.trim())
+    .filter((group) => group.length > 0);
+  if (!groups || groups.length === 0) {
+    return undefined;
+  }
+  return groups.length === 1 ? groups[0] : groups;
+};
+
 const uiAccessControlSchema = z
   .object({
     ui_access_mode_type: z.string().optional(),
@@ -27,7 +38,10 @@ const uiAccessControlSchema = z
     sso_group_jwt_field: z.string().optional(),
   })
   .superRefine((values, ctx) => {
-    if (values.ui_access_mode_type !== "restricted_sso_group" || values.restricted_sso_group) {
+    if (
+      values.ui_access_mode_type !== "restricted_sso_group" ||
+      parseRestrictedSsoGroups(values.restricted_sso_group) !== undefined
+    ) {
       return;
     }
     ctx.addIssue({
@@ -54,17 +68,6 @@ const asGroupsString = (value: unknown): string | undefined => {
     return value;
   }
   return Array.isArray(value) && value.every((group) => typeof group === "string") ? value.join(", ") : undefined;
-};
-
-export const parseRestrictedSsoGroups = (value: string | undefined): string | string[] | undefined => {
-  const groups = value
-    ?.split(",")
-    .map((group) => group.trim())
-    .filter((group) => group.length > 0);
-  if (!groups || groups.length === 0) {
-    return undefined;
-  }
-  return groups.length === 1 ? groups[0] : groups;
 };
 
 const toFormValues = (ssoData: unknown): UIAccessControlFormValues | null => {
