@@ -63,6 +63,7 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
+    ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
@@ -132,7 +133,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
     prepare_response_for_header_attachment,
     replace_complexity_router_headers,
-    response_in_flight_token_count,
+    response_total_token_count,
 )
 from litellm.router_utils.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
@@ -215,6 +216,8 @@ from litellm.router_utils.reasoning_effort_capability import (
     resolve_supported_reasoning_efforts,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+    find_deployment_metadata,
+    get_counted_usage_tokens,
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
@@ -240,6 +243,7 @@ from litellm.types.router import (
     DeploymentModelListingInfo,
     DeploymentTypedDict,
     FallbackAccessCheck,
+    FallbackBudgetCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
     MockRouterTestingParams,
@@ -777,6 +781,7 @@ class Router:
         background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
         fallback_access_check: FallbackAccessCheck | None = None,
+        fallback_budget_check: FallbackBudgetCheck | None = None,
         auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
     ) -> None:
         """
@@ -815,6 +820,7 @@ class Router:
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
             fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
+            fallback_budget_check (Optional[FallbackBudgetCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over budget is skipped. Defaults to None (budget is not re-checked on fallback).
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -856,6 +862,7 @@ class Router:
         self.ignore_invalid_deployments = ignore_invalid_deployments
         self.auto_router_capability_limit = auto_router_capability_limit
         self.fallback_access_check: Final = fallback_access_check
+        self.fallback_budget_check: Final = fallback_budget_check
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
@@ -7937,6 +7944,7 @@ class Router:
         response = original_function(*args, **kwargs)
         if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
             response = await response
+        await self.increment_deployment_usage_for_response(response=response, request_kwargs=kwargs)
         ## PROCESS RESPONSE HEADERS
         response = await self.set_response_headers(response=response, model_group=model_group, request_kwargs=kwargs)
 
@@ -8153,8 +8161,6 @@ class Router:
         """
         Track remaining tpm/rpm quota for model in model_list
         """
-        from litellm.types.caching import RedisPipelineIncrementOperation
-
         try:
             # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
             if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
@@ -8162,113 +8168,134 @@ class Router:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object is None")
-            if kwargs["litellm_params"].get("metadata") is None:
-                pass
-            else:
-                deployment_name: Final = kwargs["litellm_params"]["metadata"].get(
-                    "deployment", None
-                )  # stable name - works for wildcard routes as well
-                # Get model_group and id from kwargs like the sync version does
-                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
-                model_info: Final = kwargs["litellm_params"].get("model_info", {}) or {}
-                id = model_info.get("id", None)
-                if model_group is None or id is None:
-                    return
-                elif isinstance(id, int):
-                    id = str(id)
+            litellm_params: Final = kwargs["litellm_params"]
+            metadata: Final = litellm_params.get("metadata")
+            if metadata is None:
+                return
+            model_group: Final = metadata.get("model_group", None)
+            model_info: Final = litellm_params.get("model_info", {}) or {}
+            deployment_id: Final = model_info.get("id", None)
+            if model_group is None or deployment_id is None or self.get_deployment(model_id=str(deployment_id)) is None:
+                return
 
-                ## get deployment info
-                deployment_info: Final = self.get_deployment(model_id=id)
+            # Always track deployment successes for cooldown logic, regardless of TPM/RPM limits
+            increment_deployment_successes_for_current_minute(
+                litellm_router_instance=self,
+                deployment_id=str(deployment_id),
+            )
 
-                if deployment_info is None:
-                    return
-                else:
-                    deployment_model_info: Final = self.get_router_model_info(
-                        deployment=deployment_info,
-                        received_model_name=model_group,
-                    )
-                    # get tpm/rpm from deployment info
-                    tpm: Final = deployment_info.get("tpm", None)
-                    rpm: Final = deployment_info.get("rpm", None)
-
-                    ## check tpm/rpm in litellm_params
-                    tpm_litellm_params: Final = deployment_info.litellm_params.tpm
-                    rpm_litellm_params: Final = deployment_info.litellm_params.rpm
-
-                    ## check tpm/rpm in model_info
-                    tpm_model_info: Final = deployment_model_info.get("tpm", None)
-                    rpm_model_info: Final = deployment_model_info.get("rpm", None)
-
-                # Always track deployment successes for cooldown logic, regardless of TPM/RPM limits
-                increment_deployment_successes_for_current_minute(
-                    litellm_router_instance=self,
-                    deployment_id=id,
-                )
-
-                deployment_dict = deployment_info if isinstance(deployment_info, dict) else deployment_info.model_dump()
-                has_io_token_limits: Final = deployment_has_io_token_limits(deployment_dict)
-
-                ## Nothing to track only when neither tpm/rpm nor itpm/otpm limits are
-                ## set. IO deployments still record TPM/RPM usage here so TPM-aware
-                ## routing strategies see their real load in mixed model groups; their
-                ## itpm/otpm enforcement runs separately in ModelRateLimitingCheck.
-                if (
-                    tpm is None
-                    and rpm is None
-                    and tpm_litellm_params is None
-                    and rpm_litellm_params is None
-                    and tpm_model_info is None
-                    and rpm_model_info is None
-                    and not has_io_token_limits
-                ):
-                    return
-
-                parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
-                total_tokens: Final[float] = standard_logging_object.get("total_tokens", 0)
-
-                # ------------
-                # Setup values
-                # ------------
-                dt: Final = get_utc_datetime()
-                current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
-
-                tpm_key = RouterCacheEnum.TPM.value.format(id=id, current_minute=current_minute, model=deployment_name)
-                # ------------
-                # Update usage
-                # ------------
-                # update cache
-                pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
-
-                ## TPM
-                pipeline_operations.append(
-                    RedisPipelineIncrementOperation(
-                        key=tpm_key,
-                        increment_value=total_tokens,
-                        ttl=RoutingArgs.ttl.value,
-                    )
-                )
-
-                ## RPM
-                rpm_key = RouterCacheEnum.RPM.value.format(id=id, current_minute=current_minute, model=deployment_name)
-                pipeline_operations.append(
-                    RedisPipelineIncrementOperation(
-                        key=rpm_key,
-                        increment_value=1,
-                        ttl=RoutingArgs.ttl.value,
-                    )
-                )
-
-                await self.cache.async_increment_cache_pipeline(
-                    increment_list=pipeline_operations,
-                    parent_otel_span=parent_otel_span,
-                )
-
-                return tpm_key
+            total_tokens: Final[float] = standard_logging_object.get("total_tokens", 0)
+            counted_tokens: Final = get_counted_usage_tokens(litellm_params)
+            deployment_name: Final = metadata.get("deployment", None)
+            return await self._increment_deployment_usage(
+                deployment_id=str(deployment_id),
+                deployment_name=deployment_name if isinstance(deployment_name, str) else None,
+                model_group=model_group,
+                total_tokens=total_tokens if counted_tokens is None else max(0, total_tokens - counted_tokens),
+                rpm_increment=1 if counted_tokens is None else 0,
+                parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+            )
 
         except Exception as e:
             verbose_router_logger.debug(
                 "litellm.router.Router::deployment_callback_on_success(): Exception occured - %s", e
             )
+
+    async def increment_deployment_usage_for_response(
+        self,
+        response: object,
+        request_kwargs: dict[str, object],
+    ) -> None:
+        if response is None:
+            return
+        try:
+            deployment_metadata: Final = find_deployment_metadata(request_kwargs)
+            model_group: Final = request_kwargs.get("model")
+            if deployment_metadata is None or not isinstance(model_group, str):
+                return
+            model_info: Final = deployment_metadata["model_info"]
+            deployment_id: Final = model_info.get("id") if isinstance(model_info, dict) else None
+            if deployment_id is None:
+                return
+            total_tokens: Final = response_total_token_count(response)
+            deployment_name: Final = deployment_metadata.get("deployment")
+            deployment_metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] = total_tokens
+            try:
+                await self._increment_deployment_usage(
+                    deployment_id=str(deployment_id),
+                    deployment_name=deployment_name if isinstance(deployment_name, str) else None,
+                    model_group=model_group,
+                    total_tokens=total_tokens,
+                    rpm_increment=1,
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(request_kwargs),
+                )
+            except Exception:
+                deployment_metadata.pop(ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY, None)
+                raise
+        except Exception as e:
+            verbose_router_logger.debug(
+                "litellm.router.Router::increment_deployment_usage_for_response(): Exception occured - %s", e
+            )
+
+    async def _increment_deployment_usage(
+        self,
+        *,
+        deployment_id: str,
+        deployment_name: str | None,
+        model_group: str,
+        total_tokens: float,
+        rpm_increment: int,
+        parent_otel_span: Span | None,
+    ) -> str | None:
+        from litellm.types.caching import RedisPipelineIncrementOperation
+
+        deployment_info: Final = self.get_deployment(model_id=deployment_id)
+        if deployment_info is None:
+            return None
+        deployment_model_info: Final = self.get_router_model_info(
+            deployment=deployment_info,
+            received_model_name=model_group,
+        )
+        configured_limits: Final = (
+            deployment_info.get("tpm", None),
+            deployment_info.get("rpm", None),
+            deployment_info.litellm_params.tpm,
+            deployment_info.litellm_params.rpm,
+            deployment_model_info.get("tpm", None),
+            deployment_model_info.get("rpm", None),
+        )
+        ## Nothing to track only when neither tpm/rpm nor itpm/otpm limits are
+        ## set. IO deployments still record TPM/RPM usage here so TPM-aware
+        ## routing strategies see their real load in mixed model groups; their
+        ## itpm/otpm enforcement runs separately in ModelRateLimitingCheck.
+        if all(limit is None for limit in configured_limits) and not deployment_has_io_token_limits(
+            deployment_info.model_dump()
+        ):
+            return None
+        if total_tokens <= 0 and rpm_increment <= 0:
+            return None
+
+        current_minute: Final = get_utc_datetime().strftime("%H-%M")  # use the same timezone regardless of system clock
+        tpm_key: Final = RouterCacheEnum.TPM.value.format(
+            id=deployment_id, current_minute=current_minute, model=deployment_name
+        )
+        rpm_key: Final = RouterCacheEnum.RPM.value.format(
+            id=deployment_id, current_minute=current_minute, model=deployment_name
+        )
+        pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = [
+            RedisPipelineIncrementOperation(key=key, increment_value=increment_value, ttl=RoutingArgs.ttl.value)
+            for key, increment_value in ((tpm_key, total_tokens), (rpm_key, rpm_increment))
+        ]
+        post_increment_values: Final = await self.cache.async_increment_cache_pipeline(
+            increment_list=pipeline_operations,
+            parent_otel_span=parent_otel_span,
+        )
+        if post_increment_values is not None and self.cache.redis_cache is not None:
+            for operation, value in zip(pipeline_operations, post_increment_values):
+                await self.cache.async_set_cache(
+                    operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
+                )
+        return tpm_key
 
     def sync_deployment_callback_on_success(
         self,
@@ -11205,15 +11232,7 @@ class Router:
 
         if model_group is not None:
             remaining_usage: Final = await self.get_remaining_model_group_usage(model_group)
-            # get_remaining_model_group_usage reads the router's TPM/RPM counter,
-            # which is incremented post-response by deployment_callback_on_success.
-            # Replay the in-flight increment for TPM/RPM only (LIT-2719); ITPM/OTPM
-            # counters are incremented at reservation time and must not be adjusted.
-            apply_remaining_usage_headers(
-                additional_headers,
-                remaining_usage,
-                response_in_flight_token_count(response),
-            )
+            apply_remaining_usage_headers(additional_headers, remaining_usage)
         return response
 
     def _build_model_name_index(self, model_list: list) -> None:

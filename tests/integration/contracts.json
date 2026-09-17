@@ -75,6 +75,123 @@
     ],
     "tests/integration/authorization/test_warmed_policy.py::test_expiry_and_explicit_clear_reach_both_warmed_workers": [
       "mgmt.key.update.expiry_changes_reach_warmed_workers"
+    ],
+    "tests/integration/database/test_partition_transactions.py::test_real_partition_ddl_survives_witnessed_lock_and_is_idempotent": [
+      "other.database.partitions.lock_wait_outlives_transaction_default",
+      "other.database.partitions.repeat_preserves_rows"
+    ],
+    "tests/integration/database/test_reader_writer_regeneration.py::test_key_regeneration_uses_writer_with_a_real_readonly_reader": [
+      "other.database.regeneration.writer_updates_dependent_grants"
+    ],
+    "tests/integration/pricing/test_price_precedence.py::test_generated_zero_null_and_omitted_prices_follow_independent_arithmetic": [
+      "quota_management.spend_tracking.price_precedence.zero_and_default_rates"
+    ],
+    "tests/integration/pricing/test_price_precedence.py::test_same_upstream_aliases_keep_distinct_prices_after_reload": [
+      "quota_management.spend_tracking.alias_prices.remain_independent_on_reload"
+    ],
+    "tests/integration/spend/test_cache_and_quota.py::test_generated_cache_sequences_preserve_content_usage_and_zero_hit_cost": [
+      "quota_management.response_cache.generated_sequences_preserve_content_and_accounting"
+    ],
+    "tests/integration/spend/test_cache_and_quota.py::test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores": [
+      "quota_management.budget.key.boundary_blocks_before_provider_and_reset_restores"
+    ],
+    "tests/integration/spend/test_cache_and_quota.py::test_different_system_messages_do_not_share_a_cached_response": [
+      "quota_management.response_cache.system_messages_partition_cache_identity"
+    ],
+    "tests/integration/database/test_transaction_atomicity.py::test_access_group_second_key_constraint_failure_rolls_back_all_writes": [
+      "other.database.access_group.failed_second_write_rolls_back_first"
+    ],
+    "tests/integration/spend/test_cache_and_quota.py::test_repeated_hits_keep_response_identity_and_create_distinct_zero_cost_rows": [
+      "quota_management.response_cache.repeated_hits_preserve_identity_and_single_charge"
+    ],
+    "tests/integration/providers/test_s3_wire.py::test_sigv4_verifier_matches_published_put_and_rejects_corruption": [
+      "other.provider_wire.s3.verifier_known_answer_and_negative_controls"
+    ],
+    "tests/integration/providers/test_s3_wire.py::test_s3_sync_and_async_uploads_pass_independent_wire_verification": [
+      "other.provider_wire.s3.sync_async_reserved_keys_are_signed_and_accepted"
+    ],
+    "tests/integration/providers/test_bedrock_auth_wire.py::test_bearer_only_sdk_sync_async_requests_do_not_require_aws_credentials": [
+      "other.provider_wire.bedrock.bearer_sdk_skips_credential_chain"
+    ],
+    "tests/integration/providers/test_bedrock_auth_wire.py::test_bearer_environment_reference_loads_from_db_and_yaml_and_survives_reload": [
+      "other.provider_wire.bedrock.bearer_db_yaml_survives_reload"
+    ],
+    "tests/integration/streaming/test_stream_contracts.py::test_generated_tcp_partitions_preserve_unicode_text_identity_and_final_usage": [
+      "other.streaming.byte_partitions.preserve_text_identity_and_usage"
+    ],
+    "tests/integration/streaming/test_stream_contracts.py::test_fragmented_tool_names_and_arguments_keep_each_call_identity": [
+      "other.streaming.tools.fragmented_calls_keep_independent_arguments"
+    ],
+    "tests/integration/streaming/test_stream_contracts.py::test_proxy_stream_usage_visibility_keeps_exact_persisted_charge": [
+      "other.streaming.usage.client_visibility_preserves_persisted_accounting"
+    ],
+    "tests/integration/streaming/test_stream_contracts.py::test_truncated_http_stream_is_an_error_and_next_stream_succeeds": [
+      "other.streaming.failure.truncated_transport_raises_and_control_recovers"
+    ],
+    "tests/integration/streaming/test_stream_contracts.py::test_client_cancellation_releases_the_actual_provider_connection": [
+      "other.streaming.cancellation.closes_actual_provider_connection"
+    ],
+    "tests/integration/routing/test_observed_routing.py::test_retry_counts_and_public_errors_match_actual_provider_attempts": [
+      "other.routing.retries.several_attempts_reach_success_without_hidden_retries",
+      "other.routing.errors.nonretryable_and_exhausted_failures_remain_errors"
+    ],
+    "tests/integration/routing/test_observed_routing.py::test_loaded_fallback_selects_expected_deployment_and_keeps_response_identity": [
+      "other.routing.fallback.loaded_configuration_selects_only_permitted_target"
+    ],
+    "tests/integration/routing/test_observed_routing.py::test_saved_deployment_target_update_changes_wire_and_preserves_control": [
+      "other.routing.alias_update.persisted_target_changes_only_selected_route"
+    ],
+    "tests/integration/providers/test_bedrock_role_configuration.py::test_role_reference_from_db_and_yaml_reaches_real_sts_http_and_bedrock": [
+      "other.provider_wire.bedrock.db_yaml_role_reference_reaches_sts_and_signed_request"
+    ],
+    "tests/integration/routing/test_redis_recovery.py::test_owned_redis_outage_recovers_requests_and_real_response_cache": [
+      "other.routing.redis.owned_outage_recovers_serving_and_response_cache"
+    ],
+    "tests/integration/providers/test_anthropic_wire.py::test_anthropic_tool_history_and_cache_tokens_keep_wire_and_accounting_contracts": [
+      "other.provider_wire.anthropic.tool_history_system_cache_and_internal_fields",
+      "quota_management.spend_tracking.cache_tokens.disjoint_classes_use_explicit_rates"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_saved_headers_reach_real_mcp_tool_and_survive_unrelated_edit": [
+      "mcp.call_tool.saved_headers.reach_actual_transport"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_tool_error_remains_error_and_healthy_sibling_returns_value": [
+      "mcp.call_tool.errors.tool_failure_is_not_success"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_generated_mcp_edits_preserve_actual_headers_and_tool_results": [
+      "other.mcp.lifecycle.generated_save_reload_preserves_effective_headers"
+    ],
+    "tests/integration/observability/test_callback_delivery.py::test_concurrent_success_and_failure_join_callbacks_and_rows_without_credentials": [
+      "other.observability.callbacks.credentials_stay_out_of_event_bodies",
+      "other.observability.callbacks.concurrent_results_join_complete_events_and_rows"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_guardrail_rewrites_system_and_user_in_actual_anthropic_request": [
+      "other.observability.guardrails.rewrite_reaches_correct_anthropic_positions"
+    ],
+    "tests/integration/compatibility/test_a2a_wire_versions.py::test_a2a_versions_and_legacy_casing_preserve_real_wire_and_response": [
+      "other.compatibility.a2a.supported_versions_preserve_literal_envelopes"
+    ],
+    "tests/integration/compatibility/test_persisted_toolsets.py::test_existing_toolset_format_loads_before_start_and_keeps_sibling_denied": [
+      "other.compatibility.mcp.persisted_tool_names_survive_candidate_startup"
+    ],
+    "tests/integration/mcp/test_oauth_configuration.py::test_partial_discovery_and_unrelated_edit_keep_actual_authorization_destination": [
+      "other.mcp.oauth.discovery_cannot_erase_configured_authorization_endpoint"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_guardrail_denial_prevents_provider_and_preserves_allowed_control": [
+      "other.observability.guardrails.denial_prevents_provider_with_allowed_control"
+    ],
+    "tests/integration/mcp/test_mcp_protocol_errors.py::test_jsonrpc_error_and_malformed_tool_result_remain_errors": [
+      "other.mcp.errors.protocol_and_malformed_results_cannot_be_empty_success"
+    ],
+    "tests/integration/compatibility/test_openai_consumer.py::test_retained_openai_clients_parse_real_proxy_tool_and_usage_responses": [
+      "other.compatibility.openai.retained_client_parses_tools_and_usage"
+    ],
+    "tests/integration/spend/test_filtered_ledger.py::test_rotated_keys_users_and_model_groups_preserve_success_failure_cache_ledger": [
+      "quota_management.spend_tracking.filtered_ledger_preserves_owner_identity_and_totals"
+    ]
+  },
+  "browser": {
+    "tests/e2e/ui/tests/integrationCritical/projectDetachment.spec.ts::project creation and explicit detachment preserve saved scope and restore serving": [
+      "mgmt.key.ui.project_create_clear_preserves_serving_scope"
     ]
   }
 }

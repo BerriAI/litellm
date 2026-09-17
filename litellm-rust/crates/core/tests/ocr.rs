@@ -348,13 +348,14 @@ async fn fallible_host_phases_do_not_replay_or_reach_transport() {
                     }
                     OcrHostOperation::ProjectRequest => {
                         result = Some(OcrHostResult::Request(Ok((
-                            Box::new(request.take().unwrap()),
+                            Box::new(request.take().unwrap().into()),
                             false,
                         ))))
                     }
                     OcrHostOperation::AcquireAzureAdToken => {
                         panic!("test request has no token provider")
                     }
+                    OcrHostOperation::ReadDocument => panic!("test request has no file reader"),
                     OcrHostOperation::PreCall(request) => {
                         phases.push("pre");
                         result = Some(OcrHostResult::PreCall(if failure_phase == "pre" {
@@ -405,7 +406,7 @@ async fn invalid_provider_response_runs_post_call_before_normalization_failure()
         match call.resume(result.take()).await {
             Ok(OcrCallStep::Host(OcrHostOperation::ProjectRequest)) => {
                 result = Some(OcrHostResult::Request(Ok((
-                    Box::new(request.take().unwrap()),
+                    Box::new(request.take().unwrap().into()),
                     false,
                 ))));
             }
@@ -467,9 +468,10 @@ async fn direct_native_host_drives_the_same_state_machine() {
                     _ => panic!("unexpected OCR operation"),
                 });
                 result = Some(match operation {
-                    OcrHostOperation::ProjectRequest => {
-                        OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false)))
-                    }
+                    OcrHostOperation::ProjectRequest => OcrHostResult::Request(Ok((
+                        Box::new(request.take().unwrap().into()),
+                        false,
+                    ))),
                     operation => host.invoke(operation).await,
                 });
             }
@@ -499,6 +501,137 @@ async fn direct_native_host_drives_the_same_state_machine() {
         call.resume(None).await,
         Err(crate::ocr::Error::InvalidRequest(_))
     ));
+}
+
+async fn drive_native_file_call(
+    request: super::LiteLLMOcrRequest<super::OcrDocumentInput>,
+    content: Result<super::OcrFileContent, crate::ocr::Error>,
+) -> (Result<super::LiteLLMOcrResponse, crate::ocr::Error>, usize) {
+    let NativeOutcome::Completed(mut call) =
+        OcrCall::admit(super::test_support::ocr_client(), OcrAdmission::all())
+    else {
+        panic!("supported call declined")
+    };
+    let mut request = Some(request);
+    let mut content = Some(content);
+    let mut result = None;
+    let mut reads = 0;
+    let outcome = loop {
+        match call.resume(result.take()).await {
+            Ok(OcrCallStep::Host(OcrHostOperation::ProjectRequest)) => {
+                result = Some(OcrHostResult::Request(Ok((
+                    Box::new(request.take().unwrap()),
+                    false,
+                ))));
+            }
+            Ok(OcrCallStep::Host(OcrHostOperation::ReadDocument)) => {
+                reads += 1;
+                result = Some(OcrHostResult::Document(content.take().unwrap()));
+            }
+            Ok(OcrCallStep::Host(operation)) => result = Some(NoopOcrHost.invoke(operation).await),
+            Ok(OcrCallStep::Complete(response)) => break Ok(response),
+            Err(error) => break Err(error),
+        }
+    };
+    (outcome, reads)
+}
+
+#[tokio::test]
+async fn host_reader_documents_are_read_once_at_the_core_selected_point_and_encoded() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({
+        "pages":[{"index":0,"markdown":"file"}]
+    }))])
+    .await;
+    let request = wire_request("mistral/model", &base, json!({})).with_document(
+        super::OcrDocumentInput::HostReader {
+            mime_type: Some("application/pdf".into()),
+        },
+    );
+    let (response, reads) = drive_native_file_call(
+        request,
+        Ok(super::OcrFileContent {
+            bytes: b"abc".as_slice().into(),
+            file_name: Some("scan.png".into()),
+        }),
+    )
+    .await;
+    server.await.unwrap();
+    assert_eq!(response.unwrap().pages[0]["markdown"], "file");
+    assert_eq!(reads, 1);
+    assert!(seen.lock().unwrap()[0].contains("data:application/pdf;base64,YWJj"));
+}
+
+#[tokio::test]
+async fn host_reader_failures_and_empty_files_fail_before_the_provider_is_called() {
+    let (base, seen, _server) = mock_server(vec![]).await;
+    let request = wire_request("mistral/model", &base, json!({}));
+    let failure = crate::ocr::Error::InvalidRequest("reader exploded".into());
+    let (response, reads) = drive_native_file_call(
+        request.with_document(super::OcrDocumentInput::HostReader { mime_type: None }),
+        Err(failure.clone()),
+    )
+    .await;
+    assert_eq!(response.unwrap_err(), failure);
+    assert_eq!(reads, 1);
+
+    let request = wire_request("mistral/model", &base, json!({}));
+    let (response, _) = drive_native_file_call(
+        request.with_document(super::OcrDocumentInput::HostReader { mime_type: None }),
+        Ok(super::OcrFileContent {
+            bytes: Default::default(),
+            file_name: None,
+        }),
+    )
+    .await;
+    assert!(matches!(
+        response.unwrap_err(),
+        crate::ocr::Error::InvalidRequest(_)
+    ));
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn path_documents_are_read_by_core_without_a_host_operation() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({
+        "pages":[{"index":0,"markdown":"path"}]
+    }))])
+    .await;
+    let dir = std::env::temp_dir().join(format!("litellm-ocr-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("scan.png");
+    std::fs::write(&path, b"abc").unwrap();
+    let request = wire_request("mistral/model", &base, json!({})).with_document(
+        super::OcrDocumentInput::Path {
+            path: path.clone(),
+            mime_type: None,
+        },
+    );
+    let (response, reads) = drive_native_file_call(
+        request,
+        Err(crate::ocr::Error::InvalidRequest("unused".into())),
+    )
+    .await;
+    server.await.unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(response.unwrap().pages[0]["markdown"], "path");
+    assert_eq!(reads, 0);
+    assert!(seen.lock().unwrap()[0].contains("data:image/png;base64,YWJj"));
+
+    let (base, seen, _server) = mock_server(vec![]).await;
+    let request = wire_request("mistral/model", &base, json!({}));
+    let (response, _) = drive_native_file_call(
+        request.with_document(super::OcrDocumentInput::Path {
+            path: path.clone(),
+            mime_type: None,
+        }),
+        Err(crate::ocr::Error::InvalidRequest("unused".into())),
+    )
+    .await;
+    assert!(matches!(
+        response.unwrap_err(),
+        crate::ocr::Error::FileRead { path: failed, kind: std::io::ErrorKind::NotFound, .. } if failed == path
+    ));
+    assert!(seen.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -543,9 +676,10 @@ async fn public_finalization_failure_never_dispatches_success_or_replays_provide
                     | OcrHostOperation::Lifecycle(HostPhase::DeploymentFailure) => {
                         panic!("finalization failure used provider/success dispatch")
                     }
-                    OcrHostOperation::ProjectRequest => {
-                        OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false)))
-                    }
+                    OcrHostOperation::ProjectRequest => OcrHostResult::Request(Ok((
+                        Box::new(request.take().unwrap().into()),
+                        false,
+                    ))),
                     operation => host.invoke(operation).await,
                 });
             }
@@ -582,7 +716,7 @@ async fn cancellation_at_provider_hook_prevents_execution_and_further_resumption
             OcrCallStep::Host(OcrHostOperation::PreCall(_)) => break,
             OcrCallStep::Host(OcrHostOperation::ProjectRequest) => {
                 result = Some(OcrHostResult::Request(Ok((
-                    Box::new(request.take().unwrap()),
+                    Box::new(request.take().unwrap().into()),
                     false,
                 ))))
             }
@@ -799,7 +933,7 @@ async fn cancellation_waits_for_provider_capture_drop_even_when_acknowledgement_
                     _ = entered.notified() => break,
                     step = call.resume(result.take()) => {
                         result = Some(match step.unwrap() {
-                            OcrCallStep::Host(OcrHostOperation::ProjectRequest) => OcrHostResult::Request(Ok((Box::new(request.take().unwrap()), false))),
+                            OcrCallStep::Host(OcrHostOperation::ProjectRequest) => OcrHostResult::Request(Ok((Box::new(request.take().unwrap().into()), false))),
                             OcrCallStep::Host(operation) => NoopOcrHost.invoke(operation).await,
                             OcrCallStep::Complete(_) => panic!("pending provider completed"),
                         });

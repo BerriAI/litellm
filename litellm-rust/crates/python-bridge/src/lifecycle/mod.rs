@@ -599,6 +599,34 @@ mod tests {
 
     static PYTHON_GLOBALS: Mutex<()> = Mutex::new(());
 
+    fn install_lifecycle_module(py: Python<'_>) -> Bound<'_, PyModule> {
+        py.run(
+            pyo3::ffi::c_str!(
+                r#"
+import sys
+import types
+
+sys.modules.setdefault('litellm', types.ModuleType('litellm'))
+sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bridge'))
+"#
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+        let source = std::ffi::CString::new(include_str!(
+            "../../../../../litellm/rust_bridge/lifecycle.py"
+        ))
+        .unwrap();
+        PyModule::from_code(
+            py,
+            &source,
+            pyo3::ffi::c_str!("lifecycle.py"),
+            pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
+        )
+        .unwrap()
+    }
+
     fn install_logging_worker(py: Python<'_>, worker: &Bound<'_, PyAny>) -> PyResult<()> {
         py.import("litellm.litellm_core_utils.logging_worker")?
             .setattr("GLOBAL_LOGGING_WORKER", worker)
@@ -773,17 +801,7 @@ mod tests {
             .unwrap_or_else(|error| error.into_inner());
         Python::initialize();
         Python::attach(|py| {
-            let source = std::ffi::CString::new(include_str!(
-                "../../../../../litellm/rust_bridge/lifecycle.py"
-            ))
-            .unwrap();
-            PyModule::from_code(
-                py,
-                &source,
-                pyo3::ffi::c_str!("lifecycle.py"),
-                pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
-            )
-            .unwrap();
+            install_lifecycle_module(py);
             let route = SyntheticRoute(
                 PythonCallState::new(
                     py,
@@ -819,17 +837,7 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             py.import("asyncio").unwrap();
-            let source = std::ffi::CString::new(include_str!(
-                "../../../../../litellm/rust_bridge/lifecycle.py"
-            ))
-            .unwrap();
-            let module = PyModule::from_code(
-                py,
-                &source,
-                pyo3::ffi::c_str!("lifecycle.py"),
-                pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
-            )
-            .unwrap();
+            let module = install_lifecycle_module(py);
             let locals = PyDict::new(py);
             locals
                 .set_item("drive", module.getattr("drive").unwrap())

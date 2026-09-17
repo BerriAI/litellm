@@ -16,6 +16,7 @@ extension-module = ["pyo3/extension-module"]
 panic-test = []
 
 [dependencies]
+bytes.workspace = true
 futures-util.workspace = true
 litellm-core.workspace = true
 litellm-auth.workspace = true
