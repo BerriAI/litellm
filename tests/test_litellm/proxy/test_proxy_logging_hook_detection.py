@@ -73,7 +73,7 @@ async def test_post_call_response_headers_hook_returns_early_without_callbacks(
 
 def test_callback_capabilities_skips_default_custom_logger(monkeypatch):
     """
-    Internal proxy hooks (e.g. _PROXY_MaxBudgetLimiter, ManagedFiles) inherit
+    Internal proxy hooks (e.g. _PROXY_CacheControlCheck, ManagedFiles) inherit
     the default ``async_post_call_streaming_iterator_hook`` body.  The
     capability scanner must NOT report them as iterator overrides — wrapping
     the chunk stream through every no-op layer was responsible for ~10x

@@ -972,11 +972,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/projects/_components/ProjectKeysSection.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/projects/_components/ProjectModals/ProjectBaseForm.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2

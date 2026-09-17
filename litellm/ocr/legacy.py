@@ -11,7 +11,7 @@ from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass
 from io import IOBase
 from types import MappingProxyType
-from typing import Final, cast  # noqa: TID251  # adapters preserve the legacy untyped contracts
+from typing import Final, Protocol, cast  # noqa: TID251  # adapters preserve the legacy untyped contracts
 
 import httpx
 
@@ -26,12 +26,15 @@ from litellm.llms.base_llm.ocr.transformation import (
     parse_ocr_request_format,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.ocr.input import FileReader
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CustomPricingLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
 base_llm_http_handler: Final = BaseLLMHTTPHandler()
+
+
+class FileReader(Protocol):
+    def read(self) -> bytes | str: ...
 
 
 @dataclass(frozen=True, slots=True)
