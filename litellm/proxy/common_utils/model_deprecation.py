@@ -75,23 +75,11 @@ def _mapping_field(deployment: Mapping[str, object], key: str) -> Mapping[str, o
 def _resolve_deployment_deprecation(
     deployment: Mapping[str, object],
 ) -> _ResolvedDeprecation | None:
-    """Resolve a deployment's deprecation date and successor, preferring its explicit overrides"""
+    """Resolve a deployment's deprecation date and successor, preferring its explicit overrides field by field"""
     model_info: Final = _mapping_field(deployment, "model_info")
     raw_model: Final = _mapping_field(deployment, "litellm_params").get("model")
-    explicit_successor: Final = _successor_model(model_info.get("successor_model"))
-
-    override: Final = _parse_deprecation_date(model_info.get("deprecation_date"))
-    if override is not None:
-        provider: Final = model_info.get("litellm_provider")
-        return _ResolvedDeprecation(
-            deprecation_date=override,
-            litellm_model=raw_model if isinstance(raw_model, str) else None,
-            litellm_provider=provider if isinstance(provider, str) else None,
-            successor_model=explicit_successor,
-        )
-
     unprefixed: Final = raw_model.split("/", 1)[1] if isinstance(raw_model, str) and "/" in raw_model else None
-    resolved: Final = next(
+    from_cost_map: Final = next(
         (
             candidate
             for candidate in (
@@ -103,9 +91,20 @@ def _resolve_deployment_deprecation(
         ),
         None,
     )
-    if resolved is None or explicit_successor is None:
-        return resolved
-    return replace(resolved, successor_model=explicit_successor)
+    successor: Final = _successor_model(model_info.get("successor_model")) or (
+        from_cost_map.successor_model if from_cost_map is not None else None
+    )
+
+    override: Final = _parse_deprecation_date(model_info.get("deprecation_date"))
+    if override is not None:
+        provider: Final = model_info.get("litellm_provider")
+        return _ResolvedDeprecation(
+            deprecation_date=override,
+            litellm_model=raw_model if isinstance(raw_model, str) else None,
+            litellm_provider=provider if isinstance(provider, str) else None,
+            successor_model=successor,
+        )
+    return None if from_cost_map is None else replace(from_cost_map, successor_model=successor)
 
 
 def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:

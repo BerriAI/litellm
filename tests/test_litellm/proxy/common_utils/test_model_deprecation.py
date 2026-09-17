@@ -480,3 +480,24 @@ class TestSuccessorModel:
         assert "migrate to `&lt;https://evil.example|new&gt;`" in message
         assert "<https://evil.example|new>" not in message
         assert message.count("migrate to") == 1
+
+    def test_should_take_the_cost_map_successor_when_the_deployment_overrides_only_the_date(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {"old-model": {"deprecation_date": "2030-01-01", "successor_model": "new-model"}},
+        )
+        router = _make_router(
+            [
+                {
+                    "model_name": "old",
+                    "litellm_params": {"model": "old-model"},
+                    "model_info": {"id": "1", "deprecation_date": "2026-06-10"},
+                }
+            ]
+        )
+
+        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+
+        assert snapshot.imminent[0].deprecation_date == date(2026, 6, 10)
+        assert snapshot.imminent[0].successor_model == "new-model"
