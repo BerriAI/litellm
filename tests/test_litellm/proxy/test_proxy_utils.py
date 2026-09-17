@@ -160,6 +160,37 @@ async def test_proxy_only_error_log_keeps_litellm_metadata_in_litellm_params():
     assert "litellm_metadata" not in captured["optional_params"]
 
 
+@pytest.mark.asyncio
+async def test_proxy_only_error_log_keeps_the_request_litellm_call_id(monkeypatch: pytest.MonkeyPatch):
+    """LIT-7836: a route that already stamped the caller's litellm_call_id must
+    keep it when the failure is a proxy-only error, so the spend-log row and the
+    error line share one id instead of a fresh uuid minted here."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    call_id: Final = "caller-supplied-7836"
+    captured: dict[str, object] = {}
+
+    def fake_pre_call(self, *args, **kwargs):
+        captured["litellm_call_id"] = self.litellm_call_id
+
+    async def _noop_async_failure(self, *args, **kwargs):
+        return None
+
+    monkeypatch.setattr(Logging, "pre_call", fake_pre_call)
+    monkeypatch.setattr(Logging, "async_failure_handler", _noop_async_failure)
+    request_data: Final[dict[str, object]] = {"model": "gpt-4o", "input": "hi", "litellm_call_id": call_id}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-bad", request_route="/v1/moderations"),
+        route="/v1/moderations",
+        original_exception=Exception("bad key"),
+    )
+
+    assert request_data["litellm_call_id"] == call_id
+    assert captured["litellm_call_id"] == call_id
+
+
 def test_get_model_group_info_order():
     from litellm import Router
     from litellm.proxy.proxy_server import _get_model_group_info
