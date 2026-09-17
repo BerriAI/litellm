@@ -24,3 +24,23 @@ pub enum Error {
     #[error(transparent)]
     Aws(#[from] litellm_auth_aws::Error),
 }
+
+impl From<litellm_providers::audio_transcription::Error> for Error {
+    fn from(error: litellm_providers::audio_transcription::Error) -> Self {
+        match error {
+            litellm_providers::audio_transcription::Error::InvalidType { expected, actual } => {
+                Self::InvalidType { expected, actual }
+            }
+            litellm_providers::audio_transcription::Error::MissingField(field) => {
+                Self::MissingField(field)
+            }
+            litellm_providers::audio_transcription::Error::InvalidRequest(message) => {
+                Self::InvalidRequest(message)
+            }
+            litellm_providers::audio_transcription::Error::InvalidResponse(message) => {
+                Self::InvalidResponse(message)
+            }
+            litellm_providers::audio_transcription::Error::Auth(error) => Self::Auth(error),
+        }
+    }
+}

@@ -586,35 +586,38 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    create_data: Final[dict[str, Any]] = {
-        "created_by": user_api_key_dict.user_id or "",
-        "updated_by": user_api_key_dict.user_id or "",
-    }
-
-    seed_row_id: Final = (
+    seeds_temp_budget: Final = "temp_budget_increase" in write_data or "temp_budget_expiry" in write_data
+    source_row_id: Final = (
         existing_budget_id
         if is_shared_default
         else team_default_budget_id
-        if team_default_budget_id is not None
-        and ("temp_budget_increase" in write_data or "temp_budget_expiry" in write_data)
+        if team_default_budget_id is not None and seeds_temp_budget
         else None
     )
-    if seed_row_id is not None:
-        seed_row: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": seed_row_id})
-        if seed_row is not None:
-            seed_dict: Final = seed_row.model_dump()
-            for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS:
-                value = seed_dict.get(field)
-                if field == "max_budget" and value == 0 and not is_shared_default:
-                    continue
-                if _is_set_budget_value(value):
-                    create_data[field] = value
+    source_row: Final = (
+        await tx.litellm_budgettable.find_unique(where={"budget_id": source_row_id})
+        if source_row_id is not None
+        else None
+    )
+    source: Final[Mapping[str, Any]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
 
-    create_data.update(write_data)
+    def _seeds(field: str) -> bool:
+        if field == "max_budget" and source.get(field) == 0 and not is_shared_default:
+            return False
+        return _is_set_budget_value(source.get(field))
 
-    if create_data.get("budget_duration") is not None:
-        create_data["budget_reset_at"] = get_budget_reset_time(budget_duration=create_data["budget_duration"])
-    else:
+    create_data: Final[dict[str, Any]] = {  # mutable-ok: Prisma create payloads are dict-shaped
+        "created_by": user_api_key_dict.user_id or "",
+        "updated_by": user_api_key_dict.user_id or "",
+        **MappingProxyType({f: source[f] for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS if _seeds(f)}),
+        **write_data,
+    }
+
+    # Restarting an inherited window on an unrelated edit hands the member a free period.
+    carried: Final = source.get("budget_reset_at") if "budget_duration" not in budget_patch else None
+    if carried is not None:
+        create_data["budget_reset_at"] = carried
+    if create_data.get("budget_reset_at") is None:
         create_data.pop("budget_reset_at", None)
 
     if not _has_meaningful_budget_limit(create_data):

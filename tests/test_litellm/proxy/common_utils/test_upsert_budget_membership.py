@@ -1,6 +1,6 @@
 # tests/litellm/proxy/common_utils/test_upsert_budget_membership.py
 import types
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -27,9 +27,7 @@ def mock_tx():
     budget = MagicMock()
     budget.update = AsyncMock()
     budget.find_unique = AsyncMock(return_value=None)
-    budget.create = AsyncMock(
-        return_value=types.SimpleNamespace(budget_id="new-budget-123")
-    )
+    budget.create = AsyncMock(return_value=types.SimpleNamespace(budget_id="new-budget-123"))
 
     tx = MagicMock()
     tx.litellm_teammembership = membership
@@ -83,9 +81,7 @@ async def test_empty_patch_is_noop(mock_tx, fake_user):
 # member falls back to the team default instead of keeping an empty private row.
 @pytest.mark.asyncio
 async def test_clearing_all_limits_disconnects(mock_tx, fake_user):
-    mock_tx.litellm_budgettable.find_unique = AsyncMock(
-        return_value=budget_row(max_budget=100.0)
-    )
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row(max_budget=100.0))
 
     await _upsert_budget_and_membership(
         mock_tx,
@@ -136,9 +132,7 @@ async def test_clear_one_field_keeps_others(mock_tx, fake_user):
 # budget_reset_at, so the budget rolls over without waiting for the reset cron.
 @pytest.mark.asyncio
 async def test_update_in_place_seeds_reset_at(mock_tx, fake_user):
-    mock_tx.litellm_budgettable.find_unique = AsyncMock(
-        return_value=budget_row(max_budget=20.0)
-    )
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row(max_budget=20.0))
 
     await _upsert_budget_and_membership(
         mock_tx,
@@ -163,9 +157,7 @@ async def test_update_in_place_seeds_reset_at(mock_tx, fake_user):
 # budget_duration must not get a (re)computed reset time.
 @pytest.mark.asyncio
 async def test_update_in_place_single_field_leaves_reset_at_alone(mock_tx, fake_user):
-    mock_tx.litellm_budgettable.find_unique = AsyncMock(
-        return_value=budget_row(max_budget=50.0)
-    )
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row(max_budget=50.0))
 
     await _upsert_budget_and_membership(
         mock_tx,
@@ -294,6 +286,7 @@ async def test_create_from_temp_pair_skips_zero_team_default_cap(mock_tx, fake_u
 @pytest.mark.asyncio
 async def test_clone_on_write_from_shared_default(mock_tx, fake_user):
     shared_default_id = "team-default-budget-1"
+    shared_reset_at = datetime.now(timezone.utc) + timedelta(hours=3)
     mock_tx.litellm_budgettable.find_unique = AsyncMock(
         return_value=budget_row(
             budget_id=shared_default_id,
@@ -304,6 +297,7 @@ async def test_clone_on_write_from_shared_default(mock_tx, fake_user):
             rpm_limit=None,
             model_max_budget=None,
             budget_duration="1d",
+            budget_reset_at=shared_reset_at,
             allowed_models=[],
         )
     )
@@ -321,7 +315,7 @@ async def test_clone_on_write_from_shared_default(mock_tx, fake_user):
     mock_tx.litellm_budgettable.update.assert_not_called()
     mock_tx.litellm_budgettable.create.assert_awaited_once()
     create_data = mock_tx.litellm_budgettable.create.await_args.kwargs["data"]
-    assert_future_reset_time(create_data.pop("budget_reset_at"))
+    assert create_data.pop("budget_reset_at") == shared_reset_at
     assert create_data == {
         "created_by": fake_user.user_id,
         "updated_by": fake_user.user_id,
@@ -387,9 +381,7 @@ async def test_clone_on_write_clears_duration(mock_tx, fake_user):
 # team default), we update it in place rather than forking another row.
 @pytest.mark.asyncio
 async def test_private_budget_updates_in_place(mock_tx, fake_user):
-    mock_tx.litellm_budgettable.find_unique = AsyncMock(
-        return_value=budget_row(max_budget=10.0)
-    )
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row(max_budget=10.0))
 
     await _upsert_budget_and_membership(
         mock_tx,
