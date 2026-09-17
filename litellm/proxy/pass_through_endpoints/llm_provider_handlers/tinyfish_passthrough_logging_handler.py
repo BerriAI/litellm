@@ -55,6 +55,20 @@ class _TinyfishLoggingPayload(NamedTuple):
 # asyncio tasks are weakly referenced by the loop; hold them until done or they can vanish mid-poll
 _BACKGROUND_BILLING_TASKS: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: task registry
 
+_SSE_POLLER_SPAWNED_KEY: Final = "tinyfish_sse_poller_spawned"
+
+
+def mark_sse_poller_spawned(logging_obj: LiteLLMLoggingObj) -> None:
+    logging_obj.model_call_details[_SSE_POLLER_SPAWNED_KEY] = True
+
+
+def sse_poller_spawned(logging_obj: LiteLLMLoggingObj) -> bool:
+    return logging_obj.model_call_details.get(_SSE_POLLER_SPAWNED_KEY) is True
+
+
+def run_id_from_sse_frames(frames: bytes) -> str | None:
+    return _run_id_from_sse_chunks(frames.decode("utf-8", errors="replace").splitlines())
+
 
 def resolve_tinyfish_agent_api_base() -> str:
     return (os.getenv("TINYFISH_AGENT_API_BASE") or TINYFISH_AGENT_DEFAULT_API_BASE).rstrip("/")
@@ -90,6 +104,9 @@ def _parse_run(payload: object) -> TinyfishRun | None:
 
 def _run_cost(run: TinyfishRun | None) -> float | None:
     if run is None:
+        return None
+    # TinyFish only invoices COMPLETED runs, so FAILED/CANCELLED runs must charge the team $0
+    if run.get("status") != "COMPLETED":
         return None
     num_of_steps: Final = run.get("num_of_steps")
     if num_of_steps is None:
@@ -164,6 +181,30 @@ class TinyFishPassthroughLoggingHandler:
                 start_time=start_time,
                 cache_hit=cache_hit,
                 kwargs=kwargs,
+            )
+        )
+        _BACKGROUND_BILLING_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_BILLING_TASKS.discard)
+
+    @staticmethod
+    def start_sse_run_billing(
+        run_id: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        start_time: datetime,
+        client: AsyncHTTPHandler | None = None,
+    ) -> None:
+        """Bill POST /v1/automation/run-sse once, when the polled run turns terminal; the detached
+        task outlives client disconnects, so interrupted streams still bill completed runs."""
+        mark_sse_poller_spawned(litellm_logging_obj)
+        task: Final = asyncio.create_task(
+            TinyFishPassthroughLoggingHandler._poll_and_log(
+                run_id=run_id,
+                logging_obj=litellm_logging_obj,
+                result="",
+                start_time=start_time,
+                cache_hit=litellm_logging_obj.model_call_details.get("cache_hit") is True,
+                kwargs=_EMPTY_KWARGS,
+                client=client,
             )
         )
         _BACKGROUND_BILLING_TASKS.add(task)
@@ -285,8 +326,8 @@ class TinyFishPassthroughLoggingHandler:
         end_time: datetime,
         client: AsyncHTTPHandler | None = None,
     ) -> PassThroughEndpointLoggingTypedDict:
-        """Bill a POST /v1/automation/run-sse stream: SSE events carry no num_of_steps, so the
-        run_id parsed from the buffered events prices the run via one GET /v1/runs/{id}."""
+        """Fallback for run-sse streams where chunk_processor spawned no poller (no run_id frame
+        ever arrived): logs the request, still pricing via GET /v1/runs/{id} if a run_id parses."""
         try:
             run_id: Final = _run_id_from_sse_chunks(all_chunks)
             if run_id is None:
@@ -326,6 +367,8 @@ class TinyFishPassthroughLoggingHandler:
             "model": TINYFISH_MODEL_NAME,
             "custom_llm_provider": "tinyfish",
             "response_cost": response_cost,
+            # spend rows key on this as request_id; without it every poller-billed row is a NULL-key collision
+            "litellm_call_id": logging_obj.litellm_call_id,
         }
         logging_obj.model_call_details.update(
             model=TINYFISH_MODEL_NAME,

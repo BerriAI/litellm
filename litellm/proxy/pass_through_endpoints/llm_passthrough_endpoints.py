@@ -2748,11 +2748,11 @@ async def tinyfish_proxy_route(
     - POST /v1/automation/run        — run to completion (blocking)
     - POST /v1/automation/run-async  — submit a run, poll GET /v1/runs/{id} for the result
     - POST /v1/automation/run-sse    — run with SSE progress events
-    - GET  /v1/runs                  — list runs
     - GET  /v1/runs/{id}             — run status / result
     - POST /v1/runs/{id}/cancel      — cancel a run
 
-    Every other Agent API endpoint (vault, wallet, browser profiles) returns 403: all
+    Every other Agent API endpoint (vault, wallet, browser profiles, and the GET /v1/runs
+    listing, which would let any caller discover other callers' run ids) returns 403: all
     proxy callers share one upstream key.
 
     Credential lookup order:

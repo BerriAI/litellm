@@ -27,6 +27,8 @@ from .llm_provider_handlers.openai_passthrough_logging_handler import (
 )
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
     TinyFishPassthroughLoggingHandler,
+    run_id_from_sse_frames,
+    sse_poller_spawned,
 )
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
@@ -180,12 +182,26 @@ class PassThroughStreamingHandler:
                 )
             )
         )
+        # TinyFish SSE bills via a detached poller spawned on the first run_id-bearing frame, so a
+        # client disconnect mid-stream cannot lose the charge (the run completes upstream regardless).
+        tinyfish_scan_active = endpoint_type == EndpointType.TINYFISH  # rebind-ok: scan stops once the poller spawns
+        tinyfish_pending = b""  # rebind-ok: SSE frame reassembly buffer across transport chunks
         try:
             if not cost_injection_active:
                 # Hot path: just buffer for end-of-stream logging and forward.
                 async for chunk in response.aiter_bytes():
                     raw_bytes.append(chunk)
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
+                    if tinyfish_scan_active:
+                        complete_frames, tinyfish_pending = split_complete_sse_frames(tinyfish_pending + chunk)
+                        run_id = run_id_from_sse_frames(complete_frames) if b"run_id" in complete_frames else None
+                        if run_id:
+                            TinyFishPassthroughLoggingHandler.start_sse_run_billing(
+                                run_id=run_id,
+                                litellm_logging_obj=litellm_logging_obj,
+                                start_time=start_time,
+                            )
+                            tinyfish_scan_active = False
                     yield chunk
             else:
                 # ``cost_injection_active`` already requires ``model_name`` to
@@ -274,9 +290,11 @@ class PassThroughStreamingHandler:
         - OpenAI
         """
         try:
-            # TinyFish is dispatched before the sync builder: its SSE events carry no
-            # num_of_steps, so pricing needs an async GET /v1/runs/{id} after the stream.
+            # TinyFish billing is owned by the poller spawned in chunk_processor; this path only
+            # writes the $0 fallback row for streams that never produced a run_id.
             if endpoint_type == EndpointType.TINYFISH:
+                if sse_poller_spawned(litellm_logging_obj):
+                    return
                 tinyfish_payload: Final = (
                     await TinyFishPassthroughLoggingHandler.handle_logging_tinyfish_collected_chunks(
                         litellm_logging_obj=litellm_logging_obj,

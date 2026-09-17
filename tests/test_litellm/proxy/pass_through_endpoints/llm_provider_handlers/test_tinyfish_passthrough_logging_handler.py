@@ -7,9 +7,12 @@ import httpx
 import pytest
 
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.tinyfish_passthrough_logging_handler import (
+    _BACKGROUND_BILLING_TASKS,
     TinyFishPassthroughLoggingHandler,
     is_tinyfish_agent_url,
     resolve_tinyfish_cost_per_step,
+    run_id_from_sse_frames,
+    sse_poller_spawned,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
@@ -140,12 +143,19 @@ class TestBlockingRunBilling:
 
         assert handler_result["kwargs"]["response_cost"] == pytest.approx(1.0)
 
-    def test_failed_run_still_bills_steps_taken(self, tinyfish_env):
+    def test_failed_run_logs_without_cost(self, tinyfish_env):
         run = {"run_id": "run-1", "status": "FAILED", "num_of_steps": 2, "error": {"code": "AGENT_FAILURE"}}
 
         handler_result = self._handle(run, _make_logging_obj())
 
-        assert handler_result["kwargs"]["response_cost"] == pytest.approx(0.032)
+        assert handler_result["kwargs"]["response_cost"] is None
+
+    def test_cancelled_run_logs_without_cost(self, tinyfish_env):
+        run = {"run_id": "run-1", "status": "CANCELLED", "num_of_steps": 2}
+
+        handler_result = self._handle(run, _make_logging_obj())
+
+        assert handler_result["kwargs"]["response_cost"] is None
 
     def test_null_steps_logs_without_cost(self, tinyfish_env):
         run = {"run_id": "run-1", "status": "RUNNING", "num_of_steps": None}
@@ -221,7 +231,69 @@ class TestRunAsyncBilling:
         assert run is None
 
 
-class TestSseBilling:
+class TestRunCostStatusGate:
+    def test_poller_bills_zero_for_terminal_failed_run(self, tinyfish_env):
+        logging_obj = _make_logging_obj()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        fake_client = _FakeClient(payloads=[{"run_id": "run-9", "status": "FAILED", "num_of_steps": 4}])
+
+        asyncio.run(
+            TinyFishPassthroughLoggingHandler._poll_and_log(
+                run_id="run-9",
+                logging_obj=logging_obj,
+                result="",
+                start_time=datetime.now(),
+                cache_hit=False,
+                kwargs={},
+                client=fake_client,
+            )
+        )
+
+        logging_obj.dispatch_success_handlers.assert_awaited_once()
+        assert logging_obj.dispatch_success_handlers.await_args.kwargs["response_cost"] is None
+        assert len(fake_client.requested_urls) == 1
+
+
+class TestRunIdFromSseFrames:
+    def test_finds_run_id_in_first_frame(self):
+        frames = b'data: {"run_id": "run-7", "event": "INITIALIZED"}\n\ndata: {"run_id": "run-7", "event": "ACTION"}\n\n'
+        assert run_id_from_sse_frames(frames) == "run-7"
+
+    def test_skips_frames_without_run_id(self):
+        frames = b': keepalive\n\ndata: not-json\n\ndata: {"event": "HEARTBEAT"}\n\n'
+        assert run_id_from_sse_frames(frames) is None
+
+
+class TestStartSseRunBilling:
+    def test_spawns_detached_poller_that_bills_once(self, tinyfish_env):
+        logging_obj = _make_logging_obj()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        fake_client = _FakeClient(
+            payloads=[{"run_id": "run-7", "status": "COMPLETED", "num_of_steps": 5, "result": "done"}]
+        )
+
+        async def _run() -> None:
+            tasks_before = set(_BACKGROUND_BILLING_TASKS)
+            TinyFishPassthroughLoggingHandler.start_sse_run_billing(
+                run_id="run-7",
+                litellm_logging_obj=logging_obj,
+                start_time=datetime.now(),
+                client=fake_client,
+            )
+            assert sse_poller_spawned(logging_obj)
+            await asyncio.gather(*(_BACKGROUND_BILLING_TASKS - tasks_before))
+
+        asyncio.run(_run())
+
+        logging_obj.dispatch_success_handlers.assert_awaited_once()
+        awaited_kwargs = logging_obj.dispatch_success_handlers.await_args.kwargs
+        assert awaited_kwargs["response_cost"] == pytest.approx(0.08)
+        # a missing call id makes every poller row a NULL request_id primary-key collision
+        assert awaited_kwargs["standard_logging_object"]["id"] == "test-call-id"
+        assert fake_client.requested_urls == ["https://agent.tinyfish.ai/v1/runs/run-7?screenshots=none"]
+
+    def test_flag_defaults_to_not_spawned(self):
+        assert not sse_poller_spawned(_make_logging_obj())
     def test_collected_chunks_price_via_run_fetch(self, tinyfish_env):
         logging_obj = _make_logging_obj()
         chunks = [
@@ -289,7 +361,7 @@ class TestEndpointAllowlist:
             ("POST", "/v1/automation/run", True),
             ("POST", "/v1/automation/run-async", True),
             ("POST", "/v1/automation/run-sse", True),
-            ("GET", "/v1/runs", True),
+            ("GET", "/v1/runs", False),
             ("GET", "/v1/runs/run-abc-123", True),
             ("POST", "/v1/runs/run-abc-123/cancel", True),
             ("GET", "/v1/vault/items", False),

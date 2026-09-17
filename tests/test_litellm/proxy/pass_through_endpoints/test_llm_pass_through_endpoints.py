@@ -5531,6 +5531,7 @@ class TestTinyFishProxyRoute:
             ("GET", "/tinyfish/v1/wallet"),
             ("POST", "/tinyfish/v1/browser-profiles"),
             ("GET", "/tinyfish/v1/automation/run"),
+            ("GET", "/tinyfish/v1/runs"),
         ],
     )
     def test_blocks_endpoints_outside_allowlist(self, tinyfish_client: TestClient, method: str, path: str) -> None:
@@ -5567,7 +5568,7 @@ class TestTinyFishProxyRoute:
         monkeypatch.delenv("TINYFISH_API_KEY")
 
         with respx.mock:
-            response = tinyfish_client.get("/tinyfish/v1/runs")
+            response = tinyfish_client.get("/tinyfish/v1/runs/run-123")
 
         assert response.status_code == 401
         assert "TINYFISH_API_KEY" in response.json()["detail"]

@@ -8,6 +8,7 @@ TINYFISH_AGENT_DOCS_URL: Final = "https://docs.tinyfish.ai/agent-api"
 TINYFISH_DEFAULT_COST_PER_STEP: Final = 0.016
 TINYFISH_MODEL_NAME: Final = "tinyfish/automation-run"
 TINYFISH_POLLING_INTERVAL_SECONDS: Final = 5.0
+# Matches the Agent API's 1200s max run duration; raise together or long runs go unbilled
 TINYFISH_MAX_POLLING_SECONDS: Final = 1200.0
 TINYFISH_MAX_CONSECUTIVE_POLL_FAILURES: Final = 3
 
@@ -49,8 +50,8 @@ def is_allowed_tinyfish_endpoint(method: str, path: str) -> bool:
         return False
     if method == "POST" and segments in _RUN_SUBMIT_PATHS:
         return True
-    if method == "GET" and segments == ("v1", "runs"):
-        return True
+    # no GET /v1/runs listing: run ids are unguessable, so withholding the list keeps teams
+    # behind the shared key from discovering (then reading/cancelling) each other's runs
     if method == "GET" and len(segments) == 3 and segments[:2] == ("v1", "runs"):
         return True
     return method == "POST" and len(segments) == 4 and segments[:2] == ("v1", "runs") and segments[3] == "cancel"
