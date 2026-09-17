@@ -12,6 +12,17 @@ from tests.integration._support.database import read_rows
 from tests.integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 
 
+def _key_rows(digest: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT token, key_name, key_alias, models, aliases, config, router_settings, user_id, team_id, '
+        'agent_id, project_id, permissions, max_parallel_requests, metadata, blocked, tpm_limit, rpm_limit, '
+        'tpd_limit, max_budget, budget_duration, allowed_cache_controls, allowed_routes, key_type, policies, '
+        'access_group_ids, model_spend, model_max_budget, budget_fallbacks, budget_id, organization_id, '
+        'object_permission_id, budget_limits FROM "LiteLLM_VerificationToken" WHERE token = %s',
+        (digest,),
+    )
+
+
 @pytest.mark.covers("mgmt.key.update.generated_sequences_preserve_state")
 def test_generated_partial_updates_preserve_persisted_and_effective_state(gateway: Gateway) -> None:
     class KeyUpdates(RuleBasedStateMachine):
@@ -198,3 +209,84 @@ def test_denied_key_update_preserves_saved_grants_and_serving(gateway: Gateway) 
         )
         assert rejected.status_code == 403, rejected.text
         assert rejected.json()["error"]["type"] == "key_model_access_denied"
+
+
+@pytest.mark.covers("mgmt.key.update.project_detach_denied_to_restricted_actor")
+def test_restricted_actor_cannot_detach_key_from_project(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team: Final = scenario.team(models=[model], team_member_permissions=["/key/update"])
+        project: Final = scenario.project(team, models=[model])
+        member: Final = scenario.user(user_role="internal_user")
+        gateway.post(
+            "/team/member_add",
+            {"team_id": team, "member": {"user_id": member, "role": "user"}},
+        )
+        target: Final = scenario.key(user_id=member, team_id=team, project_id=project, models=[model])
+        caller: Final = scenario.key(
+            user_id=member,
+            team_id=team,
+            models=[model],
+            allowed_routes=["/key/update"],
+        )
+        digest: Final = sha256(target.encode()).hexdigest()
+        before: Final = _key_rows(digest)
+        assert len(before) == 1
+        assert before[0]["project_id"] == project
+        assert before[0]["team_id"] == team
+        denied: Final = gateway.request(
+            "POST", "/key/update", {"key": target, "project_id": None}, key=caller
+        )
+        assert denied.status_code == 403, denied.text
+        assert _key_rows(digest) == before
+
+
+@pytest.mark.covers(
+    "mgmt.key.info.cross_tenant_key_is_denied",
+    "mgmt.key.update.cross_tenant_key_is_denied",
+    "mgmt.key.update.cross_tenant_project_detach_is_denied",
+)
+def test_cross_tenant_actor_cannot_read_update_or_detach_project_key(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team: Final = scenario.team(models=[model])
+        foreign_team: Final = scenario.team(models=[model])
+        project: Final = scenario.project(team, models=[model])
+        foreign_user: Final = scenario.user(user_role="internal_user")
+        gateway.post(
+            "/team/member_add",
+            {"team_id": foreign_team, "member": {"user_id": foreign_user, "role": "user"}},
+        )
+        target: Final = scenario.key(team_id=team, project_id=project, models=[model])
+        caller: Final = scenario.key(
+            user_id=foreign_user,
+            team_id=foreign_team,
+            models=[model],
+            allowed_routes=["/key/info", "/key/update"],
+        )
+        digest: Final = sha256(target.encode()).hexdigest()
+        before: Final = _key_rows(digest)
+        assert len(before) == 1
+        assert before[0]["project_id"] == project
+        assert before[0]["team_id"] == team
+        info_denied: Final = gateway.request(
+            "GET", "/key/info", params={"key": digest}, key=caller
+        )
+        assert info_denied.status_code == 403, info_denied.text
+        assert target not in info_denied.text
+        assert digest not in info_denied.text
+        assert project not in info_denied.text
+        assert team not in info_denied.text
+        update_denied: Final = gateway.request(
+            "POST", "/key/update", {"key": target, "key_alias": "foreign-update"}, key=caller
+        )
+        assert update_denied.status_code == 401, update_denied.text
+        detach_denied: Final = gateway.request(
+            "POST", "/key/update", {"key": target, "project_id": None}, key=caller
+        )
+        assert detach_denied.status_code == 401, detach_denied.text
+        for response in (update_denied, detach_denied):
+            assert target not in response.text
+            assert digest not in response.text
+            assert project not in response.text
+        assert _key_rows(digest) == before

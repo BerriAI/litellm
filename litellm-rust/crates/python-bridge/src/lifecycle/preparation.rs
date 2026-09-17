@@ -1,4 +1,4 @@
-use litellm_core::auth::{credential_default_fields, credential_index};
+use litellm_auth::{credential_default_fields, credential_index};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 

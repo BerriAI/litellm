@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
 
 _PROPAGATOR: Final = TraceContextTextMapPropagator()
+_W3C_TRACE_HEADERS: Final = frozenset(("traceparent", "tracestate"))
 
 # The request's root span — the FastAPI-owned SERVER span — captured ONCE when the
 # proxy first resolves it, so request-level spans (the LLM call, guardrails) can
@@ -308,6 +309,37 @@ def extract_traceparent(headers: Mapping[str, str]) -> Context | None:
         return None
     carrier: Final = {str(key).lower(): value for key, value in headers.items()}
     return _PROPAGATOR.extract(carrier)
+
+
+def _outgoing_trace_context(parent_span: object) -> Context | None:
+    if isinstance(parent_span, Span) and is_recordable_span(parent_span):
+        return context_from_span(parent_span)
+
+    root: Final = request_root_span()
+    if root is not None:
+        return context_from_span(root)
+
+    current: Final = get_current()
+    if is_recordable_span(get_current_span(current)):
+        return current
+    return None
+
+
+def inject_trace_context(headers: Mapping[str, str], parent_span: object = None) -> dict[str, str]:
+    """``headers`` plus W3C ``traceparent``/``tracestate`` for this request's span.
+
+    Parent preference: ``parent_span`` (the request span auth stashed on the key), then
+    the anchored request root span, then the ambient active span. Only trace context is
+    injected, never Baggage. Unchanged when no valid span exists anywhere.
+    """
+    context: Final = _outgoing_trace_context(parent_span)
+    if context is None:
+        return dict(headers)  # mutable-ok: OpenTelemetry propagator requires a mutable carrier
+    carrier: Final = {  # mutable-ok: OpenTelemetry propagator requires a mutable carrier
+        key: value for key, value in headers.items() if key.lower() not in _W3C_TRACE_HEADERS
+    }
+    _PROPAGATOR.inject(carrier, context=context)
+    return carrier
 
 
 # The OTLP destinations this request's key or team pointed its traces at, resolved

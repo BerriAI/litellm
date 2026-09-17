@@ -682,6 +682,12 @@ class BedrockGuardrailStreamingParams(BaseModel):
         "and the scan result lands in guardrail_information; a flagged response still ends the "
         "stream with a block message (disable_exception_on_block=true) or an error frame.",
     )
+    streaming_buffer_release_on_scan: bool = Field(
+        default=False,
+        description="When buffering, scan the accumulated response every streaming_sampling_rate chunks "
+        "and release the withheld chunks once the scan passes, instead of holding everything to end of stream. "
+        "Flagged content is never released. Ignored when streaming_end_of_stream_only is true.",
+    )
 
     @classmethod
     def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":
