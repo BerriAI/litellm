@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import base64
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final, Literal, NoReturn
 
 from fastapi import HTTPException
@@ -426,16 +426,19 @@ def validate_static_credential(
     auth_type: MCPAuthType,
     headers: Mapping[str, str],
     upstream_token_header: str | None = None,
+    static_header_names: Iterable[str] = (),
 ) -> Result[None, CredError]:
     if auth_type not in _STATIC_MODES:
         return Ok(None)
     default_slot: Final = "X-API-Key" if auth_type == MCPAuth.api_key else "Authorization"
+    admin_chosen_slots: Final = tuple(static_header_names) if auth_type == MCPAuth.api_key else ()
     slots: Final = frozenset(
         name.lower()
         for name in (
             upstream_token_header or default_slot,
             default_slot,
             "Authorization",
+            *admin_chosen_slots,
         )
     )
     values: Final = tuple((name.lower(), value.strip()) for name, value in headers.items() if name.lower() in slots)
@@ -448,7 +451,9 @@ async def prepare_mcp_client(server: MCPServer, client: MCPClient) -> MCPClient:
     if server.auth_type not in _STATIC_MODES or client.transport_type == MCPTransport.stdio:
         return client
     request: Final = await client.prepare_request_auth()
-    match validate_static_credential(server.auth_type, request.headers, server.upstream_token_header):
+    match validate_static_credential(
+        server.auth_type, request.headers, server.upstream_token_header, server.static_headers or ()
+    ):
         case Error(error):
             raise_public(error)
         case Ok():
