@@ -1,5 +1,7 @@
 use serde_json::{Map, Value, json};
 
+use super::super::aws_base::{bedrock_model_id_and_region, resolve_bedrock_region};
+use super::super::constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE};
 use crate::chat_completions::Error;
 use crate::chat_completions::conversation::{Conversation, TurnRole, build_conversation};
 use crate::chat_completions::response_utils::{finish_reason_for, unix_now, usage_from_parts};
@@ -12,9 +14,6 @@ use crate::chat_completions::types::{
     ChatCompletionsUsage, ChatMessage, ChatMessageContent, ProviderChatRequestData,
     ProviderChatResponseData,
 };
-
-use super::super::aws_base::{bedrock_model_id_and_region, resolve_bedrock_region};
-use super::super::constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE};
 
 /// Converse parameter names, post `map_openai_params`, that the Rust path can
 /// place verbatim in `inferenceConfig`.

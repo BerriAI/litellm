@@ -1,8 +1,6 @@
 use serde_json::Value;
 
 use super::Error;
-use crate::http_utils::{http_request, truncate_error_body};
-
 use super::client::http_client;
 use super::prepare::prepare_provider_request;
 use super::transformation::ChatCompletionsAuth;
@@ -10,6 +8,7 @@ use super::types::{
     ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,
     ResolvedChatCompletionsRequest,
 };
+use crate::http_utils::{http_request, truncate_error_body};
 
 pub(super) async fn execute_chat_completions_provider_call(
     request: ResolvedChatCompletionsRequest<'_>,

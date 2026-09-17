@@ -3,14 +3,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use litellm_auth::{InputSource, Sourced};
+use litellm_auth_azure::AzureAuthInputs;
 use reqwest::Url;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 use tokio::time::Instant;
-
-use litellm_auth::{InputSource, Sourced};
-use litellm_auth_azure::AzureAuthInputs;
 
 use crate::call_arguments::CallArguments;
 use crate::constants::{
@@ -632,9 +631,10 @@ fn nonblank(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
     use serde_json::{Value, json};
+
+    use super::*;
 
     fn map(value: Value) -> Result<DocumentIntelligenceParams, crate::ocr::Error> {
         let arguments = serde_json::from_value(value).unwrap();
@@ -1220,8 +1220,9 @@ mod tests {
 
     #[tokio::test]
     async fn pre_call_guardrail_receives_caller_pages_before_mapping() {
-        use crate::ocr::hooks::{OcrHookFuture, OcrHooks, OcrPreCallRequest};
         use std::sync::Arc;
+
+        use crate::ocr::hooks::{OcrHookFuture, OcrHooks, OcrPreCallRequest};
 
         struct RewritePages;
         impl OcrHooks for RewritePages {

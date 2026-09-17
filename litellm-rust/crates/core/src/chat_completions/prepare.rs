@@ -1,15 +1,14 @@
 use serde_json::Value;
 
 use super::Error;
-use crate::http_utils::has_header;
-use crate::providers::custom_llm_provider::{CustomLlmProvider, get_custom_llm_provider};
-
 use super::common_utils::{chat_completions_provider_config, string_headers};
 use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
 use super::types::{
     ChatCompletionsRequest, ChatMessage, ProviderChatCompletionsRequest,
     ResolvedChatCompletionsRequest,
 };
+use crate::http_utils::has_header;
+use crate::providers::custom_llm_provider::{CustomLlmProvider, get_custom_llm_provider};
 
 pub(super) fn resolve_provider_config<'a>(
     model: &'a str,

@@ -1,5 +1,6 @@
-use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
+
+use serde_json::{Value, json};
 
 use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
 use super::wire::{OcrWireRequest, decode_request};
@@ -421,8 +422,9 @@ async fn model_id_is_encoded_and_dot_segments_are_rejected() {
 
 #[tokio::test]
 async fn pre_call_guardrail_receives_caller_pages_before_mapping() {
-    use crate::ocr::hooks::{OcrHookFuture, OcrHooks, OcrPreCallRequest};
     use std::sync::Arc;
+
+    use crate::ocr::hooks::{OcrHookFuture, OcrHooks, OcrPreCallRequest};
 
     struct RewritePages;
     impl OcrHooks for RewritePages {

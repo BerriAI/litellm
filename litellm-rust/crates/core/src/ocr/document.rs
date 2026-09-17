@@ -1,3 +1,4 @@
+use std::collections::BTreeMap as Map;
 use std::io::Read;
 use std::path::Path;
 
@@ -5,7 +6,6 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::mime::Mime;
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError};
 use reqwest::Url;
-use std::collections::BTreeMap as Map;
 
 use super::Error as OcrError;
 use super::Error as OcrRequestError;
@@ -216,8 +216,9 @@ fn map_media_error(error: MediaError) -> OcrError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::BTreeMap as Map;
+
+    use super::*;
 
     fn document(source: &str) -> OcrDocument {
         OcrDocument::DocumentUrl {

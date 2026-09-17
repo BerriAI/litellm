@@ -1,10 +1,9 @@
 use serde_json::Value;
 
 use super::Error;
-use crate::http_utils::{http_request, truncate_error_body};
-
 use super::client::http_client;
 use super::types::ProviderAudioTranscriptionRequest;
+use crate::http_utils::{http_request, truncate_error_body};
 
 pub async fn execute_audio_transcription_provider_call(
     request: ProviderAudioTranscriptionRequest,

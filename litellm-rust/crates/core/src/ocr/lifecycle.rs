@@ -2,6 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use litellm_auth::Error as AuthError;
+use litellm_auth::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
 use tokio::sync::{mpsc, oneshot};
 
 use super::handler::perform_ocr_request;
@@ -16,8 +18,6 @@ use crate::call_lifecycle::host::{
 };
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
 use crate::ocr::Error;
-use litellm_auth::Error as AuthError;
-use litellm_auth::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
 
 pub type NativeResult<T> = Result<NativeOutcome<T>, Error>;
 

@@ -165,8 +165,9 @@ pub(crate) fn prepare_request(request: ResolvedOcrRequest) -> PreparedOcrRequest
 
 #[cfg(test)]
 mod tests {
-    use crate::call_arguments::{CallArguments, compose_body, parse_options};
     use serde_json::json;
+
+    use crate::call_arguments::{CallArguments, compose_body, parse_options};
 
     #[derive(serde::Deserialize)]
     struct KnownParams {
