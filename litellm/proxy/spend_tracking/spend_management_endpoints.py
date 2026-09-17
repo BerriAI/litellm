@@ -69,6 +69,11 @@ _SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
 _SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
 _MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
 _AGENT_CALL_TYPE_SQL: Final = "'asend_message'"
+_SESSION_REPRESENTATIVE_ORDER_SQL: Final = (
+    f"(call_type = {_AGENT_CALL_TYPE_SQL}) DESC, "
+    f'CASE WHEN call_type = {_AGENT_CALL_TYPE_SQL} THEN "endTime" END DESC NULLS LAST, '
+    f'call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC, request_id'
+)
 _SPEND_LOG_LIST_COLUMNS: Final = """
                 request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
@@ -2763,7 +2768,7 @@ async def ui_view_spend_logs(
             p += 1
 
         # Status filter
-        if status_filter is not None:
+        if status_filter is not None and not (group_by_session is True and not is_search_lookup):
             if status_filter == "success":
                 sql_conditions.append("(status = 'success' OR status IS NULL)")
             else:
@@ -2803,6 +2808,23 @@ async def ui_view_spend_logs(
         if error_message is not None:
             sql_conditions.append(f"metadata->'error_information'->>'error_message' LIKE ${p}")
             sql_params.append(f"%{error_message}%")
+            p += 1
+
+        if status_filter is not None and group_by_session is True and not is_search_lookup:
+            session_filter_conditions: Final = " AND ".join(sql_conditions) or "TRUE"
+            sql_conditions.append(
+                f"""({_SESSION_GROUP_KEY_SQL}) IN (
+                    SELECT session_key, api_key FROM (
+                        SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
+                            {_SESSION_KEY_EXPR} AS session_key, api_key, status
+                        FROM "LiteLLM_SpendLogs"
+                        WHERE {session_filter_conditions}
+                        ORDER BY {_SESSION_GROUP_KEY_SQL}, {_SESSION_REPRESENTATIVE_ORDER_SQL}
+                    ) AS session_outcomes
+                    WHERE COALESCE(status, 'success') = ${p}
+                )"""
+            )
+            sql_params.append(status_filter)
             p += 1
 
         if (
@@ -2871,7 +2893,7 @@ async def ui_view_spend_logs(
                         {_SPEND_LOG_LIST_COLUMNS}
                     FROM "LiteLLM_SpendLogs"
                     WHERE {joined_conditions}
-                    ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
+                    ORDER BY {_SESSION_GROUP_KEY_SQL}, {_SESSION_REPRESENTATIVE_ORDER_SQL}
                 ) AS session_representatives
                 ORDER BY {exact_request_id_first}{_order_expr} {_sql_dir}{_nulls_clause}, request_id
                 LIMIT ${p} OFFSET ${p + 1}
@@ -2943,7 +2965,7 @@ async def _fetch_session_representatives(
     next_param_index: int,
     session_keys: Sequence[tuple[str, str]],
 ) -> list[dict[str, object]]:  # mutable-ok: _build_ui_spend_logs_response writes session counts onto each row
-    """Fetch the newest non-MCP row of each ``(session_key, api_key)`` session, in ``session_keys`` order."""
+    """Fetch the final agent outcome, or newest non-MCP row, of each ``(session_key, api_key)`` session, in ``session_keys`` order."""
     rep_query: Final = f"""
         SELECT * FROM (
             SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
@@ -2953,7 +2975,7 @@ async def _fetch_session_representatives(
               AND ({_SESSION_GROUP_KEY_SQL}) IN (
                   SELECT * FROM unnest(${next_param_index}::text[], ${next_param_index + 1}::text[])
               )
-            ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
+            ORDER BY {_SESSION_GROUP_KEY_SQL}, {_SESSION_REPRESENTATIVE_ORDER_SQL}
         ) AS session_representatives
     """
     rep_rows: Final[Sequence[dict[str, object]]] = await _query_raw(  # mutable-ok: rows are enriched in place
@@ -3020,7 +3042,7 @@ async def _ui_session_grouped_spend_logs(
     page_size``, trimmed to the end of the ``SPEND_LOGS_PAGINATION_COUNT_CAP``
     window the capped ``total`` promises, so a page never runs past that total
     and one starting at or past it returns no rows without a query. Each session is represented
-    by its newest non-MCP row, enriched by ``_build_ui_spend_logs_response``
+    by its final agent outcome (or newest non-MCP row), enriched by ``_build_ui_spend_logs_response``
     exactly like the flat listing, and the response carries
     ``next_session_cursor`` / ``has_more`` while ``total`` counts sessions
     (capped like the flat total). A page that runs out of sessions while still

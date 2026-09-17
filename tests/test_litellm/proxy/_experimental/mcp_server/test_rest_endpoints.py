@@ -2399,6 +2399,7 @@ class TestCallToolRestAPI:
 
         mock_server = MagicMock()
         mock_server.server_id = "server-1"
+        mock_server.name = "Example server"
 
         def fake_get_mcp_server_by_id(server_id):
             return mock_server if server_id == "server-1" else None
@@ -2415,6 +2416,11 @@ class TestCallToolRestAPI:
             lambda *args, **kwargs: None,
             raising=False,
         )
+
+        failure_log = AsyncMock()
+        execute_tool = AsyncMock()
+        monkeypatch.setattr(rest_endpoints, "_safe_fire_mcp_tool_call_failure_logging", failure_log)
+        monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", execute_tool)
 
         request_payload = {
             "server_id": "server-1",
@@ -2436,6 +2442,16 @@ class TestCallToolRestAPI:
         assert exc_info.value.status_code == 403
         assert exc_info.value.detail["error"] == "access_denied"
         assert "server server-1" in exc_info.value.detail["message"]
+
+        execute_tool.assert_not_awaited()
+        failure_log.assert_awaited_once()
+        logged_data = failure_log.await_args.args[4]
+        assert logged_data["model"] == "MCP: demo-tool"
+        assert logged_data["metadata"]["model_group"] == "MCP: demo-tool"
+        logging_obj = failure_log.await_args.args[0]
+        assert logging_obj.model_call_details["mcp_tool_call_metadata"] == {
+            "name": "demo-tool", "mcp_server_name": "Example server",
+        }
 
     async def test_executes_tool_when_allowed(self, monkeypatch):
         async def fake_contexts(user_api_key_auth):

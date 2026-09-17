@@ -1108,6 +1108,11 @@ if MCP_AVAILABLE:
                     },
                 )
 
+            data["model"] = f"MCP: {tool_name}"
+            data["metadata"] = {
+                **(data.get("metadata") or {}),
+                "model_group": f"MCP: {tool_name}",
+            }
             proxy_base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
             _request_start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the tool start time below
             try:
@@ -1139,6 +1144,15 @@ if MCP_AVAILABLE:
                 # call_mcp_tool expects user_api_key_auth as a top-level parameter
                 if "metadata" in data and "user_api_key_auth" in data["metadata"]:
                     data["user_api_key_auth"] = data["metadata"]["user_api_key_auth"]
+
+                requested_server: Final = global_mcp_server_manager.get_mcp_server_by_id(
+                    server_id
+                ) or global_mcp_server_manager.get_mcp_server_by_name(server_id)
+                if logging_obj is not None:
+                    logging_obj.model_call_details["mcp_tool_call_metadata"] = {
+                        "name": tool_name,
+                        "mcp_server_name": requested_server.name if requested_server else server_id,
+                    }
 
                 # Resolve allowed MCP servers with IP filtering
                 (
