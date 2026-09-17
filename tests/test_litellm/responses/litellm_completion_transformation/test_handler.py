@@ -203,13 +203,6 @@ _ANTHROPIC_MESSAGE_PAYLOAD: Final = {
 
 @pytest.mark.asyncio
 async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_provider_body():
-    """The proxy's ResponsesIDSecurity hook rewrites `previous_response_id` and keeps the
-    id the client addressed under `_litellm_addressed_response_id` in the same request
-    body, so internal retries re-authorize it. On a model without a native Responses
-    config that body is bridged into `litellm.acompletion` kwargs, and Azure AI Claude
-    answered `_litellm_addressed_response_id: Extra inputs are not permitted` (400) on
-    every follow-up turn. The key is LiteLLM-internal and must never reach the provider.
-    """
     provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
     client: Final = AsyncHTTPHandler()
     client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
