@@ -1,6 +1,5 @@
 import asyncio
 import io
-import traceback
 from collections.abc import Sequence
 from typing import Final, get_type_hints
 
@@ -9,19 +8,23 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, 
 from fastapi.responses import ORJSONResponse
 
 import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    log_llm_api_exception,
+    resolve_litellm_call_id,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     coerce_numeric_form_fields,
     numeric_form_fields,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
+    litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
 )
@@ -95,11 +98,12 @@ async def image_generation(
         version,
     )
 
-    data = {}
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+    data = {"litellm_call_id": litellm_call_id}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body: Final = await request.body()
-        data = orjson.loads(body)
+        data = orjson.loads(body) | data
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -157,9 +161,7 @@ async def image_generation(
         response = await llm_call
 
         ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(litellm_call_id=data.get("litellm_call_id", ""), status="success")
-        )
+        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
 
         ### CALL HOOKS ### - modify outgoing data (guardrails, otel, etc.)
         response = await proxy_logging_obj.post_call_success_hook(
@@ -172,7 +174,7 @@ async def image_generation(
         cache_key: Final = hidden_params.get("cache_key", None) or ""
         api_base: Final = hidden_params.get("api_base", None) or ""
         response_cost: Final = hidden_params.get("response_cost", None) or ""
-        litellm_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
+        response_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -183,7 +185,7 @@ async def image_generation(
                 version=version,
                 response_cost=response_cost,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                call_id=litellm_call_id,
+                call_id=response_call_id,
                 request_data=data,
                 hidden_params=hidden_params,
             )
@@ -204,13 +206,13 @@ async def image_generation(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
-        verbose_proxy_logger.error("litellm.proxy.proxy_server.image_generation(): Exception occured - %s", e)
-        verbose_proxy_logger.debug(traceback.format_exc())
+        log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
                 type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
                 param=openai_error_param(e),
+                headers=litellm_call_id_headers(litellm_call_id),
                 code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
@@ -219,6 +221,7 @@ async def image_generation(
                 message=getattr(e, "message", error_msg),
                 type=openai_error_type(e, error_status_code(e, 500)),
                 param=openai_error_param(e),
+                headers=litellm_call_id_headers(litellm_call_id),
                 openai_code=getattr(e, "code", None),
                 code=error_status_code(e, 500),
             )

@@ -1,7 +1,10 @@
+import json
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
+from pydantic import JsonValue
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
@@ -10,11 +13,184 @@ from tests.test_litellm_rust.support.recording_server import RecordingServer, Re
 from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
+    call_native,
     call_native_aocr,
     call_native_ocr,
 )
 
 pytestmark = pytest.mark.requires_rust_extension
+
+
+@pytest.fixture(params=[False, True], ids=["python", "rust"])
+def ocr_backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> bool:
+    enabled: Final = bool(request.param)
+    monkeypatch.setenv("LITELLM_RUST", "1" if enabled else "0")
+    return enabled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_ocr_contract_upstream_status(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+) -> None:
+    upstream: Final = ResponseSpec(body={"detail": "invalid provider option"}, status=422)
+    ocr_server.enqueue(upstream)
+    arguments: Final = {
+        "model": "vertex_ai/mistral-ocr-latest",
+        "vertex_project": "test-project",
+        "vertex_location": "us-central1",
+        "num_retries": 0,
+    }
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await call_native(ocr_server, asynchronous, **arguments)
+    assert caught.value.status_code == upstream.status
+    assert caught.value.response.status_code == upstream.status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("preserved", ["body", "headers"])
+async def test_ocr_contract_provider_error_details(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+    preserved: str,
+) -> None:
+    payload: Final = {"message": "rate limited"}
+    headers: Final = {"Retry-After": "17", "X-Request-ID": "ocr-request-123", "X-Future-Header": "retained"}
+    ocr_server.enqueue(ResponseSpec(body=payload, status=429, headers=headers))
+    with pytest.raises(litellm.RateLimitError) as caught:
+        await call_native(ocr_server, asynchronous, num_retries=0)
+    response: Final = caught.value.response
+    assert isinstance(response, httpx.Response)
+    if preserved == "body":
+        assert response.content == json.dumps(payload).encode()
+    else:
+        for name, value in headers.items():
+            assert response.headers.get(name.lower()) == value
+            assert response.headers.get(name.upper()) == value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_ocr_contract_invalid_response_format(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+) -> None:
+    ocr_server.expected_requests = 0
+    with pytest.raises(litellm.UnsupportedParamsError) as caught:
+        await call_native(ocr_server, asynchronous, req_format="bogus", num_retries=0)
+    assert caught.value.status_code == 400
+    for value in ("req_format", "bogus", "native", "litellm"):
+        assert value in str(caught.value)
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "document,field",
+    [
+        ([], "document"),
+        ({"document_url": "https://example.com/a.pdf"}, "type"),
+        ({"type": "text"}, "type"),
+    ],
+)
+async def test_ocr_contract_malformed_document_is_actionable(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+    document: JsonValue,
+    field: str,
+) -> None:
+    ocr_server.expected_requests = None
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await call_native(ocr_server, asynchronous, document=document, num_retries=0)
+    assert caught.value.status_code == 400
+    assert field.lower() in str(caught.value).lower()
+    assert "NoneType: None" not in str(caught.value)
+    assert "indices must be" not in str(caught.value)
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("option,value,field", [("pages", [-1], "pages"), ("features", [1], "features")])
+async def test_ocr_contract_azure_invalid_options_are_bad_requests(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+    option: str,
+    value: JsonValue,
+    field: str,
+) -> None:
+    ocr_server.expected_requests = 0
+    arguments: Final = {"model": "azure_ai/doc-intelligence/prebuilt-read", option: value, "num_retries": 0}
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await call_native(ocr_server, asynchronous, **arguments)
+    assert caught.value.status_code == 400
+    assert field in str(caught.value)
+    assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("model", ["mistral/mistral-ocr-latest", "azure_ai/mistral-ocr-latest", "reducto/parse-v3"])
+async def test_ocr_contract_native_format_supported(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+    model: str,
+) -> None:
+    ocr_server.expected_requests = None
+    payload: Final = (
+        {"result": {"chunks": [{"content": "native OCR response"}]}, "usage": {"num_pages": 1}}
+        if model.startswith("reducto/")
+        else OCR_RESPONSE
+    )
+    ocr_server.default_response = ResponseSpec(body=payload)
+    arguments: Final = {
+        "model": model,
+        "req_format": "native",
+        "num_retries": 0,
+        "document": {"type": "document_url", "document_url": "reducto://ready.pdf"}
+        if model.startswith("reducto/")
+        else OCR_DOCUMENT,
+    }
+    response: Final = (
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
+    )
+    assert response.pages[0].markdown == "native OCR response"
+    assert response.get_provider_native_response() == payload
+    assert len(ocr_server.requests) == 1
+    if ocr_backend:
+        assert_native_request(ocr_server)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_ocr_contract_unknown_reducto_model_reaches_provider(
+    ocr_server: RecordingServer,
+    ocr_backend: bool,
+    asynchronous: bool,
+) -> None:
+    ocr_server.default_response = ResponseSpec(body={"result": {"chunks": [{"content": "future model response"}]}})
+    arguments: Final = {
+        "model": "reducto/future-parse-model",
+        "document": {"type": "document_url", "document_url": "reducto://ready.pdf"},
+        "num_retries": 0,
+    }
+    response: Final = (
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
+    )
+    assert response.model == "future-parse-model"
+    assert response.pages[0].markdown == "future model response"
+    assert len(ocr_server.requests) == 1
+    assert ocr_server.requests[0].path == "/parse"
+    assert ocr_server.requests[0].body == {"input": "reducto://ready.pdf"}
 
 
 @pytest.mark.asyncio
@@ -518,32 +694,34 @@ async def test_native_ocr_inherits_named_credentials_without_overwriting_argumen
     assert ocr_server.requests[0].body["pages"] == [0, 2]
 
 
-@pytest.mark.parametrize("source", ["sdk", "proxy"])
 @pytest.mark.parametrize(
-    "filename,mime", [("scan.PNG", "image/png"), ("document.pdf", "application/pdf"), ("note.txt", "text/plain")]
+    "filename,field,mime",
+    [("scan.PNG", "image_url", "image/png"), ("document.pdf", "document_url", "application/pdf")],
 )
-def test_ocr_file_helpers_use_native_document_preparation(source: str, filename: str, mime: str) -> None:
+def test_native_ocr_infers_mime_type_from_reader_name(
+    ocr_server: RecordingServer, filename: str, field: str, mime: str
+) -> None:
     from io import BytesIO
-
-    from litellm.ocr.input import convert_file_document_to_url_document, get_mime_type
-    from litellm.proxy.ocr_endpoints.endpoints import _build_document_from_upload
 
     file: Final = BytesIO(b"abc")
     file.name = filename
-    document: Final = (
-        convert_file_document_to_url_document({"type": "file", "file": file})
-        if source == "sdk"
-        else _build_document_from_upload(b"abc", filename, "application/octet-stream; charset=utf-8")
-    )
-    field: Final = "image_url" if mime.startswith("image/") else "document_url"
-    assert get_mime_type(filename) == mime
-    assert document == {"type": field, field: f"data:{mime};base64,YWJj"}
+    call_native_ocr(ocr_server, document={"type": "file", "file": file})
+    assert ocr_server.requests[0].body["document"] == {"type": field, field: f"data:{mime};base64,YWJj"}
+
+
+def test_native_ocr_encodes_str_reader_results_as_utf8(ocr_server: RecordingServer) -> None:
+    from io import StringIO
+
+    call_native_ocr(ocr_server, document={"type": "file", "file": StringIO("abc"), "mime_type": "text/plain"})
+    assert ocr_server.requests[0].body["document"] == {
+        "type": "document_url",
+        "document_url": "data:text/plain;base64,YWJj",
+    }
 
 
 @pytest.mark.parametrize("attribute", ["read", "name"])
-def test_native_file_preparation_preserves_property_errors(attribute: str) -> None:
-    from litellm.ocr.input import convert_file_document_to_url_document
-
+def test_native_file_preparation_preserves_property_errors(ocr_server: RecordingServer, attribute: str) -> None:
+    ocr_server.expected_requests = 0
     failure: Final = LookupError("file property failed")
 
     class File:
@@ -555,16 +733,49 @@ def test_native_file_preparation_preserves_property_errors(attribute: str) -> No
         def read(self):
             return b"abc"
 
-    with pytest.raises(LookupError) as caught:
-        convert_file_document_to_url_document({"type": "file", "file": File()})
-    assert caught.value is failure
+    with pytest.raises(litellm.APIConnectionError, match="file property failed") as caught:
+        call_native_ocr(ocr_server, document={"type": "file", "file": File()})
+    assert caught.value.__context__ is failure
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_native_file_preparation_preserves_reader_exception(
+    ocr_server: RecordingServer, asynchronous: bool
+) -> None:
+    ocr_server.expected_requests = 0
+    failure: Final = RuntimeError("reader failed")
+
+    class Reader:
+        def read(self) -> bytes:
+            raise failure
+
+    document: Final = {"type": "file", "file": Reader()}
+    with pytest.raises(litellm.APIConnectionError, match="reader failed") as caught:
+        await call_native_aocr(ocr_server, document=document) if asynchronous else call_native_ocr(
+            ocr_server, document=document
+        )
+    assert caught.value.__context__ is failure
+
+
+def test_native_file_preparation_rejects_unsupported_reader_results(ocr_server: RecordingServer) -> None:
+    ocr_server.expected_requests = 0
+
+    class Reader:
+        def read(self) -> int:
+            return 1
+
+    with pytest.raises(litellm.APIConnectionError, match="bytes or str") as caught:
+        call_native_ocr(ocr_server, document={"type": "file", "file": Reader()})
+    assert isinstance(caught.value.__context__, TypeError)
 
 
 @pytest.mark.parametrize("kind", ["bytes", "path", "reader"])
-def test_native_file_preparation_rejects_oversized_input(kind: str, tmp_path: Path) -> None:
-    from litellm.ocr.input import FileDocument, convert_file_document_to_url_document, get_max_file_bytes
-
-    limit: Final = get_max_file_bytes()
+def test_native_file_preparation_rejects_oversized_input(
+    ocr_server: RecordingServer, kind: str, tmp_path: Path
+) -> None:
+    ocr_server.expected_requests = 0
+    limit: Final = 50 * 1024 * 1024
     path: Final = tmp_path / "large.pdf"
     with path.open("wb") as stream:
         stream.truncate(limit + 1)
@@ -573,53 +784,25 @@ def test_native_file_preparation_rejects_oversized_input(kind: str, tmp_path: Pa
         def read(self) -> bytes:
             return b"a" * (limit + 1)
 
-    document: Final[FileDocument] = {
+    document: Final = {
         "type": "file",
         "file": path if kind == "path" else Reader() if kind == "reader" else b"a" * (limit + 1),
     }
-    with pytest.raises(ValueError, match="exceeds the size limit"):
-        convert_file_document_to_url_document(document)
+    with pytest.raises(litellm.BadRequestError, match="exceeds the size limit"):
+        call_native_ocr(ocr_server, document=document)
 
 
-@pytest.mark.parametrize("kind", ["str", "path", "reader"])
-def test_native_upload_binding_rejects_filesystem_inputs(kind: str, tmp_path: Path) -> None:
+def test_native_file_preparation_reports_missing_paths(ocr_server: RecordingServer, tmp_path: Path) -> None:
+    ocr_server.expected_requests = 0
+    missing: Final = tmp_path / "missing.pdf"
+    with pytest.raises(litellm.APIConnectionError, match=f"File not found: {missing}") as caught:
+        call_native_ocr(ocr_server, document={"type": "file", "file": missing})
+    assert isinstance(caught.value.__context__, FileNotFoundError)
+
+
+def test_native_file_preparation_rejects_empty_readers(ocr_server: RecordingServer) -> None:
     from io import BytesIO
-    from typing import cast  # noqa: TID251  # deliberately invalid inputs exercise the native runtime boundary
 
-    from litellm.ocr.input import convert_upload_to_url_document
-
-    path: Final = tmp_path / "secret.pdf"
-    path.write_bytes(b"server secret")
-    source: Final = str(path) if kind == "str" else path if kind == "path" else BytesIO(b"abc")
-    with pytest.raises(TypeError):
-        convert_upload_to_url_document(cast(bytes, source), "document.pdf", None)
-
-
-@pytest.mark.parametrize("extra_bytes", [0, 1])
-def test_native_upload_enforces_file_size_limit(extra_bytes: int) -> None:
-    import base64
-
-    from litellm.ocr.input import convert_upload_to_url_document, get_max_file_bytes
-
-    content: Final = b"a" * (get_max_file_bytes() + extra_bytes)
-    if extra_bytes:
-        with pytest.raises(ValueError, match="exceeds the size limit"):
-            convert_upload_to_url_document(content, "scan.pdf", None)
-        return
-    document: Final = convert_upload_to_url_document(content, "scan.pdf", None)
-    assert document["type"] == "document_url"
-    assert base64.b64decode(document["document_url"].split(",", 1)[1]) == content
-
-
-def test_native_file_preparation_preserves_reader_exception() -> None:
-    from litellm.ocr.input import convert_file_document_to_url_document
-
-    failure: Final = RuntimeError("reader failed")
-
-    class Reader:
-        def read(self) -> bytes:
-            raise failure
-
-    with pytest.raises(RuntimeError) as caught:
-        convert_file_document_to_url_document({"type": "file", "file": Reader()})
-    assert caught.value is failure
+    ocr_server.expected_requests = 0
+    with pytest.raises(litellm.BadRequestError, match="File is empty"):
+        call_native_ocr(ocr_server, document={"type": "file", "file": BytesIO(b"")})
