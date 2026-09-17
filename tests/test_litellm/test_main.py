@@ -2471,6 +2471,21 @@ async def test_mock_completion_prices_azure_ai_router_deployment_with_custom_pri
     assert response._hidden_params["custom_llm_provider"] == "azure_ai"
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_provider"),
+    (("anthropic/claude-sonnet-5", "anthropic"), ("no-such-provider-model", None)),
+)
+def test_mock_completion_infers_provider_when_called_directly_without_one(model: str, expected_provider: str | None):
+    response: Final = litellm.mock_completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response="ok",
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert response._hidden_params.get("custom_llm_provider") == expected_provider
+
+
 _ADMISSION_INPUT_TOKENS: Final = 51234
 
 
