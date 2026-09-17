@@ -452,7 +452,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["model"] = response.model
 
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-                inputs=inputs,
+                inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
                 request_data=request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
@@ -615,7 +615,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if responses_so_far and hasattr(responses_so_far[0], "model") and responses_so_far[0].model:
                 inputs["model"] = responses_so_far[0].model
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-                inputs=inputs,
+                inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
                 request_data=request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
@@ -760,7 +760,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if responses_so_far and getattr(responses_so_far[0], "model", None):
             inputs["model"] = responses_so_far[0].model
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-            inputs=inputs,
+            inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
             request_data=request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
@@ -792,10 +792,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, ModelResponseStream))
         stream_ended: Final = self._first_choice_has_finished(responses_so_far)
+        tool_call_fingerprints: Final = self._streamed_tool_call_fingerprints(responses_so_far)
         return StreamingScanKey(
             texts=tuple(self._combine_streaming_texts(chunks).values()),
-            tool_calls=self._streamed_tool_call_fingerprints(responses_so_far) if stream_ended else (),
+            tool_calls=tool_call_fingerprints if stream_ended else (),
             stream_ended=stream_ended,
+            tool_calls_in_flight=bool(tool_call_fingerprints) and not stream_ended,
         )
 
     @staticmethod
@@ -804,7 +806,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             stream_item_fingerprint(tool_call)
             for chunk in responses_so_far
             for choice in _stream_chunk_choices(chunk)
-            for tool_call in stream_item_items(stream_item_field(choice, "delta"), "tool_calls")
+            for tool_call in _streamed_delta_tool_calls(stream_item_field(choice, "delta"))
         )
 
     @staticmethod
@@ -1340,6 +1342,12 @@ def _stream_chunk_choices(item: object) -> Sequence[object]:
     if isinstance(choices, Sequence) and not isinstance(choices, (str, bytes)):
         return choices
     return ()
+
+
+def _streamed_delta_tool_calls(delta: object) -> tuple[object, ...]:
+    function_call: Final = stream_item_field(delta, "function_call")
+    legacy: Final = () if function_call is None else (function_call,)
+    return stream_item_items(delta, "tool_calls") + legacy
 
 
 def _blocked_stream_identity(

@@ -6675,8 +6675,10 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
             allowed_mcp_servers=[api_key_server, oauth_server],
             start_time=datetime.now(),
             requested_server_id=api_key_server.server_id,
+            guardrail_context={"metadata": {"guardrails": ("block-all",)}},
         )
 
+    assert captured["guardrail_context"] == {"metadata": {"guardrails": ("block-all",)}}
     assert captured["server_name"] == "echo_api_key"
     assert captured["name"] == "echo"
 

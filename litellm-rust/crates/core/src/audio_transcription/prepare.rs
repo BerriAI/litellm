@@ -1,14 +1,15 @@
-use crate::error::Error;
-use crate::http_utils::{has_header, string_headers};
-#[cfg(feature = "bedrock-auth")]
-use crate::providers::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
-use crate::providers::custom_llm_provider::{CustomLlmProvider, get_custom_llm_provider};
-
-use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderConfig};
+use super::Error;
 use super::types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
+use crate::http_utils::{has_header, string_headers};
+use crate::litellm_core_utils::get_llm_provider_logic::{
+    CustomLlmProvider, get_custom_llm_provider,
+};
+use crate::llms::base_llm::audio_transcription::transformation::{
+    AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
+};
+use crate::llms::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
 
-fn provider_config(provider: &str) -> Option<&'static dyn AudioTranscriptionProviderConfig> {
-    #[cfg(feature = "bedrock-auth")]
+fn provider_config(provider: &str) -> Option<&'static dyn BaseAudioTranscriptionConfig> {
     if provider == "bedrock" {
         return Some(&BEDROCK_AUDIO_TRANSCRIPTION_CONFIG);
     }
@@ -48,7 +49,7 @@ pub fn prepare_audio_transcription_provider_call(
     if !has_header(&headers, "content-type") {
         headers.push(("Content-Type".to_string(), "application/json".to_string()));
     }
-    let url = config.complete_url(
+    let url = config.get_complete_url(
         request.api_base,
         &model,
         &request.optional_params,
@@ -56,7 +57,7 @@ pub fn prepare_audio_transcription_provider_call(
     )?;
     let filtered_params = config.map_transcription_params(&request.optional_params);
     let transformed =
-        config.transform_transcription_request(&model, request.audio, filtered_params)?;
+        config.transform_audio_transcription_request(&model, request.audio, filtered_params)?;
     Ok(ProviderAudioTranscriptionRequest {
         model,
         custom_llm_provider: provider_info.custom_llm_provider.to_string(),
@@ -65,7 +66,6 @@ pub fn prepare_audio_transcription_provider_call(
         body: transformed.body,
         upstream_headers: headers,
         auth,
-        #[cfg(feature = "bedrock-auth")]
         optional_params: request.optional_params,
         timeout: request.timeout,
     })
