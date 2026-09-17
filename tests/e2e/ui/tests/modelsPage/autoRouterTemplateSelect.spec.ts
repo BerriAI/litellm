@@ -47,9 +47,11 @@ test.describe("Auto Router template select anchoring", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
   test("opens the options below the trigger when there is room below it", async ({ page }) => {
-    await page.setViewportSize({ width: 1280, height: 900 });
+    const viewport = { width: 1280, height: 900 };
+    await page.setViewportSize(viewport);
     const trigger = await openTemplateSelect(page);
-    await trigger.scrollIntoViewIfNeeded();
+    await trigger.evaluate((element) => element.scrollIntoView({ block: "start" }));
+    await expect.poll(async () => (await trigger.boundingBox())?.y).toBeLessThan(viewport.height / 2);
 
     await trigger.click();
     await expect(page.getByRole("listbox")).toBeVisible();
