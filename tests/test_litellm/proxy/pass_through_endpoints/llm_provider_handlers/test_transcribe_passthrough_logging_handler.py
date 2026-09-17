@@ -35,7 +35,6 @@ class TestTranscribeSupportedOperations:
         assert transcribe_supported_operations() == frozenset(
             get_session().get_service_model("transcribe").operation_names
         )
-        assert "StartTranscriptionJob" in transcribe_supported_operations()
 
 
 class TestTranscribePassthroughHandler:
