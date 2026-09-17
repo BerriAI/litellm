@@ -20,6 +20,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     coerce_numeric_form_fields,
     numeric_form_fields,
 )
+from litellm.proxy.common_utils.openai_error_payload import (
+    error_status_code,
+    openai_error_param,
+    openai_error_type,
+)
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
@@ -200,18 +205,18 @@ async def image_generation(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
                 openai_code=getattr(e, "code", None),
-                code=getattr(e, "status_code", 500),
+                code=error_status_code(e, 500),
             )
 
 

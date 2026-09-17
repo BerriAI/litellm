@@ -14,6 +14,7 @@ All /budget management endpoints
 #### BUDGET TABLE MANAGEMENT ####
 import math
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -176,6 +177,10 @@ async def update_budget(
     recomputed_reset_at: Final = (
         {"budget_reset_at": get_budget_reset_time(budget_duration=budget_obj.budget_duration)}
         if budget_obj.budget_duration is not None and "budget_reset_at" not in budget_obj.model_fields_set
+        else MappingProxyType({"budget_reset_at": None})
+        if "budget_duration" in budget_obj.model_fields_set
+        and budget_obj.budget_duration is None
+        and "budget_reset_at" not in budget_obj.model_fields_set
         else {}
     )
 

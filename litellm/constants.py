@@ -53,6 +53,7 @@ S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
 S3_PREFIX_DIGEST_CHARS: Final = 16
 # s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
 MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
+MAX_FILE_LIST_LIMIT: Final = 10000
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
 budget_reservation_disabled_info_emitted = False
@@ -143,6 +144,8 @@ DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD: Final = float(
     os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD", 0.3)
 )
 MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH: Final = int(os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150))
+MAX_LITELLM_CALL_ID_LENGTH: Final = 256
+MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH: Final = 2048
 
 DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS: Final = 2000
 
@@ -197,6 +200,7 @@ LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-adaptive-router-model",
     "x-litellm-applied-guardrails",
     "x-litellm-guardrail-scan-id",
+    "x-litellm-guardrail-scan-metadata",
     "x-litellm-cache-key",
 ]
 
@@ -333,6 +337,7 @@ DEFAULT_SSL_CIPHERS: Final = os.getenv(
 
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY: Final = "litellm_spend_update_buffer"
+REDIS_GATEWAY_REQUESTS_BUFFER_KEY: Final = "litellm_gateway_requests_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_team_spend_update_buffer"
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_org_spend_update_buffer"
@@ -394,6 +399,18 @@ TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS: Final = get_env_int_in_range(
     default=1024,
     minimum=1,
     maximum=TIKTOKEN_ENCODE_MAX_CHUNK_SIZE_CHARS,
+)
+TOKEN_COUNTER_MAX_EXACT_CHARS: Final = get_env_int_in_range(
+    "TOKEN_COUNTER_MAX_EXACT_CHARS",
+    default=4_000_000,
+    minimum=1,
+    maximum=1_000_000_000,
+)
+TOKEN_COUNTER_MAX_CONCURRENT_COUNTS: Final = get_env_int_in_range(
+    "TOKEN_COUNTER_MAX_CONCURRENT_COUNTS",
+    default=4,
+    minimum=1,
+    maximum=256,
 )
 MAX_TILE_WIDTH: Final = int(os.getenv("MAX_TILE_WIDTH", 512))
 MAX_TILE_HEIGHT: Final = int(os.getenv("MAX_TILE_HEIGHT", 512))
@@ -556,6 +573,7 @@ ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = int(
 LOGGING_WORKER_CONCURRENCY: Final = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100))  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
+LOGGING_WORKER_TIMEOUT_SUMMARY_WINDOW_SECONDS: Final = 5.0
 LOGGING_WORKER_CLEAR_PERCENTAGE: Final = int(
     os.getenv("LOGGING_WORKER_CLEAR_PERCENTAGE", 50)
 )  # Percentage of queue to clear (default: 50%)
@@ -567,6 +585,7 @@ LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS: Final = float(
 LOGGING_EXECUTOR_MAX_THREADS: Final = get_env_int("LOGGING_EXECUTOR_MAX_THREADS", 100)
 LOGGING_EXECUTOR_MAX_PENDING_TASKS: Final = get_env_int("LOGGING_EXECUTOR_MAX_PENDING_TASKS", 10_000)
 LOGGING_EXECUTOR_DROPPED_TASK_LOG_INTERVAL_SECONDS: Final = 30.0
+AWS_SIGNING_MAX_THREADS: Final = 16
 DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE: Final = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
@@ -1374,6 +1393,7 @@ bedrock_embedding_models: Final[set] = set(
         "cohere.embed-multilingual-v3",
         "cohere.embed-v4:0",
         "twelvelabs.marengo-embed-2-7-v1:0",
+        "twelvelabs.marengo-embed-3-0-v1:0",
     ]
 )
 
@@ -1637,6 +1657,7 @@ CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME: Final = "cloudzero_export_usage_data"
 MAVVRIK_FOCUS_EXPORT_JOB_NAME: Final = "mavvrik_focus_export_usage_data"
 CLOUDZERO_MAX_FETCHED_DATA_RECORDS: Final = int(os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000))
 SPEND_LOG_CLEANUP_JOB_NAME: Final = "spend_log_cleanup"
+BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME: Final = "background_health_check_db_save"
 KEY_ROTATION_JOB_NAME: Final = "litellm_key_rotation_job"
 EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME: Final = "litellm_expired_ui_session_key_cleanup_job"
 WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
@@ -1665,6 +1686,7 @@ SPEND_LOG_QUEUE_POLL_INTERVAL: Final = float(os.getenv("SPEND_LOG_QUEUE_POLL_INT
 RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS: Final = max(1, int(os.getenv("RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS", "3")))
 RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL: Final = float(os.getenv("RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL", "0.2"))
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = int(os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000))
+PROXY_DB_LOOKUP_MAX_CONCURRENCY: Final = max(1, int(os.getenv("PROXY_DB_LOOKUP_MAX_CONCURRENCY", "25")))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS: Final = int(os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60))  # 1 minute
 PROXY_BUDGET_RESCHEDULER_MIN_TIME: Final = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597))
 RESET_BUDGET_JOB_BATCH_SIZE: Final = max(1, int(os.getenv("RESET_BUDGET_JOB_BATCH_SIZE", "500")))
@@ -1766,6 +1788,10 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
 DEFAULT_ACCESS_GROUP_CACHE_TTL: Final = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
+SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
+SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL: Final = 30
+SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS: Final = 10000
+SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS: Final = 5000
 # Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
 # callers from forcing a DB query per request for unknown names, while bounding
 # staleness so a transient DB error (which surfaces as an empty list) cannot
@@ -1977,6 +2003,10 @@ NON_INFERENCE_CALL_TYPES: Final[frozenset[str]] = frozenset(
     }
 )
 
+UNKNOWN_MODEL_SPEND_LOG_MODEL: Final[str] = "unknown-model"
+MAX_SPEND_LOG_MODEL_NAME_LENGTH: Final[int] = 256
+MCP_SPEND_LOG_MODEL_PREFIX: Final[str] = "MCP: "
+
 # PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
 # sentinel api_key so PTU flat cost stays distinguishable from real per-request
 # spend under the table's composite unique constraint.
@@ -2009,3 +2039,6 @@ BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
 EMPTY_MAPPING: Final = MappingProxyType({})
+
+# API endpoint for breached password k-anonymity search
+HIBP_RANGE_API_BASE: Final = "https://api.pwnedpasswords.com/range"

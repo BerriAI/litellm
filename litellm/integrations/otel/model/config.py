@@ -269,7 +269,9 @@ class OpenTelemetryV2Config(BaseSettings):
         if (self.endpoint or self.traces_endpoint) and self.exporter == "console":
             self.exporter = "otlp_http"
         # When no explicit destinations are given, fold the single-destination
-        # shorthand into one spec so the provider always has a destination.
+        # shorthand into one spec so the provider always has a destination. A spec
+        # with no fields set is how the presets tell "nothing configured" from an
+        # operator who asked for the console by name.
         if not self.exporters:
             self.exporters = [
                 ExporterSpec(
@@ -278,6 +280,8 @@ class OpenTelemetryV2Config(BaseSettings):
                     traces_endpoint=self.traces_endpoint,
                     headers=self.headers,
                 )
+                if not self.model_fields_set.isdisjoint(("exporter", "endpoint", "headers"))
+                else ExporterSpec()
             ]
         # Ensure ``genai`` is always present and first.
         names = list(self.mapper_names)
