@@ -1788,20 +1788,20 @@ async def _validate_project_assignment(
     if project_obj is None:
         raise HTTPException(
             status_code=404,
-            detail={"error": f"Project not found, project_id={data.project_id}"},
+            detail={"error": f"Project not found, project_id={data.project_id}"},  # mutable-ok: HTTPException.detail has no immutable form
         )
     team: Final = data.team_id if "team_id" in data.model_fields_set else existing_key_row.team_id
     if team is None or team != project_obj.team_id:
         raise HTTPException(
             status_code=400,
-            detail={
+            detail={  # mutable-ok: HTTPException.detail has no immutable form
                 "error": f"Project {data.project_id} belongs to team {project_obj.team_id}. Keys can only be assigned to a project owned by their own team (key team: {team})"
             },
         )
     await _check_project_key_limits(
         project_id=data.project_id,
         data=data.model_copy(
-            update={
+            update={  # mutable-ok: model_copy takes a dict-shaped update payload
                 "models": data.models if "models" in data.model_fields_set else existing_key_row.models,
                 "max_budget": data.max_budget if data.max_budget is not None else existing_key_row.max_budget,
             }
