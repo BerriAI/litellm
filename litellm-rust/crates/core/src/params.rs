@@ -66,60 +66,6 @@ pub fn is_control_param(name: &str) -> bool {
     )
 }
 
-impl OpaqueParams {
-    pub fn into_inner(self) -> Map<String, Value> {
-        self.0
-    }
-
-    pub fn without(&self, names: &[&str]) -> Self {
-        self.iter()
-            .filter(|(name, _)| !names.contains(&name.as_str()))
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect()
-    }
-
-    pub fn provider_params(&self) -> Self {
-        self.iter()
-            .filter(|(name, _)| !is_control_param(name))
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect()
-    }
-
-    pub fn into_provider_body(self) -> Result<Map<String, Value>, Error> {
-        let mut fields = self.0;
-        let overrides = match fields.remove("extra_body") {
-            None | Some(Value::Null) => Map::new(),
-            Some(Value::Object(fields)) => fields,
-            Some(_) => {
-                return Err(Error::ExtraBody);
-            }
-        };
-        Ok(fields
-            .into_iter()
-            .chain(overrides)
-            .filter(|(name, _)| name != "extra_body" && !is_control_param(name))
-            .collect())
-    }
-}
-
-#[cfg(test)]
-fn merge_extra_params<B: Serialize>(body: &B, extra_params: OpaqueParams) -> Result<Value, Error> {
-    let Value::Object(fields) = serde_json::to_value(body).map_err(|_| Error::Body)? else {
-        return Err(Error::Body);
-    };
-    Ok(Value::Object(
-        fields
-            .into_iter()
-            .chain(
-                extra_params
-                    .into_provider_body()?
-                    .into_iter()
-                    .filter(|(name, _)| name != "model"),
-            )
-            .collect(),
-    ))
-}
-
 impl Deref for OpaqueParams {
     type Target = Map<String, Value>;
 
@@ -165,64 +111,7 @@ impl IntoIterator for OpaqueParams {
 mod tests {
     use serde_json::json;
 
-    use super::*;
-
-    #[test]
-    fn extras_merge_shallowly_and_preserve_values_without_leaking_controls() {
-        let extras: OpaqueParams = serde_json::from_value(json!({
-            "future": {"nested": [false, 0, null]},
-            "explicit_null": null,
-            "azure_ad_token": "secret",
-            "req_format": "native",
-            "extra_body": {
-                "future": {"replacement": true},
-                "temperature": 0.5,
-                "model": "override",
-                "aws_secret_access_key": "secret"
-            }
-        }))
-        .unwrap();
-        let body =
-            merge_extra_params(&json!({"model":"resolved", "temperature":0.1}), extras).unwrap();
-        assert_eq!(
-            body,
-            json!({
-                "model":"resolved", "temperature":0.5,
-                "future":{"replacement":true}, "explicit_null":null
-            })
-        );
-    }
-
-    #[test]
-    fn invalid_extra_body_is_rejected_and_null_is_empty() {
-        for value in [json!(false), json!([]), json!("value"), json!(1)] {
-            let params: OpaqueParams = serde_json::from_value(json!({"extra_body":value})).unwrap();
-            assert!(params.into_provider_body().is_err());
-        }
-        let params: OpaqueParams =
-            serde_json::from_value(json!({"extra_body":null,"future":null})).unwrap();
-        assert_eq!(
-            Value::Object(params.into_provider_body().unwrap()),
-            json!({"future":null})
-        );
-    }
-
-    #[test]
-    fn provider_params_preserve_opaque_values() {
-        let params: OpaqueParams = serde_json::from_value(json!({
-            "object": {"future": [1, null]},
-            "null": null,
-            "azure_ad_token": "secret"
-        }))
-        .unwrap();
-
-        let retained = params.provider_params();
-
-        assert_eq!(
-            serde_json::to_value(retained).unwrap(),
-            json!({"object": {"future": [1, null]}, "null": null})
-        );
-    }
+    use super::OpaqueParams;
 
     #[test]
     fn outer_value_must_be_an_object() {
