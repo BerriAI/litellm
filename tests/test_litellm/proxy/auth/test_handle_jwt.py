@@ -2,12 +2,14 @@ import asyncio
 import re
 import time
 from collections.abc import Mapping, Sequence
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 import httpx
 import pytest
+
+import litellm
 
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
@@ -21,8 +23,11 @@ from litellm.proxy._types import (
     Member,
     ProxyErrorTypes,
     ProxyException,
+    RoleBasedPermissions,
+    ScopeMapping,
 )
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.auth.handle_jwt import (
     JWKS_FETCH_ATTEMPTS,
     STALE_CACHE_KEY_PREFIX,
@@ -32,6 +37,8 @@ from litellm.proxy.auth.handle_jwt import (
     JWTHandler,
     NoMatchingJWTPublicKeyError,
 )
+from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
+from litellm.types.agents import AgentResponse
 
 
 @pytest.mark.asyncio
@@ -6786,3 +6793,354 @@ async def test_sync_user_role_and_teams_singular_claim_only_recognized_under_fla
     }
     assert mock_patch.call_args.kwargs["teams_ids_to_add_user_to"] == []
     assert user.teams == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["identity", "authorize", "admit"])
+@pytest.mark.parametrize("existing_user", [False, True])
+@pytest.mark.parametrize("model_allowed", [False, True])
+async def test_jwt_identity_and_authorization_keep_provisioning_in_admission(
+    monkeypatch: pytest.MonkeyPatch, operation: str, existing_user: bool, model_allowed: bool
+) -> None:
+    from litellm.proxy._types import ScopeMapping
+    from litellm.proxy.auth.auth_checks import UserNotFoundError
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    private_key, jwk = _get_rsa_key_and_jwk("identity-mode")
+    cache: Final = UserApiKeyCache()
+    cache.set_cache("litellm_jwt_auth_keys_https://identity.example/jwks", [jwk])
+    user_id: Final = f"identity-mode-{operation}-{existing_user}-{model_allowed}"
+    user: Final = LiteLLM_UserTable(user_id=user_id, organization_memberships=[])
+    if existing_user:
+        cache.set_cache(user_id, user)
+    database: Final = MagicMock()
+    users: Final = database.db.litellm_usertable
+    users.find_unique = AsyncMock(return_value=None)
+    users.find_first = AsyncMock(return_value=None)
+    users.create = AsyncMock(return_value=user)
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=database,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            user_id_jwt_field="sub",
+            user_id_upsert=True,
+            enforce_scope_based_access=True,
+            scope_mappings=[ScopeMapping(scope="allowed", models=["allowed-model"])],
+        ),
+    )
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://identity.example/jwks")
+    monkeypatch.setenv("JWT_ISSUER", "https://identity.example")
+    monkeypatch.setenv("JWT_AUDIENCE", "gateway")
+    token: Final = _encode_rsa_jwt(
+        private_key, "https://identity.example", "gateway", "identity-mode", {"sub": user_id, "scope": "allowed"}
+    )
+    common: Final = {
+        "api_key": token,
+        "jwt_handler": handler,
+        "prisma_client": database,
+        "user_api_key_cache": cache,
+        "parent_otel_span": None,
+        "proxy_logging_obj": MagicMock(),
+    }
+    if operation == "identity":
+        if not existing_user:
+            with pytest.raises(UserNotFoundError):
+                await JWTAuthManager.resolve_identity(**common)
+        else:
+            identity: Final = await JWTAuthManager.resolve_identity(**common)
+            assert identity.user_id == user_id
+            assert identity.user_object is not None and identity.user_object.user_id == user_id
+        users.create.assert_not_awaited()
+        return
+    authorize: Final = JWTAuthManager.auth_builder if operation == "admit" else JWTAuthManager.authorize_jwt
+    pending: Final = authorize(
+        **common,
+        request_data={"model": "allowed-model" if model_allowed else "forbidden-model"},
+        general_settings={},
+        route="/mcp/example",
+    )
+    if not model_allowed:
+        with pytest.raises(HTTPException) as denial:
+            await pending
+        assert denial.value.status_code == 403
+        users.create.assert_not_awaited()
+        return
+    if operation == "authorize" and not existing_user:
+        with pytest.raises(UserNotFoundError):
+            await pending
+    else:
+        result: Final = await pending
+        assert result["user_id"] == user_id
+        assert result["user_object"] is not None
+        assert result["user_object"].user_id == user_id
+    assert users.create.await_count == (0 if operation == "authorize" or existing_user else 1)
+
+
+def _entra_agent_registry() -> AgentRegistry:
+    registry = AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id="canonical-agent-id",
+            agent_name="2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21",
+            agent_card_params={"name": "research-agent", "url": "http://localhost:9999/a2a", "version": "1.0.0"},
+            litellm_params={"require_trace_id_on_calls_by_agent": True},
+        )
+    )
+    return registry
+
+
+def _entra_agent_jwt_handler(agent_id_jwt_field: str | None) -> JWTHandler:
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(user_id_jwt_field="sub", agent_id_jwt_field=agent_id_jwt_field),
+    )
+    return jwt_handler
+
+
+@pytest.mark.parametrize(
+    "claim_value",
+    ["canonical-agent-id", "2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21"],
+    ids=["matches_agent_id", "matches_agent_name"],
+)
+def test_resolve_agent_id_returns_canonical_agent_id(claim_value: str):
+    """An Entra app token's azp claim binds to the registered agent by id or by name and yields its canonical id."""
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field="azp")
+
+    resolved = JWTAuthManager.resolve_agent_id(
+        jwt_handler=jwt_handler,
+        jwt_valid_token={"sub": "sp-object-id-1234", "azp": claim_value},
+        agent_registry=_entra_agent_registry(),
+    )
+
+    assert resolved == "canonical-agent-id"
+
+
+def test_resolve_agent_id_reads_nested_claim():
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field="entra.client_id")
+
+    resolved = JWTAuthManager.resolve_agent_id(
+        jwt_handler=jwt_handler,
+        jwt_valid_token={"sub": "sp-object-id-1234", "entra": {"client_id": "canonical-agent-id"}},
+        agent_registry=_entra_agent_registry(),
+    )
+
+    assert resolved == "canonical-agent-id"
+
+
+def test_resolve_agent_id_rejects_claim_for_unregistered_agent():
+    """A configured agent claim naming no registered agent fails closed with 403 instead of falling back to an unbound identity."""
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field="azp")
+
+    with pytest.raises(HTTPException) as exc_info:
+        JWTAuthManager.resolve_agent_id(
+            jwt_handler=jwt_handler,
+            jwt_valid_token={"sub": "sp-object-id-1234", "azp": "00000000-0000-0000-0000-000000000000"},
+            agent_registry=_entra_agent_registry(),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        {"sub": "sp-object-id-1234"},
+        {"sub": "sp-object-id-1234", "azp": ""},
+        {"sub": "sp-object-id-1234", "azp": ["canonical-agent-id"]},
+    ],
+    ids=["claim_absent", "claim_empty", "claim_not_a_string"],
+)
+def test_resolve_agent_id_returns_none_when_claim_unusable(token: dict):
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field="azp")
+
+    assert (
+        JWTAuthManager.resolve_agent_id(
+            jwt_handler=jwt_handler, jwt_valid_token=token, agent_registry=_entra_agent_registry()
+        )
+        is None
+    )
+
+
+def test_resolve_agent_id_ignores_claim_when_field_not_configured():
+    """Without agent_id_jwt_field an azp claim (even an unknown one) leaves JWT auth behaviour unchanged."""
+    jwt_handler = _entra_agent_jwt_handler(agent_id_jwt_field=None)
+
+    resolved = JWTAuthManager.resolve_agent_id(
+        jwt_handler=jwt_handler,
+        jwt_valid_token={"sub": "sp-object-id-1234", "azp": "00000000-0000-0000-0000-000000000000"},
+        agent_registry=_entra_agent_registry(),
+    )
+
+    assert resolved is None
+
+
+def _entra_signed_app_token(monkeypatch, azp: str, scope: str) -> tuple[JWTHandler, str]:
+    """A JWTHandler that verifies RS256 tokens against a pre-cached JWKS, plus a signed Entra-style app token."""
+    jwks_url = "https://login.microsoftonline.test/discovery/v2.0/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    private_key, jwk = _get_rsa_key_and_jwk(kid="entra-kid")
+    cache = DualCache()
+    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(agent_id_jwt_field="azp"),
+    )
+    token = _encode_rsa_jwt(
+        private_key,
+        issuer="https://login.microsoftonline.test/lit7664-tenant/v2.0",
+        audience="api://litellm",
+        kid="entra-kid",
+        extra_claims={"sub": "sp-object-id-1234", "azp": azp, "scope": scope},
+    )
+    return jwt_handler, token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_admin_token", [False, True], ids=["standard_jwt", "proxy_admin_jwt"])
+@pytest.mark.parametrize("identity_only", [False, True])
+async def test_auth_builder_propagates_agent_id_from_jwt_claim(monkeypatch, is_admin_token: bool, identity_only: bool):
+    """auth_builder carries the resolved agent id into JWTAuthBuilderResult on both the admin and standard paths."""
+    jwt_handler, token = _entra_signed_app_token(
+        monkeypatch,
+        azp="2f5c9b1e-6a4d-4c8e-9f0b-7d1a3e5c9b21",
+        scope=LiteLLM_JWTAuth().admin_jwt_scope if is_admin_token else "",
+    )
+    jwt_handler.bind_agent_lookup(_entra_agent_registry())
+
+    if identity_only:
+        identity = await JWTAuthManager.resolve_identity(
+            api_key=token, jwt_handler=jwt_handler, prisma_client=None,
+            user_api_key_cache=None, parent_otel_span=None, proxy_logging_obj=None,
+        )
+        assert identity.agent_id == "canonical-agent-id"
+        return
+
+    result = await JWTAuthManager.auth_builder(
+        api_key=token,
+        jwt_handler=jwt_handler,
+        request_data={"model": "gpt-5.6"},
+        general_settings={"enforce_rbac": False},
+        route="/key/info" if is_admin_token else "/chat/completions",
+        prisma_client=None,
+        user_api_key_cache=None,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+
+    assert result["is_proxy_admin"] is is_admin_token
+    assert result["agent_id"] == "canonical-agent-id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity_only", [False, True])
+async def test_auth_builder_denies_jwt_naming_unregistered_agent_before_admin_check(monkeypatch, identity_only: bool):
+    """An unknown agent claim is rejected even when the token would otherwise be a proxy admin."""
+    jwt_handler, token = _entra_signed_app_token(
+        monkeypatch,
+        azp="00000000-0000-0000-0000-000000000000",
+        scope=LiteLLM_JWTAuth().admin_jwt_scope,
+    )
+    jwt_handler.bind_agent_lookup(_entra_agent_registry())
+
+    if identity_only:
+        with pytest.raises(HTTPException) as denial:
+            await JWTAuthManager.resolve_identity(
+                api_key=token, jwt_handler=jwt_handler, prisma_client=None,
+                user_api_key_cache=None, parent_otel_span=None, proxy_logging_obj=None,
+            )
+        assert denial.value.status_code == 403
+        return
+    with pytest.raises(HTTPException) as exc_info:
+        await JWTAuthManager.auth_builder(
+            api_key=token,
+            jwt_handler=jwt_handler,
+            request_data={"model": "gpt-5.6"},
+            general_settings={"enforce_rbac": False},
+            route="/key/info",
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+_JWT_DENIED_CLIENT_MESSAGE = (
+    "The requested model 'gpt-5.6' is not available for this API key, or the model name is invalid. "
+    "Check the models available to you and try again."
+)
+
+
+def test_can_rbac_role_call_model_denial_hides_role_allowlist_from_client():
+    general_settings = {
+        "role_permissions": [
+            RoleBasedPermissions(role=LitellmUserRoles.INTERNAL_USER, models=["gpt-5.6-mini"]),
+        ]
+    }
+
+    with pytest.raises(ModelAccessDeniedHTTPException) as exc_info:
+        JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings=general_settings,
+            model="gpt-5.6",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == _JWT_DENIED_CLIENT_MESSAGE
+    assert exc_info.value.internal_message == (
+        "Role=internal_user not allowed to call model=gpt-5.6. Allowed models=['gpt-5.6-mini']"
+    )
+
+
+def test_check_scope_based_access_denial_hides_scope_allowlist_from_client():
+    with pytest.raises(ModelAccessDeniedHTTPException) as exc_info:
+        JWTAuthManager.check_scope_based_access(
+            scope_mappings=[ScopeMapping(scope="litellm.api.consumer", models=["gpt-5.6-mini"])],
+            scopes=["litellm.api.consumer"],
+            request_data={"model": "gpt-5.6"},
+            general_settings={},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {"error": _JWT_DENIED_CLIENT_MESSAGE}
+    assert exc_info.value.internal_message == "model=gpt-5.6 not allowed. Allowed_models=['gpt-5.6-mini']"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admission", [False, True])
+async def test_admin_jwt_team_header_only_provisions_during_admission(monkeypatch, admission: bool):
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    handler, token = _entra_signed_app_token(
+        monkeypatch, azp="canonical-agent-id", scope=LiteLLM_JWTAuth().admin_jwt_scope,
+    )
+    handler.bind_agent_lookup(_entra_agent_registry())
+    handler.litellm_jwtauth.team_id_upsert = True
+    handler.litellm_jwtauth.admin_allowed_routes = ["openai_routes"]
+    database = MagicMock()
+    database.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    create_team = AsyncMock(return_value=LiteLLM_TeamTable(team_id="new-team").model_dump())
+    monkeypatch.setattr(team_endpoints, "new_team", create_team)
+    resolve = JWTAuthManager.auth_builder if admission else JWTAuthManager.authorize_jwt
+
+    result = await resolve(
+        api_key=token, jwt_handler=handler, request_data={}, general_settings={},
+        route="/chat/completions", prisma_client=database,
+        user_api_key_cache=handler.user_api_key_cache, parent_otel_span=None,
+        proxy_logging_obj=MagicMock(), request_headers={"x-litellm-team-id": "new-team"},
+    )
+
+    assert result["is_proxy_admin"] is True
+    if admission:
+        create_team.assert_awaited_once()
+        assert result["team_id"] == "new-team"
+    else:
+        create_team.assert_not_awaited()
+        assert result["team_id"] is None

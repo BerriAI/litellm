@@ -99,23 +99,13 @@ def setup(
 
 def check_limits(kwargs: Mapping[str, object]) -> None:
     import litellm
+    from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
 
     current_cost: Final = litellm._current_cost  # pyright: ignore[reportPrivateUsage]  # shared SDK budget counter has no public accessor
     if litellm.max_budget and current_cost > litellm.max_budget:
         raise litellm.BudgetExceededError(current_cost=current_cost, max_budget=litellm.max_budget)
-    metadata: Final = kwargs.get("metadata")
-    if isinstance(metadata, Mapping):
-        typed_metadata: Final = cast(  # cast-ok: runtime Mapping check establishes read-only metadata
-            Mapping[str, object], metadata
-        )
-        previous: Final = typed_metadata.get("previous_models")
-        if (
-            isinstance(previous, list)
-            and litellm.num_retries_per_request is not None
-            and len(cast(list[object], previous))  # cast-ok: runtime list check establishes the retry history
-            >= litellm.num_retries_per_request
-        ):
-            raise RuntimeError("Max retries per request hit!")
+    if max_retries_per_request_hit(kwargs, litellm.num_retries_per_request):
+        raise RuntimeError("Max retries per request hit!")
 
 
 def finalize(

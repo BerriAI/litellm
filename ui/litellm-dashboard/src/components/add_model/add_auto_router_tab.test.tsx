@@ -15,7 +15,7 @@ import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
 import { getSubmitBlockedReason } from "./add_auto_router_tab";
 import { buildModelAvailability } from "@/lib/autorouter_presets";
-import { testAutoRouterRouting } from "../networking";
+import { modelCreateCall, testAutoRouterRouting } from "../networking";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { AutoRouterPreset, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
 import { BUNDLED_PRESETS, LOADED_PRESETS_QUERY, useAutoRouterPresets } from "../../../tests/mocks/autoRouterPresets";
@@ -104,6 +104,7 @@ const { validateAutoRouterConfig } = vi.hoisted(() => ({
 }));
 
 vi.mock("../networking", () => ({
+  modelCreateCall: vi.fn().mockResolvedValue({}),
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   testAutoRouterRouting: vi.fn(),
   validateAutoRouterConfig,
@@ -111,6 +112,7 @@ vi.mock("../networking", () => ({
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: mockFetchAvailableModels,
+  fetchAutoRouterModels: mockFetchAvailableModels,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", async (importOriginal) => {
@@ -143,6 +145,7 @@ vi.mock("../common_components/team_dropdown", () => ({
       >
         <option value="">none</option>
         <option value="team-1">team-1</option>
+        <option value="team-2">team-2</option>
       </select>
       <button type="button" data-testid="team-dropdown-clear" onClick={() => onChange?.(null)}>
         clear team
@@ -163,6 +166,124 @@ describe("AddAutoRouterTab", () => {
     mockFetchAvailableModels.mockResolvedValue([]);
     mockFetchAllModelDeployments.mockResolvedValue([]);
   });
+
+  it.each(["Capability", "Fuse v2"])(
+    "creates %s from its dedicated tab without complexity templates",
+    async (label) => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockResolvedValue([
+        { model_group: "efficient", mode: "chat" },
+        { model_group: "capable", mode: "chat" },
+        { model_group: "judge", mode: "chat" },
+      ]);
+      renderWithProviders(<Harness />);
+      await user.type(screen.getByLabelText("Auto Router Name"), "forecast-router");
+      await user.click(screen.getByRole("tab", { name: label, exact: true }));
+      expect(screen.getByLabelText("Auto Router Name")).toHaveValue("forecast-router");
+      expect(screen.queryByTestId("template-selector")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("detailed-configuration-toggle")).not.toBeInTheDocument();
+      expect(screen.queryByText("Complexity Tier Configuration")).not.toBeInTheDocument();
+      expect(screen.queryByText("Advanced: Classification Method")).not.toBeInTheDocument();
+      expect(screen.queryByText("Advanced: Adaptive Routing")).not.toBeInTheDocument();
+      const capability = label === "Capability";
+      for (const [role, model] of [
+        ["Efficient", "efficient"],
+        ["Capable", "capable"],
+      ]) {
+        await user.click(
+          screen.getByRole("combobox", {
+            name: capability ? `Select ${role.toLowerCase()} solver models` : `${role} solver`,
+          }),
+        );
+        await user.click(await screen.findByRole("option", { name: model, exact: true }));
+        if (capability) await user.keyboard("{Escape}");
+      }
+      await user.click(screen.getByRole("combobox", { name: "Judge model" }));
+      await user.click(await screen.findByRole("option", { name: "judge", exact: true }));
+      expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+      if (capability) {
+        fireEvent.change(screen.getByLabelText("Solve probability threshold"), { target: { value: "0.7" } });
+      } else {
+        fireEvent.change(screen.getByLabelText("Efficient solver profile"), { target: { value: "Small solver" } });
+        fireEvent.change(screen.getByLabelText("Capable solver profile"), { target: { value: "Large solver" } });
+        fireEvent.change(screen.getByLabelText("Harness and budget"), { target: { value: "One attempt" } });
+        fireEvent.change(screen.getByLabelText("Maximum quality gap"), { target: { value: "0.05" } });
+      }
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Advanced routing options" }));
+      for (const label of ["Adaptive Routing", "Context Window Escalation", "Escalation Keywords"]) {
+        expect(screen.queryByText(`Advanced: ${label}`)).not.toBeInTheDocument();
+      }
+      expect(screen.getByText("Advanced: Stalled Task Escalation")).toBeInTheDocument();
+      expect(screen.getByText("Advanced: Response Format")).toBeInTheDocument();
+      expect(screen.queryByText("Advanced: Classification Method")).not.toBeInTheDocument();
+      expect(screen.getByText("Advanced: Affinity")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledTimes(1));
+      const expected = {
+        classifier_type: capability ? "capability" : "llm_v2",
+        adaptive: false,
+        enable_context_window_escalation: false,
+        escalation_keywords: [],
+        tiers: { SIMPLE: ["efficient"], REASONING: ["capable"] },
+        classifier_llm_config: { model: "judge" },
+      };
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject(expected);
+    },
+  );
+
+  it("restores the automatic/template/detail flow on the Complexity tab", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    renderWithProviders(<Harness />);
+    await screen.findByTestId("configure-automatically-button");
+    await user.click(screen.getByRole("tab", { name: "Capability", exact: true }));
+    expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Complexity", exact: true }));
+    expect(screen.getByTestId("configure-automatically-button")).toBeInTheDocument();
+    expect(screen.getByTestId("template-selector")).toBeInTheDocument();
+    expandDetailedConfiguration();
+    expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
+    for (const label of ["Adaptive Routing", "Context Window Escalation", "Escalation Keywords"]) {
+      expect(screen.getByText(`Advanced: ${label}`)).toBeInTheDocument();
+    }
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.queryByRole("radio", { name: /^Capability/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /^Fuse v2/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /^Heuristic \(default/ })).toBeChecked();
+  });
+
+  it.each(["Capability", "Fuse v2"])(
+    "retries failed model loading on %s without losing entered settings",
+    async (label) => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockRejectedValueOnce(new Error("Model list unavailable")).mockResolvedValue([
+        { model_group: "efficient", mode: "chat" },
+        { model_group: "capable", mode: "chat" },
+        { model_group: "judge", mode: "chat" },
+      ]);
+      renderWithProviders(<Harness />);
+      await user.click(screen.getByRole("tab", { name: label, exact: true }));
+      await user.type(screen.getByLabelText("Auto Router Name"), "forecast-retry");
+      const capability = label === "Capability";
+      const policyField = capability ? "Solve probability threshold" : "Efficient solver profile";
+      fireEvent.change(screen.getByLabelText(policyField), {
+        target: { value: capability ? "0.7" : "Small solver" },
+      });
+      expect(await screen.findByText("Could not load available models.")).toBeVisible();
+      expect(screen.queryByTestId("template-selector")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Retry", exact: true }));
+      await waitFor(() => expect(screen.queryByText("Could not load available models.")).not.toBeInTheDocument());
+      expect(screen.getByRole("tab", { name: label, exact: true })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByLabelText("Auto Router Name")).toHaveValue("forecast-retry");
+      expect(screen.getByLabelText(policyField)).toHaveValue(capability ? 0.7 : "Small solver");
+      await user.click(screen.getByRole("combobox", { name: "Judge model" }));
+      expect(await screen.findByRole("option", { name: "judge", exact: true })).toBeVisible();
+      expect(mockFetchAvailableModels).toHaveBeenCalledTimes(2);
+    },
+  );
 
   // Detailed Configuration starts collapsed so the modal opens onto just Name + Template; a caller
   // opts into the full tier/classifier form rather than always seeing it up front.
@@ -292,6 +413,62 @@ describe("AddAutoRouterTab", () => {
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({ team_id: "team-1" });
+  });
+
+  it("creates a member's router with only its name, team and routing configuration", async () => {
+    mockFetchAvailableModels.mockImplementation(async (_token: string, teamId?: string) =>
+      teamId === "team-1" ? ALL_FAMILY_MODELS : [],
+    );
+    const actualSubmit = await vi.importActual<typeof import("./handle_add_auto_router_submit")>(
+      "./handle_add_auto_router_submit",
+    );
+    vi.mocked(handleAddAutoRouterSubmit).mockImplementationOnce(actualSubmit.handleAddAutoRouterSubmit);
+    const user = userEvent.setup();
+    renderWithProviders(
+      <AddAutoRouterTab
+        handleOk={vi.fn()}
+        accessToken="token"
+        userRole="Internal User"
+        userId="member"
+        createScope="team-required"
+        teams={
+          [
+            {
+              team_id: "team-1",
+              team_member_permissions: ["/auto_router/manage"],
+              members_with_roles: [{ user_id: "member", user_email: "member@example.com", role: "user" }],
+            },
+          ] as import("../networking").Team[]
+        }
+      />,
+    );
+
+    await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
+    openTemplateDropdown();
+    await waitForPresetEnabled(ANTHROPIC_PRESET.label);
+    await selectTemplate(ANTHROPIC_PRESET.label);
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "my-router" } });
+    await user.selectOptions(screen.getByTestId("team-dropdown"), "team-2");
+    await waitFor(() => expect(mockFetchAvailableModels).toHaveBeenLastCalledWith("token", "team-2"));
+    expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
+    expect(screen.getByPlaceholderText(/smart_router/i)).toHaveValue("my-router");
+    await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
+    expandDetailedConfiguration();
+    expect(screen.queryByText("Advanced: Compression")).not.toBeInTheDocument();
+    expect(screen.queryByText("Model Access Groups")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(modelCreateCall).toHaveBeenCalled());
+    expect(modelCreateCall).toHaveBeenLastCalledWith("token", {
+      model_name: "my-router",
+      model_info: { team_id: "team-1" },
+      litellm_params: {
+        model: "auto_router/complexity_router",
+        complexity_router_config: expect.objectContaining({ tiers: ANTHROPIC_TIERS }),
+        complexity_router_default_model: expect.any(String),
+      },
+    });
+    expect(mockFetchAvailableModels).toHaveBeenCalledWith("token", "team-1");
   });
 
   it("does not submit when the backend's dry-run rejects the config", async () => {
@@ -715,9 +892,7 @@ describe("AddAutoRouterTab", () => {
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Affinity"));
-    expect(
-      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
-    ).toBeChecked();
+    expect(await screen.findByRole("switch", { name: "Pin one model deployment per tier" })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
@@ -736,7 +911,7 @@ describe("AddAutoRouterTab", () => {
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Affinity"));
-    await user.click(await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }));
+    await user.click(await screen.findByRole("switch", { name: "Pin one model deployment per tier" }));
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 

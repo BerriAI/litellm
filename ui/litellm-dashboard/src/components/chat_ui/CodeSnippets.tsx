@@ -1,6 +1,7 @@
 import { MessageType } from "./types";
 import { EndpointType } from "./mode_endpoint_mapping";
 import { MCPServer } from "@/components/mcp_tools/types";
+import type { CustomHeaders } from "@/components/llm_calls/request_headers";
 
 interface CodeGenMetadata {
   tags?: string[];
@@ -30,6 +31,7 @@ interface GenerateCodeParams {
     PROXY_BASE_URL?: string;
     LITELLM_UI_API_DOC_BASE_URL?: string | null;
   };
+  customHeaders?: CustomHeaders;
 }
 
 export const generateCodeSnippet = (params: GenerateCodeParams): string => {
@@ -48,6 +50,7 @@ export const generateCodeSnippet = (params: GenerateCodeParams): string => {
     selectedModel,
     selectedSdk,
     proxySettings,
+    customHeaders,
   } = params;
   const effectiveApiKey = apiKeySource === "session" ? accessToken : apiKey;
 
@@ -76,6 +79,11 @@ export const generateCodeSnippet = (params: GenerateCodeParams): string => {
 
   const modelNameForCode = selectedModel || "your-model-name";
 
+  const defaultHeadersCode =
+    customHeaders && Object.keys(customHeaders).length > 0
+      ? `,\n\tdefault_headers=${JSON.stringify(customHeaders, null, 2).replace(/\n/g, "\n\t")}`
+      : "";
+
   const clientInitialization =
     selectedSdk === "azure"
       ? `import openai
@@ -83,13 +91,13 @@ export const generateCodeSnippet = (params: GenerateCodeParams): string => {
 client = openai.AzureOpenAI(
 	api_key="${effectiveApiKey || "YOUR_LITELLM_API_KEY"}",
 	azure_endpoint="${apiBase}",
-	api_version="2024-02-01"
+	api_version="2024-02-01"${defaultHeadersCode}
 )`
       : `import openai
 
 client = openai.OpenAI(
 	api_key="${effectiveApiKey || "YOUR_LITELLM_API_KEY"}",
-	base_url="${apiBase}"
+	base_url="${apiBase}"${defaultHeadersCode}
 )`;
 
   let endpointSpecificCode;

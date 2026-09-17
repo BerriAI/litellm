@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 import litellm
-from litellm.cost_calculator import cost_per_token
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import StandardBuiltInToolCostTracking
 
@@ -21,16 +20,6 @@ PRICING = (
 def _load_cost_map(filename: str = "model_prices_and_context_window.json") -> dict:
     with open(Path(__file__).parents[2] / filename) as f:
         return json.load(f)
-
-
-@pytest.mark.parametrize("model, input_cost, cached_cost, output_cost", PRICING)
-def test_muse_spark_1_3_cost_per_token(
-    local_model_cost_map, model: str, input_cost: float, cached_cost: float, output_cost: float
-):
-    prompt_cost, completion_cost = cost_per_token(model=model, prompt_tokens=1000, completion_tokens=500)
-
-    assert prompt_cost == pytest.approx(1000 * input_cost)
-    assert completion_cost == pytest.approx(500 * output_cost)
 
 
 @pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR))

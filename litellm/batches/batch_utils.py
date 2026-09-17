@@ -9,6 +9,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
+from litellm.llms.vertex_ai.batches.transformation import vertex_prompt_tokens_details
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import token_counter
@@ -356,6 +357,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
             prompt_tokens=_prompt,
             completion_tokens=_completion,
             total_tokens=_total,
+            prompt_tokens_details=vertex_prompt_tokens_details(usage_metadata),
         )
 
         try:

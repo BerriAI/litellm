@@ -17,7 +17,7 @@ pub(crate) fn ocr_client() -> OcrClient {
 
 pub(crate) async fn perform_ocr(
     request: LiteLLMOcrRequest,
-) -> Result<LiteLLMOcrResponse, crate::Error> {
+) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
     ocr_client().perform(request).await
 }
 

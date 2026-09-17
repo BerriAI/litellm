@@ -9,7 +9,7 @@ When contributing to this directory, please first discuss the change you wish to
 
 ## Setup
 
-The suites run against a live proxy, so bring one up first by running the litellm proxy locally. Point it at a config that prewires the example models the suites use (`gpt-5.5`, `claude-haiku-4-5`, `gemini-2.5-flash`, `openai-text-embedding-3-small`) with keys from your `.env`, and enables prompt storage, a redis cache, and the fast budget rescheduler the quota suites rely on. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that config and read it back in the test rather than hardcoding values
+The suites run against a live proxy, so bring one up first by running the litellm proxy locally. Point it at a config that prewires the example models the suites use (`gpt-5.5`, `claude-haiku-4-5`, `gemini-2.5-flash`, `openai-text-embedding-3-small`) with keys from your `.env`, and enables prompt storage, a redis cache, the fast budget rescheduler the quota suites rely on, and `router_settings.optional_pre_call_checks: ["prompt_caching"]`, which the router suite's prompt-cache affinity test reads back from `GET /router/settings` and fails without. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that config and read it back in the test rather than hardcoding values
 
 ## Running the tests locally
 
@@ -60,7 +60,11 @@ The suites run against a live proxy, so bring one up first by running the litell
 
    Keycloak's password grant is a test-only provisioning shortcut, not a production login recommendation. The `litellm-e2e-admin` client adds the proxy's admin scope; the normal client does not. Never reuse this permissive realm outside an isolated test stack.
 
-   Management tests can use the shared `idp` and `jwt_identity` fixtures. Each test gets a unique Keycloak group/user and a matching proxy user/team. Setup and fallback cleanup use the master key; the operations and read-backs being tested must explicitly use `caller_key=idp.access_token(jwt_identity, client_id=ADMIN_CLIENT_ID)` (or a member token). See `management/test_jwt_management_e2e.py` for create/read/update/clear/delete and tenant-denial examples. A group claim alone is not database team membership: permission tests explicitly add the member and prove an allowed read before asserting the denied write.
+   Management tests can bind a credential once with `client.with_caller(Caller(...))`; direct calls, delegated helpers and replica read-backs then retain that caller. Explicit `caller_key` arguments override the binding. Keep the original master-backed client for bootstrap and cleanup. `actor_factory` lazily provisions database roles and tenant memberships, with `database_role` tokens carrying no groups and `group_scoped` actors retaining the existing team route gate. Token minting is explicit through `actor.mint_caller(idp)`. The factory runs requests without backend retries and reports cleanup failures. `coverage_registry/management_cases.py` records exact canary nodes and non-secret actor labels; the CI execution assertion rejects a missing or skipped actor row
+
+   For the opt-in browser profile, start the existing IdP first, then run `.github/e2e-stack/oidc-profile.sh "$PROXY_BASE_URL" <server-command>`. The wrapper creates a confidential client with an exact `/sso/callback` redirect and S256 PKCE, passes the client secret only through the child process environment, and removes the client on exit. It uses the existing generic OIDC handler with `GENERIC_USER_ID_ATTRIBUTE=sub`. Preserve the IdP's PostgreSQL data across restarts
+
+   `tests/e2e/ui/playwright.oidc.config.ts` uses an already running OIDC stack and separate storage/output files. Supply `E2E_OIDC_UI_URL`, `JWT_ISSUER`, `E2E_OIDC_USERNAME` and `E2E_OIDC_PASSWORD` for a seeded actor. Its setup follows the real login and callback path. The current Python canary qualifies browser-client configuration and token/userinfo identity mapping; browser journey specs under `ui/oidc/` are a separate coverage step
 
    Every successful IdP create immediately registers cleanup, including partial setup failures. Cleanup failures emit warnings. Tokens are minted on demand, and the expiration test waits relative to the token's actual `exp` with a bounded clock-drift check. To check first-attempt behavior locally, run both files with `--reruns 0`:
 
@@ -212,7 +216,7 @@ Each suite provides its own `client` fixture (see `llm_translation/passthrough_c
 
 Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
 
-Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself carries no marker and runs regardless. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
+Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself carries no marker and runs regardless. A test that needs proxy configuration the default stack does not carry goes behind an opt-in marker (`managed_files`, `prompt_caching_stack`, `weekly`), each deselected unless its env var is set; `OPT_IN_MARKERS` in `conftest.py` maps marker to env var, and the coverage collector counts such a cell only where the env var is set. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
 
 ## Pre-commit steps
 
@@ -232,3 +236,15 @@ Before you push
 4. Capture screenshots of the test run and attach them to the PR as proof
 
 5. If a test fails because it surfaced a real issue in the product, flag that explicitly in the PR rather than reworking the test until it passes
+
+### Strict stateless replay matching
+
+Set `E2E_REPLAY_MATCH_PROFILE=stateless_v1` for both recording and replay to bind OpenAI `/v1/chat/completions` and Anthropic `/v1/messages` requests to their upstream destination, ordered query pairs, semantic headers and literal JSON content. The default remains `legacy`. Strict bundles use format 5 and cannot load as legacy bundles; select the matching profile or re-record with `E2E_FIXTURE_MODE=record`. Missing profile metadata never enrolls a legacy bundle in strict matching
+
+Strict matching preserves dates, UUIDs, hashes, model names, tool arguments, array order and omitted/null/empty/false/zero values. JSON object key order and header name casing may change. The strict body uses tagged JSON values so number precision and JSON types survive persistence, including exact numeric spelling and numbers larger than a floating-point value. Invalid UTF-8 query values fail eligibility. Duplicate JSON keys, unsupported endpoints, non-JSON bodies and unknown semantic headers fail eligibility before contacting a provider
+
+The semantic header set is `content-type`, `accept`, `anthropic-version`, `anthropic-beta` and `openai-beta`, including missing versus present values. Authorization records presence and the case-insensitive scheme; `x-api-key` records presence only. Credential values and cookies are excluded. Credential query values are redacted while their position and field name remain in the identity. Never use real customer inputs in fixture qualification
+
+Excluded transport and telemetry headers are `host`, `content-length`, `connection`, `accept-encoding`, `user-agent`, `traceparent`, `tracestate`, `x-request-id`, `x-client-request-id` and `x-stainless-*`. Inbound transfer-encoding is unsupported; send JSON with content-length framing. The destination represents host identity and the relay carries original body bytes. Replay does not verify credentials, SDK timeout/retry behavior, transport performance, model availability or stateful remote IDs. Live relay uses original request bytes and header values, never the stored identity
+
+Strict replay harness regression tests live in `tests/code_coverage_tests/test_provider_replay_harness.py`. The CircleCI `provider_replay_harness` job runs them alongside the existing legacy harness files with `--noconftest -o pythonpath=tests/e2e`; they need only synthetic HTTP providers and temporary fixture storage

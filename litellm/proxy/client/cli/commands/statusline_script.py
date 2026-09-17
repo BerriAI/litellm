@@ -7,19 +7,17 @@ status refresh (about every 300ms while typing), so the proxy is asked at most o
 TTL per session and every other refresh is served from a small on-disk cache that holds
 only the proxy's answer, never the key.
 
-Claude Code pipes a JSON payload on stdin (session_id, transcript_path, model); the routed
-model is the `message.model` of the latest foreground assistant line in the transcript,
-which is the proxy's response `model` field. That only names the tier model when the
-auto-router deployment sets `return_raw_model_name: true`; otherwise it is the alias the
-client requested. Codex pipes its Stop event instead (hook_event_name, session_id) and has
-no transcript to read, so the routed model comes from the proxy's session record and the
-result is printed as a `systemMessage` for the transcript. The proxy key is read from the
-agent's own environment (the static token `lite configure claude` writes); nothing here
-spawns a credential helper.
+Claude Code pipes a JSON payload on stdin (session_id, transcript_path, model). After the
+first foreground assistant response, the routed model comes from the proxy's session
+record, falling back to the latest foreground assistant `message.model` in the transcript
+when no record is available. Codex pipes its Stop event instead (hook_event_name, session_id)
+and prints the session record as a `systemMessage` for the transcript. The proxy key is read
+from the agent's own environment (the static token `lite configure claude` writes); nothing
+here spawns a credential helper.
 
-Cost figures come from GET /auto_router/session on the proxy, which reads the per-session
-rollup written by the spend flush. That flush is asynchronous, so a turn's cost lands a
-second or two after the turn; the cache TTL absorbs it.
+The routed model and cost figures come from GET /auto_router/session on the proxy, which
+reads the per-session rollup written by the asynchronous spend flush. The record and cache
+can briefly lag a completed turn.
 """
 
 from __future__ import annotations
@@ -30,6 +28,7 @@ import os
 import sys
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -44,7 +43,6 @@ FETCH_TIMEOUT_SECONDS: Final = 3
 BAR_WIDTH: Final = 24
 BAR_FULL: Final = "\u2588"
 BAR_EMPTY: Final = "\u2591"
-SEPARATOR: Final = " \u00b7 "
 TRANSCRIPT_SCAN_LIMIT_BYTES: Final = 4 * 1024 * 1024
 CLAUDE_BASE_URL_ENV_KEYS: Final = ("ANTHROPIC_BASE_URL",)
 CLAUDE_API_KEY_ENV_KEYS: Final = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
@@ -52,7 +50,6 @@ CODEX_BASE_URL_ENV_KEYS: Final = ("OPENAI_BASE_URL",)
 CODEX_API_KEY_ENV_KEYS: Final = ("OPENAI_API_KEY",)
 CODEX_STOP_EVENT: Final = "Stop"
 SYNTHETIC_MODEL: Final = "<synthetic>"
-LITELLM_LABEL: Final = "LiteLLM"
 RESET: Final = "\033[0m"
 BOLD: Final = "\033[1m"
 DIM: Final = "\033[90m"
@@ -304,31 +301,37 @@ def _bar(fraction: float, color: str, width: int, use_color: bool) -> str:
     return f"{color}{BAR_FULL * filled}{DIM}{BAR_EMPTY * (width - filled)}{RESET}"
 
 
+def _display_width(label: str) -> int:
+    return sum(
+        2 if unicodedata.east_asian_width(character) in ("W", "F") else 1
+        for character in label
+        if unicodedata.category(character) not in ("Mn", "Me")
+    )
+
+
 def render(model: str, session: Session | None, config_dir: Path, use_color: bool, bar_width: int = BAR_WIDTH) -> str:
     def paint(code: str, text: str) -> str:
         return f"{code}{text}{RESET}" if use_color else text
 
     routed: Final = paint(BOLD, f"Routed to: {model}")
-    if session is None:
+    if session is None or session.baseline_model is None or session.baseline_spend <= 0:
         return routed
-    header: Final = f"{session.router_name}{SEPARATOR}{routed}"
-    if session.baseline_model is None or session.baseline_spend <= 0:
-        return header
     reference: Final = baseline_label(session.baseline_model, config_dir)
     pct: Final = (session.baseline_spend - session.spend) / session.baseline_spend * 100
     delta: Final = paint(LITELLM_COLOR, f"{'-' if pct >= 0 else '+'}{abs(round(pct))}% vs {reference}")
     peak: Final = max(session.spend, session.baseline_spend)
-    label_width: Final = max(len(LITELLM_LABEL), len(reference))
+    label_width: Final = max(_display_width(session.router_name), _display_width(reference))
     rows: Final = (
-        (LITELLM_LABEL, session.spend, LITELLM_COLOR),
+        (session.router_name, session.spend, LITELLM_COLOR),
         (reference, session.baseline_spend, BASELINE_COLOR),
     )
     lines: Final = (
-        f"{paint(DIM, label.ljust(label_width))} {_bar(amount / peak, color, bar_width, use_color)} "
+        f"{paint(DIM, label + ' ' * (label_width - _display_width(label)))} "
+        f"{_bar(amount / peak, color, bar_width, use_color)} "
         f"{paint(DIM, f'${amount:.2f}')}"
         for label, amount, color in rows
     )
-    return "\n".join((f"{header}  {delta}", *lines))
+    return "\n".join((f"{routed}  {delta}", *lines))
 
 
 def color_enabled(env: Mapping[str, str]) -> bool:
@@ -348,7 +351,8 @@ def status_line(
     if not session_id or not credentials.usable:
         return render(label, None, config_dir, color_enabled(env))
     session: Final = load_session(credentials, session_id, cache_dir, fetch)
-    return render(label, session, config_dir, color_enabled(env))
+    routed_label: Final = model_label(session.last_model, config_dir) if session is not None else label
+    return render(routed_label, session, config_dir, color_enabled(env))
 
 
 def codex_stop_message(

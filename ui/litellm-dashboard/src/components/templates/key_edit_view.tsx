@@ -20,7 +20,6 @@ import BudgetDurationDropdown from "../common_components/budget_duration_dropdow
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
-import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import { routerSettingsEditorValue, routerSettingsUpdate } from "../common_components/routerSettingsPayload";
@@ -31,7 +30,15 @@ import {
   modelSentinelOptions,
   parseAllowedRoutes,
 } from "./keyEditFieldNormalizers";
-import { KeyAgentAndSkillFields, KeyBudgetNumberField, KeyTypeSelect, labelWithHint } from "./KeyEditViewControls";
+import {
+  KeyAgentAndSkillFields,
+  KeyBudgetNumberField,
+  KeyMetadataField,
+  KeyRateLimitFields,
+  KeyTypeSelect,
+  labelWithHint,
+  moveMetadataTagsToTagsField,
+} from "./KeyEditViewControls";
 import {
   KeyEditFormValues,
   keyEditFormSchema,
@@ -341,9 +348,12 @@ export function KeyEditView({
   return (
     <TooltipProvider>
       <form
-        onSubmit={form.handleSubmit((values) =>
-          handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts })),
-        )}
+        onSubmit={(event) => {
+          moveMetadataTagsToTagsField(form);
+          return form.handleSubmit((values) =>
+            handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts })),
+          )(event);
+        }}
       >
         <FieldGroup>
           <FormField control={form.control} name="key_alias" label="Key Alias">
@@ -474,39 +484,7 @@ export function KeyEditView({
             />
           </Field>
 
-          <FormField control={form.control} name="tpm_limit" label="TPM Limit">
-            {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
-          </FormField>
-
-          <FormField control={form.control} name="tpm_limit_type">
-            {({ value, onChange, id }) => (
-              <RateLimitTypeFormItem
-                id={id}
-                type="tpm"
-                name="tpm_limit_type"
-                showDetailedDescriptions={false}
-                value={value as string | null}
-                onChange={onChange}
-              />
-            )}
-          </FormField>
-
-          <FormField control={form.control} name="rpm_limit" label="RPM Limit">
-            {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
-          </FormField>
-
-          <FormField control={form.control} name="rpm_limit_type">
-            {({ value, onChange, id }) => (
-              <RateLimitTypeFormItem
-                id={id}
-                type="rpm"
-                name="rpm_limit_type"
-                showDetailedDescriptions={false}
-                value={value as string | null}
-                onChange={onChange}
-              />
-            )}
-          </FormField>
+          <KeyRateLimitFields control={form.control} />
 
           <FormField
             control={form.control}
@@ -843,9 +821,7 @@ export function KeyEditView({
             )}
           </FormField>
 
-          <FormField control={form.control} name="metadata" label="Metadata">
-            {(field) => <Textarea {...field} value={(field.value as string | undefined) ?? ""} rows={10} />}
-          </FormField>
+          <KeyMetadataField form={form} />
 
           <div className="mb-4">
             <FormField control={form.control} name="duration">
