@@ -19,10 +19,11 @@ sse-stream = { version = "=0.2.6", optional = true }
 thiserror.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 rstest.workspace = true
 tokio.workspace = true
 
 [[bench]]
-name = "allocations"
+name = "framing"
 harness = false
 required-features = ["aws", "sse"]
