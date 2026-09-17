@@ -120,6 +120,18 @@ def test_sync_read_caches_per_resolved_target(monkeypatch: pytest.MonkeyPatch) -
     assert team_b_route.call_count == 1
 
 
+@respx.mock
+def test_sync_read_caches_per_data_key_for_the_same_secret_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager: Final = _build_manager(monkeypatch, {"HCP_VAULT_SECRET_NAMESPACE": "teams/team-a"})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    respx.get(f"{VAULT_ADDR}/v1/teams/team-a/secret/data/DB_CREDS").respond(json=SECRET_RESPONSE)
+    password_params: Final = {"secret_manager_settings": {"data": "password"}}
+
+    assert manager.sync_read_secret("DB_CREDS") == "sk-from-vault"
+    assert manager.sync_read_secret("DB_CREDS", optional_params=password_params) == "pw-from-vault"
+    assert manager.sync_read_secret("DB_CREDS") == "sk-from-vault"
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_async_read_uses_secret_namespace_and_login_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
