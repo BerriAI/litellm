@@ -28,6 +28,94 @@ from litellm.utils import _invalidate_model_cost_lowercase_map
 from .conftest import normalize  # type: ignore[import-not-found]
 
 
+@pytest.mark.parametrize(
+    ("backend_model", "base_model"),
+    (
+        ("azure/hosted-model", "fallback-model"),
+        ("openai/org/fallback-model", None),
+        ("openai/hosted-model", "fallback-model"),
+        ("openai/fallback-model", "unknown-base-model"),
+    ),
+)
+@pytest.mark.parametrize("advertised_limit", (None, 2048))
+async def test_discovery_preserves_model_info_fallbacks(
+    backend_model: str, base_model: str | None, advertised_limit: int | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "local",
+                "litellm_params": {
+                    "model": backend_model,
+                    "api_base": "https://fallback.test/v1",
+                    "api_key": "local-key",
+                },
+                "model_info": {"id": "fallback-deployment", "base_model": base_model, "max_output_tokens": 333},
+            }
+        ]
+    )
+    builtin: Final = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "max_input_tokens": 7000,
+        "max_output_tokens": 2000,
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "fallback-model": builtin,
+            "openai/fallback-model": builtin,
+            "fallback-deployment": {"litellm_provider": "openai", "mode": "chat"},
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": backend_model.split("/", 1)[1],
+                            "max_model_len": advertised_limit,
+                        }
+                    ]
+                },
+            )
+        )
+    ) as client:
+        handler.client = client
+        await router.arefresh_model_info(client=handler)
+    deployment: Final = {
+        **router.model_list[0],
+        "model_info": {**router.model_list[0]["model_info"], "mode": None},
+    }
+    enriched_models: Final = (
+        proxy_server._get_proxy_model_info(copy.deepcopy(deployment)),
+        proxy_server._enrich_model_info_with_litellm_data(copy.deepcopy(deployment), llm_router=router),
+    )
+    expected_input: Final = (
+        advertised_limit
+        if advertised_limit is not None and backend_model.startswith("openai/")
+        else builtin["max_input_tokens"]
+    )
+    for enriched in enriched_models:
+        info: Final = enriched["model_info"]
+        assert info.get("max_input_tokens") == expected_input
+        assert info["max_output_tokens"] == 333
+        assert info["input_cost_per_token"] == builtin["input_cost_per_token"]
+        assert info["output_cost_per_token"] == builtin["output_cost_per_token"]
+        assert info["mode"] is None
+    _invalidate_model_cost_lowercase_map()
+
+
 async def test_upstream_limits_reach_model_info_routes(
     client: TestClient,
     auth_as: Callable[[], AbstractContextManager[object]],

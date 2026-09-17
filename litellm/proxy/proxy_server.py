@@ -9324,12 +9324,6 @@ def get_litellm_model_info(model: dict = {}):
     model_info: Final = model.get("model_info", {})
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
     try:
-        if llm_router is not None and model_info.get("id") is not None:
-            deployment_info: Final = llm_router.get_deployment_model_info(
-                model_id=model_info["id"], model_name=model_to_lookup
-            )
-            if deployment_info is not None:
-                return deployment_info
         if "azure" in model_to_lookup or model_info.get("base_model"):
             model_to_lookup = model_info.get("base_model", None)
         litellm_model_info: Final = litellm.get_model_info(model_to_lookup)
@@ -13623,8 +13617,11 @@ def _enrich_model_info_with_litellm_data(
                 litellm_model_info = litellm.get_model_info(model=litellm_model, custom_llm_provider=split_model[0])
             except Exception:
                 litellm_model_info = {}
-    for k, v in litellm_model_info.items():
-        if model_info.get(k) is None:
+    discovered_model_info: Final = (
+        llm_router.get_discovered_model_info(model_info.get("id")) if llm_router is not None else MappingProxyType({})
+    )
+    for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items():
+        if k not in model_info or (model_info[k] is None and k in discovered_model_info):
             model_info[k] = v
     model["model_info"] = model_info
     # don't return the api key / vertex credentials
@@ -15089,8 +15086,11 @@ def _get_proxy_model_info(model: dict) -> dict:
             litellm_model_info = litellm.get_model_info(model=litellm_model, custom_llm_provider=split_model[0])
         except Exception:
             litellm_model_info = {}
-    for k, v in litellm_model_info.items():
-        if k not in model_info:
+    discovered_model_info: Final = (
+        llm_router.get_discovered_model_info(model_info.get("id")) if llm_router is not None else MappingProxyType({})
+    )
+    for k, v in MappingProxyType({**litellm_model_info, **discovered_model_info}).items():
+        if k not in model_info or (model_info[k] is None and k in discovered_model_info):
             model_info[k] = v
     model["model_info"] = model_info
     # don't return the llm credentials

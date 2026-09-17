@@ -982,7 +982,7 @@ class Router:
             self.get_deployment_model_info
         )
         self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
-            max_size_in_memory=DEFAULT_MAX_LRU_CACHE_SIZE,
+            max_size_in_memory=max(len(model_list or ()), 1),
             default_ttl=2 * MODEL_INFO_REFRESH_SECONDS,
         )
         self._routing_group_rows: tuple[DeploymentTypedDict, ...] | None = None
@@ -9504,6 +9504,7 @@ class Router:
 
     def set_model_list(self, model_list: list):
         original_model_list: Final = copy.deepcopy(model_list)
+        self._discovered_model_info_cache.flush_cache()
         self.model_list = []
         self.model_id_to_deployment_index_map = {}  # Reset the index
         self.model_name_to_deployment_indices = {}  # Reset the model_name index
@@ -9798,6 +9799,7 @@ class Router:
         - model_id: str - the id of the deployment that was removed
         - removal_idx: int - the index where the deployment was removed from model_list
         """
+        self._discovered_model_info_cache.delete_cache(model_id)
         # Update indices for all models after the removed one
         for deployment_id, idx in self.model_id_to_deployment_index_map.items():
             if idx > removal_idx:
@@ -10384,13 +10386,14 @@ class Router:
         model_id: Final = deployment.model_info.id
         if not limits or model_id is None or self.get_model_info(model_id) is not raw_deployment:
             return
+        self._discovered_model_info_cache.max_size_in_memory = max(len(self.model_list), 1)
         self._discovered_model_info_cache.delete_cache(model_id)
         self._discovered_model_info_cache.set_cache(
             model_id, DiscoveredDeploymentModelInfo(deployment=raw_deployment, limits=limits)
         )
         self._invalidate_model_group_info_cache()
 
-    def _get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
+    def get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
         cached: Final[object] = self._discovered_model_info_cache.get_cache(model_id)
         if (
             model_id is not None
@@ -10428,7 +10431,7 @@ class Router:
         model_infos: Final = tuple(
             MappingProxyType(
                 {
-                    **self._get_discovered_model_info((deployment.get("model_info") or MappingProxyType({})).get("id")),
+                    **self.get_discovered_model_info((deployment.get("model_info") or MappingProxyType({})).get("id")),
                     **MappingProxyType(
                         {
                             k: v
@@ -10487,7 +10490,7 @@ class Router:
 
         model_info: Final = MappingProxyType(
             {
-                **self._get_discovered_model_info(deployment.model_info.id),
+                **self.get_discovered_model_info(deployment.model_info.id),
                 **deployment.model_info.model_dump(exclude_none=True),
             }
         )
@@ -10757,7 +10760,7 @@ class Router:
         # values are skipped or Deployment's None pricing defaults would erase the map's
         merged_model_info: Final[ModelMapInfo] = {
             **copy.deepcopy(model_info),
-            **self._get_discovered_model_info((deployment.get("model_info") or {}).get("id")),
+            **self.get_discovered_model_info((deployment.get("model_info") or {}).get("id")),
             **MappingProxyType(
                 {key: value for key, value in (user_model_info or MappingProxyType({})).items() if value is not None}
             ),
@@ -10811,7 +10814,7 @@ class Router:
             custom_model_info = (
                 {  # mutable-ok: the legacy model-info merge updates this private copy
                     **copy.deepcopy(litellm.model_cost.get(model_id) or MappingProxyType({})),
-                    **self._get_discovered_model_info(model_id),
+                    **self.get_discovered_model_info(model_id),
                 }
                 if model_id in litellm.model_cost
                 else None

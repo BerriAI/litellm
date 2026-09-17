@@ -21,6 +21,7 @@ import pytest
 import litellm
 from litellm import Router
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
@@ -62,6 +63,50 @@ def _restore_model_cost_entries(original_entries):
             litellm.model_cost.pop(key, None)
         else:
             litellm.model_cost[key] = value
+    _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize("initial_count", (1, DEFAULT_MAX_LRU_CACHE_SIZE + 1))
+async def test_discovered_limits_survive_deployment_growth_and_removal(
+    initial_count: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    deployments: Final = tuple(
+        Deployment(
+            model_name=f"local-{index}",
+            litellm_params=LiteLLM_Params(
+                model="hosted_vllm/local-model", api_base="https://capacity.test/v1", api_key="local-key"
+            ),
+            model_info=ModelInfo(id=f"capacity-{index}"),
+        )
+        for index in range(DEFAULT_MAX_LRU_CACHE_SIZE + 2)
+    )
+    router: Final = Router(model_list=[deployment.to_json() for deployment in deployments[:initial_count]])
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"data": [{"id": "local-model", "max_model_len": 4096}]})
+        )
+    ) as client:
+        handler.client = client
+        await router.arefresh_model_info(client=handler)
+        assert all(
+            router.get_configured_token_limits(deployment.model_name) == (4096, 4096)
+            for deployment in deployments[:initial_count]
+        )
+        for deployment in deployments[initial_count:]:
+            router.add_deployment(deployment)
+            await router._arefresh_deployment_model_info(router.model_list[-1], client=handler)
+        assert all(
+            router.get_configured_token_limits(deployment.model_name) == (4096, 4096) for deployment in deployments
+        )
+        for deployment in deployments[-2:]:
+            router.delete_deployment(deployment.model_info.id or "")
+        await router._arefresh_deployment_model_info(router.model_list[0], client=handler)
+        assert all(
+            router.get_configured_token_limits(deployment.model_name) == (4096, 4096) for deployment in deployments[:-2]
+        )
     _invalidate_model_cost_lowercase_map()
 
 
@@ -131,7 +176,7 @@ async def test_discovery_is_isolated_across_routers_and_reused_ids(monkeypatch: 
         await first.arefresh_model_info(client=handler)
         assert second.get_configured_token_limits("local") == (None, None)
         await second.arefresh_model_info(client=handler)
-        assert first._get_discovered_model_info("shared-discovery-id")["max_input_tokens"] == 8192
+        assert first.get_discovered_model_info("shared-discovery-id")["max_input_tokens"] == 8192
         assert first.get_configured_token_limits("local") == (8192, 8192)
         assert second.get_configured_token_limits("local") == (2048, 2048)
         assert litellm.model_cost["shared-discovery-id"].get("max_input_tokens") is None
