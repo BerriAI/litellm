@@ -144,9 +144,15 @@ class BaseOCRConfig:
         """
         return None
 
-    def supports_rust_bridge(self) -> bool:
-        """Whether the Rust OCR bridge may serve this config when it is enabled for the provider."""
-        return True
+    def resolve_connection_params(
+        self,
+        *,
+        api_key: str | None,
+        api_base: str | None,
+        dynamic_api_key: str | None,
+        dynamic_api_base: str | None,
+    ) -> tuple[str | None, str | None]:
+        return dynamic_api_key or api_key, dynamic_api_base or api_base
 
     def get_health_check_document(self) -> DocumentType:
         return {  # mutable-ok: litellm.aocr rejects any document that is not a dict

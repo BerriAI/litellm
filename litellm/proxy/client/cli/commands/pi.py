@@ -10,7 +10,7 @@ import os
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated, Final
@@ -25,7 +25,7 @@ LITELLM_PROXY_API_KEY_ENV: Final = "LITELLM_PROXY_API_KEY"
 _REJECTED_STATUSES: Final = frozenset((401, 403))
 
 
-class ListingFailure(StrEnum):
+class ListingFailure(str, Enum):
     """Why a proxy could not be listed, decided once where the HTTP outcome is classified.
 
     `unreachable` means no response at all; the other kinds prove the proxy answered, so callers

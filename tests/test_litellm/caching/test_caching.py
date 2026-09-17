@@ -1,9 +1,12 @@
 import logging
 import re
+from unittest.mock import MagicMock
 
 import pytest
 
+import litellm.caching.redis_cache as redis_cache_module
 from litellm.caching.caching import Cache
+from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
 from litellm.types.caching import LiteLLMCacheType, SemanticCacheScope
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
@@ -51,6 +54,29 @@ def test_cache_key_debug_log_does_not_include_prompt_material(caplog):
     assert created_cache_key_logs
     assert all(prompt_marker not in message for message in created_cache_key_logs)
     assert any(cache_key in message for message in created_cache_key_logs)
+
+
+@pytest.mark.parametrize(
+    ("backend", "expected_level"),
+    [
+        pytest.param(MagicMock(spec=RedisCache), logging.DEBUG, id="redis_backend_is_throttled"),
+        pytest.param(MagicMock(), logging.ERROR, id="other_backend_logs_every_timeout"),
+    ],
+)
+def test_add_cache_timeout_only_joins_redis_throttle_for_redis_backends(backend, expected_level, caplog, monkeypatch):
+    throttle = _RedisTimeoutLogThrottle(interval=5.0, clock=MagicMock(return_value=1_000.0))
+    assert throttle.admit() == 0
+    monkeypatch.setattr(redis_cache_module, "_redis_timeout_log_throttle", throttle)
+
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    backend.set_cache.side_effect = TimeoutError("lit7520 backend timed out")
+    cache.cache = backend
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        cache.add_cache("result", model="gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}])
+
+    records = [r for r in caplog.records if "lit7520 backend timed out" in r.getMessage()]
+    assert [r.levelno for r in records] == [expected_level]
 
 
 def _embedding_response(prompt_tokens, num_items):

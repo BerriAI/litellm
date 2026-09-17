@@ -124,7 +124,7 @@ def decrypt_value_helper(
     key: str,  # this is just for debug purposes, showing the k,v pair that's invalid. not a signing key.
     exception_type: Literal["debug", "error"] = "error",
     return_original_value: bool = False,
-):
+) -> str | None:
     signing_key: Final = _get_salt_key()
 
     try:

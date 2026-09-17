@@ -177,6 +177,34 @@ locals {
     [local.backend_launch_cmd],
   ))
 
+  collector_address = "tcp://127.0.0.1:${var.collector_port}"
+  collector_env_kv = var.collector_enabled ? [
+    { name = "LITELLM_COLLECTOR_ENABLED", value = "true" },
+    { name = "LITELLM_COLLECTOR_ADDRESS", value = local.collector_address },
+    { name = "LITELLM_COLLECTOR_BUFFER_SIZE", value = tostring(var.collector_buffer_size) },
+    { name = "LITELLM_COLLECTOR_ON_UNAVAILABLE", value = var.collector_on_unavailable },
+    { name = "LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS", value = tostring(var.collector_drain_timeout_seconds) },
+  ] : []
+
+  gateway_env_kv      = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env, local.metrics_env_kv, local.gateway_pool_env, local.collector_env_kv)
+  gateway_env_secrets = concat(local.shared_env_secrets, local.otel_env_secrets, local.billing_metrics_env_secrets, local.gateway_extra_secret_kv)
+
+  collector_env_kv_all = concat(
+    local.shared_env_kv,
+    local.gateway_extra_env_kv,
+    local.proxy_config_env,
+    local.gateway_pool_env,
+    local.collector_env_kv,
+    [{ name = "LITELLM_JOB_ROLE", value = "collector" }],
+  )
+  collector_env_secrets = concat(local.shared_env_secrets, local.gateway_extra_secret_kv)
+
+  collector_args = join(" && ", concat(
+    local.redis_ca_fragment,
+    local.database_url_fragment,
+    ["exec python -m litellm.proxy.collector"],
+  ))
+
   # Env shipped to the migrations Job. The migrations image runs run.py
   # which assembles DATABASE_URL from these discrete vars itself, so we
   # only need writer-side DB env (no read replica, no proxy_config, no
@@ -202,6 +230,13 @@ resource "google_cloud_run_v2_service" "gateway" {
   ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
   labels              = local.labels
   deletion_protection = false
+
+  lifecycle {
+    precondition {
+      condition     = !var.collector_enabled || var.gateway_metrics_port == null || var.collector_port != var.gateway_metrics_port
+      error_message = "collector_port and gateway_metrics_port must differ: both sidecars bind loopback in the same instance."
+    }
+  }
 
   template {
     service_account                  = google_service_account.runtime.email
@@ -235,7 +270,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env, local.metrics_env_kv, local.gateway_pool_env)
+        for_each = local.gateway_env_kv
         content {
           name  = env.value.name
           value = env.value.value
@@ -243,7 +278,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_secrets, local.otel_env_secrets, local.billing_metrics_env_secrets, local.gateway_extra_secret_kv)
+        for_each = local.gateway_env_secrets
         content {
           name = env.value.name
           value_source {
@@ -353,6 +388,52 @@ resource "google_cloud_run_v2_service" "gateway" {
           }
           period_seconds  = 30
           timeout_seconds = 30
+        }
+      }
+    }
+
+    dynamic "containers" {
+      for_each = var.collector_enabled ? [1] : []
+      content {
+        name    = "spend-collector"
+        image   = local.gateway_image
+        command = ["sh", "-c"]
+        args    = [local.collector_args]
+
+        resources {
+          limits = {
+            cpu    = var.collector_cpu
+            memory = var.collector_memory
+          }
+        }
+
+        dynamic "env" {
+          for_each = local.collector_env_kv_all
+          content {
+            name  = env.value.name
+            value = env.value.value
+          }
+        }
+
+        dynamic "env" {
+          for_each = local.collector_env_secrets
+          content {
+            name = env.value.name
+            value_source {
+              secret_key_ref {
+                secret  = env.value.secret
+                version = env.value.version
+              }
+            }
+          }
+        }
+
+        dynamic "volume_mounts" {
+          for_each = local.proxy_config_enabled ? [1] : []
+          content {
+            name       = local.proxy_config_volume
+            mount_path = local.proxy_config_mount_path
+          }
         }
       }
     }

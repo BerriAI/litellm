@@ -926,3 +926,38 @@ def test_classifier_callback_redaction_preserves_exclusions(monkeypatch: pytest.
     assert failure_payload["response"]["choices"][0]["message"]["content"] == "redacted-by-litellm"
     assert payload["classifier_input"] == {"system": "private rubric"}
     assert payload["response"]["choices"][0]["message"]["content"] == "private answer"
+
+
+class _SelfRedactingLogger(CustomLogger):
+    def redacts_messages_itself(self) -> bool:
+        return True
+
+
+@pytest.mark.parametrize("logger", [CustomLogger(), _SelfRedactingLogger()], ids=["default", "redacts_itself"])
+def test_field_exclusion_alone_leaves_messages_and_responses_intact(monkeypatch: pytest.MonkeyPatch, logger: CustomLogger) -> None:
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["model"])
+    payload: Final = {
+        "messages": [{"role": "user", "content": "private prompt"}],
+        "response": {"choices": [{"message": {"content": "private answer"}}]},
+        "model": "classifier",
+    }
+    stored: Final = logger.redact_standard_logging_payload_from_model_call_details({"standard_logging_object": payload})[
+        "standard_logging_object"
+    ]
+    assert stored == {"messages": payload["messages"], "response": payload["response"]}
+
+
+def test_a_callback_that_redacts_itself_keeps_its_messages_but_not_the_classifier_audit() -> None:
+    payload: Final = {
+        "classifier_input": {"system": "private rubric"},
+        "messages": [{"role": "user", "content": "private prompt"}],
+        "response": {"choices": [{"message": {"content": "private answer"}}]},
+    }
+    logger: Final = _SelfRedactingLogger()
+    logger.turn_off_message_logging = True
+    stored: Final = logger.redact_standard_logging_payload_from_model_call_details({"standard_logging_object": payload})[
+        "standard_logging_object"
+    ]
+    assert "classifier_input" not in stored
+    assert stored["messages"] == payload["messages"]
+    assert stored["response"] == payload["response"]

@@ -2407,3 +2407,60 @@ class TestCountBillableUsers:
         client.db.litellm_usertable = _RacyTable()
         repo = UserRepository(client)
         assert await repo.count_billable_users() == 0
+
+
+class TestAutoRouterSessionRepository:
+    ROW: Final = {
+        "api_key": "hashed-key",
+        "session_id": "s1",
+        "router_name": "claude-auto",
+        "router_type": "complexity",
+        "first_turn_at": datetime(2026, 9, 1, 12, 0, 0),
+        "last_turn_at": datetime(2026, 9, 1, 12, 5, 0),
+        "last_model": "anthropic/claude-sonnet-5",
+        "models": {"anthropic/claude-sonnet-5": {"at": 1.0, "ttl": None}},
+        "turns": 3,
+        "spend": 0.14,
+        "saved_spend": 0.24,
+        "classifier_cost": 0.01,
+        "tier_turns": {"complex": 3},
+        "baseline_models": {"anthropic/claude-opus-5": 3},
+    }
+
+    @staticmethod
+    def _repo(record: Optional[Dict[str, Any]]):
+        from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
+
+        lookups: List[Dict[str, Any]] = []
+
+        class _Table:
+            async def find_first(self, where: Dict[str, Any], order: Dict[str, str]):
+                lookups.append({"where": where, "order": order})
+                return MockRecord(record) if record is not None else None
+
+        client = MagicMock()
+        client.db.litellm_autoroutersession = _Table()
+        return AutoRouterSessionRepository(client), lookups
+
+    @pytest.mark.asyncio
+    async def test_find_latest_for_key_reads_the_keys_own_partition_newest_router_first(self):
+        repo, lookups = self._repo(dict(self.ROW))
+        row = await repo.find_latest_for_key("hashed-key", "s1")
+        assert lookups == [{"where": {"api_key": "hashed-key", "session_id": "s1"}, "order": {"last_turn_at": "desc"}}]
+        assert row is not None
+        assert (row.router_name, row.turns, row.spend, row.saved_spend) == ("claude-auto", 3, 0.14, 0.24)
+        assert row.baseline_models == {"anthropic/claude-opus-5": 3}
+        assert row.baseline_model == "anthropic/claude-opus-5"
+
+    @pytest.mark.asyncio
+    async def test_find_latest_for_key_is_none_when_the_key_wrote_no_such_session(self):
+        repo, _ = self._repo(None)
+        assert await repo.find_latest_for_key("hashed-key", "unknown") is None
+
+    def test_table_is_the_session_rollup_and_needs_a_database(self):
+        from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
+
+        client = MagicMock()
+        assert AutoRouterSessionRepository(client).table is client.db.litellm_autoroutersession
+        with pytest.raises(RuntimeError, match="No DB Connected"):
+            _ = AutoRouterSessionRepository(None).table

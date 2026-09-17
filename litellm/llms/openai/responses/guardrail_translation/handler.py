@@ -48,6 +48,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
+    RequestScanContext,
     StreamingScanKey,
     StreamTransformSink,
 )
@@ -56,6 +57,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
+    unappliable_request_rewrite,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -450,6 +452,28 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
         return cast(list[AllMessageValues], messages) if messages else None
 
+    def request_scan_context(
+        self, data: Mapping[str, object], guardrail_to_apply: "CustomGuardrail"
+    ) -> RequestScanContext:
+        raw_tools: Final = data.get("tools")
+        structured_messages: Final = tuple(
+            self.get_structured_messages(
+                dict(data)  # mutable-ok: get_structured_messages takes the request as a dict
+            )
+            or ()
+        )
+        return RequestScanContext(
+            structured_messages=structured_messages,
+            tools=tuple(
+                cast(ChatCompletionToolParam, tool)  # cast-ok: mcp tools ride along in the guardrail's tool list
+                for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(
+                    tuple(raw_tools) if isinstance(raw_tools, list) else ()
+                )
+                for tool in form.chat_tools
+            ),
+            conversation_supplied=bool(structured_messages),
+        )
+
     async def process_input_messages(
         self,
         data: dict,
@@ -495,11 +519,16 @@ class OpenAIResponsesHandler(BaseTranslation):
                 data["instructions"] = written_back.instructions  # rebind-ok: data is an out-param
         elif isinstance(input_data, str):
             guardrailed_texts: Final = guardrailed_inputs.get("texts") or ()
+            if len(guardrailed_texts) > 1:
+                raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data  # rebind-ok: data is an out-param
         else:
+            rewritten_texts: Final = guardrailed_inputs.get("texts") or ()
+            if len(rewritten_texts) != len(extracted.task_mappings):
+                raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
             await self._apply_guardrail_responses_to_input(
                 messages=input_data,
-                responses=guardrailed_inputs.get("texts") or (),
+                responses=rewritten_texts,
                 task_mappings=extracted.task_mappings,
             )
         verbose_proxy_logger.debug("OpenAI Responses API: Processed input messages: %s", data.get("input"))
@@ -635,10 +664,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         Apply guardrail responses back to input messages.
 
+        ``responses`` pairs positionally with ``task_mappings``; the caller rejects
+        the request when the two disagree, so this never has to guess an alignment.
+
         Override this method to customize how responses are applied.
         """
-        for task_idx, guardrail_response in enumerate(responses):
-            mapping = task_mappings[task_idx]
+        for guardrail_response, mapping in zip(responses, task_mappings):
             msg_idx = cast(int, mapping[0])
             content_idx_optional = cast(int | None, mapping[1])
 
@@ -746,7 +777,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
             pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-                inputs=inputs,
+                inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
                 request_data=request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
@@ -859,7 +890,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
                 pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
                 guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-                    inputs=inputs,
+                    inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
                     request_data=request_data,
                     input_type="response",
                     logging_obj=litellm_logging_obj,
@@ -918,7 +949,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 if hasattr(model_response_stream, "model") and model_response_stream.model:
                     inputs["model"] = model_response_stream.model
                 await guardrail_to_apply.apply_guardrail(
-                    inputs=inputs,
+                    inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
                     request_data=request_data if request_data is not None else {},
                     input_type="response",
                     logging_obj=litellm_logging_obj,
@@ -941,7 +972,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             if response_model:
                 fallback_inputs["model"] = response_model
             fallback_outputs: Final = await guardrail_to_apply.apply_guardrail(
-                inputs=fallback_inputs,
+                inputs=self.with_response_context(fallback_inputs, request_data, guardrail_to_apply),
                 request_data=request_data if request_data is not None else {},
                 input_type="response",
                 logging_obj=litellm_logging_obj,
@@ -1167,11 +1198,22 @@ class OpenAIResponsesHandler(BaseTranslation):
         last_event_type: Final = stream_item_field(last_event, "type")
         if last_event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
             return None
-        if last_event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value:
+        if last_event_type in _TERMINAL_ENVELOPE_EVENT_TYPES:
             return self._completed_response_scan_key(stream_item_field(last_event, "response"))
         return StreamingScanKey(
             texts=(self.get_streaming_string_so_far(responses_so_far),),
-            stream_ended=self._check_streaming_has_ended(responses_so_far),
+            tool_calls_in_flight=self._has_streamed_tool_call_events(responses_so_far),
+        )
+
+    @staticmethod
+    def _has_streamed_tool_call_events(responses_so_far: Sequence[object]) -> bool:
+        return any(
+            stream_item_field(event, "type") in _TOOL_CALL_PAYLOAD_EVENT_TYPES
+            or (
+                stream_item_field(event, "type") in _OUTPUT_ITEM_EVENT_TYPES
+                and stream_item_field(stream_item_field(event, "item"), "type") in _TOOL_CALL_ITEM_TYPES
+            )
+            for event in responses_so_far
         )
 
     @staticmethod

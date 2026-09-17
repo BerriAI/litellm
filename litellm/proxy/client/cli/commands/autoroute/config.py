@@ -162,6 +162,7 @@ def build_generated_model_list(config: AutorouteConfig) -> list[JsonValue]:
     complexity_router_config: Final[dict[str, JsonValue]] = {
         "tiers": {tier: list(models) for tier, models in config.tiers.items()},
         "default_model": config.default_model,
+        "return_raw_model_name": True,
     }
     if isinstance(config.classifier, LLMClassifier):
         complexity_router_config["classifier_type"] = "llm"

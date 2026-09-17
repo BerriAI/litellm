@@ -170,6 +170,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         admitted_user_context,
         build_effective_auth_contexts,
+        can_access_mcp_server,
         is_ui_session_credential,
     )
     from litellm.proxy._types import (
@@ -1253,7 +1254,7 @@ if MCP_AVAILABLE:
         """
         user_mcp_management_mode: Final = _get_user_mcp_management_mode()
 
-        if user_mcp_management_mode == "view_all":
+        if user_mcp_management_mode == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
             return [{"server_id": server.server_id, "status": server.status} for server in servers]
 
@@ -2483,10 +2484,11 @@ if MCP_AVAILABLE:
                 )
             return server
 
-        allowed_server_ids: Final[set[str]] = set()
-        for auth_context in await build_effective_auth_contexts(user_api_key_dict):
-            allowed_server_ids.update(await global_mcp_server_manager.get_allowed_mcp_servers(auth_context))
-        if server is None or server.server_id not in allowed_server_ids:
+        if server is None or not await can_access_mcp_server(
+            user_api_key_dict,
+            server.server_id,
+            global_mcp_server_manager.get_allowed_mcp_servers,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={

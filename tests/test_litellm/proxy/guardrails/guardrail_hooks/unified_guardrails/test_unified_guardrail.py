@@ -1,6 +1,8 @@
 """Tests for unified guardrail."""
 
 import logging
+from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -19,14 +21,14 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     openai_messages_without_system,
     openai_messages_without_tool,
 )
+from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
+from litellm.llms.mistral.ocr.guardrail_translation.handler import OCRHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
 )
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
-from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
-from litellm.llms.mistral.ocr.guardrail_translation.handler import OCRHandler
 from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
     MCPGuardrailTranslationHandler,
 )
@@ -645,6 +647,64 @@ class TestUnifiedLLMGuardrails:
         """End-to-end tests: UnifiedLLMGuardrails -> OCRHandler."""
 
         @pytest.mark.asyncio
+        @pytest.mark.parametrize("call_type", [CallTypes.ocr, CallTypes.aocr, CallTypes.aresponses])
+        async def test_post_call_logging_fallback_is_limited_to_ocr(self, call_type: CallTypes) -> None:
+            guardrail: Final = RecordingGuardrail()
+            response: Final = (
+                TestUnifiedLLMGuardrails.TestResponsesRouteAliases._responses_api_response()
+                if call_type == CallTypes.aresponses
+                else OCRResponse(model="mistral-ocr-latest", pages=[OCRPage(index=0, markdown="Scan this page")])
+            )
+
+            result: Final = await UnifiedLLMGuardrails().async_post_call_success_hook(
+                data={
+                    "guardrail_to_apply": guardrail,
+                    "litellm_logging_obj": SimpleNamespace(call_type=call_type.value),
+                },
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+            assert result is response
+            if call_type in (CallTypes.ocr, CallTypes.aocr):
+                assert len(guardrail.apply_calls) == 1
+                assert guardrail.apply_calls[0]["inputs"]["texts"] == ["Scan this page"]
+            else:
+                assert guardrail.apply_calls == []
+
+        @pytest.mark.asyncio
+        @pytest.mark.parametrize("request_route", [None, "/v1/chat/completions"])
+        async def test_ocr_logging_fallback_preserves_route_and_response_precedence(
+            self, request_route: str | None, monkeypatch: pytest.MonkeyPatch
+        ) -> None:
+            from litellm.types.utils import ModelResponse
+
+            _patch_translation_mappings(
+                monkeypatch,
+                {
+                    CallTypes.completion: OpenAIChatCompletionsHandler,
+                    CallTypes.acompletion: OpenAIChatCompletionsHandler,
+                    CallTypes.aocr: OCRHandler,
+                },
+            )
+            guardrail: Final = RecordingGuardrail()
+            response: Final = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Chat output"}}])
+
+            result: Final = await guardrail.async_post_call_success_deployment_hook(
+                request_data={
+                    "guardrails": [guardrail.guardrail_name],
+                    "user_api_key_request_route": request_route,
+                    "litellm_logging_obj": SimpleNamespace(call_type=CallTypes.aocr.value),
+                },
+                response=response,
+                call_type=CallTypes.aocr,
+            )
+
+            assert result is response
+            assert len(guardrail.apply_calls) == 1
+            assert guardrail.apply_calls[0]["inputs"]["texts"] == ["Chat output"]
+
+        @pytest.mark.asyncio
         async def test_pre_call_hook_invokes_ocr_handler_for_input(self):
             """
             Verify that async_pre_call_hook with call_type=aocr routes through
@@ -1059,6 +1119,7 @@ class TestStreamingTransform:
             emitted_text_per_choice={},
             holdback_per_choice={},
             finish_reason_per_choice={0: "stop", 1: "length"},
+            held_chars_per_choice={},
             is_final=True,
         )
 
@@ -1097,6 +1158,7 @@ class TestStreamingTransform:
             emitted_text_per_choice={},
             holdback_per_choice={},
             finish_reason_per_choice={},
+            held_chars_per_choice={},
             is_final=False,
         )
 
@@ -1119,6 +1181,7 @@ class TestStreamingTransform:
                 emitted_text_per_choice={0: "My SSN is 123"},
                 holdback_per_choice={},
                 finish_reason_per_choice={},
+                held_chars_per_choice={},
                 is_final=False,
             )
 
@@ -1251,6 +1314,65 @@ class TestStreamingTransform:
         assert _delta_text(out[0]) == "LET ME CHECK "
         assert out[1].choices[0].delta.tool_calls
         assert out[1].choices[0].finish_reason == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_held_text_flushes_before_tool_call_finish_reason(self):
+        """Text still held back when a separate terminal tool-call chunk arrives is
+        delivered before the stream's finish_reason, not after it."""
+        guardrail = _StreamingTextGuardrail(holdback_schedule=[100, 100, 100])
+
+        tool_chunk = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=None,
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": "{}"},
+                            }
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+        )
+        chunks = [_stream_chunk("let me check "), tool_chunk]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        finished_at = [i for i, item in enumerate(out) if item.choices[0].finish_reason is not None]
+        assert finished_at == [len(out) - 1]
+        assert out[-1].choices[0].finish_reason == "tool_calls"
+        assert "".join(_delta_text(i) for i in out) == "LET ME CHECK "
+        assert any(item.choices[0].delta.tool_calls for item in out)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "usage_choices",
+        [[], [StreamingChoices(index=0, delta=Delta(), finish_reason=None)]],
+        ids=["choiceless", "empty-delta"],
+    )
+    async def test_usage_chunk_is_forwarded_after_final_text(self, usage_choices):
+        """A trailing usage chunk (stream_options.include_usage) is delivered after
+        the transformed text instead of being swallowed, whether it arrives with
+        no choices or, as CustomStreamWrapper emits it, with one empty delta."""
+        guardrail = _StreamingTextGuardrail(holdback_schedule=[100, 100, 100])
+        usage_chunk = ModelResponseStream(
+            choices=usage_choices,
+            usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        )
+        chunks = [_stream_chunk("hello "), _stream_chunk("world", finish_reason="stop"), usage_chunk]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert "".join(_delta_text(i) for i in out) == "HELLO WORLD"
+        assert out[-1].usage.total_tokens == 5
+        assert not _delta_text(out[-1])
+        assert out[-2].choices[0].finish_reason == "stop"
 
     @pytest.mark.asyncio
     async def test_tool_call_blocking_guardrail_is_enforced(self):

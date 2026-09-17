@@ -264,9 +264,7 @@ def _formatting_strategy() -> SearchStrategy[ReductoFormatting]:
         ),
         st.sampled_from((False, True)).map(lambda value: {"add_page_markers": value}),
         st.sampled_from((False, True)).map(lambda value: {"merge_tables": value}),
-        st.sampled_from(REDUCTO_FORMATTING_INCLUDE_GROUPS)
-        .map(list)
-        .map(lambda value: {"include": value}),
+        st.sampled_from(REDUCTO_FORMATTING_INCLUDE_GROUPS).map(list).map(lambda value: {"include": value}),
     )
     return values.map(ReductoFormatting.model_validate)
 

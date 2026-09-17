@@ -278,6 +278,62 @@ locals {
       "${local.proxy_config_fetch_cmd} && ${local.backend_launch_cmd}"
     ]
   } : {}
+
+  collector_address = "tcp://127.0.0.1:${var.collector_port}"
+  collector_env = var.collector_enabled ? [
+    { name = "LITELLM_COLLECTOR_ENABLED", value = "true" },
+    { name = "LITELLM_COLLECTOR_ADDRESS", value = local.collector_address },
+    { name = "LITELLM_COLLECTOR_BUFFER_SIZE", value = tostring(var.collector_buffer_size) },
+    { name = "LITELLM_COLLECTOR_ON_UNAVAILABLE", value = var.collector_on_unavailable },
+    { name = "LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS", value = tostring(var.collector_drain_timeout_seconds) },
+  ] : []
+
+  gateway_environment = concat(
+    local.shared_env,
+    local.gateway_otel_env,
+    local.billing_metrics_env,
+    local.gateway_extra_env_list,
+    local.proxy_config_env,
+    local.metrics_env,
+    local.gateway_pool_env,
+    local.collector_env,
+  )
+
+  collector_launch_cmd = "exec python -m litellm.proxy.collector"
+  collector_command = [
+    local.proxy_config_enabled ? "${local.proxy_config_fetch_cmd} && ${local.collector_launch_cmd}" : local.collector_launch_cmd
+  ]
+
+  collector_container = var.collector_enabled ? [{
+    name      = "collector"
+    image     = var.gateway_image
+    essential = false
+    cpu       = var.collector_cpu
+    memory    = var.collector_memory
+
+    restartPolicy = { enabled = true }
+
+    entryPoint = ["sh", "-c"]
+    command    = local.collector_command
+    environment = concat(
+      local.shared_env,
+      local.gateway_extra_env_list,
+      local.proxy_config_env,
+      local.gateway_pool_env,
+      local.collector_env,
+      [{ name = "LITELLM_JOB_ROLE", value = "collector" }],
+    )
+    secrets = concat(local.shared_secrets, local.gateway_extra_secrets_list)
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.gateway.name
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "collector"
+      }
+    }
+  }] : []
 }
 
 # ---------- Gateway ----------
@@ -309,6 +365,16 @@ resource "aws_ecs_task_definition" "gateway" {
       condition     = !var.gateway_connection_pool_enabled || local.database_enabled
       error_message = "gateway_connection_pool_enabled needs a database: set create_database = true or pass database_url."
     }
+
+    precondition {
+      condition     = !var.collector_enabled || (var.collector_cpu < var.gateway_cpu && var.collector_memory < var.gateway_memory)
+      error_message = "collector_cpu and collector_memory are carved out of gateway_cpu / gateway_memory and must leave room for the gateway container."
+    }
+
+    precondition {
+      condition     = !var.collector_enabled || var.gateway_metrics_port == null || var.collector_port != var.gateway_metrics_port
+      error_message = "collector_port and gateway_metrics_port must differ: both sidecars bind loopback in the same task."
+    }
   }
 
   family                   = "${local.name}-gateway"
@@ -327,17 +393,9 @@ resource "aws_ecs_task_definition" "gateway" {
         essential = true
 
         portMappings = [{ containerPort = 4000, protocol = "tcp" }]
-        environment = concat(
-          local.shared_env,
-          local.gateway_otel_env,
-          local.billing_metrics_env,
-          local.gateway_extra_env_list,
-          local.proxy_config_env,
-          local.metrics_env,
-          local.gateway_pool_env,
-        )
-        secrets     = concat(local.shared_secrets, local.gateway_extra_secrets_list)
-        mountPoints = local.metrics_mount_points
+        environment  = local.gateway_environment
+        secrets      = concat(local.shared_secrets, local.gateway_extra_secrets_list)
+        mountPoints  = local.metrics_mount_points
 
         # Container-level healthCheck intentionally omitted — the wolfi
         # runtime image doesn't ship curl/wget. The ALB target group polls
@@ -354,7 +412,7 @@ resource "aws_ecs_task_definition" "gateway" {
       },
       local.gateway_proxy_overrides,
     )
-  ], local.gateway_metrics_container))
+  ], local.gateway_metrics_container, local.collector_container))
 
   dynamic "volume" {
     for_each = local.metrics_enabled ? [1] : []

@@ -237,6 +237,38 @@ async def test_record_turn_attributes_satisfaction_to_previous_response_model():
 
 
 @pytest.mark.asyncio
+async def test_external_default_keeps_feedback_history_without_entering_bandit_pool():
+    r = _make_router()
+    before = r._cells[(RequestType.GENERAL, "fast")]
+    await r.record_turn(
+        session_id="fallback",
+        model_name="fast",
+        request_type=RequestType.GENERAL,
+        turn=Turn(user_content="fix this retry bug", assistant_content="clear the cache"),
+    )
+    await r.record_turn(
+        session_id="fallback",
+        model_name="external-default",
+        request_type=RequestType.GENERAL,
+        turn=Turn(user_content="the fix is still broken", assistant_content="keep cache entries"),
+    )
+    assert r._cells[(RequestType.GENERAL, "fast")].beta > before.beta
+    await r.record_turn(
+        session_id="fallback",
+        model_name="smart",
+        request_type=RequestType.GENERAL,
+        turn=Turn(
+            user_content="the fix is still broken",
+            assistant_content="use the corrected entry",
+            tool_results=[{"is_error": True, "content": "failure"}],
+        ),
+    )
+    assert r._feedback_contexts["fallback"].model_name == "smart"
+    assert all(model != "external-default" for _, model in r._cells)
+    assert r.config.available_models == ["fast", "smart"]
+
+
+@pytest.mark.asyncio
 async def test_record_turn_bounds_feedback_contexts_and_evicts_least_recent_session():
     r = _make_router()
     context_limit = ar_module._FEEDBACK_CONTEXT_MAX_ENTRIES

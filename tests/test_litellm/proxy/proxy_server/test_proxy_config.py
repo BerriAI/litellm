@@ -8,6 +8,7 @@ Pins covered:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -316,13 +317,28 @@ _TWO_HEURISTIC_V2_ROUTERS_YAML = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("license_limit", [1, None])
-async def test_ProxyConfig_load_config_takes_the_heuristic_v2_limit_from_the_license_only(
-    tmp_path, monkeypatch, license_limit: int | None
+@pytest.mark.parametrize("classifier_type", ["heuristic_v2", "capability", "llm_v2"])
+async def test_ProxyConfig_load_config_takes_the_classifier_limit_from_the_license_only(
+    tmp_path, monkeypatch, license_limit: int | None, classifier_type: str
 ) -> None:
     """`router_settings.auto_router_capability_limit` is managed outside config.yaml: an operator
     cannot grant the entitlement by editing the config, and a licensed proxy boots both routers."""
     f = tmp_path / "c.yaml"
-    f.write_text(_TWO_HEURISTIC_V2_ROUTERS_YAML)
+    forecast_settings = {
+        "capability": (
+            "        classifier_llm_config: {model: gpt-4o-mini}\n"
+            "        capability_classifier_config: {efficient_tier: SIMPLE, capable_tier: REASONING, base_threshold: 0.7}\n"
+        ),
+        "llm_v2": (
+            "        classifier_llm_config: {model: gpt-4o-mini}\n"
+            "        adaptive: false\n"
+            "        llm_v2_config: {efficient_profile: Small solver, capable_profile: Large solver, harness: One attempt, max_quality_gap: 0.05}\n"
+        ),
+    }
+    config_yaml = _TWO_HEURISTIC_V2_ROUTERS_YAML.replace(
+        "classifier_type: heuristic_v2\n", f"classifier_type: {classifier_type}\n{forecast_settings.get(classifier_type, '')}"
+    ).replace("tiers: {SIMPLE: gpt-4o-mini}", "tiers: {SIMPLE: gpt-4o-mini, REASONING: gpt-4o}")
+    f.write_text(config_yaml)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
@@ -712,22 +728,124 @@ async def test_ProxyConfig__get_config_from_file_missing_path_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_ProxyConfig__process_includes_merges_files(tmp_path):
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_merges_files(tmp_path):
     inc = tmp_path / "models.yaml"
     inc.write_text("model_list:\n  - model_name: gpt-4\n")
     pc = ProxyConfig()
     cfg = {"include": ["models.yaml"], "model_list": [], "litellm_settings": {}}
-    result = pc._process_includes(cfg, base_dir=str(tmp_path))
+    result = await pc._process_includes(cfg, config_file_path=str(tmp_path / "config.yaml"))
     assert result == {
         "model_list": [{"model_name": "gpt-4"}],
         "litellm_settings": {},
     }
 
 
-def test_ProxyConfig__process_includes_missing_file_raises(tmp_path):
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_missing_file_raises(tmp_path):
     pc = ProxyConfig()
     with pytest.raises(FileNotFoundError):
-        pc._process_includes({"include": ["nope.yaml"]}, base_dir=str(tmp_path))
+        await pc._process_includes({"include": ["nope.yaml"]}, config_file_path=str(tmp_path / "config.yaml"))
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_follows_nested_includes(tmp_path):
+    (tmp_path / "models.yaml").write_text("include:\n  - more_models.yaml\nmodel_list:\n  - model_name: first\n")
+    (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: second\n")
+    result = await ProxyConfig()._process_includes(
+        {"include": ["models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+    )
+    assert result == {"model_list": [{"model_name": "first"}, {"model_name": "second"}]}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_resolves_a_nested_include_next_to_its_own_file(tmp_path):
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "models.yaml").write_text(
+        "include:\n  - more_models.yaml\nmodel_list:\n  - model_name: first\n"
+    )
+    (tmp_path / "shared" / "more_models.yaml").write_text("model_list:\n  - model_name: second\n")
+    (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: wrong-directory\n")
+
+    result = await ProxyConfig()._process_includes(
+        {"include": ["shared/models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+    )
+
+    assert result == {"model_list": [{"model_name": "first"}, {"model_name": "second"}]}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_still_reads_a_nested_include_left_beside_the_root_config(tmp_path):
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "models.yaml").write_text(
+        "include:\n  - more_models.yaml\nmodel_list:\n  - model_name: first\n"
+    )
+    (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: second\n")
+
+    result = await ProxyConfig()._process_includes(
+        {"include": ["shared/models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+    )
+
+    assert result == {"model_list": [{"model_name": "first"}, {"model_name": "second"}]}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_names_both_files_when_a_nested_include_matches_two(tmp_path, caplog):
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "models.yaml").write_text(
+        "include:\n  - more_models.yaml\nmodel_list:\n  - model_name: first\n"
+    )
+    (tmp_path / "shared" / "more_models.yaml").write_text("model_list:\n  - model_name: next-to-the-declaring-file\n")
+    (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: next-to-the-root-config\n")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await ProxyConfig()._process_includes(
+            {"include": ["shared/models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+        )
+
+    assert result == {"model_list": [{"model_name": "first"}, {"model_name": "next-to-the-declaring-file"}]}
+    assert [
+        record
+        for record in caplog.records
+        if str(tmp_path / "shared" / "more_models.yaml") in record.getMessage()
+        and str(tmp_path / "more_models.yaml") in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_merges_a_shared_file_once(tmp_path):
+    (tmp_path / "shared.yaml").write_text("model_list:\n  - model_name: shared\n")
+    (tmp_path / "a.yaml").write_text("include:\n  - shared.yaml\n")
+    (tmp_path / "b.yaml").write_text("include:\n  - ./shared.yaml\n")
+
+    result = await ProxyConfig()._process_includes(
+        {"include": ["a.yaml", "b.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+    )
+
+    assert result == {"model_list": [{"model_name": "shared"}]}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_names_the_file_when_it_is_not_a_mapping(tmp_path):
+    (tmp_path / "models.yaml").write_text("- model_name: gpt-4\n")
+
+    with pytest.raises(ValueError, match=re.escape(str(tmp_path / "models.yaml"))):
+        await ProxyConfig()._process_includes(
+            {"include": ["models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+        )
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_terminates_on_a_cycle(tmp_path):
+    (tmp_path / "a.yaml").write_text("include:\n  - b.yaml\nmodel_list:\n  - model_name: from-a\n")
+    (tmp_path / "b.yaml").write_text("include:\n  - a.yaml\nmodel_list:\n  - model_name: from-b\n")
+
+    result = await asyncio.wait_for(
+        ProxyConfig()._process_includes({"include": ["a.yaml"]}, config_file_path=str(tmp_path / "config.yaml")),
+        timeout=10,
+    )
+
+    assert result == {"model_list": [{"model_name": "from-a"}, {"model_name": "from-b"}]}
 
 
 # ---------------------------------------------------------------------------
@@ -1042,6 +1160,31 @@ async def test_ProxyConfig_get_config_loads_from_file(tmp_path, monkeypatch):
         "general_settings": {},
         "litellm_settings": {},
     }
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_config_from_a_bucket_merges_includes(monkeypatch):
+    objects = {
+        "lit6982/config.yaml": {
+            "include": ["model_config.yaml"],
+            "general_settings": {"master_key": "sk-1234"},
+        },
+        "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
+    }
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.load_config_utils.s3_object_reader",
+        lambda bucket_name: objects.get,
+    )
+    monkeypatch.setenv("LITELLM_CONFIG_BUCKET_NAME", "litellm-configs")
+    monkeypatch.setenv("LITELLM_CONFIG_BUCKET_OBJECT_KEY", "lit6982/config.yaml")
+    monkeypatch.setenv("LITELLM_CONFIG_BUCKET_TYPE", "s3")
+
+    cfg = await ProxyConfig().get_config()
+
+    assert cfg["model_list"] == [{"model_name": "included-model"}]
+    assert "include" not in cfg
 
 
 @pytest.mark.asyncio
@@ -3342,6 +3485,30 @@ async def test_ProxyConfig__update_general_settings_cleared_db_max_batch_file_si
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_applies_db_allowed_file_extensions(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc = ProxyConfig()
+    await pc._update_general_settings({"allowed_file_extensions": [".jsonl"]})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("allowed_file_extensions") == [".jsonl"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_yaml_allowed_file_extensions_wins_over_db(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"allowed_file_extensions": [".pdf"]},
+    )
+    pc = ProxyConfig()
+    pc._yaml_general_settings_keys = {"allowed_file_extensions"}
+    await pc._update_general_settings({"allowed_file_extensions": [".jsonl"]})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("allowed_file_extensions") == [".pdf"]
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_general_settings_none_input_noop():
     pc = ProxyConfig()
     # None input returns early.
@@ -3613,6 +3780,55 @@ async def test_ProxyConfig__init_agents_in_db_keeps_config_defined_agents(clean_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("agents_source", ["config", "db", "api"])
+async def test_ProxyStartupEvent_jwt_auth_resolves_agent_claims_against_live_registry(
+    clean_agent_registry, agents_source
+):
+    """A JWT agent claim must resolve against every agent the proxy knows, including ones created after startup."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.types.agents import AgentResponse
+
+    original_lookup = proxy_server.jwt_handler.agent_lookup
+    try:
+        proxy_server.ProxyStartupEvent._initialize_jwt_auth(
+            general_settings={"litellm_jwtauth": {"agent_id_jwt_field": "appid"}},
+            prisma_client=None,
+            user_api_key_cache=UserApiKeyCache(),
+        )
+        if agents_source == "config":
+            await ProxyConfig()._init_non_llm_configs(
+                config={"agents": [_config_agent("loaded-agent")]},
+                config_file_path=None,
+            )
+        elif agents_source == "db":
+            prisma_client = MagicMock()
+            prisma_client.db.litellm_agentstable.find_many = AsyncMock(
+                return_value=[_FakeAgentRow("db-id", "loaded-agent")]
+            )
+            await ProxyConfig()._init_agents_in_db(prisma_client=prisma_client)
+        else:
+            clean_agent_registry.register_agent(
+                agent_config=AgentResponse(agent_id="api-id", **_config_agent("loaded-agent"))
+            )
+
+        resolved = JWTAuthManager.resolve_agent_id(
+            jwt_handler=proxy_server.jwt_handler,
+            jwt_valid_token={"appid": "loaded-agent"},
+            agent_registry=proxy_server.jwt_handler.agent_lookup,
+        )
+    finally:
+        proxy_server.jwt_handler.bind_agent_lookup(original_lookup)
+        proxy_server.jwt_handler.update_environment(
+            prisma_client=None, user_api_key_cache=UserApiKeyCache(), litellm_jwtauth=LiteLLM_JWTAuth()
+        )
+
+    assert resolved == clean_agent_registry.get_agent_by_name(agent_name="loaded-agent").agent_id
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "config, expected_agent_names",
     [
@@ -3722,3 +3938,58 @@ async def test_ProxyConfig__init_guardrails_in_db_skips_only_the_unloadable_row(
 
     assert sorted(handler.IN_MEMORY_GUARDRAILS) == ["first", "last"]
     assert handler.reconciled_with == [{"first", "broken", "last"}]
+
+
+# ---------------------------------------------------------------------------
+# add_deployment: UI settings convergence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_deployment_re_reads_ui_settings_so_other_pods_converge(monkeypatch):
+    """The periodic config reload picks up a UI setting written through another pod.
+
+    Startup used to be the only read, so a proxy admin flipping a runtime flag reached the pod
+    that served the PATCH and nowhere else until every other pod restarted.
+    """
+    general_settings: Dict[str, Any] = {"allow_agents_for_team_admins": False}
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_uisettings.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            ui_settings=json.dumps({"allow_agents_for_team_admins": True, "enable_chat_ui": False})
+        )
+    )
+
+    config = ProxyConfig()
+    config._should_load_db_object = MagicMock(return_value=False)
+    config._init_non_llm_objects_in_db = AsyncMock()
+
+    await config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=MagicMock())
+
+    prisma_client.db.litellm_uisettings.find_unique.assert_awaited_once_with(where={"id": "ui_settings"})
+    assert general_settings["allow_agents_for_team_admins"] is True
+    assert "enable_chat_ui" not in general_settings
+
+
+@pytest.mark.asyncio
+async def test_add_deployment_syncs_ui_settings_even_when_the_model_reconcile_fails(monkeypatch):
+    """A broken model reconcile must not strand every pod on stale settings."""
+    general_settings: Dict[str, Any] = {"allow_agents_for_team_admins": False}
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_uisettings.find_unique = AsyncMock(
+        return_value=SimpleNamespace(ui_settings={"allow_agents_for_team_admins": True})
+    )
+
+    config = ProxyConfig()
+    config._should_load_db_object = MagicMock(side_effect=RuntimeError("db down"))
+
+    await config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=MagicMock())
+
+    assert general_settings["allow_agents_for_team_admins"] is True

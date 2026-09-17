@@ -16,7 +16,7 @@ const state = vi.hoisted(() => ({
   can: {} as Record<string, boolean>,
   uiSettings: {} as Record<string, unknown>,
   tags: {} as Record<string, { name: string }>,
-  teams: [] as { team_id: string; team_alias: string; models: string[] }[],
+  teams: [] as { team_id: string; team_alias: string; models: string[]; organization_id?: string }[],
   organizations: [] as { organization_id: string; organization_alias: string }[],
   accessGroups: [] as { access_group_id: string; access_group_name: string }[],
   projects: [] as { project_id: string; project_alias: string; team_id?: string; models?: string[] }[],
@@ -143,6 +143,7 @@ const OPTIONAL_OPEN_PAYLOAD = {
   tpm_limit_type: null,
   rpm_limit: undefined,
   rpm_limit_type: null,
+  tpd_limit: undefined,
   throttle_on_budget_exceeded: undefined,
   enable_prompt_caching: undefined,
   guardrails: undefined,
@@ -395,6 +396,7 @@ describe("CreateKey", () => {
     it.each([
       ["Tokens per minute Limit (TPM)", "tpm_limit"],
       ["Requests per minute Limit (RPM)", "rpm_limit"],
+      ["Tokens per day Limit (TPD)", "tpd_limit"],
     ])("routes a typed %s into the %s payload key", async (label, key) => {
       await openModal();
       await nameTheKey();
@@ -804,6 +806,36 @@ describe("CreateKey", () => {
       await submit();
 
       expect((await createdPayload()).organization_id).toBe("org-1");
+    });
+
+    it("discards the old project and team when the organization changes", async () => {
+      state.uiSettings = { enable_projects_ui: true };
+      state.organizations = [
+        { organization_id: "scope-silver", organization_alias: "Silver" },
+        { organization_id: "scope-copper", organization_alias: "Copper" },
+      ];
+      state.teams = [{ team_id: "group-maple", team_alias: "Maple", organization_id: "scope-silver", models: [] }];
+      state.projects = [{ project_id: "project-orbit", project_alias: "Orbit", team_id: "group-maple", models: [] }];
+      await openModal({ teams: state.teams as Team[] });
+      await nameTheKey();
+      await userEvent.click(await screen.findByLabelText("Organization"));
+      await userEvent.click(await screen.findByRole("option", { name: /Silver/ }));
+      await userEvent.click(await screen.findByLabelText("Project"));
+      await userEvent.click(await screen.findByRole("option", { name: /Orbit/ }));
+      await waitFor(() => expect(screen.getByLabelText("Team")).toHaveValue("Maple"));
+      expect(screen.getByLabelText("Team")).toBeDisabled();
+
+      await userEvent.click(screen.getByLabelText("Organization"));
+      await userEvent.click(await screen.findByRole("option", { name: /Copper/ }));
+      expect(screen.getByLabelText("Project")).toHaveValue("");
+      expect(screen.getByLabelText("Team")).toHaveValue("");
+      expect(screen.getByLabelText("Team")).toBeEnabled();
+      await submit();
+
+      const payload = JSON.parse(JSON.stringify(await createdPayload()));
+      expect(payload.organization_id).toBe("scope-copper");
+      expect(payload.team_id).toBeNull();
+      expect(payload).not.toHaveProperty("project_id");
     });
 
     it("drops organization_id when the chosen organization is cleared again", async () => {

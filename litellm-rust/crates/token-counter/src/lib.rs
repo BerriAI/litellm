@@ -5,9 +5,13 @@
 #![forbid(unsafe_code)]
 
 mod byte_level;
+mod cl100k;
 mod counter;
 mod error;
+mod o200k;
 mod python_json;
+mod scanner;
+mod tiktoken;
 mod tools;
 mod types;
 mod unicode_classes;
