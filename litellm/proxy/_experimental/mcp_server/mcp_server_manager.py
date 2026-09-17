@@ -5592,6 +5592,7 @@ class MCPServerManager:
         server: MCPServer,
         raw_headers: dict[str, str] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ) -> dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -5645,6 +5646,7 @@ class MCPServerManager:
             incoming_bearer_token = auth_hdr[len("bearer ") :]
 
         pre_hook_kwargs: Final = {
+            "guardrail_context": guardrail_context,
             "name": name,
             "arguments": arguments,
             "server_name": server_name,
@@ -5712,6 +5714,7 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging,
         start_time: datetime.datetime,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ):
         """Create and return a during hook task for MCP tool calls.
 
@@ -5731,6 +5734,7 @@ class MCPServerManager:
         )
 
         during_hook_kwargs: Final = {
+            "guardrail_context": guardrail_context,
             "name": name,
             "arguments": arguments,
             "server_name": server_name_from_prefix,
@@ -6276,6 +6280,7 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         host_progress_callback: Callable | None = None,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -6322,6 +6327,7 @@ class MCPServerManager:
             server=mcp_server,
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
+            guardrail_context=guardrail_context,
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
@@ -6337,6 +6343,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 start_time=start_time,
                 litellm_logging_obj=litellm_logging_obj,
+                guardrail_context=guardrail_context,
             )
             tasks.append(during_hook_task)
 
