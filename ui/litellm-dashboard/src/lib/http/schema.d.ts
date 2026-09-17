@@ -17405,6 +17405,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/agents/identity/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Identity Providers */
+        get: operations["get_agent_identity_providers_v1_agents_identity_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agents/make_public": {
         parameters: {
             query?: never;
@@ -17552,6 +17569,23 @@ export interface paths {
          *     ```
          */
         patch: operations["patch_agent_v1_agents__agent_id__patch"];
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Identity Status */
+        get: operations["get_agent_identity_status_v1_agents__agent_id__identity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/agents/{agent_id}/make_public": {
@@ -23285,6 +23319,12 @@ export interface components {
             /** Uri */
             uri?: string;
         };
+        /** AgentIdentityStatus */
+        AgentIdentityStatus: {
+            identity?: components["schemas"]["EntraAgentIdentity"] | null;
+            /** Last Authenticated At */
+            last_authenticated_at?: string | null;
+        };
         /**
          * AgentInterface
          * @description Declares a combination of a target URL and a transport protocol.
@@ -23356,6 +23396,11 @@ export interface components {
             created_by?: string | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
+            /**
+             * Jwt Auth Configured
+             * @default false
+             */
+            jwt_auth_configured: boolean;
             /** Keys */
             keys?: components["schemas"]["AgentKeySummary"][] | null;
             /** Litellm Params */
@@ -28021,6 +28066,24 @@ export interface components {
             };
             /** Template Id */
             template_id: string;
+        };
+        /** EntraAgentIdentity */
+        EntraAgentIdentity: {
+            /**
+             * Client Id
+             * Format: uuid
+             */
+            client_id: string;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "microsoft_entra";
+            /**
+             * Tenant Id
+             * Format: uuid
+             */
+            tenant_id: string;
         };
         /** ErrorResponse */
         ErrorResponse: {
@@ -62655,6 +62718,26 @@ export interface operations {
             };
         };
     };
+    get_agent_identity_providers_v1_agents_identity_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+        };
+    };
     make_agents_public_v1_agents_make_public_post: {
         parameters: {
             query?: never;
@@ -62807,6 +62890,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_identity_status_v1_agents__agent_id__identity_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentIdentityStatus"];
                 };
             };
             /** @description Validation Error */

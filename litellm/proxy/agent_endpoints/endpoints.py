@@ -12,10 +12,12 @@ import asyncio
 import os
 import uuid
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from types import MappingProxyType
 from typing import Annotated, Final, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
@@ -45,6 +47,12 @@ from litellm.proxy.agent_endpoints.agent_search import (
     search_agents,
 )
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import accessible_agents
+from litellm.proxy.agent_endpoints.identity import (
+    AgentIdentityStatus,
+    agent_identity,
+    identity_evidence_key,
+    validate_identity_binding,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -164,9 +172,15 @@ def _redact_sensitive_agent_fields(
     admin included) and, for non-admin callers, virtual-key and header
     fields stripped entirely. The original objects are not modified.
     """
+    from litellm.proxy.proxy_server import general_settings, jwt_handler
+
     redacted: Final[list[AgentResponse]] = []
     for agent in agents:
         copy = agent.model_copy(deep=True)
+        copy.jwt_auth_configured = bool(
+            general_settings.get("enable_jwt_auth")
+            and (agent_identity(agent.litellm_params) is not None or jwt_handler.litellm_jwtauth.agent_id_jwt_field)
+        )
         if not is_admin:
             copy.static_headers = None
             copy.extra_headers = None
@@ -413,6 +427,51 @@ from litellm.proxy.agent_endpoints.agent_registry import (
 )
 
 
+def _trusted_agent_issuers() -> tuple[str, ...]:
+    from litellm.proxy.proxy_server import general_settings, jwt_handler
+
+    if not general_settings.get("enable_jwt_auth"):
+        return ()
+    configured: Final = jwt_handler.litellm_jwtauth.issuers or ()
+    issuer: Final = os.getenv("JWT_ISSUER")
+    global_issuers: Final = (
+        (issuer,)
+        if issuer and os.getenv("JWT_AUDIENCE") and not any(item.issuer == issuer for item in configured)
+        else ()
+    )
+    return (
+        tuple(item.issuer for item in configured if item.audience and not item.disable_audience_validation)
+        + global_issuers
+    )
+
+
+@router.get("/v1/agents/identity/providers", response_model=tuple[str, ...], tags=("[beta] A2A Agents",))
+async def get_agent_identity_providers(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> tuple[str, ...]:
+    _check_agent_management_permission(user_api_key_dict)
+    return _trusted_agent_issuers()
+
+
+@router.get("/v1/agents/{agent_id}/identity", response_model=AgentIdentityStatus, tags=("[beta] A2A Agents",))
+async def get_agent_identity_status(
+    agent_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> AgentIdentityStatus:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    _check_agent_management_permission(user_api_key_dict)
+    agent: Final = AGENT_REGISTRY.get_agent_by_id(agent_id)
+    if agent is None:
+        raise HTTPException(404, "Agent not found")
+    identity: Final = agent_identity(agent.litellm_params)
+    cached: Final[object] = await user_api_key_cache.async_get_cache(identity_evidence_key(agent))
+    return AgentIdentityStatus(
+        identity=identity,
+        last_authenticated_at=TypeAdapter(datetime | None).validate_python(cached) if identity else None,
+    )
+
+
 @router.post(
     "/v1/agents",
     tags=["[beta] A2A Agents"],
@@ -473,6 +532,10 @@ async def create_agent(
     try:
         # Get the user ID from the API key auth
         created_by: Final = user_api_key_dict.user_id or "unknown"
+
+        validate_identity_binding(
+            request.get("litellm_params"), AGENT_REGISTRY.get_agent_list(), _trusted_agent_issuers()
+        )
 
         # check for naming conflicts
         existing_agent: Final = AGENT_REGISTRY.get_agent_by_name(agent_name=request.get("agent_name"))
@@ -671,6 +734,10 @@ async def update_agent(
         if existing_agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
+        validate_identity_binding(
+            request.get("litellm_params"), AGENT_REGISTRY.get_agent_list(), _trusted_agent_issuers(), agent_id
+        )
+
         # Get the user ID from the API key auth
         updated_by: Final = user_api_key_dict.user_id or "unknown"
 
@@ -772,6 +839,10 @@ async def patch_agent(
 
         if existing_agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
+
+        validate_identity_binding(
+            request.get("litellm_params"), AGENT_REGISTRY.get_agent_list(), _trusted_agent_issuers(), agent_id
+        )
 
         # Get the user ID from the API key auth
         updated_by: Final = user_api_key_dict.user_id or "unknown"

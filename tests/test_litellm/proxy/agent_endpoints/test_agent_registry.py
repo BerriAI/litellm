@@ -990,3 +990,29 @@ async def test_patch_agent_in_db_preserves_secret_when_echoed_back_redacted():
     stored_params: Final = json.loads(mock_update.call_args.kwargs["data"]["litellm_params"])
     assert stored_params["aws_secret_access_key"] == SENTINEL_AWS_SECRET_ACCESS_KEY
     assert stored_params["is_public"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["patch", "put"])
+async def test_runtime_update_keeps_identity_binding_and_agent_id(operation: str) -> None:
+    registry: Final = AgentRegistry()
+    prisma: Final = MagicMock()
+    identity: Final = {"provider": "microsoft_entra", "tenant_id": "11111111-1111-4111-8111-111111111111", "client_id": "22222222-2222-4222-8222-222222222222"}
+    existing_params: Final = {"identity": identity, "model": "old"}
+    existing: Final = (
+        SimpleNamespace(litellm_params=existing_params, object_permission_id=None)
+        if operation == "put"
+        else {"agent_name": "Readable agent", "litellm_params": existing_params}
+    )
+    prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=existing)
+    saved: Final = MagicMock()
+    saved.object_permission = None
+    saved.model_dump.return_value = {"agent_id": "unchanged-id", "agent_name": "Renamed agent", "agent_card_params": {}, "litellm_params": {"identity": identity, "model": "new"}}
+    prisma.db.litellm_agentstable.update = AsyncMock(return_value=saved)
+    update: Final = registry.patch_agent_in_db if operation == "patch" else registry.update_agent_in_db
+    result: Final = await update(agent_id="unchanged-id", agent={"agent_name": "Renamed agent", "agent_card_params": {}, "litellm_params": {"model": "new"}}, prisma_client=prisma, updated_by="admin")
+    stored: Final = prisma.db.litellm_agentstable.update.call_args.kwargs
+    assert stored["where"] == {"agent_id": "unchanged-id"}
+    assert json.loads(stored["data"]["litellm_params"]) == {"identity": identity, "model": "new"}
+    assert result.agent_id == "unchanged-id"
+    assert "object_permission_id" not in stored["data"]

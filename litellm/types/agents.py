@@ -214,6 +214,7 @@ class AgentKeySummary(BaseModel):
 
 
 class AgentResponse(BaseModel):
+    jwt_auth_configured: bool = False
     agent_id: str
     agent_name: str
     litellm_params: dict[str, object] | None = None

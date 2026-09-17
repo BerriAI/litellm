@@ -16,6 +16,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
@@ -52,6 +53,7 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.agent_endpoints.identity import agent_identity, identity_evidence_key, match_agent_identity
 from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.auth.model_access_denied import (
     ModelAccessDeniedHTTPException,
@@ -150,6 +152,8 @@ class _JWTProvisioning:
 class AgentLookup(Protocol):
     """The registered-agent lookups a JWT agent claim is matched against."""
 
+    def get_agent_list(self) -> Sequence[AgentResponse]: ...
+
     def get_agent_by_id(self, agent_id: str) -> AgentResponse | None:
         """The agent registered under ``agent_id``, if any."""
 
@@ -159,6 +163,9 @@ class AgentLookup(Protocol):
 
 class _NoRegisteredAgents:
     """The lookup in force until the proxy binds its agent registry: no agent is registered, so no claim matches."""
+
+    def get_agent_list(self) -> tuple[AgentResponse, ...]:
+        return ()
 
     def get_agent_by_id(self, agent_id: str) -> None:
         return None
@@ -1475,13 +1482,21 @@ class JWTAuthManager:
         jwt_valid_token: Mapping[str, object],
         agent_registry: AgentLookup,
     ) -> str | None:
+        bound_agent: Final = match_agent_identity(agent_registry.get_agent_list(), jwt_valid_token)
+        if bound_agent is not None:
+            jwt_handler.user_api_key_cache.set_cache(
+                key=identity_evidence_key(bound_agent),
+                value=datetime.now(timezone.utc).isoformat(),
+                ttl=86400,
+            )
+            return bound_agent.agent_id
         agent_claim: Final = jwt_handler.get_agent_claim(token=jwt_valid_token)
         if agent_claim is None:
             return None
         agent: Final = agent_registry.get_agent_by_id(agent_id=agent_claim) or agent_registry.get_agent_by_name(
             agent_name=agent_claim
         )
-        if agent is None:
+        if agent is None or agent_identity(agent.litellm_params) is not None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"No registered agent matches JWT claim {jwt_handler.litellm_jwtauth.agent_id_jwt_field}={agent_claim}",

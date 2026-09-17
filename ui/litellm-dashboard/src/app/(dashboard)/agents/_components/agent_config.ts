@@ -1,3 +1,4 @@
+import { parseIdentityForForm } from "./agent_identity";
 /**
  * Shared configuration for agent form fields
  * Used across create, view, and update operations
@@ -314,6 +315,7 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
 };
 
 export const parseMcpPermissionsForForm = (agent: any) => ({
+  ...parseIdentityForForm(agent.litellm_params),
   allowed_mcp_servers_and_groups: {
     servers: agent.object_permission?.mcp_servers ?? [],
     accessGroups: agent.object_permission?.mcp_access_groups ?? [],

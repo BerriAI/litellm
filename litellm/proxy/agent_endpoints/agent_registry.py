@@ -12,6 +12,7 @@ import litellm
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.proxy.agent_endpoints.identity import preserve_identity
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
@@ -608,7 +609,10 @@ class AgentRegistry:
                 existing_litellm_params: Final = parse_agent_litellm_params(existing_agent.get("litellm_params"))
                 update_data["litellm_params"] = safe_dumps(
                     _restore_redacted_litellm_params(
-                        _dump_agent_params(agent.get("litellm_params") or _EMPTY_LITELLM_PARAMS),
+                        preserve_identity(
+                            _dump_agent_params(agent.get("litellm_params") or _EMPTY_LITELLM_PARAMS),
+                            existing_litellm_params,
+                        ),
                         existing_litellm_params,
                     )
                 )
@@ -688,7 +692,8 @@ class AgentRegistry:
             # Serialize litellm_params
             litellm_params_obj: Final = agent.get("litellm_params", {})
             litellm_params_dict: Final = _restore_redacted_litellm_params(
-                _dump_agent_params(litellm_params_obj), existing_litellm_params
+                preserve_identity(_dump_agent_params(litellm_params_obj), existing_litellm_params),
+                existing_litellm_params,
             )
             litellm_params: Final[str] = safe_dumps(litellm_params_dict)
 

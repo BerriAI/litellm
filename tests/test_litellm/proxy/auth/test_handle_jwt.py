@@ -7144,3 +7144,56 @@ async def test_admin_jwt_team_header_only_provisions_during_admission(monkeypatc
     else:
         create_team.assert_not_awaited()
         assert result["team_id"] is None
+
+
+def _explicit_identity_registry() -> AgentRegistry:
+    registry: Final = AgentRegistry()
+    registry.register_agent(AgentResponse(
+        agent_id="explicit-agent-id",
+        agent_name="Readable agent name",
+        agent_card_params={},
+        litellm_params={"identity": {
+            "provider": "microsoft_entra",
+            "tenant_id": "11111111-1111-4111-8111-111111111111",
+            "client_id": "22222222-2222-4222-8222-222222222222",
+        }},
+    ))
+    return registry
+
+
+@pytest.mark.parametrize("claim_field", ["azp", None])
+def test_explicit_entra_identity_resolves_without_name_convention(claim_field: str | None) -> None:
+    from litellm.proxy.agent_endpoints.identity import identity_evidence_key
+
+    registry: Final = _explicit_identity_registry()
+    handler: Final = _entra_agent_jwt_handler(claim_field)
+    resolved: Final = JWTAuthManager.resolve_agent_id(handler, {
+        "iss": "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0",
+        "tid": "11111111-1111-4111-8111-111111111111",
+        "azp": "22222222-2222-4222-8222-222222222222",
+    }, registry)
+    assert resolved == "explicit-agent-id"
+    assert isinstance(handler.user_api_key_cache.get_cache(identity_evidence_key(registry.get_agent_list()[0])), str)
+
+
+@pytest.mark.parametrize("override", [
+    {"iss": "https://attacker.example"},
+    {"tid": "33333333-3333-4333-8333-333333333333"},
+    {"azp": "33333333-3333-4333-8333-333333333333"},
+    {"azp": "explicit-agent-id"},
+    {"azp": "Readable agent name"},
+])
+def test_explicit_entra_identity_cannot_be_claimed_via_legacy_lookup(override: Mapping[str, object]) -> None:
+    from litellm.proxy.agent_endpoints.identity import identity_evidence_key
+
+    registry: Final = _explicit_identity_registry()
+    handler: Final = _entra_agent_jwt_handler("azp")
+    with pytest.raises(HTTPException) as failure:
+        JWTAuthManager.resolve_agent_id(handler, {
+            "iss": "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0",
+            "tid": "11111111-1111-4111-8111-111111111111",
+            "azp": "22222222-2222-4222-8222-222222222222",
+            **override,
+        }, registry)
+    assert failure.value.status_code == 403
+    assert handler.user_api_key_cache.get_cache(identity_evidence_key(registry.get_agent_list()[0])) is None

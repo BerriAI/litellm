@@ -8,6 +8,7 @@ import * as networking from "@/components/networking";
 import type { AgentCreateInfo } from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({
+  apiClient: { get: vi.fn() },
   getAgentInfo: vi.fn(),
   patchAgentCall: vi.fn(),
   getAgentCreateMetadata: vi.fn(),
@@ -149,6 +150,35 @@ describe("AgentInfoView update payload", () => {
     vi.mocked(networking.patchAgentCall)
       .mockReset()
       .mockResolvedValue({} as never);
+  });
+
+  it("prefills the saved Entra binding and preserves it and runtime settings when renaming", async () => {
+    const user = setup();
+    const identity = {
+      provider: "microsoft_entra",
+      tenant_id: "11111111-1111-4111-8111-111111111111",
+      client_id: "22222222-2222-4222-8222-222222222222",
+    };
+    const params = { ...A2A_AGENT.litellm_params, identity, require_trace_id_on_calls_by_agent: true };
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({ ...A2A_AGENT, litellm_params: params } as never);
+    vi.mocked(networking.apiClient.get).mockImplementation(async (path) =>
+      path.endsWith("/providers")
+        ? [`https://login.microsoftonline.com/${identity.tenant_id}/v2.0`]
+        : { last_authenticated_at: null },
+    );
+    renderView();
+    expect(await screen.findByText("Configured, awaiting an authenticated request")).toBeInTheDocument();
+    await openEditor(user);
+    expect(screen.getByLabelText("Application (Client) ID")).toHaveValue(identity.client_id);
+    fireEvent.change(screen.getByLabelText("Agent Name"), { target: { value: "Renamed agent" } });
+    await save(user);
+    expect(patchedPayload().agent_name).toBe("Renamed agent");
+    expect(patchedPayload().litellm_params).toEqual(params);
+    expect(networking.patchAgentCall).toHaveBeenCalledWith(
+      "tok",
+      "agent-1",
+      expect.objectContaining({ agent_name: "Renamed agent" }),
+    );
   });
 
   it("sends only the fields whose panel has been opened, dropping the rest", async () => {

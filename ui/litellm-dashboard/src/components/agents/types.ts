@@ -9,6 +9,7 @@ export interface AgentAttachedKey {
 export type AgentObjectPermission = components["schemas"]["AgentObjectPermission"];
 
 export interface Agent {
+  jwt_auth_configured?: boolean;
   agent_id: string;
   agent_name: string;
   litellm_params: {

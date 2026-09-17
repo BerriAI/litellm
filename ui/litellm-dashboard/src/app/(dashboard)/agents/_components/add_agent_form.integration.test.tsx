@@ -1,5 +1,5 @@
 import React from "react";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import AddAgentForm from "./add_agent_form";
@@ -8,6 +8,7 @@ import type { AgentCreateInfo } from "@/components/networking";
 import { chooseSelectOption, renderWithProviders as render } from "../../../../../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
+  apiClient: { get: vi.fn() },
   createAgentCall: vi.fn(),
   getAgentCreateMetadata: vi.fn(),
   getAgentsList: vi.fn(),
@@ -90,6 +91,41 @@ describe("AddAgentForm submit payload", () => {
     vi.mocked(networking.keyUpdateCall)
       .mockReset()
       .mockResolvedValue({} as never);
+  });
+
+  it("registers a readable agent with an explicit Entra identity and no virtual key", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const tenant = "11111111-1111-4111-8111-111111111111";
+    const clientId = "22222222-2222-4222-8222-222222222222";
+    vi.mocked(networking.apiClient.get).mockResolvedValue([`https://login.microsoftonline.com/${tenant}/v2.0`]);
+    renderForm();
+    fireEvent.change(await screen.findByLabelText("Agent Name"), { target: { value: "Readable agent" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://runtime.example/a2a" } });
+    fireEvent.change(screen.getByLabelText("Display Name"), { target: { value: "Readable agent" } });
+    fireEvent.change(screen.getByPlaceholderText("Describe what this agent does..."), {
+      target: { value: "Test agent" },
+    });
+    await user.click(screen.getByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Microsoft Entra ID" }));
+    await user.click(screen.getByLabelText("Trusted Entra Tenant"));
+    await user.click(await screen.findByRole("option", { name: tenant }));
+    fireEvent.change(screen.getByLabelText("Application (Client) ID"), { target: { value: clientId } });
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+    await user.click(screen.getByRole("button", { name: "Use Entra JWT authentication" }));
+    await user.click(screen.getByRole("button", { name: /Create Agent/ }));
+    await waitFor(() => expect(networking.createAgentCall).toHaveBeenCalledTimes(1));
+    expect(createdPayload().agent_name).toBe("Readable agent");
+    expect(createdPayload().litellm_params).toEqual({
+      identity: { provider: "microsoft_entra", tenant_id: tenant, client_id: clientId },
+    });
+    expect(networking.keyCreateForAgentCall).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        "Microsoft Entra ID is configured. Send an authenticated agent request to verify the connection.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("sends every a2a field the user filled across all collapsible panels", async () => {

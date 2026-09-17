@@ -2497,6 +2497,34 @@
           "title": "AgentExtension",
           "type": "object"
         },
+        "AgentIdentityStatus": {
+          "properties": {
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EntraAgentIdentity"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "last_authenticated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Authenticated At"
+            }
+          },
+          "title": "AgentIdentityStatus",
+          "type": "object"
+        },
         "AgentInterface": {
           "description": "Declares a combination of a target URL and a transport protocol.",
           "properties": {
@@ -2732,6 +2760,11 @@
                 }
               ],
               "title": "Extra Headers"
+            },
+            "jwt_auth_configured": {
+              "default": false,
+              "title": "Jwt Auth Configured",
+              "type": "boolean"
             },
             "keys": {
               "anyOf": [
@@ -3152,6 +3185,33 @@
             }
           },
           "title": "DailySpendMetadata",
+          "type": "object"
+        },
+        "EntraAgentIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {
+              "format": "uuid",
+              "title": "Client Id",
+              "type": "string"
+            },
+            "provider": {
+              "const": "microsoft_entra",
+              "title": "Provider",
+              "type": "string"
+            },
+            "tenant_id": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "tenant_id",
+            "client_id"
+          ],
+          "title": "EntraAgentIdentity",
           "type": "object"
         },
         "HTTPAuthSecurityScheme": {
@@ -4003,6 +4063,36 @@
           ]
         }
       },
+      "/v1/agents/identity/providers": {
+        "get": {
+          "operationId": "get_agent_identity_providers_v1_agents_identity_providers_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Response Get Agent Identity Providers V1 Agents Identity Providers Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Identity Providers",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
       "/v1/agents/make_public": {
         "post": {
           "description": "Make multiple agents publicly discoverable\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/v1/agents/make_public\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"agent_ids\": [\"123e4567-e89b-12d3-a456-426614174000\", \"123e4567-e89b-12d3-a456-426614174001\"]\n    }'\n```\n\nExample Response:\n```json\n{\n    \"agent_id\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"agent_name\": \"my-custom-agent\",\n    \"litellm_params\": {\n        \"make_public\": true\n    },\n    \"agent_card_params\": {...},\n    \"created_at\": \"2025-11-15T10:30:00Z\",\n    \"updated_at\": \"2025-11-15T10:35:00Z\",\n    \"created_by\": \"user123\",\n    \"updated_by\": \"user123\"\n}\n```",
@@ -4249,6 +4339,53 @@
             }
           ],
           "summary": "Update Agent",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/v1/agents/{agent_id}/identity": {
+        "get": {
+          "operationId": "get_agent_identity_status_v1_agents__agent_id__identity_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "agent_id",
+              "required": true,
+              "schema": {
+                "title": "Agent Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/AgentIdentityStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Identity Status",
           "tags": [
             "agents"
           ]

@@ -1,3 +1,5 @@
+import { AgentIdentityFields } from "./AgentIdentityFields";
+import { withAgentIdentity } from "./agent_identity";
 import React, { useState, useEffect } from "react";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { toast } from "@/lib/toast";
@@ -351,7 +353,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         return;
       }
       const values = form.getValues();
-      const agentData = buildAgentData(values);
+      const built = buildAgentData(values);
+      const agentData = built ? withAgentIdentity(built, values) : null;
       if (!agentData) {
         toast.error("Failed to build agent data");
         setIsSubmitting(false);
@@ -899,6 +902,11 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
         <Separator className="my-4" />
 
+        {form.getValues("identity_provider") === "microsoft_entra" && (
+          <p className="mb-4 text-sm text-muted-foreground">
+            This agent will authenticate with Microsoft Entra ID. You can skip virtual key creation.
+          </p>
+        )}
         <RadioGroup
           value={keyAssignOption}
           onValueChange={(value) => setKeyAssignOption(value as "create_new" | "existing_key" | "skip")}
@@ -983,7 +991,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
             className="text-sm text-muted-foreground underline hover:text-foreground"
             onClick={() => setKeyAssignOption("skip")}
           >
-            Skip for now — I&apos;ll assign a key later
+            {form.getValues("identity_provider") === "microsoft_entra"
+              ? "Use Entra JWT authentication"
+              : "Skip for now, I’ll assign a key later"}
           </button>
         </div>
       </div>
@@ -1012,7 +1022,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       )}
       {!createdKeyValue && !assignedKeyAlias && keyAssignOption === "skip" && (
         <p className="mt-2 text-sm text-muted-foreground">
-          No key assigned. You can create one from the Virtual Keys page.
+          {form.getValues("identity_provider") === "microsoft_entra"
+            ? "Microsoft Entra ID is configured. Send an authenticated agent request to verify the connection."
+            : "No key assigned. You can create one from the Virtual Keys page."}
         </p>
       )}
     </div>
@@ -1035,7 +1047,12 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
             <FormProvider {...form}>
               <form onSubmit={(event) => event.preventDefault()} className="space-y-4">
-                {currentStep === 0 && renderConfigureStep()}
+                {currentStep === 0 && (
+                  <>
+                    {renderConfigureStep()}
+                    <AgentIdentityFields accessToken={accessToken} />
+                  </>
+                )}
                 {currentStep === 1 && renderEntitlementsStep()}
                 {currentStep === 2 && renderObservabilityStep()}
                 {currentStep === 3 && renderAssignKeyStep()}
