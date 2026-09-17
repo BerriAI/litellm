@@ -1,8 +1,6 @@
 name: auto-merge-price-sync
 
 on:
-  pull_request_review:
-    types: [submitted]
   issue_comment:
     types: [created, edited]
   check_suite:
@@ -56,7 +54,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number || (github.event.issue.pull_request && github.event.issue.number) || github.event.inputs.pr-number || '' }}
+          PR_NUMBER: ${{ (github.event.issue.pull_request && github.event.issue.number) || github.event.inputs.pr-number || '' }}
           BASE_BRANCH: main
           PR_AUTHOR_ALLOWLIST: "berriai-litellm-provider-info-sync[bot]"
           SELF_CHECK_NAME: auto-merge-price-sync
