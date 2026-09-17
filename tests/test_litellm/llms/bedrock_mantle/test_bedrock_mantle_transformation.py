@@ -257,6 +257,18 @@ class TestBedrockMantleConfig:
         assert "temperature" in params
         assert "stream" in params
         assert "max_tokens" in params
+        assert "verbosity" not in params
+
+    def test_verbosity_passes_through_for_gpt_5_models(self):
+        cfg = BedrockMantleChatConfig()
+        assert "verbosity" in cfg.get_supported_openai_params("openai.gpt-5.6-sol")
+        optional_params = litellm.get_optional_params(
+            model="openai.gpt-5.6-sol",
+            custom_llm_provider="bedrock_mantle",
+            verbosity="low",
+            drop_params=False,
+        )
+        assert optional_params["verbosity"] == "low"
 
 
 class TestBedrockMantleChatAuth:
