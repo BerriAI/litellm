@@ -2009,16 +2009,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-callback-python-legacy"
-version = "0.1.0"
-dependencies = [
- "litellm-auth",
- "litellm-callback-protocol",
- "litellm-python-interop",
- "pyo3",
-]
-
-[[package]]
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
@@ -2071,6 +2061,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-python-api"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth",
+ "litellm-callback-protocol",
+ "litellm-python-interop",
+ "pyo3",
+]
+
+[[package]]
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
@@ -2078,8 +2078,8 @@ dependencies = [
  "criterion",
  "futures-util",
  "litellm-auth",
- "litellm-callback-python-legacy",
  "litellm-core",
+ "litellm-python-api",
  "litellm-python-interop",
  "litellm-token-counter",
  "pyo3",

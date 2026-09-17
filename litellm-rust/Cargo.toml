@@ -12,7 +12,7 @@ repository = "https://github.com/BerriAI/litellm"
 bytes = "1"
 litellm-core = { path = "crates/core" }
 litellm-callback-protocol = { path = "crates/callback-protocol" }
-litellm-callback-python-legacy = { path = "crates/callback-python-legacy" }
+litellm-python-api = { path = "crates/python-api" }
 litellm-framing = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-aws = { path = "crates/auth-aws" }

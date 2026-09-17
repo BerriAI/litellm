@@ -2,9 +2,9 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use futures_util::future::{AbortHandle, Abortable};
-use litellm_callback_python_legacy as bindings;
-use litellm_callback_python_legacy::DeploymentHooks;
-pub(crate) use litellm_callback_python_legacy::LegacyPythonLogger as PythonLogger;
+use litellm_python_api as python_api;
+use litellm_python_api::DeploymentHooks;
+pub(crate) use litellm_python_api::LegacyPythonLogger;
 #[cfg(test)]
 use litellm_core::call_lifecycle::host::HostCallFuture;
 use litellm_core::call_lifecycle::host::{
@@ -286,7 +286,7 @@ impl<R: PythonRoute> Drop for PythonLifecycle<R> {
 pub(crate) struct PythonCallState {
     pub args: Py<PyTuple>,
     pub kwargs: Py<PyDict>,
-    pub logger: Option<PythonLogger>,
+    pub logger: Option<LegacyPythonLogger>,
     pub start: Py<PyAny>,
     pub end: Option<Py<PyAny>>,
     pub response: Option<Py<PyAny>>,
@@ -398,7 +398,7 @@ impl PythonCallState {
         })
     }
 
-    pub fn logger(&self) -> PyResult<&PythonLogger> {
+    pub fn logger(&self) -> PyResult<&LegacyPythonLogger> {
         self.logger.as_ref().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err("call logging is not initialized")
         })
@@ -406,8 +406,8 @@ impl PythonCallState {
 
     pub fn setup(&mut self, py: Python<'_>) -> PyResult<()> {
         self.start = now(py)?;
-        self.internal = bindings::is_internal_call(py)?;
-        let result = bindings::setup(
+        self.internal = python_api::is_internal_call(py)?;
+        let result = python_api::setup(
             py,
             self.call_type,
             &self.args,
@@ -421,12 +421,12 @@ impl PythonCallState {
     }
 
     pub fn prepare(&mut self, py: Python<'_>) -> PyResult<()> {
-        self.kwargs = bindings::prepare(py, self.kwargs.bind(py), self.logger()?)?.unbind();
+        self.kwargs = python_api::prepare(py, self.kwargs.bind(py), self.logger()?)?.unbind();
         Ok(())
     }
 
     pub fn finalize(&self, py: Python<'_>) -> PyResult<()> {
-        bindings::finalize(
+        python_api::finalize(
             py,
             &self.response,
             self.logger()?,
@@ -532,7 +532,7 @@ impl PythonCallState {
 }
 
 struct PendingSuccess {
-    logger: PythonLogger,
+    logger: LegacyPythonLogger,
     response: Option<Py<PyAny>>,
     start: Py<PyAny>,
     end: Option<Py<PyAny>>,
