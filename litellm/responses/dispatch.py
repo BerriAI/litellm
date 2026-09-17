@@ -6,7 +6,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.rust_bridge.catalog import Context, Delivery, Route
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
 from litellm.rust_bridge.public_call import bind, optional_bool, optional_mapping, optional_str, signature
 from litellm.rust_bridge.responses.entrypoints import (
     NATIVE_ARESPONSES,
@@ -95,7 +95,7 @@ def responses(
         kwargs,
         python=python,
         binding=NATIVE_RESPONSES,
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=call_hook,
     )
 
 
@@ -106,7 +106,7 @@ async def aresponses(*args: object, **kwargs: object) -> ResponsesResult:  # kwa
         kwargs,
         python=python,
         binding=NATIVE_ARESPONSES,
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=call_hook,
     )
 
 
