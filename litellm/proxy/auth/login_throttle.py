@@ -281,25 +281,7 @@ class LoginThrottle:
             yield LoginAttempt(throttle=self, username=username, block=None)
             return
         slot: Final = keys.pair_block if block.scope == "user" else keys.source_block
-        held: Final = _HELD_ATTEMPTS.get(slot, 0)
-        if held >= MAX_HELD_ATTEMPTS_PER_KEY:
-            verbose_proxy_logger.warning(
-                "Admin UI sign-in refused: %s attempts already held for a blocked %s; username=%r source=%s",
-                held,
-                block.scope,
-                username,
-                self.client_ip,
-            )
-            self.refuse(BLOCKED_ATTEMPT_HOLD_SECONDS)
-        _HELD_ATTEMPTS[slot] = held + 1
-        try:
-            yield LoginAttempt(throttle=self, username=username, block=block)
-        finally:
-            remaining: Final = _HELD_ATTEMPTS.get(slot, 1) - 1
-            if remaining > 0:
-                _HELD_ATTEMPTS[slot] = remaining
-            else:
-                _HELD_ATTEMPTS.pop(slot, None)
+        yield LoginAttempt(throttle=self, username=username, block=block, slot=slot)
 
     async def _active_block(self, keys: _Keys) -> Block | None:
         local: Final = self._local_block_ttls(keys)
@@ -391,6 +373,7 @@ class LoginAttempt:
     throttle: LoginThrottle
     username: str
     block: Block | None
+    slot: str | None = None
 
     async def succeeded(self) -> None:
         if not self.throttle.enabled:
@@ -400,9 +383,8 @@ class LoginAttempt:
     async def failed(self) -> None:
         if not self.throttle.enabled:
             return
-        if self.block is not None:
-            await _sleep(BLOCKED_ATTEMPT_HOLD_SECONDS)
-            self.throttle.refuse(max(self.block.retry_after - BLOCKED_ATTEMPT_HOLD_SECONDS, 1))
+        if self.block is not None and self.slot is not None:
+            await self._hold_then_refuse(self.block, self.slot)
         user_block, source_block = await self.throttle.record_failure(self.username)
         if user_block == 0 and source_block == 0:
             return
@@ -413,3 +395,26 @@ class LoginAttempt:
             self.username,
             self.throttle.client_ip,
         )
+
+    async def _hold_then_refuse(self, block: Block, slot: str) -> NoReturn:
+        held: Final = _HELD_ATTEMPTS.get(slot, 0)
+        if held >= MAX_HELD_ATTEMPTS_PER_KEY:
+            verbose_proxy_logger.warning(
+                "Admin UI sign-in refused at once: %s wrong attempts already held for a blocked %s; "
+                "username=%r source=%s",
+                held,
+                block.scope,
+                self.username,
+                self.throttle.client_ip,
+            )
+            self.throttle.refuse(block.retry_after)
+        _HELD_ATTEMPTS[slot] = held + 1
+        try:
+            await _sleep(BLOCKED_ATTEMPT_HOLD_SECONDS)
+        finally:
+            remaining: Final = _HELD_ATTEMPTS.get(slot, 1) - 1
+            if remaining > 0:
+                _HELD_ATTEMPTS[slot] = remaining
+            else:
+                _HELD_ATTEMPTS.pop(slot, None)
+        self.throttle.refuse(max(block.retry_after - BLOCKED_ATTEMPT_HOLD_SECONDS, 1))
