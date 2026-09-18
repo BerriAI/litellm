@@ -402,4 +402,54 @@ mod tests {
         let error = perform_ocr(request).await.unwrap_err();
         assert!(error.to_string().contains("data URI"));
     }
+
+    struct EchoCallerDocument(Value);
+
+    impl OcrHooks for EchoCallerDocument {
+        fn intercepts_requests(&self) -> bool {
+            true
+        }
+
+        fn during_call(
+            &self,
+            mut request: OcrDuringCallRequest,
+        ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
+            let document = self.0.clone();
+            Box::pin(async move {
+                request.body["document"] = document;
+                Ok(request)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_document_stays_inlined_when_hook_echoes_caller_document() {
+        let (base, seen, server) = mock_server(vec![
+            MockResponse::json(json!("served document")),
+            MockResponse::json(json!({"pages":[{"index":0,"markdown":"hello"}],"usage_info":{"pages_processed":1}})),
+        ])
+        .await;
+        let document_url = format!("{base}/document.pdf");
+        let mut request = crate::ocr::test_support::with_source(
+            wire_request("azure_ai/model", &base, json!({})),
+            &document_url,
+        );
+        request.hooks = Arc::new(EchoCallerDocument(
+            json!({"type":"document_url","document_url":document_url}),
+        ));
+
+        let result = perform_ocr(request).await.unwrap();
+        server.await.unwrap();
+
+        assert_eq!(result.pages[0].markdown, "hello");
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("GET /document.pdf "));
+        let body: Value =
+            serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            body["document"]["document_url"],
+            json!("data:application/json;base64,InNlcnZlZCBkb2N1bWVudCI=")
+        );
+    }
 }
