@@ -481,16 +481,18 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     return <div className="p-4">Loading...</div>;
   }
 
+  const backButton = (
+    <Button variant="ghost" onClick={onClose} className="mb-4">
+      <ArrowLeft className="w-4 h-4" />
+      Back to Guardrails
+    </Button>
+  );
+
   if (!guardrailData) {
-    return <div className="p-4">Guardrail not found</div>;
+    return <div className="p-4">{backButton}Guardrail not found</div>;
   }
 
-  // Format date helper function
-  const formatDate = (dateString?: string) => {
-    if (!dateString) return "-";
-    const date = new Date(dateString);
-    return date.toLocaleString();
-  };
+  const formatDate = (dateString?: string) => (dateString ? new Date(dateString).toLocaleString() : "-");
 
   // Format the provider display name and logo
   const { logo, displayName } = getGuardrailLogoAndName(guardrailData.litellm_params?.guardrail || "");
@@ -510,10 +512,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   return (
     <div className="p-4">
       <div>
-        <Button variant="ghost" onClick={onClose} className="mb-4">
-          <ArrowLeft className="w-4 h-4" />
-          Back to Guardrails
-        </Button>
+        {backButton}
         <h1 className="text-2xl font-semibold">{guardrailData.guardrail_name || "Unnamed Guardrail"}</h1>
         <div className="flex items-center cursor-pointer">
           <p className="text-muted-foreground font-mono">{guardrailData.guardrail_id}</p>

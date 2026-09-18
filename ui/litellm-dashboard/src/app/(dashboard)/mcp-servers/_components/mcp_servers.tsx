@@ -36,6 +36,7 @@ import type {
   Team,
 } from "@/components/mcp_tools/types";
 import MCPSemanticFilterSettings from "@/components/Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
+import MCPToolSearchSettings from "@/components/Settings/AdminSettings/MCPToolSearchSettings/MCPToolSearchSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "@/components/mcp_tools/ByokCredentialModal";
@@ -545,6 +546,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               </TabsTrigger>
             )}
             {isAdminRole(userRole) && (
+              <TabsTrigger value="tool-search" className="flex-none rounded-none px-4 py-2">
+                Tool Search
+              </TabsTrigger>
+            )}
+            {isAdminRole(userRole) && (
               <TabsTrigger value="network-settings" className="flex-none rounded-none px-4 py-2">
                 Network Settings
               </TabsTrigger>
@@ -724,6 +730,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           {isAdminRole(userRole) && (
             <TabsContent value="semantic-filter" keepMounted>
               <MCPSemanticFilterSettings accessToken={accessToken} />
+            </TabsContent>
+          )}
+          {isAdminRole(userRole) && (
+            <TabsContent value="tool-search" keepMounted>
+              <MCPToolSearchSettings accessToken={accessToken} />
             </TabsContent>
           )}
           {isAdminRole(userRole) && (

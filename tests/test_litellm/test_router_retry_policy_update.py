@@ -21,6 +21,7 @@ This file pins both halves of the fix.
 
 import json
 from dataclasses import dataclass
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -28,7 +29,18 @@ from pydantic import ValidationError
 
 
 import litellm
+from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
 from litellm.types.router import RetryPolicy, UpdateRouterConfig
+
+
+@pytest.fixture(autouse=True)
+def isolate_litellm_callbacks():
+    callbacks_before: Final = litellm.callbacks.copy()
+    yield
+    litellm.callbacks = callbacks_before  # test-quality-ok: required callback-state restoration fixture
+
 
 # ---------------------------------------------------------------------------
 # UpdateRouterConfig schema membership (LIT-3152 part 1)
@@ -98,6 +110,114 @@ def _build_router() -> litellm.Router:
             }
         ]
     )
+
+
+def test_update_settings_adds_optional_pre_call_check_once():
+    router = _build_router()
+
+    router.update_settings(num_retries=7, optional_pre_call_checks=["prompt_caching"])
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+
+    prompt_caching_callbacks = [
+        callback for callback in router.optional_callbacks if isinstance(callback, PromptCachingDeploymentCheck)
+    ]
+    assert len(prompt_caching_callbacks) == 1
+    assert router.num_retries == 7
+
+
+def test_update_settings_clears_omitted_toggleable_pre_call_checks():
+    router = _build_router()
+
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+    router.update_settings(optional_pre_call_checks=[])
+
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in (router.optional_callbacks or []))
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in litellm.callbacks)
+
+
+def test_set_optional_pre_call_checks_reconciles_callback_types():
+    router = _build_router()
+
+    router.set_optional_pre_call_checks(["prompt_caching"])
+    router.set_optional_pre_call_checks([])
+
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in (router.optional_callbacks or []))
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in litellm.callbacks)
+
+
+def test_remove_optional_pre_call_check_removes_local_and_global_callbacks():
+    router = _build_router()
+
+    router.set_optional_pre_call_checks(["prompt_caching"])
+    router._remove_optional_callbacks_of_type(PromptCachingDeploymentCheck)
+
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in (router.optional_callbacks or []))
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in litellm.callbacks)
+
+
+def test_remove_optional_pre_call_check_keeps_global_callback_for_another_router():
+    router_a = _build_router()
+    router_b = _build_router()
+
+    router_a.update_settings(optional_pre_call_checks=["prompt_caching"])
+    router_b.update_settings(optional_pre_call_checks=["prompt_caching"])
+
+    router_a.update_settings(optional_pre_call_checks=[])
+
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in (router_a.optional_callbacks or []))
+    assert any(type(callback) is PromptCachingDeploymentCheck for callback in (router_b.optional_callbacks or []))
+    assert any(type(callback) is PromptCachingDeploymentCheck for callback in litellm.callbacks)
+
+    router_b.update_settings(optional_pre_call_checks=[])
+
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in (router_b.optional_callbacks or []))
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in litellm.callbacks)
+
+
+def test_remove_optional_pre_call_check_keeps_global_callback_when_second_router_clears_first():
+    router_a = _build_router()
+    router_b = _build_router()
+
+    router_a.update_settings(optional_pre_call_checks=["prompt_caching"])
+    router_b.update_settings(optional_pre_call_checks=["prompt_caching"])
+
+    router_b.update_settings(optional_pre_call_checks=[])
+
+    assert any(type(callback) is PromptCachingDeploymentCheck for callback in (router_a.optional_callbacks or []))
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in (router_b.optional_callbacks or []))
+    assert any(type(callback) is PromptCachingDeploymentCheck for callback in litellm.callbacks)
+
+    router_a.update_settings(optional_pre_call_checks=[])
+
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in litellm.callbacks)
+
+
+def test_update_settings_replaces_toggleable_pre_call_checks():
+    router = _build_router()
+
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+    router.update_settings(optional_pre_call_checks=["enforce_model_rate_limits"])
+
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in (router.optional_callbacks or []))
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in litellm.callbacks)
+    assert any(isinstance(callback, ModelRateLimitingCheck) for callback in (router.optional_callbacks or []))
+
+
+@pytest.mark.asyncio
+async def test_update_settings_preserves_router_budget_limiting_when_omitted(monkeypatch):
+    async def _disable_periodic_sync(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "litellm.router_strategy.budget_limiter.RouterBudgetLimiting.periodic_sync_in_memory_spend_with_redis",
+        _disable_periodic_sync,
+    )
+    router = _build_router()
+
+    router.add_optional_pre_call_checks(["router_budget_limiting"])
+    router.update_settings(optional_pre_call_checks=[])
+
+    assert any(isinstance(callback, RouterBudgetLimiting) for callback in (router.optional_callbacks or []))
 
 
 def test_update_settings_persists_retry_policy_dict():
@@ -255,8 +375,12 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
             RateLimitErrorRetries=7,
         )
     )
+    request = MagicMock()
+    request.json = AsyncMock(return_value={"router_settings": {"retry_policy": posted.model_dump()}})
+
     await proxy_server.update_config(
         config_info=ConfigYAML(router_settings=posted),
+        request=request,
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"),
     )
 

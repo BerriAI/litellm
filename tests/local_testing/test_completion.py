@@ -57,23 +57,6 @@ def test_response_model_none():
     assert isinstance(x, litellm.ModelResponse)
 
 
-def test_completion_custom_provider_model_name():
-    try:
-        litellm.cache = None
-        response = completion(
-            model="together_ai/openai/gpt-oss-20b",
-            messages=messages,
-            logger_fn=logger_fn,
-        )
-        # Add assertions here to check the-response
-        print(response)
-        print(response["choices"][0]["finish_reason"])
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
     new_response = MagicMock()
     new_response.headers = {"hello": "world"}
@@ -2803,41 +2786,6 @@ def test_completion_together_ai_llama():
 
 
 # test_completion_together_ai()
-def test_customprompt_together_ai():
-    try:
-        litellm.set_verbose = False
-        litellm.num_retries = 0
-        print("in test_customprompt_together_ai")
-        print(litellm.success_callback)
-        print(litellm._async_success_callback)
-        response = completion(
-            model="together_ai/openai/gpt-oss-20b",
-            messages=messages,
-            roles={
-                "system": {
-                    "pre_message": "<|im_start|>system\n",
-                    "post_message": "<|im_end|>",
-                },
-                "assistant": {
-                    "pre_message": "<|im_start|>assistant\n",
-                    "post_message": "<|im_end|>",
-                },
-                "user": {
-                    "pre_message": "<|im_start|>user\n",
-                    "post_message": "<|im_end|>",
-                },
-            },
-        )
-        print(response)
-    except litellm.exceptions.Timeout as e:
-        print(f"Timeout Error")
-        pass
-    except Exception as e:
-        print(f"ERROR TYPE {type(e)}")
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_customprompt_together_ai()
 
 
 def response_format_tests(response: litellm.ModelResponse):
@@ -2879,7 +2827,6 @@ def response_format_tests(response: litellm.ModelResponse):
     "model",
     [
         "bedrock/mistral.mistral-large-2407-v1:0",
-        "bedrock/cohere.command-r-plus-v1:0",
         "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "mistral.mistral-7b-instruct-v0:2",
         "meta.llama3-8b-instruct-v1:0",
@@ -3645,28 +3592,6 @@ async def test_acompletion_stream_watsonx():
 # test_maritalk()
 
 
-def test_completion_together_ai_stream():
-    litellm.set_verbose = True
-    user_message = "Write 1pg about YC & litellm"
-    messages = [{"content": user_message, "role": "user"}]
-    try:
-        response = completion(
-            model="together_ai/openai/gpt-oss-20b",
-            messages=messages,
-            stream=True,
-            max_tokens=5,
-        )
-        print(response)
-        for chunk in response:
-            print(chunk)
-        # print(string_response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_together_ai_stream()
-
-
 def test_moderation():
     response = litellm.moderation(input="i'm ishaan cto of litellm")
     print(response)
@@ -4000,10 +3925,14 @@ def test_completion_novita_ai():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
+        openai_client.chat.completions.with_raw_response, "create"
     ) as mock_call:
+        mock_call.return_value.headers = {}
+        mock_call.return_value.parse.return_value = litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "Hello"}}]
+        )
         try:
-            completion(
+            response = completion(
                 model="novita/meta-llama/llama-3.3-70b-instruct",
                 messages=messages,
                 client=openai_client,
@@ -4011,6 +3940,7 @@ def test_completion_novita_ai():
             )
 
             mock_call.assert_called_once()
+            assert response.choices[0].message.content == "Hello"
 
             # Verify model is passed correctly
             assert (

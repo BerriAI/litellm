@@ -1,4 +1,6 @@
+import io
 import json
+from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
@@ -18,11 +20,62 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_parsed_body,
     _safe_get_request_query_params,
     _safe_set_request_parsed_body,
+    coerce_numeric_form_fields,
     get_form_data,
     get_request_body,
     get_tags_from_request_body,
+    numeric_form_fields,
     populate_request_with_path_params,
+    read_raw_json_body,
 )
+
+
+def _starlette_request(body: bytes, content_type: str) -> Request:
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/messages",
+        "headers": [(b"content-type", content_type.encode())],
+        "query_string": b"",
+    }
+    chunks = iter((body,))
+
+    async def receive():
+        return {"type": "http.request", "body": next(chunks, b""), "more_body": False}
+
+    return Request(scope, receive)
+
+
+@pytest.mark.asyncio
+async def test_read_raw_json_body_returns_the_bytes_the_parsed_body_came_from():
+    body = b'{"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}]}'
+    request = _starlette_request(body, "application/json")
+
+    assert await _read_request_body(request) == orjson.loads(body)
+    assert await read_raw_json_body(request) == body
+
+
+@pytest.mark.asyncio
+async def test_read_raw_json_body_is_none_until_the_body_has_been_parsed():
+    request = _starlette_request(b'{"model": "claude-sonnet-4-5"}', "application/json")
+
+    assert await read_raw_json_body(request) is None
+    assert await read_raw_json_body(None) is None
+
+
+@pytest.mark.asyncio
+async def test_read_raw_json_body_is_none_for_form_bodies():
+    request = _starlette_request(b"model=claude-sonnet-4-5", "application/x-www-form-urlencoded")
+
+    assert await _read_request_body(request) == {"model": "claude-sonnet-4-5"}
+    assert await read_raw_json_body(request) is None
+
+
+@pytest.mark.asyncio
+async def test_read_raw_json_body_is_none_for_a_request_that_only_mocks_the_parsed_body_path():
+    mock_request = MagicMock()
+
+    assert await read_raw_json_body(mock_request) is None
 
 
 @pytest.mark.asyncio
@@ -459,8 +512,8 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     the repair must be skipped and the existing 400 raised immediately, while bodies
     at or below the limit still get repaired.
 
-    `\\ud83d` is a lone high-surrogate escape: orjson rejects it, the json fallback
-    accepts it, so a body containing it is only salvaged when the repair path runs.
+    `NaN` is rejected by orjson and accepted by the json fallback, so a body containing
+    it is only salvaged when the repair path runs.
     """
     import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 
@@ -469,14 +522,14 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
         http_parsing_utils, "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 100 / (1024 * 1024)
     )
 
-    small_body = b'{"model":"gpt-4o","x":"\\ud83d"}'
+    small_body = b'{"model":"gpt-4o","x":NaN}'
     assert len(small_body) <= 100
     repaired = await _read_request_body(_make_json_request(small_body))
     assert repaired["model"] == "gpt-4o"
 
     padding = "a" * 200
     large_body = (
-        b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":"\\ud83d"}'
+        b'{"model":"gpt-4o","pad":"' + padding.encode() + b'","x":NaN}'
     )
     assert len(large_body) > 100
     with pytest.raises(ProxyException) as exc_info:
@@ -491,6 +544,33 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     )
     repaired_large = await _read_request_body(_make_json_request(large_body))
     assert repaired_large["model"] == "gpt-4o"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(b"say ok \\ud83d", id="lone-high-surrogate"),
+        pytest.param(b"say ok \\ude00", id="lone-low-surrogate"),
+        pytest.param(b"\\ud83d\\ud83d\\ude00", id="lone-high-before-valid-pair"),
+    ],
+)
+async def test_lone_surrogate_escape_is_rejected_with_400(content: bytes):
+    """
+    orjson rejects a lone surrogate escape, and the json fallback accepts it, so the
+    parsed body used to carry a code point no provider request can UTF-8 encode. That
+    surfaced as a 500 from the provider handler instead of a 400 for the bad input.
+    """
+    body = b'{"model":"gpt-4o","messages":[{"role":"user","content":"' + content + b'"}]}'
+    with pytest.raises(ProxyException) as exc_info:
+        await _read_request_body(_make_json_request(body))
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert "Invalid JSON payload" in exc_info.value.message
+
+    paired = body.replace(content, b"say ok \\ud83d\\ude00")
+    parsed = await _read_request_body(_make_json_request(paired))
+    assert parsed["messages"][0]["content"] == "say ok \U0001F600"
 
 
 @pytest.mark.asyncio
@@ -1029,3 +1109,97 @@ class TestGetRequestBody:
         mock_request = MagicMock()
         mock_request.method = "GET"
         assert await get_request_body(mock_request) == {}
+
+
+class TestNumericFormFields:
+    def test_image_edit_schema_yields_only_n(self):
+        from litellm.types.images.main import ImageEditRequestParams
+
+        assert dict(numeric_form_fields(get_type_hints(ImageEditRequestParams))) == {"n": int}
+
+    def test_qualifiers_and_optionality_are_unwrapped(self):
+        from typing import Optional
+
+        from typing_extensions import Annotated, NotRequired, ReadOnly, Required, TypedDict
+
+        class Schema(TypedDict, total=False):
+            plain: int
+            optional: Optional[int]
+            piped: int | None
+            read_only: ReadOnly[int | None]
+            not_required: NotRequired[ReadOnly[int]]
+            required: Required[ReadOnly[Annotated[float, "meta"]]]
+            read_only_not_required: ReadOnly[NotRequired[int]]
+            read_only_required: ReadOnly[Required[float]]
+
+        assert dict(numeric_form_fields(get_type_hints(Schema))) == {
+            "plain": int,
+            "optional": int,
+            "piped": int,
+            "read_only": int,
+            "not_required": int,
+            "required": float,
+            "read_only_not_required": int,
+            "read_only_required": float,
+        }
+
+    def test_qualifiers_are_unwrapped_when_get_type_hints_keeps_extras(self):
+        from typing_extensions import Annotated, NotRequired, ReadOnly, Required, TypedDict
+
+        class Schema(TypedDict, total=False):
+            annotated: ReadOnly[Annotated[int, "meta"]]
+            not_required: NotRequired[ReadOnly[int]]
+            required: Required[ReadOnly[Annotated[float, "meta"]]]
+
+        assert dict(numeric_form_fields(get_type_hints(Schema, include_extras=True))) == {
+            "annotated": int,
+            "not_required": int,
+            "required": float,
+        }
+
+    def test_non_scalar_and_bool_fields_are_skipped(self):
+        from typing import Any, Literal, Optional, Union
+
+        from typing_extensions import TypedDict
+
+        class Schema(TypedDict, total=False):
+            flag: bool
+            optional_flag: Optional[bool]
+            text: str
+            choice: Optional[Literal["high", "low"]]
+            numbers: list[int]
+            mapping: Optional[dict[str, Any]]
+            ambiguous: Union[int, str]
+
+        assert dict(numeric_form_fields(get_type_hints(Schema))) == {}
+
+
+class TestCoerceNumericFormFields:
+    numeric_fields = {"n": int, "temperature": float}
+
+    def test_numeric_strings_are_parsed(self):
+        assert coerce_numeric_form_fields(
+            parsed_body={"n": "2", "temperature": "0.5"},
+            numeric_fields=self.numeric_fields,
+        ) == {"n": 2, "temperature": 0.5}
+
+    def test_other_fields_keep_their_string_values(self):
+        result = coerce_numeric_form_fields(
+            parsed_body={"size": "1024x1024", "prompt": "2", "quality": "high"},
+            numeric_fields=self.numeric_fields,
+        )
+        assert result == {"size": "1024x1024", "prompt": "2", "quality": "high"}
+
+    def test_unparseable_value_is_left_for_the_provider_to_reject(self):
+        assert coerce_numeric_form_fields(
+            parsed_body={"n": "two", "temperature": ""},
+            numeric_fields=self.numeric_fields,
+        ) == {"n": "two", "temperature": ""}
+
+    def test_already_typed_and_non_string_values_pass_through(self):
+        buffer = io.BytesIO(b"png")
+        result = coerce_numeric_form_fields(
+            parsed_body={"n": 3, "temperature": None, "image": buffer},
+            numeric_fields=self.numeric_fields,
+        )
+        assert result == {"n": 3, "temperature": None, "image": buffer}

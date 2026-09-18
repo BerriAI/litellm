@@ -18,9 +18,11 @@ caller's identity metadata, minus two things that must never be forwarded as-is:
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, NON_INFERENCE_CALL_TYPES
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, InternalCallOrigin
 
 BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
@@ -140,6 +142,19 @@ def forwarded_internal_call_metadata(
     return _sanitized(parent_metadata) | {  # mutable-ok: SDK metadata kwarg
         INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin
     }
+
+
+def parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mapping[str, str]:
+    kwargs: Final = request_kwargs or MappingProxyType({})
+    return MappingProxyType(
+        {k: v for k in ("litellm_session_id", "litellm_trace_id") if isinstance(v := kwargs.get(k), str)}
+    )
+
+
+def effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | None) -> bool | None:
+    return initialize_standard_callback_dynamic_params(dict(request_kwargs) if request_kwargs else None).get(
+        "turn_off_message_logging"
+    )
 
 
 def sanitized_forwardable_call_metadata(

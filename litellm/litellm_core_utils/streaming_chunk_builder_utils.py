@@ -1,6 +1,6 @@
 import base64
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
@@ -24,6 +24,7 @@ from litellm.types.utils import (
     Choices,
     CompletionTokensDetails,
     CompletionTokensDetailsWrapper,
+    Delta,
     Function,
     FunctionCall,
     ModelResponse,
@@ -36,6 +37,8 @@ from litellm.types.utils import (
 from litellm.utils import print_verbose, token_counter
 
 if TYPE_CHECKING:
+    from openai.types.completion_usage import CompletionUsage
+
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.litellm_core_utils.streaming_chunk_builder_utils import (
         UsagePerChunk,
@@ -145,6 +148,7 @@ class _ToolCallChunk(TypedDict):
 class _UsageBearingChunk(TypedDict, total=False):
     usage: Usage | None
     _hidden_params: Mapping[str, str]
+    choices: ReadOnly[Sequence[StreamingChoices | Mapping[str, object]]]
 
 
 class _UsageSummary(TypedDict):
@@ -207,7 +211,7 @@ def apply_grounding_request_counts(
 
 
 class ChunkProcessor:
-    def __init__(self, chunks: list, messages: list | None = None):
+    def __init__(self, chunks: list, messages: Sequence | None = None):
         self.chunks = self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]
@@ -325,6 +329,18 @@ class ChunkProcessor:
         return ""
 
     @staticmethod
+    def _get_role_from_chunks(chunks: Sequence["_BaseChunk"]) -> str:
+        return ChunkProcessor._role_of_choice(next((c["choices"][0] for c in chunks if c.get("choices")), None))
+
+    @staticmethod
+    def _role_of_choice(choice: object) -> str:
+        match choice:
+            case StreamingChoices(delta=Delta(role=str() as role)) | {"delta": {"role": str() as role}} if role:
+                return role
+            case _:
+                return "assistant"
+
+    @staticmethod
     def _get_model_from_chunks(chunks: Sequence["_BaseChunk"], first_chunk_model: str) -> str:
         """
         Get the actual model from chunks, preferring a model that differs from the first chunk.
@@ -351,8 +367,7 @@ class ChunkProcessor:
         model: Final = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint: Final = chunk.get("system_fingerprint", None)
 
-        first_chunk_with_choices: Final = next((c for c in chunks if c.get("choices")), chunk)
-        role: Final = first_chunk_with_choices["choices"][0]["delta"]["role"]
+        role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason = "stop"
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
@@ -794,7 +809,7 @@ class ChunkProcessor:
 
     @staticmethod
     def _extract_usage_chunk(chunk: "_UsageBearingChunk | ModelResponse | ModelResponseStream") -> Usage | None:
-        usage_chunk: Usage | None = None
+        usage_chunk: Usage | CompletionUsage | None = None
         if hasattr(chunk, "usage") and chunk.usage is not None:
             usage_chunk = chunk.usage
         elif "usage" in chunk:
@@ -806,7 +821,9 @@ class ChunkProcessor:
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)
-        return usage_chunk
+        if usage_chunk is None or isinstance(usage_chunk, Usage):
+            return usage_chunk
+        return Usage(**usage_chunk.model_dump())
 
     def _calculate_usage_per_chunk(
         self,
@@ -905,21 +922,22 @@ class ChunkProcessor:
 
         prompt_tokens_details = attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details)
 
-        completion_tokens = self._reset_anthropic_cursor_completion_tokens(
+        recovered_completion_tokens: Final = self._reset_anthropic_cursor_completion_tokens(
             chunks=chunks,
             completion_tokens=completion_tokens,
             completion_usage_updates=completion_usage_updates,
         )
+        cursor_was_reset: Final = recovered_completion_tokens != completion_tokens
 
         return UsagePerChunk(
             prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            completion_tokens=recovered_completion_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             server_tool_use=server_tool_use,
             web_search_requests=web_search_requests,
             google_maps_grounding_requests=google_maps_grounding_requests,
-            completion_tokens_details=completion_tokens_details,
+            completion_tokens_details=None if cursor_was_reset else completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
             cost=cost,
             inference_geo=self._last_provider_pricing_field(chunks, "inference_geo"),
@@ -945,6 +963,30 @@ class ChunkProcessor:
         return values[-1] if values else None
 
     @staticmethod
+    def _finish_reason_of_choice(choice: object) -> str | None:
+        match choice:
+            case StreamingChoices(finish_reason=reason) | Choices(finish_reason=reason):
+                return reason
+            case {"finish_reason": str() as reason}:
+                return reason
+            case _:
+                return None
+
+    @staticmethod
+    def _chunk_choices(chunk: "_UsageBearingChunk | ModelResponse | ModelResponseStream") -> Sequence[object]:
+        if isinstance(chunk, dict):
+            return chunk.get("choices", ())
+        return getattr(chunk, "choices", ())
+
+    @staticmethod
+    def _saw_finish_reason(chunks: Sequence["_UsageBearingChunk | ModelResponse"]) -> bool:
+        return any(
+            ChunkProcessor._finish_reason_of_choice(choice) is not None
+            for chunk in chunks
+            for choice in ChunkProcessor._chunk_choices(chunk)
+        )
+
+    @staticmethod
     def _reset_anthropic_cursor_completion_tokens(
         chunks: Sequence["_UsageBearingChunk | ModelResponse"],
         completion_tokens: int,
@@ -954,18 +996,18 @@ class ChunkProcessor:
 
         See the ``completion_usage_updates`` comment in
         ``_calculate_usage_per_chunk``. The accumulated value is NOT a stale
-        cursor when either it is > 1 (definitely not a placeholder) or we saw
-        >= 2 completion-bearing usage events (positive evidence ``message_delta``
-        arrived). Otherwise — the only completion update we ever saw was the
-        Anthropic ``message_start`` cursor (=1) — reset to 0 so
-        ``calculate_usage()``'s ``or token_counter(text=...)`` fallback estimates
-        from the actually-received completion text instead of trusting the
-        placeholder. Gated on ``custom_llm_provider == "anthropic"`` so the
-        heuristic (which encodes Anthropic's specific message_start SSE shape)
-        does not silently affect other providers that may legitimately report
-        ``completion_tokens=1`` from a single usage event.
+        cursor when we saw >= 2 completion-bearing usage events or any chunk
+        carried a ``finish_reason`` (positive evidence ``message_delta``
+        arrived). Otherwise the only completion update we ever saw was the
+        Anthropic ``message_start`` cursor, a small placeholder whose magnitude
+        varies per request (1 and 8 both observed live), so reset to 0 and let
+        ``calculate_usage()``'s ``or token_counter(...)`` fallback estimate from
+        the actually-received text and reasoning instead. Gated on
+        ``custom_llm_provider == "anthropic"`` so the heuristic (which encodes
+        Anthropic's specific message_start SSE shape) does not silently affect
+        other providers that legitimately report usage from a single event.
         """
-        saw_non_cursor_completion: Final = completion_tokens > 1 or completion_usage_updates >= 2
+        saw_non_cursor_completion: Final = completion_usage_updates >= 2 or ChunkProcessor._saw_finish_reason(chunks)
         if saw_non_cursor_completion:
             return completion_tokens
 
@@ -979,7 +1021,7 @@ class ChunkProcessor:
             if isinstance(hp, dict):
                 custom_llm_provider = hp.get("custom_llm_provider")
 
-        if custom_llm_provider == "anthropic" and completion_tokens == 1:
+        if custom_llm_provider == "anthropic":
             return 0
         return completion_tokens
 
@@ -988,8 +1030,9 @@ class ChunkProcessor:
         chunks: Sequence["_UsageBearingChunk | ModelResponse"],
         model: str,
         completion_output: str,
-        messages: list | None = None,
+        messages: Sequence | None = None,
         reasoning_tokens: int | None = None,
+        count_prompt_tokens: Callable[[], int] | None = None,
     ) -> Usage:
         """
         Calculate usage for the given chunks.
@@ -1014,16 +1057,21 @@ class ChunkProcessor:
         cost: Final[float | None] = calculated_usage_per_chunk["cost"]
 
         try:
-            returned_usage.prompt_tokens = prompt_tokens or token_counter(model=model, messages=messages)
+            returned_usage.prompt_tokens = prompt_tokens or (
+                count_prompt_tokens() if count_prompt_tokens else token_counter(model=model, messages=messages)
+            )
         except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
             returned_usage.prompt_tokens = 0
         returned_usage.completion_tokens = (
             completion_tokens
-            or token_counter(
-                model=model,
-                text=completion_output,
-                count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+            or (
+                token_counter(
+                    model=model,
+                    text=completion_output,
+                    count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+                )
+                + (reasoning_tokens or 0)
             )
         )
         returned_usage.total_tokens = returned_usage.prompt_tokens + returned_usage.completion_tokens
@@ -1047,15 +1095,16 @@ class ChunkProcessor:
                 returned_usage.completion_tokens_details = completion_tokens_details
 
         if reasoning_tokens is not None:
+            capped_reasoning_tokens: Final = min(max(0, reasoning_tokens), returned_usage.completion_tokens)
             if returned_usage.completion_tokens_details is None:
                 returned_usage.completion_tokens_details = CompletionTokensDetailsWrapper(
-                    reasoning_tokens=reasoning_tokens
+                    reasoning_tokens=capped_reasoning_tokens,
+                    text_tokens=returned_usage.completion_tokens - capped_reasoning_tokens,
                 )
             elif (
                 returned_usage.completion_tokens_details is not None
                 and returned_usage.completion_tokens_details.reasoning_tokens is None
             ):
-                capped_reasoning_tokens: Final = min(max(0, reasoning_tokens), returned_usage.completion_tokens)
                 returned_usage.completion_tokens_details.reasoning_tokens = capped_reasoning_tokens
                 if returned_usage.completion_tokens_details.text_tokens is None:
                     returned_usage.completion_tokens_details.text_tokens = (

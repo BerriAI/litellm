@@ -1,0 +1,69 @@
+interactions:
+- request:
+    body: "--87aea09e72c511f78d32f6eabd194f5c\r\nContent-Disposition: form-data; name=\"file\";
+      filename=\"document\"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.4\n1 0
+      obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids
+      [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources
+      4 0 R /MediaBox [0 0 612 792] /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Font
+      << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >>\nendobj\n5
+      0 obj\n<< /Length 44 >>\nstream\nBT\n/F1 12 Tf\n100 700 Td\n(Test PDF File)
+      Tj\nET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000
+      n \n0000000058 00000 n \n0000000115 00000 n \n0000000214 00000 n \n0000000293
+      00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n385\n%%EOF\n\r\n--87aea09e72c511f78d32f6eabd194f5c--\r\n"
+    headers:
+      Accept:
+      - '*/*'
+      Content-Type:
+      - multipart/form-data; boundary=87aea09e72c511f78d32f6eabd194f5c
+      User-Agent:
+      - litellm/1.101.0
+    method: POST
+    uri: http://parity-provider.invalid/upload
+  response:
+    body:
+      string: '{"file_id":"reducto://a91f568b-6e98-4962-9924-097202093779.pdf","presigned_url":null}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - Tue, 01 Sep 2026 19:54:53 GMT
+    status:
+      code: 200
+      message: ''
+- request:
+    body: '{"document_url":"reducto://a91f568b-6e98-4962-9924-097202093779.pdf"}'
+    headers:
+      Accept:
+      - '*/*'
+      Content-Type:
+      - application/json
+      User-Agent:
+      - litellm/1.101.0
+    method: POST
+    uri: http://parity-provider.invalid/parse
+  response:
+    body:
+      string: '{"response_type":"parse","job_id":"cddd635e-5d16-4621-bf48-031e7637dc0b","duration":2.4146597385406494,"pdf_url":"https://prod-storage20241010144745140900000001.s3.amazonaws.com/org/8bd983d1-47dd-440b-93d8-431412d819bf/a91f568b-6e98-4962-9924-097202093779.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA2UOK6OVBOUYL7WYA%2F20260901%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20260901T195456Z&X-Amz-Expires=43200&X-Amz-SignedHeaders=host&X-Amz-Signature=aa77b33e20fc1426307688f55147d57e8d3b2286a787c096b2da016d7d7d0c93","studio_link":"https://studio.reducto.ai/job/cddd635e-5d16-4621-bf48-031e7637dc0b","usage":{"num_pages":1,"credits":1.0,"credit_breakdown":{"page":1.0},"page_billing_breakdown":{"1":["page"]},"non_empty_cell_count":null},"result":{"type":"full","chunks":[{"content":"#
+        Test PDF File","embed":"# Test PDF File","enriched":null,"enrichment_success":false,"blocks":[{"type":"Title","bbox":{"left":0.16352969387356803,"top":0.10490237663507056,"width":0.11855640077405508,"height":0.011359045881442221,"page":1,"original_page":1},"content":"Test
+        PDF File","image_url":null,"chart_data":null,"confidence":"high","granular_confidence":{"extract_confidence":null,"parse_confidence":0.7126715332269669},"extra":null}]}],"ocr":null,"custom":null},"parse_mode":null,"document_properties":null}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - Tue, 01 Sep 2026 19:54:57 GMT
+    status:
+      code: 200
+      message: ''
+recorded_at: '2026-09-01T19:54:57.246119+00:00'
+ttl_seconds: 0
+version: 1
+x-litellm:
+  case:
+    litellm_input:
+      contract: reducto_legacy
+      document:
+        document_url: data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvUmVzb3VyY2VzIDQgMCBSIC9NZWRpYUJveCBbMCAwIDYxMiA3OTJdIC9Db250ZW50cyA1IDAgUiA+PgplbmRvYmoKNCAwIG9iago8PCAvRm9udCA8PCAvRjEgPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+ID4+ID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggNDQgPj4Kc3RyZWFtCkJUCi9GMSAxMiBUZgoxMDAgNzAwIFRkCihUZXN0IFBERiBGaWxlKSBUagpFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDIxNCAwMDAwMCBuIAowMDAwMDAwMjkzIDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKMzg1CiUlRU9GCg==
+        type: document_url
+      model: reducto/parse-legacy
+  request_source: python_replay
+  schema_version: 1

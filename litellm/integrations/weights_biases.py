@@ -4,17 +4,9 @@ imported_openAIResponse = True
 try:
     import io
     import logging
-    import sys
-    from typing import Any, TypeVar
+    from typing import Any, Literal, Protocol, TypeVar
 
     from wandb.sdk.data_types import trace_tree
-
-    if sys.version_info >= (3, 8):
-        from typing import Literal, Protocol
-    else:
-        from typing import Literal
-
-        from typing_extensions import Protocol
 
     logger: Final = logging.getLogger(__name__)
 

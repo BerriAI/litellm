@@ -32,7 +32,7 @@ export const runSemanticFilterTest = async ({
   setTestError,
 }: {
   accessToken: string;
-  testModel: string;
+  testModel: string | null;
   testQuery: string;
   setIsTesting: (value: boolean) => void;
   setTestResult: (result: TestResult | null) => void;
@@ -68,12 +68,12 @@ export const runSemanticFilterTest = async ({
   }
 };
 
-export const getCurlCommand = (testModel: string, testQuery: string) =>
+export const getCurlCommand = (testModel: string | null, testQuery: string) =>
   `curl --location 'http://localhost:4000/v1/responses' \\
 --header 'Content-Type: application/json' \\
 --header 'Authorization: Bearer sk-1234' \\
 --data '{
-    "model": "${testModel}",
+    "model": "${testModel ?? "YOUR_MODEL"}",
     "input": [
     {
       "role": "user",

@@ -12,7 +12,7 @@ import {
   normalizeUrlForCompare,
   storeReturnUrl,
 } from "@/utils/returnUrlUtils";
-import { MIGRATED_PAGES, migratedHref } from "@/utils/migratedPages";
+import { legacyPageRedirectHref } from "@/app/(dashboard)/legacyPageRoutes";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef } from "react";
 
@@ -21,8 +21,6 @@ function CreateKeyPageContent() {
 
   const router = useRouter();
   const searchParams = useSearchParams()!;
-
-  const explicitPage = searchParams.get("page");
 
   // Track if we've already attempted a return URL redirect to prevent race conditions
   const hasAttemptedReturnRedirectRef = useRef(false);
@@ -41,13 +39,12 @@ function CreateKeyPageContent() {
     }
   }, [redirectToLogin]);
 
-  // Redirect legacy ?page= deep links (old bookmarks) to their path-based routes.
-  const isLegacyRedirect = explicitPage !== null && explicitPage in MIGRATED_PAGES;
+  const legacyRedirectHref = legacyPageRedirectHref(searchParams);
   useEffect(() => {
-    if (!authLoading && isLegacyRedirect) {
-      router.replace(migratedHref(MIGRATED_PAGES[explicitPage]));
+    if (!authLoading && legacyRedirectHref !== null) {
+      router.replace(legacyRedirectHref);
     }
-  }, [authLoading, isLegacyRedirect, explicitPage, router]);
+  }, [authLoading, legacyRedirectHref, router]);
 
   // Check for a stored return URL after successful authentication
   // This handles the case where user comes back from SSO and we need to redirect to the original URL
@@ -86,7 +83,7 @@ function CreateKeyPageContent() {
     }
   }, [token]);
 
-  const isRedirecting = redirectToLogin || isLegacyRedirect;
+  const isRedirecting = redirectToLogin || legacyRedirectHref !== null;
 
   if (authLoading || isRedirecting) {
     return <LoadingScreen />;

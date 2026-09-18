@@ -1,0 +1,19 @@
+- Target invariants; implementation and runtime validation may lag these rules
+- Keep this crate the CPython runtime adapter and nothing more: Serde marshalling, interpreter detachment, tokio/asyncio glue, the `Execution` handle, the call driver and the `CallbackAdapter`/`RouteHost` traits
+  - No LiteLLM domain dependencies beyond `litellm-callbacks`: no route types, no `Logging` policy, no public API registration, no cdylib build features
+  - The driver emits `Succeeded` or `Failed` exactly once and never dispatches after a cancellation; which Python objects consume those events is the adapter's business
+  - `RouteHost::invoke` receives the keyword view the adapter's `begin` returned, not the caller's dict; a route host that projects from it inherits that adapter's rewrites (for the legacy adapter: setup, deployment hooks, credential inheritance)
+  - A failure that surfaces inside the call, including a host op the call asked for, is mapped through the route's `map_failure`; a failure in `begin` or `after_success` is raised as is
+- Use standard PyO3 ownership and conversion APIs
+  - Prefer `Bound<'py, T>` for attached operations/results, `Py<T>` for retention; binding/unbinding does not copy payloads
+  - Use `pythonize` for selected Serde data, never a JSON-text round trip; share conversion with `Pythonized<T>`
+  - Preserve `PythonizeError`'s standard conversion into `PyErr`; do not stringify original Python exceptions into new `ValueError`s
+  - Keep serializer-panic containment in `Pythonized<T>`: async output conversion can run in an unjoined blocking task and otherwise strand delivery
+- Use `Python::detach` for Rust-only work; Python operations require attachment
+  - Keep diagnostic counters in the consumer; wrapper invocations do not measure every interpreter release
+  - Release exclusive class borrows/locks before Python calls or decrements that can invoke finalizers; expose retained Python edges to GC without calling Python during traversal
+- Keep coroutine driving in the shared Python driver and the native handle
+  - Driver: `litellm/rust_bridge/lifecycle.py`; handle: `src/handle.rs`; call driver: `src/driver.rs`; native-backed behavior tests: `tests/lifecycle.py`
+  - Every adapter suspension is awaited inline in the caller's task; `into_future` creates a separate task and cannot satisfy this contract
+- References: [ownership](https://pyo3.rs/v0.29.2/types.html), [conversions](https://pyo3.rs/v0.29.2/conversions/traits.html), [pythonize errors](https://docs.rs/pythonize/0.29.0/src/pythonize/error.rs.html)
+  - [GC](https://pyo3.rs/v0.29.2/class/protocols.html#garbage-collector-integration), [re-entry](https://pyo3.rs/v0.29.2/class/call.html), [parallelism](https://pyo3.rs/v0.29.2/parallelism.html), [async delivery source](https://docs.rs/pyo3-async-runtimes/0.29.0/src/pyo3_async_runtimes/generic.rs.html)

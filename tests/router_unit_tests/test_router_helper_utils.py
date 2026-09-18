@@ -1,3 +1,5 @@
+import asyncio
+import json
 import os
 import traceback
 from dotenv import load_dotenv
@@ -9,9 +11,14 @@ import pytest
 import litellm
 from unittest.mock import patch, MagicMock, AsyncMock
 from create_mock_standard_logging_payload import create_standard_logging_payload
-from litellm.types.utils import StandardLoggingPayload
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
-from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
+from litellm.types.utils import ModelResponse, StandardLoggingPayload
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
+from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
+from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 
 
 @pytest.fixture
@@ -628,17 +635,35 @@ def test_deployment_callback_respects_cooldown_time(model_list):
         assert mock_set.call_args.kwargs["time_to_cooldown"] == 0
 
 
-def test_log_retry(model_list):
-    """Test if the '_log_retry' function is working correctly"""
-    import time
-
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+def test_log_retry(model_list: list[DeploymentTypedDict], metadata_key: str) -> None:
+    """log_retry appends one flat record per failed attempt, copies neither the request kwargs nor the
+    request metadata into it, counts every failed attempt of the request independently of the
+    per-hop attempted_retries, and never trusts a negative count planted before the first failure"""
     router = Router(model_list=model_list)
+    rate_limit_error = litellm.RateLimitError(message="slow down", llm_provider="openai", model="gpt-3.5-turbo")
     new_kwargs = router.log_retry(
-        kwargs={"metadata": {}},
-        e=Exception(),
+        kwargs={
+            "model": "gpt-3.5-turbo",
+            "api_key": "sk-must-not-be-recorded",
+            "messages": [{"role": "user", "content": "hi"}],
+            metadata_key: {"model_info": {"id": "deployment-1"}, "attempted_retries": 2, "user_api_key": "sk-proxy"},
+        },
+        e=rate_limit_error,
     )
-    assert "metadata" in new_kwargs
-    assert "previous_models" in new_kwargs["metadata"]
+    assert json.loads(json.dumps(new_kwargs[metadata_key]["previous_models"])) == [
+        {
+            "model_group": "gpt-3.5-turbo",
+            "deployment_id": "deployment-1",
+            "exception_type": "RateLimitError",
+            "exception_string": "litellm.RateLimitError: slow down",
+            "attempted_retries": 2,
+        }
+    ]
+    assert new_kwargs[metadata_key]["request_retry_count"] == 1
+    assert router.log_retry(kwargs=new_kwargs, e=rate_limit_error)[metadata_key]["request_retry_count"] == 2
+    planted_kwargs = {"model": "gpt-3.5-turbo", metadata_key: {"request_retry_count": -100}}
+    assert router.log_retry(kwargs=planted_kwargs, e=rate_limit_error)[metadata_key]["request_retry_count"] == 1
 
 
 def test_update_usage(model_list):
@@ -909,18 +934,7 @@ async def test_set_response_headers(model_list):
 
 
 @pytest.mark.asyncio
-async def test_set_response_headers_subtracts_in_flight_delta(model_list):
-    """
-    LIT-2719: router-derived `x-ratelimit-remaining-*` headers must be
-    post-decrement (match OpenAI/Anthropic vendor semantics) so the proxy's
-    HTTP response headers and the prometheus gauges that read them stay
-    comparable across providers.
-
-    Router's TPM/RPM counter is incremented post-response by
-    `deployment_callback_on_success`, so `get_remaining_model_group_usage`
-    sees pre-decrement values. `set_response_headers` must replay the
-    in-flight increment before writing the headers.
-    """
+async def test_set_response_headers_passes_through_post_increment_counters(model_list):
     from pydantic import BaseModel
 
     class _Usage(BaseModel):
@@ -933,49 +947,10 @@ async def test_set_response_headers_subtracts_in_flight_delta(model_list):
     router = Router(model_list=model_list)
     router.get_remaining_model_group_usage = AsyncMock(
         return_value={
-            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-tokens": 958,
             "x-ratelimit-limit-tokens": 1000,
-            "x-ratelimit-remaining-requests": 100,
+            "x-ratelimit-remaining-requests": 99,
             "x-ratelimit-limit-requests": 100,
-        }
-    )
-
-    resp = _Resp()
-    resp._hidden_params = {}
-    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
-
-    headers = resp._hidden_params["additional_headers"]
-    assert headers["x-ratelimit-remaining-tokens"] == 958
-    assert headers["x-ratelimit-remaining-requests"] == 99
-    # Limit headers pass through unmodified.
-    assert headers["x-ratelimit-limit-tokens"] == 1000
-    assert headers["x-ratelimit-limit-requests"] == 100
-
-
-@pytest.mark.asyncio
-async def test_set_response_headers_in_flight_delta_only_adjusts_tpm_rpm(model_list):
-    """
-    The in-flight replay applies only to the post-incremented TPM/RPM counters
-    (`x-ratelimit-remaining-tokens` / `-requests`). The ITPM/OTPM counters are
-    incremented at reservation time (pre-call), so the input/output token
-    headers already reflect this request and must pass through untouched.
-    """
-    from pydantic import BaseModel
-
-    class _Usage(BaseModel):
-        total_tokens: int = 30
-        prompt_tokens: int = 20
-        completion_tokens: int = 10
-
-    class _Resp(BaseModel):
-        usage: _Usage = _Usage()
-        _hidden_params: dict = {}
-
-    router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
-        return_value={
-            "x-ratelimit-remaining-tokens": 1000,
-            "x-ratelimit-remaining-requests": 100,
             "x-ratelimit-remaining-input-tokens": 1000,
             "x-ratelimit-remaining-output-tokens": 500,
         }
@@ -986,12 +961,334 @@ async def test_set_response_headers_in_flight_delta_only_adjusts_tpm_rpm(model_l
     await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
 
     headers = resp._hidden_params["additional_headers"]
-    # TPM/RPM headers replay the in-flight increment...
-    assert headers["x-ratelimit-remaining-tokens"] == 970
+    assert headers["x-ratelimit-remaining-tokens"] == 958
     assert headers["x-ratelimit-remaining-requests"] == 99
-    # ...but the reservation-based input/output headers pass through unchanged.
+    assert headers["x-ratelimit-limit-tokens"] == 1000
+    assert headers["x-ratelimit-limit-requests"] == 100
     assert headers["x-ratelimit-remaining-input-tokens"] == 1000
     assert headers["x-ratelimit-remaining-output-tokens"] == 500
+
+
+def _rpm_tpm_router(model_id: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-fake", "tpm": 1000, "rpm": 100},
+                "model_info": {"id": model_id},
+            }
+        ]
+    )
+
+
+def _ratelimit_headers(response: ModelResponse | CustomStreamWrapper) -> dict[str, int]:
+    return {k: v for k, v in response._hidden_params["additional_headers"].items() if k.startswith("x-ratelimit-")}
+
+
+@pytest.mark.asyncio
+async def test_acompletion_headers_read_post_increment_counter_and_count_once():
+    router = _rpm_tpm_router("lit-3058-async")
+
+    response = await router.acompletion(
+        model="gpt-5-mini", messages=[{"role": "user", "content": "hi"}], mock_response="pong"
+    )
+    total_tokens = response.usage.total_tokens
+    assert total_tokens > 0
+
+    headers = _ratelimit_headers(response)
+    assert headers["x-ratelimit-remaining-tokens"] == 1000 - total_tokens
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert await router.get_model_group_usage("gpt-5-mini") == (total_tokens, 1)
+
+    await asyncio.sleep(0.5)
+    assert await router.get_model_group_usage("gpt-5-mini") == (total_tokens, 1)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_wildcard_route_headers_and_counter_use_resolved_deployment_name():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "sk-fake", "tpm": 1000, "rpm": 100},
+                "model_info": {"id": "lit-3058-wildcard"},
+            }
+        ]
+    )
+
+    response = await router.acompletion(
+        model="openai/gpt-5-mini", messages=[{"role": "user", "content": "hi"}], mock_response="pong"
+    )
+    total_tokens = response.usage.total_tokens
+
+    headers = _ratelimit_headers(response)
+    assert headers["x-ratelimit-remaining-tokens"] == 1000 - total_tokens
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert await router.get_model_group_usage("openai/gpt-5-mini") == (total_tokens, 1)
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_counts_request_before_headers_and_tokens_once_on_completion():
+    router = _rpm_tpm_router("lit-3058-stream")
+
+    stream = await router.acompletion(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong pong pong",
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    headers = _ratelimit_headers(stream)
+    assert headers["x-ratelimit-remaining-tokens"] == 1000
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert await router.get_model_group_usage("gpt-5-mini") == (0, 1)
+
+    chunks = [chunk async for chunk in stream]
+    total_tokens = chunks[-1].usage.total_tokens
+    assert total_tokens > 0
+
+    await asyncio.sleep(0.5)
+    assert await router.get_model_group_usage("gpt-5-mini") == (total_tokens, 1)
+
+
+@pytest.mark.asyncio
+async def test_deployment_callback_on_success_adds_only_uncounted_tokens():
+    import time
+
+    router = _rpm_tpm_router("lit-3058-callback")
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["total_tokens"] = 100
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "deployment": "gpt-5-mini",
+                "model_group": "gpt-5-mini",
+                ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 60,
+            },
+            "model_info": {"id": "lit-3058-callback"},
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+
+    tpm_key = await router.deployment_callback_on_success(
+        kwargs=kwargs,
+        completion_response=litellm.ModelResponse(model="gpt-5-mini", usage={"total_tokens": 100}),
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+
+    assert tpm_key is not None
+    assert await router.get_model_group_usage("gpt-5-mini") == (40, 0)
+
+
+class _GatedIncrementCache(DualCache):
+    def __init__(self) -> None:
+        super().__init__(in_memory_cache=InMemoryCache())
+        self.first_increment_started = asyncio.Event()
+        self.release_first_increment = asyncio.Event()
+        self.increment_calls = 0
+
+    async def async_increment_cache_pipeline(
+        self,
+        increment_list: list[RedisPipelineIncrementOperation],
+        local_only: bool = False,
+        parent_otel_span: object = None,
+        **kwargs: object,
+    ) -> list[float] | None:
+        self.increment_calls += 1
+        if self.increment_calls == 1:
+            self.first_increment_started.set()
+            await self.release_first_increment.wait()
+        return await super().async_increment_cache_pipeline(
+            increment_list, local_only=local_only, parent_otel_span=parent_otel_span, **kwargs
+        )
+
+
+@pytest.mark.asyncio
+async def test_success_callback_running_during_pre_header_increment_does_not_double_count():
+    router = _rpm_tpm_router("lit-3058-race")
+    cache = _GatedIncrementCache()
+    router.cache = cache
+
+    request = asyncio.ensure_future(
+        router.acompletion(model="gpt-5-mini", messages=[{"role": "user", "content": "hi"}], mock_response="pong")
+    )
+    await asyncio.wait_for(cache.first_increment_started.wait(), timeout=5)
+    for _ in range(50):
+        if get_deployment_successes_for_current_minute(router, "lit-3058-race") == 1:
+            break
+        await asyncio.sleep(0.1)
+    assert get_deployment_successes_for_current_minute(router, "lit-3058-race") == 1
+    assert cache.increment_calls == 1
+
+    cache.release_first_increment.set()
+    response = await request
+
+    assert await router.get_model_group_usage("gpt-5-mini") == (response.usage.total_tokens, 1)
+
+
+class _UnavailableIncrementCache(DualCache):
+    def __init__(self) -> None:
+        super().__init__(in_memory_cache=InMemoryCache())
+        self.first_increment_started = asyncio.Event()
+        self.release_first_increment = asyncio.Event()
+        self.increment_calls = 0
+
+    async def async_increment_cache_pipeline(
+        self,
+        increment_list: list[RedisPipelineIncrementOperation],
+        local_only: bool = False,
+        parent_otel_span: object = None,
+        **kwargs: object,
+    ) -> list[float] | None:
+        self.increment_calls += 1
+        if self.increment_calls == 1:
+            self.first_increment_started.set()
+            await self.release_first_increment.wait()
+        raise RuntimeError("cache unavailable")
+
+
+@pytest.mark.asyncio
+async def test_callback_observing_stamp_before_pre_header_increment_fails_leaves_no_stamp_behind():
+    router = _rpm_tpm_router("lit-3058-fail")
+    cache = _UnavailableIncrementCache()
+    router.cache = cache
+    metadata: dict[str, object] = {}
+
+    request = asyncio.ensure_future(
+        router.acompletion(
+            model="gpt-5-mini", messages=[{"role": "user", "content": "hi"}], mock_response="pong", metadata=metadata
+        )
+    )
+    await asyncio.wait_for(cache.first_increment_started.wait(), timeout=5)
+    assert metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] == 30
+    for _ in range(50):
+        if get_deployment_successes_for_current_minute(router, "lit-3058-fail") == 1:
+            break
+        await asyncio.sleep(0.1)
+    assert get_deployment_successes_for_current_minute(router, "lit-3058-fail") == 1
+    assert cache.increment_calls == 1
+
+    cache.release_first_increment.set()
+    response = await request
+
+    assert response.usage.total_tokens == 30
+    assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in metadata
+    assert _ratelimit_headers(response)["x-ratelimit-remaining-requests"] == 100
+    assert await router.get_model_group_usage("gpt-5-mini") == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_increment_deployment_usage_for_response_skips_session_wrappers():
+    router = _rpm_tpm_router("lit-3058-ws")
+    request_kwargs = {
+        "model": "gpt-5-mini",
+        "litellm_metadata": {"model_group": "gpt-5-mini", "model_info": {"id": "lit-3058-ws"}},
+    }
+
+    await router.increment_deployment_usage_for_response(response=None, request_kwargs=request_kwargs)
+
+    assert await router.get_model_group_usage("gpt-5-mini") == (None, None)
+    assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in request_kwargs["litellm_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_increment_deployment_usage_writes_only_positive_deltas_for_limited_deployments():
+    router = _rpm_tpm_router("lit-3058-delta")
+    unlimited = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-fake"},
+                "model_info": {"id": "lit-3058-unlimited"},
+            }
+        ]
+    )
+
+    tpm_key = await router._increment_deployment_usage(
+        deployment_id="lit-3058-delta",
+        deployment_name="gpt-5-mini",
+        model_group="gpt-5-mini",
+        total_tokens=25,
+        rpm_increment=1,
+        parent_otel_span=None,
+    )
+    assert tpm_key is not None
+    assert await router.get_model_group_usage("gpt-5-mini") == (25, 1)
+
+    assert (
+        await router._increment_deployment_usage(
+            deployment_id="lit-3058-delta",
+            deployment_name="gpt-5-mini",
+            model_group="gpt-5-mini",
+            total_tokens=0,
+            rpm_increment=0,
+            parent_otel_span=None,
+        )
+        is None
+    )
+    assert await router.get_model_group_usage("gpt-5-mini") == (25, 1)
+
+    assert (
+        await unlimited._increment_deployment_usage(
+            deployment_id="lit-3058-unlimited",
+            deployment_name="gpt-5-mini",
+            model_group="gpt-5-mini",
+            total_tokens=25,
+            rpm_increment=1,
+            parent_otel_span=None,
+        )
+        is None
+    )
+    assert await unlimited.get_model_group_usage("gpt-5-mini") == (None, None)
+
+
+def _shared_redis_stub(store: dict) -> MagicMock:
+    from litellm.caching.redis_cache import RedisCache
+
+    async def increment_pipeline(increment_list, **kwargs):
+        for op in increment_list:
+            store[op["key"]] = store.get(op["key"], 0.0) + op["increment_value"]
+        return [store[op["key"]] for op in increment_list]
+
+    async def batch_get(keys, **kwargs):
+        return {key: store.get(key) for key in keys}
+
+    redis_stub = MagicMock(spec=RedisCache)
+    redis_stub.async_increment_pipeline = increment_pipeline
+    redis_stub.async_batch_get_cache = batch_get
+    return redis_stub
+
+
+@pytest.mark.asyncio
+async def test_headers_on_fresh_worker_reflect_shared_redis_usage():
+    store: dict = {}
+    worker_a = _rpm_tpm_router("lit-3058-workers")
+    worker_b = _rpm_tpm_router("lit-3058-workers")
+    worker_a.cache = DualCache(redis_cache=_shared_redis_stub(store), in_memory_cache=InMemoryCache())
+    worker_b.cache = DualCache(redis_cache=_shared_redis_stub(store), in_memory_cache=InMemoryCache())
+
+    messages = [{"role": "user", "content": "hi"}]
+    tokens_on_a = 0
+    for _ in range(3):
+        response = await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
+        tokens_on_a += response.usage.total_tokens
+
+    response = await worker_b.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
+    headers = _ratelimit_headers(response)
+    assert headers["x-ratelimit-remaining-requests"] == 96
+    assert headers["x-ratelimit-remaining-tokens"] == 1000 - tokens_on_a - response.usage.total_tokens
+
+    counted_tokens = tokens_on_a + response.usage.total_tokens
+    for _ in range(2):
+        response = await worker_a.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong")
+        counted_tokens += response.usage.total_tokens
+
+    stream = await worker_b.acompletion(model="gpt-5-mini", messages=messages, mock_response="pong", stream=True)
+    stream_headers = _ratelimit_headers(stream)
+    assert stream_headers["x-ratelimit-remaining-requests"] == 93
+    assert stream_headers["x-ratelimit-remaining-tokens"] == 1000 - counted_tokens
+    assert [chunk async for chunk in stream]
 
 
 @pytest.mark.asyncio
@@ -1135,8 +1432,8 @@ async def test_set_response_headers_native_input_token_header_does_not_suppress_
     await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
 
     headers = resp._hidden_params["additional_headers"]
-    assert headers["x-ratelimit-remaining-tokens"] == 958
-    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert headers["x-ratelimit-remaining-tokens"] == 1000
+    assert headers["x-ratelimit-remaining-requests"] == 100
     # the provider's native header is left untouched
     assert headers["x-ratelimit-remaining-input-tokens"] == 5
 
@@ -1168,7 +1465,7 @@ async def test_set_response_headers_native_token_header_does_not_suppress_io_hea
 
     headers = resp._hidden_params["additional_headers"]
     assert headers["x-ratelimit-remaining-tokens"] == 5
-    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert headers["x-ratelimit-remaining-requests"] == 100
     assert headers["x-ratelimit-remaining-input-tokens"] == 900
     assert headers["x-ratelimit-remaining-output-tokens"] == 450
 
@@ -1177,8 +1474,7 @@ async def test_set_response_headers_native_token_header_does_not_suppress_io_hea
 async def test_set_response_headers_handles_missing_usage(model_list):
     """
     Streaming chunks and some response shapes may lack a `usage` attribute or
-    populated `total_tokens`. The in-flight subtraction must default to 0
-    tokens (still subtract 1 from requests) and never raise.
+    populated `total_tokens`. Header composition must not depend on usage and never raise.
     """
     from pydantic import BaseModel
 
@@ -1199,7 +1495,7 @@ async def test_set_response_headers_handles_missing_usage(model_list):
 
     headers = resp._hidden_params["additional_headers"]
     assert headers["x-ratelimit-remaining-tokens"] == 1000
-    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert headers["x-ratelimit-remaining-requests"] == 100
 
 
 @pytest.mark.asyncio
@@ -2080,8 +2376,12 @@ def test_handle_clientside_credential_metadata_loading(
     assert result_deployment.model_info.id != "original-id-123"
     assert result_deployment.model_info.original_model_id == "original-id-123"
 
-    # Verify the deployment was added to the router
-    assert len(router.model_list) == len(model_list) + 1
+    # The caller-supplied credential must stay scoped to this call: it must never be
+    # registered as a router deployment, or a later caller with no override of their
+    # own could be load-balanced onto it and reach the provider with this credential
+    # (see LIT-7811).
+    assert len(router.model_list) == len(model_list)
+    assert router.get_deployment(model_id=result_deployment.model_info.id) is None
 
     # Test that the function correctly uses the right metadata key
     # For acompletion, it should use "metadata"
@@ -2241,12 +2541,61 @@ def test_handle_clientside_credential_with_responses_function(model_list):
     assert result_deployment.model_info.id != "original-id-responses"
     assert result_deployment.model_info.original_model_id == "original-id-responses"
 
-    # Verify the deployment was added to the router
-    assert len(router.model_list) == len(model_list) + 1
+    # The caller-supplied credential must stay scoped to this call: it must never be
+    # registered as a router deployment (see LIT-7811).
+    assert len(router.model_list) == len(model_list)
+    assert router.get_deployment(model_id=result_deployment.model_info.id) is None
 
     print(
         "✓ Success with _ageneric_api_call_with_fallbacks function name and litellm_metadata"
     )
+
+
+def test_handle_clientside_credential_still_registers_custom_pricing(model_list):
+    """A clientside-credential call must still price against the deployment's own
+    custom rate, even though the call's ephemeral deployment is never added to the
+    router (see LIT-7811): losing that registration would silently fall back to
+    public catalog pricing for every clientside-credential call on a deployment
+    with a custom rate configured."""
+    router = Router(model_list=model_list)
+    deployment = {
+        "model_name": "gpt-4.1",
+        "litellm_params": {
+            "model": "gpt-4.1",
+            "api_key": "test_key",
+            "input_cost_per_token": 0.0001234,
+            "output_cost_per_token": 0.0005678,
+        },
+        "model_info": {"id": "original-id-pricing"},
+    }
+    kwargs = {"api_key": "client_side_key", "metadata": {"model_group": "gpt-4.1"}}
+
+    result_deployment = router._handle_clientside_credential(
+        deployment=deployment, kwargs=kwargs, function_name="acompletion"
+    )
+
+    registered = litellm.model_cost.get(result_deployment.model_info.id)
+    assert registered is not None
+    assert registered["input_cost_per_token"] == 0.0001234
+    assert registered["output_cost_per_token"] == 0.0005678
+
+
+def test_register_deployment_pricing_direct_call():
+    """Direct-call unit test for the pricing-registration helper `_handle_clientside_credential`
+    relies on, so it prices a deployment that is deliberately never added to `self.model_list`."""
+    deployment = Deployment(
+        model_name="gpt-4.1",
+        litellm_params=LiteLLM_Params(
+            model="gpt-4.1",
+            api_key="test_key",
+            input_cost_per_token=0.0009999,
+        ),
+        model_info=ModelInfo(id="direct-call-pricing-id"),
+    )
+
+    Router._register_deployment_pricing(deployment=deployment)
+
+    assert litellm.model_cost["direct-call-pricing-id"]["input_cost_per_token"] == 0.0009999
 
 
 def test_get_metadata_variable_name_from_kwargs(model_list):

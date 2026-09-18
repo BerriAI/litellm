@@ -1,15 +1,19 @@
 import asyncio
 import json
+import uuid
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
 
+import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 def test_get_supported_params_thinking():
@@ -53,6 +57,7 @@ def test_aws_params_filtered_from_request_body():
         "aws_sts_endpoint": "https://sts.amazonaws.com",
         "aws_bedrock_runtime_endpoint": "https://bedrock-runtime.us-west-2.amazonaws.com",
         "aws_external_id": "external-id-123",
+        "aws_session_tags": [{"Key": "team", "Value": "genai"}],
     }
 
     # Transform the request
@@ -101,6 +106,9 @@ def test_aws_params_filtered_from_request_body():
     assert (
         "aws_external_id" not in result_json
     ), "AWS external ID should not be in request body"
+    assert (
+        "aws_session_tags" not in result_json
+    ), "AWS session tags should not be in request body"
 
     # Also check that the sensitive values themselves are not in the response
     assert (
@@ -671,3 +679,183 @@ def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice
     assert "output_format" not in result
     assert "tools" in result
     assert "tool_choice" not in result
+
+
+@pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-5", "us.anthropic.claude-fable-5-1"])
+def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_thinking(local_model_cost_map, model):
+    result = AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            },
+            "thinking": {"type": "enabled", "budget_tokens": 4096},
+            "max_tokens": 8192,
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "tools" in result
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"] == {"effort": "high"}
+
+
+def test_bedrock_chat_invoke_response_format_stub_still_upgrades_legacy_thinking(local_model_cost_map):
+    """Regression: the tool-based ``response_format`` path swaps in a Claude 3 stub
+    model before the shared Anthropic mapping, which hid the adaptive-only model
+    from the legacy ``thinking`` upgrade and left ``type=enabled`` on the wire."""
+    result = AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={
+            "response_format": {"type": "json_object"},
+            "thinking": {"type": "enabled", "budget_tokens": 4096},
+            "max_tokens": 8192,
+        },
+        optional_params={},
+        model="us.anthropic.claude-fable-5-1",
+        drop_params=False,
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"] == {"effort": "high"}
+
+
+async def test_bedrock_invoke_claude_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):
+    image_url = f"http://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = request.content.decode()
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "us.anthropic.claude-sonnet-5",
+                "content": [{"type": "text", "text": "Green"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="bedrock/invoke/us.anthropic.claude-sonnet-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ],
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [image_url]
+    assert image_url not in captured["body"]
+    assert async_only_image_fetch.base64_png in captured["body"]
+
+
+async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sources_off_the_event_loop(async_only_image_fetch):
+    pdf_url = f"http://docs.example/{uuid.uuid4()}.pdf"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "us.anthropic.claude-sonnet-5",
+                "content": [{"type": "text", "text": "A lease"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="bedrock/invoke/us.anthropic.claude-sonnet-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this document?"},
+                    {"type": "document", "source": {"type": "url", "url": pdf_url}},
+                ],
+            }
+        ],
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "A lease"
+    assert async_only_image_fetch.fetched == [pdf_url]
+    assert {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": async_only_image_fetch.base64_png},
+    } in captured["body"]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize(
+    "model, expected_betas",
+    [
+        pytest.param("us.anthropic.claude-opus-4-8", ["tool-search-tool-2025-10-19"], id="opus_4_8"),
+        pytest.param("us.anthropic.claude-opus-5", ["tool-search-tool-2025-10-19"], id="opus_5"),
+        pytest.param("us.anthropic.claude-sonnet-5", ["tool-search-tool-2025-10-19"], id="sonnet_5"),
+        pytest.param("us.anthropic.claude-haiku-4-5-20251001-v1:0", ["tool-search-tool-2025-10-19"], id="haiku_4_5"),
+        pytest.param("us.anthropic.claude-opus-4-1-20250805-v1:0", None, id="opus_4_1_unsupported"),
+    ],
+)
+def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
+    local_model_cost_map, local_beta_headers_config, model, expected_betas
+):
+    """LIT-5851: the chat Invoke path used to add the ``tool-search-tool-2025-10-19``
+    beta whenever the id contained ``opus-4``, so Opus 5 and Sonnet 5 lost it, Haiku
+    4.5 never had it, and Opus 4.1 got it without support. The gate now follows the
+    model map's ``supports_tool_search`` flag, shared with the messages path."""
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Add 2 and 3"}],
+        optional_params={
+            "max_tokens": 64,
+            "tools": [
+                {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "add_numbers",
+                        "description": "Add two integers",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                            "required": ["a", "b"],
+                        },
+                    },
+                },
+            ],
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("anthropic_beta") == expected_betas

@@ -25,6 +25,19 @@ export const TEAM_ID_COLUMN_ID = "model_info_team_id";
 export const ACCESS_GROUPS_COLUMN_ID = "model_info_access_groups";
 export const STATUS_COLUMN_ID = "model_info_db_model";
 
+export const MODEL_TABLE_SORT_COLUMN_IDS = [
+  MODEL_NAME_COLUMN_ID,
+  CREATED_BY_COLUMN_ID,
+  UPDATED_AT_COLUMN_ID,
+  COSTS_COLUMN_ID,
+  STATUS_COLUMN_ID,
+] as const;
+
+export type ModelTableSortColumnId = (typeof MODEL_TABLE_SORT_COLUMN_IDS)[number];
+
+export const isModelTableSortColumnId = (columnId: string): columnId is ModelTableSortColumnId =>
+  (MODEL_TABLE_SORT_COLUMN_IDS as readonly string[]).includes(columnId);
+
 const COLUMN_ID_TO_SERVER_SORT_FIELD: Record<string, string> = {
   [COSTS_COLUMN_ID]: "costs",
   [STATUS_COLUMN_ID]: "status",
@@ -251,6 +264,7 @@ interface ModelRowActionsProps {
   model: ModelData;
   userRole: string;
   userID: string;
+  isViewOnly: boolean;
   isPausing: boolean;
   onDeleteClick?: (modelId: string) => void;
   onTogglePauseClick?: (modelId: string, blocked: boolean) => void | Promise<void>;
@@ -260,14 +274,15 @@ function ModelRowActions({
   model,
   userRole,
   userID,
+  isViewOnly,
   isPausing,
   onDeleteClick,
   onTogglePauseClick,
 }: ModelRowActionsProps) {
   const modelId = model.model_info?.id;
   const isConfigModel = !model.model_info?.db_model;
-  const isAdmin = userRole === "Admin";
-  const canEditModel = isAdmin || model.model_info?.created_by === userID;
+  const isAdmin = userRole === "Admin" && !isViewOnly;
+  const canEditModel = !isViewOnly && (isAdmin || model.model_info?.created_by === userID);
   const isBlocked = model.model_info?.blocked === true;
   const isPauseToggleable = !isConfigModel && isAdmin && Boolean(onTogglePauseClick);
 
@@ -344,6 +359,7 @@ function ModelRowActions({
 export interface ModelsTableColumnDeps {
   userRole: string;
   userID: string;
+  isViewOnly: boolean;
   onModelIdClick: (modelId: string) => void;
   onTeamIdClick: (teamId: string) => void;
   onDeleteClick?: (modelId: string) => void;
@@ -354,6 +370,7 @@ export interface ModelsTableColumnDeps {
 export const getModelsTableColumns = ({
   userRole,
   userID,
+  isViewOnly,
   onModelIdClick,
   onTeamIdClick,
   onDeleteClick,
@@ -483,6 +500,7 @@ export const getModelsTableColumns = ({
         model={row.original}
         userRole={userRole}
         userID={userID}
+        isViewOnly={isViewOnly}
         isPausing={pausingModelId === row.original.model_info?.id}
         onDeleteClick={onDeleteClick}
         onTogglePauseClick={onTogglePauseClick}

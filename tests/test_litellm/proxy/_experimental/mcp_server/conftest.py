@@ -2,15 +2,15 @@ import os
 
 import pytest
 
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-    global_mcp_server_manager,
-)
-
 
 @pytest.fixture(autouse=True)
 def _hermetic_mcp_server_registry():
     """Restore the singleton ``global_mcp_server_manager``'s registry state around every
     test, so entries seeded by one test never leak into another on a shared shard."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
     saved_registry = dict(global_mcp_server_manager.registry)
     saved_config_servers = dict(global_mcp_server_manager.config_mcp_servers)
     saved_tool_mapping = dict(global_mcp_server_manager.tool_name_to_mcp_server_name_mapping)

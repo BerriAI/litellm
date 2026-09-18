@@ -145,12 +145,14 @@ ROUTE_ENDPOINT_MAPPING: Final = {
 }
 
 
+_AVAILABLE_MODELS_HINT: Final = "Call `/v1/models` to view available models for your key."
+
+
 class ProxyModelNotFoundError(HTTPException):
     def __init__(self, route: str, model_name: str, retryable_with_model_read_through: bool = True):
         self.retryable_with_model_read_through: Final = retryable_with_model_read_through
-        detail: Final = {
-            "error": f"{route}: Invalid model name passed in model={model_name}. Call `/v1/models` to view available models for your key."
-        }
+        self.spend_log_error_message: Final = f"{route}: Invalid model name passed in. {_AVAILABLE_MODELS_HINT}"
+        detail: Final = {"error": f"{route}: Invalid model name passed in model={model_name}. {_AVAILABLE_MODELS_HINT}"}
         super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 

@@ -84,6 +84,7 @@ export default function AccessGroupBudgetsPanel() {
 
       <DataTable
         data={accessGroups ?? []}
+        paginationMode="client"
         columns={columns}
         getRowId={(group) => group.access_group}
         sortingMode="client"

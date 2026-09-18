@@ -1,55 +1,62 @@
-"""
-Get num retries for an exception.
+"""Resolve how many retries a RetryPolicy grants for a given exception."""
 
-- Account for retry policy by exception type.
-"""
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
+from typing import Final
 
 from litellm.exceptions import (
     AuthenticationError,
     BadRequestError,
     ContentPolicyViolationError,
+    InternalServerError,
     RateLimitError,
+    ServiceUnavailableError,
     Timeout,
 )
 from litellm.types.router import RetryPolicy
 
+_RETRIES_BY_EXCEPTION_TYPE: Final[Mapping[type, Callable[[RetryPolicy], int | None]]] = MappingProxyType(
+    {
+        AuthenticationError: lambda policy: policy.AuthenticationErrorRetries,
+        Timeout: lambda policy: policy.TimeoutErrorRetries,
+        RateLimitError: lambda policy: policy.RateLimitErrorRetries,
+        ContentPolicyViolationError: lambda policy: policy.ContentPolicyViolationErrorRetries,
+        BadRequestError: lambda policy: policy.BadRequestErrorRetries,
+        ServiceUnavailableError: lambda policy: policy.ServiceUnavailableErrorRetries,
+        InternalServerError: lambda policy: policy.InternalServerErrorRetries,
+    }
+)
+
+
+def _resolve_policy(
+    retry_policy: RetryPolicy | Mapping[str, int | None] | None,
+    model_group: str | None,
+    model_group_retry_policy: Mapping[str, RetryPolicy | Mapping[str, int | None]] | None,
+) -> RetryPolicy | None:
+    selected: Final = (
+        model_group_retry_policy[model_group]
+        if model_group_retry_policy is not None and model_group is not None and model_group in model_group_retry_policy
+        else retry_policy
+    )
+    if isinstance(selected, Mapping):
+        return RetryPolicy(**selected)
+    return selected
+
 
 def get_num_retries_from_retry_policy(
     exception: Exception,
-    retry_policy: RetryPolicy | dict | None = None,
+    retry_policy: RetryPolicy | Mapping[str, int | None] | None = None,
     model_group: str | None = None,
-    model_group_retry_policy: dict[str, RetryPolicy] | None = None,
-):
-    """
-    BadRequestErrorRetries: Optional[int] = None
-    AuthenticationErrorRetries: Optional[int] = None
-    TimeoutErrorRetries: Optional[int] = None
-    RateLimitErrorRetries: Optional[int] = None
-    ContentPolicyViolationErrorRetries: Optional[int] = None
-    """
-    # if we can find the exception then in the retry policy -> return the number of retries
-
-    if model_group_retry_policy is not None and model_group is not None and model_group in model_group_retry_policy:
-        retry_policy = model_group_retry_policy.get(model_group, None)
-
-    if retry_policy is None:
+    model_group_retry_policy: Mapping[str, RetryPolicy | Mapping[str, int | None]] | None = None,
+) -> int | None:
+    """Walk the exception's MRO, most specific class first, and return the first configured retry count."""
+    policy: Final = _resolve_policy(retry_policy, model_group, model_group_retry_policy)
+    if policy is None:
         return None
-    if isinstance(retry_policy, dict):
-        retry_policy = RetryPolicy(**retry_policy)
-
-    if isinstance(exception, AuthenticationError) and retry_policy.AuthenticationErrorRetries is not None:
-        return retry_policy.AuthenticationErrorRetries
-    if isinstance(exception, Timeout) and retry_policy.TimeoutErrorRetries is not None:
-        return retry_policy.TimeoutErrorRetries
-    if isinstance(exception, RateLimitError) and retry_policy.RateLimitErrorRetries is not None:
-        return retry_policy.RateLimitErrorRetries
-    if (
-        isinstance(exception, ContentPolicyViolationError)
-        and retry_policy.ContentPolicyViolationErrorRetries is not None
-    ):
-        return retry_policy.ContentPolicyViolationErrorRetries
-    if isinstance(exception, BadRequestError) and retry_policy.BadRequestErrorRetries is not None:
-        return retry_policy.BadRequestErrorRetries
+    configured: Final = (
+        _RETRIES_BY_EXCEPTION_TYPE[cls](policy) for cls in type(exception).__mro__ if cls in _RETRIES_BY_EXCEPTION_TYPE
+    )
+    return next((retries for retries in configured if retries is not None), policy.DefaultRetries)
 
 
 def reset_retry_policy() -> RetryPolicy:

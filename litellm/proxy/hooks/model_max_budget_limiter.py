@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
@@ -19,12 +19,14 @@ from litellm.types.utils import BudgetConfig, StandardLoggingPayload
 VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX: Final = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX: Final = "end_user_model_spend"
 USER_SPEND_CACHE_KEY_PREFIX: Final = "user_model_spend"
+TEAM_SPEND_CACHE_KEY_PREFIX: Final = "team_model_spend"
 
 _SPEND_CACHE_KEY_PREFIXES: Final = MappingProxyType(
     {
         Litellm_EntityType.KEY: VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
         Litellm_EntityType.USER: USER_SPEND_CACHE_KEY_PREFIX,
         Litellm_EntityType.END_USER: END_USER_SPEND_CACHE_KEY_PREFIX,
+        Litellm_EntityType.TEAM: TEAM_SPEND_CACHE_KEY_PREFIX,
     }
 )
 
@@ -37,6 +39,7 @@ _BUDGET_START_TIME_KEY_PREFIXES: Final = MappingProxyType(
         Litellm_EntityType.KEY: "virtual_key_budget_start_time",
         Litellm_EntityType.USER: "user_model_budget_start_time",
         Litellm_EntityType.END_USER: "end_user_budget_start_time",
+        Litellm_EntityType.TEAM: "team_model_budget_start_time",
     }
 )
 
@@ -139,6 +142,18 @@ def resolve_model_budget(model: str, model_max_budget: Mapping[str, object]) -> 
     return None
 
 
+def team_model_budget_applies(model: str, key_model_max_budget: Mapping[str, object] | None) -> bool:
+    """A key entry that spend-gates `model` overrides the team cap: it is then gated on and billed to the key alone."""
+    if not key_model_max_budget:
+        return True
+    resolved: Final = resolve_model_budget(model=model, model_max_budget=key_model_max_budget)
+    return resolved is None or not _spend_gated(resolved.budget_config)
+
+
+def _spend_gated(budget_config: BudgetConfig) -> bool:
+    return budget_config.max_budget is not None and budget_config.max_budget >= 0
+
+
 def _budget_model_candidates(model: str) -> tuple[str, ...]:
     """Names a budget may be configured under for a request on `model`, most specific first.
 
@@ -199,23 +214,31 @@ async def build_model_max_budget_usage(
         )
         for budget_model, budget_config in budgets
     )
-    batched: Final = await cache.async_batch_get_cache(
-        keys=list(spend_keys)  # mutable-ok: async_batch_get_cache annotates keys as list, so one must exist here
-    )
-    # async_batch_get_cache returns None if it fails internally, and its result is
-    # index-aligned with `keys` otherwise. An unusable result reads as a miss,
-    # which is what a never-written counter already reads as.
-    current_spends: Final = (
-        tuple(batched) if isinstance(batched, list) and len(batched) == len(budgets) else (None,) * len(budgets)
-    )
+    current_spends: Final = await _current_window_spends(cache=cache, spend_keys=spend_keys)
     return {
         budget_model: {
-            "current_spend": round(_as_spend(current_spend), 4),
+            "current_spend": round(current_spend, 4),
             "budget_limit": budget_config.max_budget,
             "time_period": budget_config.budget_duration,
         }
         for (budget_model, budget_config), current_spend in zip(budgets, current_spends, strict=True)
     }
+
+
+async def _current_window_spends(cache: DualCache, spend_keys: Sequence[str]) -> tuple[float, ...]:
+    """Redis holds the window total across replicas; the in-memory copy is one replica's share."""
+    keys: Final = list(spend_keys)  # mutable-ok: both batch readers annotate their key argument as list
+    redis_cache: Final = cache.redis_cache
+    if redis_cache is not None:
+        shared: Final = await redis_cache.async_batch_get_cache(key_list=keys)
+        return tuple(_as_spend(shared.get(key)) for key in keys)
+    # async_batch_get_cache returns None if it fails internally, and its result is
+    # index-aligned with `keys` otherwise. An unusable result reads as a miss,
+    # which is what a never-written counter already reads as.
+    batched: Final = await cache.async_batch_get_cache(keys=keys)
+    if not isinstance(batched, list) or len(batched) != len(keys):
+        return (0.0,) * len(keys)
+    return tuple(_as_spend(current_spend) for current_spend in batched)
 
 
 def _usable_budget_config(raw_budget_config: object) -> BudgetConfig | None:
@@ -338,6 +361,30 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             exceeded_message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
         )
 
+    async def is_team_within_model_budget(
+        self,
+        team_id: str,
+        team_model_max_budget: Mapping[str, object],
+        key_model_max_budget: Mapping[str, object] | None,
+        model: str,
+    ) -> bool:
+        """
+        Check if the team is within the model budget, unless the key's own
+        `model_max_budget` overrides it for `model`
+
+        Raises:
+            BudgetExceededError: If the team has exceeded the model budget
+        """
+        if not team_model_budget_applies(model=model, key_model_max_budget=key_model_max_budget):
+            return True
+        return await self._is_entity_within_model_budget(
+            entity_type=Litellm_EntityType.TEAM,
+            entity_id=team_id,
+            model_max_budget=team_model_max_budget,
+            model=model,
+            exceeded_message=f"LiteLLM Team: {team_id}, exceeded budget for model={model}",
+        )
+
     async def _is_entity_within_model_budget(
         self,
         entity_type: Litellm_EntityType,
@@ -404,7 +451,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         return current_spend + _as_spend(await self._cached_spend(legacy_spend_key))
 
     async def _cached_spend(self, spend_key: str) -> float | None:
-        return await self.dual_cache.async_get_cache(key=spend_key)
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None:
+            return await self.dual_cache.async_get_cache(key=spend_key)
+        return await redis_cache.async_get_cache(key=spend_key)
 
     async def async_filter_deployments(
         self,
@@ -445,11 +495,26 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return
 
         response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
+        key_model_max_budget: Final = _metadata.get("user_api_key_model_max_budget")
         entity_budgets: Final = (
             (
                 Litellm_EntityType.KEY,
                 payload_metadata.get("user_api_key_hash"),
-                _metadata.get("user_api_key_model_max_budget"),
+                key_model_max_budget,
+            ),
+            (
+                Litellm_EntityType.TEAM,
+                payload_metadata.get("user_api_key_team_id"),
+                (
+                    _metadata.get("user_api_key_team_model_max_budget")
+                    if team_model_budget_applies(
+                        model=model,
+                        key_model_max_budget=(
+                            key_model_max_budget if isinstance(key_model_max_budget, Mapping) else None
+                        ),
+                    )
+                    else None
+                ),
             ),
             (
                 Litellm_EntityType.USER,
@@ -467,7 +532,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if not resolved_budgets:
             verbose_proxy_logger.debug(
                 "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: "
-                "no key, user or end-user model_max_budget covers model=%s",
+                "no key, team, user or end-user model_max_budget covers model=%s",
                 model,
             )
             return

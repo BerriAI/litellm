@@ -6,6 +6,7 @@ Configuration structure:
 - policy_attachments: Define WHERE policies apply (teams, keys, models)
 """
 
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_proxy_logger
@@ -25,8 +26,8 @@ _reset_color_code: Final = "\033[0m"
 
 
 def _print_policies_on_startup(
-    policies_config: dict[str, Any],
-    policy_attachments_config: list[dict[str, Any]] | None = None,
+    policies_config: Mapping[str, Mapping[str, object]],
+    policy_attachments_config: Sequence[Mapping[str, object]] | None = None,
 ) -> None:
     """
     Print loaded policies to console on startup (similar to model list).

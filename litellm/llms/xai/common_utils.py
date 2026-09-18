@@ -8,6 +8,17 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderSpecificModelInfo
 
+USD_TICKS_PER_DOLLAR: Final = 10_000_000_000
+
+
+def xai_reported_cost_in_usd(cost_in_usd_ticks: object) -> float | None:
+    """xAI bills in ticks of a dollar: https://docs.x.ai/developers/cost-tracking"""
+    if not isinstance(cost_in_usd_ticks, int) or isinstance(cost_in_usd_ticks, bool):
+        return None
+    if cost_in_usd_ticks < 0:
+        return None
+    return cost_in_usd_ticks / USD_TICKS_PER_DOLLAR
+
 
 class XAIModelInfo(BaseLLMModelInfo):
     def get_provider_info(

@@ -20,13 +20,15 @@ describe("audio_speech", () => {
     });
 
     // Mock the OpenAI constructor and its methods
-    (OpenAI as any).mockImplementation(() => ({
-      audio: {
-        speech: {
-          create: mockCreate,
+    (OpenAI as any).mockImplementation(function () {
+      return {
+        audio: {
+          speech: {
+            create: mockCreate,
+          },
         },
-      },
-    }));
+      };
+    });
   });
 
   afterEach(() => {

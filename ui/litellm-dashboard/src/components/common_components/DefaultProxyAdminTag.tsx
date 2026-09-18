@@ -1,13 +1,12 @@
 import { Badge } from "@/components/ui/badge";
-
-const DEFAULT_USER_ID = "default_user_id";
+import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
 
 interface DefaultProxyAdminTagProps {
   userId: string | null | undefined;
 }
 
 export default function DefaultProxyAdminTag({ userId }: DefaultProxyAdminTagProps) {
-  if (userId === DEFAULT_USER_ID) {
+  if (userId === DEFAULT_PROXY_ADMIN_USER_ID) {
     return <Badge variant="secondary">Default Proxy Admin</Badge>;
   }
 

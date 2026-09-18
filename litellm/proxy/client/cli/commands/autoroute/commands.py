@@ -1,5 +1,4 @@
 import atexit
-import json
 import secrets
 import signal
 import threading
@@ -14,11 +13,15 @@ from ..claude_settings import (
     AUTOROUTE_BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
     ClaudeSettingsError,
+    StaticToken,
+    install_statusline_script,
     load_json_or_empty,
+    merge_claude_settings,
+    write_claude_settings,
 )
 from ..up import BackupRecord as ClaudeBackupRecord
 from ..up import restore_claude_settings, write_backup
-from .config import master_key_from_config
+from .config import AUTOROUTER_MODEL_NAME, master_key_from_config
 from .process import (
     CONFIG_PATH,
     DEFAULT_AUTOROUTE_PORT,
@@ -37,7 +40,6 @@ from .process import (
     terminate,
     write_pid_record,
 )
-from .settings import merge_claude_settings_static_token
 from .wizard import run_configure_wizard
 
 _GENERATED_CONFIG_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
@@ -49,7 +51,7 @@ def _ensure_master_key() -> str:
     The generated config is the single home of the key: the proxy server authenticates against
     general_settings.master_key only (a key under litellm_settings is silently ignored, which
     would leave the ephemeral proxy with no real auth), and the file is written 0600 via
-    secure_create. Reusing that persisted value keeps the key stable across `up` runs, so a
+    secure_create. Reusing that persisted value keeps the key stable across `start` runs, so a
     client configured against one session keeps working in the next.
     """
     with open(CONFIG_PATH, "r") as f:
@@ -86,15 +88,18 @@ def configure(ctx: click.Context) -> None:
     run_configure_wizard(ctx)
 
 
-@autoroute_group.command("up")
-@click.option(
+_PORT_OPTION: Final = click.option(
     "--port",
     type=click.IntRange(1, 65535),
     default=DEFAULT_AUTOROUTE_PORT,
     show_default=True,
     help="Loopback port for the ephemeral proxy; stable across runs so configured clients keep working.",
 )
-def up(port: int) -> None:
+
+
+@autoroute_group.command("start")
+@_PORT_OPTION
+def start(port: int) -> None:
     """Launch the ephemeral auto-router proxy and route Claude Code through it"""
     if not CONFIG_PATH.exists():
         raise click.ClickException("No config found. Run `lite autoroute configure` first.")
@@ -102,7 +107,7 @@ def up(port: int) -> None:
     missing: Final = missing_proxy_runtime_modules()
     if missing:
         raise click.ClickException(
-            "lite autoroute up launches a local litellm proxy, which needs the proxy runtime that the "
+            "lite autoroute start launches a local litellm proxy, which needs the proxy runtime that the "
             f"thin `litellm[cli]` install does not include (missing: {', '.join(missing)}). Install the "
             "proxy runtime with `uv tool install --force 'litellm[proxy]'`, or to QA a branch, "
             "`curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch>/scripts/install.sh | "
@@ -115,14 +120,14 @@ def up(port: int) -> None:
         raise click.ClickException(str(e))
     if existing_pid is not None and is_running(existing_pid.pid):
         raise click.ClickException(
-            "An ephemeral proxy is already running (lite autoroute up looks already active). "
-            "Run `lite autoroute down` first."
+            "An ephemeral proxy is already running (lite autoroute start looks already active). "
+            "Run `lite autoroute stop` first."
         )
 
     if AUTOROUTE_BACKUP_PATH.exists():
         raise click.ClickException(
-            f"{AUTOROUTE_BACKUP_PATH} already exists -- `lite autoroute up` looks like it's already "
-            "running (or crashed without cleanup). Run `lite autoroute down` first."
+            f"{AUTOROUTE_BACKUP_PATH} already exists -- `lite autoroute start` looks like it's already "
+            "running (or crashed without cleanup). Run `lite autoroute stop` first."
         )
 
     if port == 4000:
@@ -133,8 +138,8 @@ def up(port: int) -> None:
 
     if not is_port_available(port):
         raise click.ClickException(
-            f"Port {port} on 127.0.0.1 is already in use. If a previous `lite autoroute up` is still "
-            "running or crashed, run `lite autoroute down`; otherwise pick a different port with --port."
+            f"Port {port} on 127.0.0.1 is already in use. If a previous `lite autoroute start` is still "
+            "running or crashed, run `lite autoroute stop`; otherwise pick a different port with --port."
         )
 
     master_key: Final = _ensure_master_key()
@@ -150,16 +155,23 @@ def up(port: int) -> None:
         raise click.ClickException(str(e))
 
     try:
+        status_line: Final = install_statusline_script()
         original_existed: Final = CLAUDE_SETTINGS_PATH.exists()
         original_settings: Final = load_json_or_empty(CLAUDE_SETTINGS_PATH)
         write_backup(
             ClaudeBackupRecord(existed=original_existed, content=original_settings if original_existed else None),
             AUTOROUTE_BACKUP_PATH,
         )
-        merged: Final = merge_claude_settings_static_token(original_settings, base_url, master_key)
+        merged: Final = merge_claude_settings(
+            original_settings,
+            base_url,
+            StaticToken(master_key),
+            AUTOROUTER_MODEL_NAME,
+            AUTOROUTER_MODEL_NAME,
+            status_line=status_line,
+        )
         CLAUDE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with secure_create(CLAUDE_SETTINGS_PATH) as f:
-            json.dump(merged, f, indent=2)
+        write_claude_settings(CLAUDE_SETTINGS_PATH, merged)
     except ClaudeSettingsError as e:
         terminate(process.pid)
         clear_pid_record()
@@ -187,7 +199,7 @@ def up(port: int) -> None:
         click.echo("\nStopped ephemeral proxy and restored Claude Code settings.")
         click.echo(
             f"Restart any Claude Code session still open from this session, or another local account could "
-            f"bind the now-free port {port} and receive its requests. Do not use `lite autoroute up` on a "
+            f"bind the now-free port {port} and receive its requests. Do not use `lite autoroute start` on a "
             f"shared or multi-tenant host."
         )
 
@@ -205,13 +217,13 @@ def up(port: int) -> None:
     _teardown()
 
 
-@autoroute_group.command("down")
-def down() -> None:
+@autoroute_group.command("stop")
+def stop() -> None:
     """Restore Claude Code settings and stop a leftover ephemeral proxy, if any"""
     try:
         record: PidRecord | None = read_pid_record()
     except ClaudeSettingsError as e:
-        # down is the crash-recovery path -- a corrupt pid record must not block it; clear the
+        # stop is the crash-recovery path -- a corrupt pid record must not block it; clear the
         # unusable record and keep going rather than leaving the user with no way to clean up.
         click.echo(f"{e} Clearing it and continuing cleanup.", err=True)
         record = None
@@ -229,7 +241,34 @@ def down() -> None:
     elif restored.existed:
         click.echo(f"Restored {CLAUDE_SETTINGS_PATH} to its original contents.")
     else:
-        click.echo(f"Removed {CLAUDE_SETTINGS_PATH} (it did not exist before `lite autoroute up`).")
+        click.echo(f"Removed {CLAUDE_SETTINGS_PATH} (it did not exist before `lite autoroute start`).")
+
+
+AUTOROUTE_ALIAS_DEPRECATION_NOTICE: Final = (
+    "`lite autoroute {retired}` is deprecated and will be removed in a future release; "
+    "run `lite autoroute {current}` instead, it takes the same options."
+)
+
+
+def _warn_deprecated_alias(retired: str, current: str) -> None:
+    click.secho(AUTOROUTE_ALIAS_DEPRECATION_NOTICE.format(retired=retired, current=current), err=True, fg="yellow")
+
+
+@autoroute_group.command("up", hidden=True)
+@_PORT_OPTION
+@click.pass_context
+def up(ctx: click.Context, port: int) -> None:
+    """Deprecated alias of `lite autoroute start`"""
+    _warn_deprecated_alias("up", "start")
+    ctx.invoke(start, port=port)
+
+
+@autoroute_group.command("down", hidden=True)
+@click.pass_context
+def down(ctx: click.Context) -> None:
+    """Deprecated alias of `lite autoroute stop`"""
+    _warn_deprecated_alias("down", "stop")
+    ctx.invoke(stop)
 
 
 __all__ = ["autoroute_group"]

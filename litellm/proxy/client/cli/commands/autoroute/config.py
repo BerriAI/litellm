@@ -162,6 +162,7 @@ def build_generated_model_list(config: AutorouteConfig) -> list[JsonValue]:
     complexity_router_config: Final[dict[str, JsonValue]] = {
         "tiers": {tier: list(models) for tier, models in config.tiers.items()},
         "default_model": config.default_model,
+        "return_raw_model_name": True,
     }
     if isinstance(config.classifier, LLMClassifier):
         complexity_router_config["classifier_type"] = "llm"
@@ -213,7 +214,7 @@ def build_generated_proxy_config(config: AutorouteConfig, master_key: str) -> di
 def master_key_from_config(config: dict[str, JsonValue]) -> str | None:
     """The master key persisted in a generated config, or None when absent or blank.
 
-    Single definition of "this config already has a usable key", shared by `up` (reuse
+    Single definition of "this config already has a usable key", shared by `start` (reuse
     instead of minting) and the configure wizard (carry the key forward on rewrite) so the
     two sites can never disagree on what counts as one. Returned verbatim, never stripped:
     the proxy authenticates against the exact bytes under general_settings.master_key, so a

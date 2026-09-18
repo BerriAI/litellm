@@ -41,6 +41,7 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
   return (
     <DataTable
       data={data}
+      paginationMode="client"
       columns={columns}
       getRowId={(vectorStore, index) => vectorStore.vector_store_id || String(index)}
       sortingMode="client"
