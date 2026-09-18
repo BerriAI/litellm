@@ -544,7 +544,24 @@ class ResponsesAPIRequestUtils:
         return request_input
 
     @staticmethod
-    def strip_encrypted_reasoning_from_input(request_input: object) -> None:
+    def get_encrypted_content_model_id(item: object) -> str | None:
+        if not _is_object_dict(item):
+            return None
+        item_id: Final = item.get("id")
+        if isinstance(item_id, str):
+            decoded: Final = ResponsesAPIRequestUtils._decode_encrypted_item_id(item_id)
+            if decoded:
+                return decoded.get("model_id")
+        encrypted_content: Final = item.get("encrypted_content")
+        if isinstance(encrypted_content, str):
+            model_id, _ = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(encrypted_content)
+            return model_id or None
+        return None
+
+    @staticmethod
+    def strip_encrypted_reasoning_from_input(
+        request_input: object, *, originating_model_ids: frozenset[str] | None = None
+    ) -> None:
         """Drop reasoning items the routed deployment cannot decrypt, keeping their readable summary.
 
         Mutates ``request_input`` in place: the router's fallback snapshot shares this
@@ -553,7 +570,13 @@ class ResponsesAPIRequestUtils:
         if not isinstance(request_input, list):
             return
         items: Final = cast(list[object], request_input)  # cast-ok: untyped client json
-        stripped: Final = tuple(ResponsesAPIRequestUtils._without_encrypted_reasoning(item) for item in items)
+        stripped: Final = tuple(
+            ResponsesAPIRequestUtils._without_encrypted_reasoning(item)
+            if originating_model_ids is None
+            or ResponsesAPIRequestUtils.get_encrypted_content_model_id(item) in originating_model_ids
+            else item
+            for item in items
+        )
         items[:] = (item for item in stripped if item is not None)  # rebind-ok: list shared with fallback snapshot
 
     @staticmethod

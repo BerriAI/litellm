@@ -16,6 +16,8 @@ The mechanism works without any cache and supports two encoding strategies:
 """
 
 import time
+from copy import deepcopy
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -2120,3 +2122,136 @@ async def test_affinity_honors_router_candidate_ids_for_team_and_pattern_routes(
 
     assert request_kwargs["input"][1].get("encrypted_content")
     mock_router.get_candidate_model_ids_for_route.assert_called_once_with(model="team-public-model", team_id="teamA")
+
+
+@pytest.fixture
+def bedrock_switch_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "model_info": {"id": name},
+                "litellm_params": {
+                    "model": f"bedrock_mantle/openai.gpt-5.6-{upstream}",
+                    "api_base": "https://bedrock-mantle.us-east-2.api.aws",
+                    "api_key": "test-shared-key",
+                },
+            }
+            for name, upstream in (("sol", "sol"), ("luna", "luna"), ("sol-alias", "sol"))
+        ]
+    )
+
+
+def _bedrock_reasoning_item(origin: str, include_id: bool) -> dict[str, object]:
+    return {
+        "type": "reasoning",
+        "summary": [],
+        "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+            f"opaque-{origin}", origin
+        ),
+        **({"id": ResponsesAPIRequestUtils._build_encrypted_item_id(origin, f"rs_{origin}")} if include_id else {}),
+    }
+
+
+@pytest.mark.parametrize("include_id", [True, False])
+@pytest.mark.parametrize(("source", "target"), [("sol", "luna"), ("luna", "sol"), ("sol", "sol"), ("sol", "sol-alias")])
+async def test_bedrock_model_switch_only_removes_foreign_reasoning(
+    bedrock_switch_router: litellm.Router, source: str, target: str, include_id: bool
+) -> None:
+    check: Final = EncryptedContentAffinityCheck(router=bedrock_switch_router)
+    pool: Final = [d for d in bedrock_switch_router.model_list if d["model_name"] == target]
+    reasoning: Final = _bedrock_reasoning_item(source, include_id)
+    request: Final = {
+        "litellm_metadata": {},
+        "reasoning": {"effort": "high", "context": "all_turns", "summary": "auto"},
+        "input": [
+            {"role": "user", "content": "Inspect the bug"},
+            reasoning,
+            {"role": "assistant", "phase": "final_answer", "content": "Found it"},
+            {"role": "user", "content": "Fix it"},
+        ],
+    }
+    original: Final = deepcopy(request)
+
+    result: Final = await check.async_filter_deployments(target, pool, None, request)
+
+    assert result == pool
+    assert request["reasoning"] == original["reasoning"]
+    expected: Final = (
+        original["input"]
+        if source == target or target == "sol-alias"
+        else [item for item in original["input"] if item.get("type") != "reasoning"]
+    )
+    assert request["input"] == expected
+    assert request["litellm_metadata"]["encrypted_content_affinity_enabled"] is True
+
+
+@pytest.mark.parametrize("target", ["sol", "luna"])
+async def test_bedrock_mixed_history_keeps_selected_models_reasoning(
+    bedrock_switch_router: litellm.Router, target: str
+) -> None:
+    check: Final = EncryptedContentAffinityCheck(router=bedrock_switch_router)
+    pool: Final = [d for d in bedrock_switch_router.model_list if d["model_name"] == target]
+    sol: Final = _bedrock_reasoning_item("sol", False)
+    luna: Final = _bedrock_reasoning_item("luna", False)
+    tool_call: Final = {"type": "function_call", "call_id": "call_1", "name": "inspect", "arguments": "{}"}
+    tool_result: Final = {"type": "function_call_output", "call_id": "call_1", "output": "inspected"}
+    history: Final = [
+        {"role": "user", "content": "Inspect"}, sol, tool_call, tool_result,
+        {"role": "assistant", "phase": "final_answer", "content": "Done"},
+        {"role": "user", "content": "Fix"}, luna,
+        {"role": "user", "content": "Continue"},
+    ]
+    request: Final = {"litellm_metadata": {}, "input": deepcopy(history)}
+    shared_input: Final = request["input"]
+
+    result: Final = await check.async_filter_deployments(target, pool, None, request)
+
+    assert result == pool
+    assert request["input"] is shared_input
+    assert shared_input == [item for item in history if item != (sol if target == "luna" else luna)]
+
+
+async def test_bedrock_switch_filter_respects_opt_in(bedrock_switch_router: litellm.Router) -> None:
+    check: Final = EncryptedContentAffinityCheck(router=bedrock_switch_router, enable_global_affinity=False)
+    pool: Final = [d for d in bedrock_switch_router.model_list if d["model_name"] == "luna"]
+    request: Final = {"litellm_metadata": {}, "input": [_bedrock_reasoning_item("sol", False)]}
+    original: Final = deepcopy(request)
+
+    assert await check.async_filter_deployments("luna", pool, None, request) == pool
+    assert request == original
+
+
+async def test_bedrock_cooldown_does_not_become_a_model_switch() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "auto",
+                "model_info": {"id": name},
+                "litellm_params": {
+                    "model": f"bedrock_mantle/openai.gpt-5.6-{name}",
+                    "api_base": "https://bedrock-mantle.us-east-2.api.aws",
+                    "api_key": "test-shared-key",
+                },
+            }
+            for name in ("sol", "luna")
+        ]
+    )
+    check: Final = EncryptedContentAffinityCheck(router=router)
+    pool: Final = [d for d in router.model_list if d["model_info"]["id"] == "luna"]
+    request: Final = {"input": [_bedrock_reasoning_item("sol", False)]}
+    original: Final = deepcopy(request)
+
+    with pytest.raises(litellm.ServiceUnavailableError):
+        await check.async_filter_deployments("auto", pool, None, request)
+    assert request == original
+
+
+@pytest.mark.parametrize("prefix", ["bedrock_mantle/", "bedrock/us.", "openai/us."])
+def test_bedrock_shared_credentials_do_not_make_different_models_compatible(prefix: str) -> None:
+    shared: Final = {"api_base": "https://gateway.example/openai/v1", "api_key": "test-shared-key"}
+    sol: Final = {**shared, "model": f"{prefix}openai.gpt-5.6-sol"}
+    luna: Final = {**shared, "model": f"{prefix}openai.gpt-5.6-luna"}
+
+    assert EncryptedContentAffinityCheck._encryption_boundary_key(sol) != EncryptedContentAffinityCheck._encryption_boundary_key(luna)
+    assert EncryptedContentAffinityCheck._encryption_boundary_key(sol) == EncryptedContentAffinityCheck._encryption_boundary_key(dict(sol))
