@@ -476,7 +476,11 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
     "model_max_budget",
     "budget_duration",
     "allowed_models",
+    "temp_budget_increase",
+    "temp_budget_expiry",
 )
+
+_TEMP_BUDGET_FIELDS: Final = frozenset({"temp_budget_increase", "temp_budget_expiry"})
 
 
 MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
@@ -486,6 +490,8 @@ MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
         "rpm_limit": "rpm_limit",
         "budget_duration": "budget_duration",
         "allowed_models": "allowed_models",
+        "temp_budget_increase": "temp_budget_increase",
+        "temp_budget_expiry": "temp_budget_expiry",
     }
 )
 
@@ -548,6 +554,8 @@ async def _upsert_budget_and_membership(
     ``shared_budget_ids`` extends that protection to any other row more than one
     membership points at, which a caller patching several members at once has
     already counted; a row listed there is cloned rather than written in place.
+    A patch that only touches the temporary budget pair never copies permanent
+    limits into a new row, so the member keeps inheriting the live team default.
     """
     if not budget_patch:
         return
@@ -562,6 +570,7 @@ async def _upsert_budget_and_membership(
     is_shared_default: Final = existing_budget_id is not None and (
         existing_budget_id == team_default_budget_id or existing_budget_id in (shared_budget_ids or frozenset())
     )
+    temp_only: Final = frozenset(write_data) <= _TEMP_BUDGET_FIELDS
 
     async def _disconnect():
         await tx.litellm_teammembership.update(
@@ -583,7 +592,9 @@ async def _upsert_budget_and_membership(
         return
 
     source_row: Final = (
-        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id}) if is_shared_default else None
+        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
+        if is_shared_default and not temp_only
+        else None
     )
     source: Final[Mapping[str, Any]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
 
@@ -604,7 +615,7 @@ async def _upsert_budget_and_membership(
         create_data.pop("budget_reset_at", None)
 
     if not _has_meaningful_budget_limit(create_data):
-        if existing_budget_id is not None:
+        if existing_budget_id is not None and not temp_only:
             await _disconnect()
         return
 

@@ -1352,6 +1352,49 @@ async def test_new_organization_rejects_shared_alias_tool_permission_key():
     prisma_client.db.litellm_objectpermissiontable.create.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_new_organization_temp_budget_fields_go_to_budget_row_not_metadata(monkeypatch):
+    """temp_budget_increase/expiry are budget columns and also key-metadata field names, so
+    /organization/new must write them to the budget row and keep the datetime out of the org
+    metadata JSON (a datetime there broke JSON serialization and 500'd the request)."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._types import LitellmUserRoles, NewOrganizationRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import new_organization
+    from litellm.proxy.utils import PrismaClient
+
+    expiry = datetime(2099, 1, 1, tzinfo=timezone.utc)
+    prisma_client = MagicMock()
+    prisma_client.jsonify_object = MagicMock(side_effect=lambda data: PrismaClient.jsonify_object(prisma_client, data))
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=MagicMock(budget_id="budget-1"))
+    prisma_client.db.litellm_organizationtable.create = AsyncMock(return_value={"organization_id": "org-1"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+
+    response = await new_organization(
+        data=NewOrganizationRequest(
+            organization_alias="org",
+            max_budget=10,
+            temp_budget_increase=5,
+            temp_budget_expiry=expiry,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response == {"organization_id": "org-1"}
+    budget_write = prisma_client.db.litellm_budgettable.create.await_args.kwargs["data"]
+    assert (budget_write["max_budget"], budget_write["temp_budget_increase"], budget_write["temp_budget_expiry"]) == (
+        10,
+        5,
+        expiry,
+    )
+    org_write = prisma_client.db.litellm_organizationtable.create.await_args.kwargs["data"]
+    assert org_write["budget_id"] == "budget-1"
+    assert json.loads(org_write.get("metadata", "{}")) == {}
+
+
 def test_v2_update_organization_is_in_openapi_schema():
     """PATCH /v2/organization/{organization_id} is documented in the generated OpenAPI spec."""
     from fastapi import FastAPI

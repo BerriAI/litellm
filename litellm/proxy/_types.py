@@ -4412,6 +4412,23 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
         default=None,
         description="List of models this team member can access. Pass an empty list to remove per-member model restrictions.",
     )
+    temp_budget_increase: float | None = Field(
+        default=None,
+        ge=0,
+        allow_inf_nan=False,
+        description="Temporary additive budget increase for this team member, active until temp_budget_expiry",
+    )
+    temp_budget_expiry: datetime | None = Field(
+        default=None,
+        description="UTC expiry for temp_budget_increase",
+    )
+
+    @model_validator(mode="after")
+    def validate_temp_budget(self) -> "TeamMemberUpdateRequest":
+        if self.temp_budget_increase is not None or self.temp_budget_expiry is not None:
+            if self.temp_budget_increase is None or self.temp_budget_expiry is None:
+                raise ValueError("temp_budget_increase and temp_budget_expiry must be set together")
+        return self
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
@@ -4421,6 +4438,8 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     rpm_limit: int | None = None
     budget_duration: str | None = None
     allowed_models: list[str] | None = None
+    temp_budget_increase: float | None = None
+    temp_budget_expiry: datetime | None = None
 
 
 class TeamModelAddRequest(BaseModel):

@@ -2250,7 +2250,9 @@ async def _user_api_key_auth_builder(
                             )
 
                     if team_member_info is not None and team_member_info.litellm_budget_table is not None:
-                        team_member_budget: Final = team_member_info.litellm_budget_table.max_budget
+                        team_member_budget: Final = team_member_info.litellm_budget_table.effective_max_budget(
+                            now=datetime.now(timezone.utc),
+                        )
                         if team_member_budget is not None and team_member_budget > 0:
                             # Read from cross-pod counter (Redis-first) if available
                             from litellm.proxy.proxy_server import get_current_spend
