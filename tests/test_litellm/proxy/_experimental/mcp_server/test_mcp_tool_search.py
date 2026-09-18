@@ -985,7 +985,7 @@ class TestDispatchVirtualMcpTool:
         from litellm.proxy._experimental.mcp_server import server as srv
 
         uak = UserAPIKeyAuth(api_key="k", team_object_permission=_make_perm(mcp_tool_search_enabled=True))
-        with patch(
+        with patch(  # test-quality-ok: the dispatch reads the handler from module context; no injection seam
             "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
             new_callable=AsyncMock,
             return_value="SEARCH_RESULT",
