@@ -2767,7 +2767,7 @@ class ProxyLogging:
                 # V1 implementation - backwards compatibility
                 if callback.event_hook is None and hasattr(callback, "moderation_check"):
                     if callback.moderation_check == "pre_call":
-                        return
+                        continue
                 else:
                     # Main - V2 Guardrails implementation
                     from litellm.types.guardrails import GuardrailEventHooks
