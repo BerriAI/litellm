@@ -1,5 +1,6 @@
 import { canDetachKeyProject, KeyProjectField } from "./KeyProjectField";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
+import { useModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
@@ -63,6 +64,7 @@ import {
   tagRowsToLimits,
 } from "../key_team_helpers/TagRateLimitEditor";
 import { excludeProxyWideSentinel, hasAllModelsSentinel } from "../key_team_helpers/fetch_available_models_team_key";
+import { buildModelOptions } from "@/components/ModelSelect/modelUtils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
@@ -110,6 +112,7 @@ export function KeyEditView({
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const team = teams?.find((team) => team.team_id === keyData.team_id);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const { data: modelDeployments } = useModelDeployments();
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>(
     Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -348,11 +351,7 @@ export function KeyEditView({
 
   const modelOptions = [
     ...modelSentinelOptions(keyData.team_id, team != null),
-    ...availableModels.map((model) => ({
-      value: model,
-      label: model,
-      disabled: hasAllModelsSentinel(selectedModels),
-    })),
+    ...buildModelOptions(availableModels, modelDeployments ?? [], hasAllModelsSentinel(selectedModels)),
   ];
 
   const visibleTeams = selectedOrganizationId

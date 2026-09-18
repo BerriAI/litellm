@@ -180,6 +180,17 @@ def get_team_models(
     return all_models
 
 
+def _public_model_name(model: str, llm_router: Router) -> str:
+    deployment: Final = llm_router.get_deployment(model_id=model)
+    return model if deployment is None else deployment.model_name
+
+
+def _public_model_names(models: Sequence[str], llm_router: Router | None) -> tuple[str, ...]:
+    if llm_router is None:
+        return tuple(models)
+    return tuple(_public_model_name(model=model, llm_router=llm_router) for model in models)
+
+
 def get_complete_model_list(
     key_models: Sequence[str],
     team_models: Sequence[str],
@@ -210,9 +221,9 @@ def get_complete_model_list(
                 unique_models.append(model)
 
     if key_models:
-        append_unique(key_models)
+        append_unique(_public_model_names(models=key_models, llm_router=llm_router))
     elif team_models:
-        append_unique(team_models)
+        append_unique(_public_model_names(models=team_models, llm_router=llm_router))
     else:
         append_unique(proxy_model_list)
         if include_model_access_groups:

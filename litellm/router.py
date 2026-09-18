@@ -12537,6 +12537,11 @@ class Router:
             request_kwargs=request_kwargs,
             request_team_id=request_team_id,
         )
+        healthy_deployments = self._filter_deployments_by_granted_deployment_ids(
+            model=model,
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
         _access_group_filter_emptied_candidates = (
             _pre_model_access_group_filter_len > 0 and len(healthy_deployments) == 0
         )
@@ -12668,6 +12673,68 @@ class Router:
                 filtered_deployments.append(deployment)
 
         return filtered_deployments
+
+    def _filter_deployments_by_granted_deployment_ids(
+        self,
+        model: str,
+        healthy_deployments: Sequence[Mapping[str, object]],
+        request_kwargs: Mapping[str, object] | None,
+    ) -> list[Mapping[str, object]]:
+        """
+        Restrict candidate deployments to the deployment IDs granted on the key or team.
+
+        Applied per grant scope (key models, then team models) and only when that scope grants this
+        model through deployment IDs rather than its name, a wildcard, or all-proxy-models. A scope
+        whose granted deployments are all unavailable yields no candidates rather than widening.
+        """
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        if not healthy_deployments or request_kwargs is None:
+            return list(healthy_deployments)
+        user_api_key_auth: Final = self._request_user_api_key_auth(request_kwargs)
+        if not isinstance(user_api_key_auth, UserAPIKeyAuth):
+            return list(healthy_deployments)
+
+        model_group_ids: Final = frozenset(self.get_model_ids(model_name=model))
+        key_grants: Final = self._grant_strings(user_api_key_auth.models) - {"all-team-models"}
+        team_grants: Final = self._grant_strings(user_api_key_auth.team_models)
+        key_scoped: Final = self._restrict_to_granted_deployment_ids(
+            model=model, deployments=healthy_deployments, grants=key_grants, model_group_ids=model_group_ids
+        )
+        return self._restrict_to_granted_deployment_ids(
+            model=model, deployments=key_scoped, grants=team_grants, model_group_ids=model_group_ids
+        )
+
+    @staticmethod
+    def _request_user_api_key_auth(request_kwargs: Mapping[str, object]) -> object:
+        buckets: Final = (request_kwargs.get(name) for name in ("metadata", "litellm_metadata"))
+        return next(
+            (
+                bucket["user_api_key_auth"]
+                for bucket in buckets
+                if isinstance(bucket, Mapping) and "user_api_key_auth" in bucket
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _grant_strings(models: Sequence[object] | None) -> frozenset[str]:
+        return frozenset(model for model in models or () if isinstance(model, str))
+
+    @classmethod
+    def _restrict_to_granted_deployment_ids(
+        cls,
+        model: str,
+        deployments: Sequence[Mapping[str, object]],
+        grants: frozenset[str],
+        model_group_ids: frozenset[str],
+    ) -> list[Mapping[str, object]]:
+        if model in grants or "*" in grants or "all-proxy-models" in grants:
+            return list(deployments)
+        granted_ids: Final = grants & model_group_ids
+        if not granted_ids:
+            return list(deployments)
+        return [deployment for deployment in deployments if cls._deployment_ids((deployment,)) & granted_ids]
 
     async def async_get_healthy_deployments(
         self,

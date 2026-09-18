@@ -8844,3 +8844,74 @@ async def test_team_member_budget_check_adds_temp_increase_to_live_team_default(
                 proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
             )
     assert exc_info.value.max_budget == expected_cap
+
+
+def _make_same_name_deployments_router():
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "fake"},
+                "model_info": {"id": "openai-gpt-4-id"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "azure/gpt-4", "api_key": "fake", "api_base": "https://x"},
+                "model_info": {"id": "azure-gpt-4-id"},
+            },
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-3", "api_key": "fake"},
+                "model_info": {"id": "claude-id"},
+            },
+        ]
+    )
+
+
+def test_can_object_call_model_with_granted_deployment_id():
+    """A key holding a deployment ID may call that deployment's public model name"""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_same_name_deployments_router()
+
+    assert (
+        _can_object_call_model(
+            model="gpt-4",
+            llm_router=router,
+            models=["azure-gpt-4-id"],
+            object_type="key",
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_deployment_id_of_other_model_is_denied():
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_same_name_deployments_router()
+
+    with pytest.raises(ProxyException):
+        _can_object_call_model(
+            model="gpt-4",
+            llm_router=router,
+            models=["claude-id"],
+            object_type="key",
+        )
+
+
+def test_can_object_call_model_deployment_id_grant_does_not_cover_unknown_model():
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_same_name_deployments_router()
+
+    with pytest.raises(ProxyException):
+        _can_object_call_model(
+            model="gpt-5",
+            llm_router=router,
+            models=["azure-gpt-4-id"],
+            object_type="key",
+        )

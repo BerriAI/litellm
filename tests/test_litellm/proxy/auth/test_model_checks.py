@@ -879,3 +879,43 @@ def test_get_complete_model_list_sentinel_only_grants_nothing():
         infer_model_from_keys=False,
     )
     assert result == []
+
+
+def test_get_complete_model_list_maps_deployment_ids_to_public_names():
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "fake"},
+                "model_info": {"id": "openai-gpt-4-id"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "azure/gpt-4", "api_key": "fake", "api_base": "https://x"},
+                "model_info": {"id": "azure-gpt-4-id"},
+            },
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=["azure-gpt-4-id", "claude"],
+        team_models=[],
+        proxy_model_list=["gpt-4", "claude"],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+    assert result == ["gpt-4", "claude"]
+
+    team_result = get_complete_model_list(
+        key_models=[],
+        team_models=["openai-gpt-4-id", "azure-gpt-4-id"],
+        proxy_model_list=["gpt-4", "claude"],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+    assert team_result == ["gpt-4"]
