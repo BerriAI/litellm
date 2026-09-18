@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import random
 from collections.abc import Mapping
@@ -65,12 +66,16 @@ V3_DETECT_PATH: Final = "/api/v3/detect"
 # Integration keys minted by the v3 platform. A v1 collection key is a UUID; the prefix
 # never collides, so it can select the API when the config does not say.
 V3_KEY_PREFIX: Final = "sk_agt_"
-# `x-tool` names the ingress; Straiker reads the agent out of the body (cc_entrypoint).
-V3_INGRESS: Final = "litellm"
-V3_TOOL_HEADER: Final = "x-tool"
-V3_PHASE_HEADER: Final = "x-straiker-phase"
-V3_USER_HEADER: Final = "x-straiker-user"
+# No ingress header on v3: the platform parses the relayed body itself and reads the agent
+# out of it (cc_entrypoint), the same as the unified Kong plugin. `x-tool` is the v1
+# native-hook selector and is not sent.
 V3_SESSION_HEADER: Final = "x-claude-code-session-id"
+# Routing hints, each optional. The same headers the unified Kong plugin sends, so a
+# tenant's agents enumerate identically whichever gateway the traffic came through.
+V3_CLIENT_HEADER: Final = "x-s6r-client"
+V3_FORMAT_HEADER: Final = "x-s6r-format"
+# Prefix for a session id derived from the conversation itself, when the client states none.
+V3_DERIVED_SESSION_PREFIX: Final = "litellm-"
 # Which agent this turn belongs to, when one gateway fronts several applications. A name for
 # ONE agent, never a kind of agent: Straiker keys per-agent state on it, so a value shared by
 # several applications merges them into one. Forwarded from the client when it sends one, else
@@ -397,39 +402,19 @@ def _v3_answer_json(inputs: GenericGuardrailAPIInputs, request_data: Mapping[str
     return json.dumps(assembled)
 
 
-def _last_user_text(messages: list[dict[str, object]] | None) -> str | None:
-    """Prompt text for a post_call envelope, whose request side carries structured
-    messages rather than the flattened texts the pre_call envelope has."""
-    for message in reversed(messages or []):
-        if message.get("role") != "user":
-            continue
-        content = message.get("content")
-        if isinstance(content, str) and content:
-            return content
-        if isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
-                    if part["text"]:
-                        return str(part["text"])
-    return None
-
-
 def _v3_payload(
     envelope: StraikerWebhookRequest,
     inputs: GenericGuardrailAPIInputs,
     request_data: Mapping[str, object],
     input_type: Literal["request", "response"],
 ) -> dict[str, object]:
-    """The /api/v3/detect body for one phase of a turn.
+    """The /api/v3/detect body for one phase of a turn, the unified Kong plugin's contract.
 
     Request phase: the provider body itself. Response phase: the answer beside the request
-    it answers, which is how Straiker classifies a tool call the model just made. Both
-    also carry the flat `prompt` / `app_response` pair, because which shape Straiker scores
-    depends on the integration the key belongs to. Measured on 2026-09-18: a `custom-agent`
-    connector (what Add Agent creates) scores only the flat pair and ignores the relayed
-    body; a `gateway` connector scores either; an api-mode integration scores only the
-    relayed body. Sending both is one turn on every type, so one payload serves whichever
-    integration the console issued.
+    it answers, `{straiker_phase, sse, model, request}`, which is how Straiker classifies a
+    tool call the model just made. Straiker parses either and derives prompt, answer, agent
+    and archetype from the traffic; nothing is pre-digested here. Identity and session ride
+    on both phases the way Kong sends them.
     """
     context: Final = envelope.context
     request_body: Final = _v3_request_body(request_data)
@@ -446,25 +431,52 @@ def _v3_payload(
         if answer_json is not None:
             payload["sse"] = answer_json
 
-    payload["source"] = envelope.application.source
-    prompt: Final = "\n".join(t for t in envelope.request.texts if t) or _last_user_text(
-        envelope.request.structured_messages
-    )
-    if prompt:
-        payload["prompt"] = prompt
-    if envelope.response is not None:
-        answer_text: Final = "\n".join(t for t in envelope.response.texts if t)
-        if answer_text:
-            payload["app_response"] = answer_text
-
+    session: Final = _v3_session_id(envelope, request_data, request_body)
+    if session:
+        payload["session_id"] = session
     user: Final = _v3_user(envelope)
     if user:
-        payload["user_name"] = user
-        # The identity shape the unified Kong plugin sends, so both gateways attribute alike.
         payload["original"] = {"processed": {"Meta": {"user": user}}}
-    if context.session_id:
-        payload["session_id"] = context.session_id
     return payload
+
+
+def _v3_session_id(
+    envelope: StraikerWebhookRequest,
+    request_data: Mapping[str, object],
+    request_body: Mapping[str, object],
+) -> str | None:
+    """A stable id for the conversation, in Kong's order of precedence.
+
+    Claude Code names its session on the wire and that wins. Then the session LiteLLM
+    resolved from its own metadata. Then, for a conversation that states none, a hash of
+    the system prompt and the first message: a chat client replays the whole conversation
+    on every turn, so that pair is constant for its lifetime and groups the turns. A fresh
+    synthetic id per request would group nothing.
+    """
+    supplied: Final = _request_header(request_data, V3_SESSION_HEADER)
+    if supplied:
+        return supplied
+    if envelope.context.session_id:
+        return envelope.context.session_id
+    system = request_body.get("system")
+    if not isinstance(system, str):
+        system = json.dumps(system, default=str) if system is not None else None
+    if system is None and isinstance(request_body.get("instructions"), str):
+        system = request_body["instructions"]
+    first = ""
+    messages: Final = request_body.get("messages") or request_body.get("input")
+    if isinstance(messages, list) and messages and isinstance(messages[0], Mapping):
+        content = messages[0].get("content")
+        if isinstance(content, str):
+            first = content
+        elif isinstance(content, list) and content and isinstance(content[0], Mapping):
+            first = str(content[0].get("text") or "")
+    elif isinstance(request_body.get("prompt"), str):
+        first = str(request_body["prompt"])
+    seed: Final = f"{system or ''}\0{first}"
+    if seed == "\0":
+        return None
+    return V3_DERIVED_SESSION_PREFIX + hashlib.md5(seed.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def _v3_user(envelope: StraikerWebhookRequest) -> str | None:
@@ -483,37 +495,39 @@ def _v3_user(envelope: StraikerWebhookRequest) -> str | None:
 
 
 def _v3_headers(
-    envelope: StraikerWebhookRequest,
     request_data: Mapping[str, object],
-    input_type: Literal["request", "response"],
     agent_ref: str | None = None,
+    client: str | None = None,
+    format_hint: str | None = None,
 ) -> dict[str, str]:
-    """Per-call headers: which ingress this is, which phase, and who is asking."""
-    headers: dict[str, str] = {
-        V3_TOOL_HEADER: V3_INGRESS,
-        V3_PHASE_HEADER: input_type,
-    }
-    user: Final = _v3_user(envelope)
-    if user:
-        headers[V3_USER_HEADER] = user
-    # Claude Code names its session on the wire; forwarding it groups a coding session
-    # the way the native hook would.
+    """Per-call routing hints, the unified Kong plugin's set. All optional.
+
+    `x-s6r-agent` names ONE application when a gateway fronts several; a client-supplied
+    value wins over the route's `agent_ref`. `x-s6r-client` and `x-s6r-format` come from
+    config alone. Claude Code's own session header is forwarded when the client sent it,
+    which is how a coding session groups the way the native hook would.
+    """
+    headers: dict[str, str] = {}
     session: Final = _request_header(request_data, V3_SESSION_HEADER)
     if session:
         headers[V3_SESSION_HEADER] = session
     agent: Final = _request_header(request_data, V3_AGENT_HEADER) or agent_ref
     if agent:
         headers[V3_AGENT_HEADER] = agent
+    if client:
+        headers[V3_CLIENT_HEADER] = client
+    if format_hint:
+        headers[V3_FORMAT_HEADER] = format_hint
     return headers
 
 
 def _v3_decision(body: Mapping[str, object]) -> tuple[str | None, Mapping[str, object]]:
     """``(decision, verdict)``: the enforceable decision and the object carrying it.
 
-    Straiker answers a gateway in two envelopes. Under `x-tool` the verdict is the hook
-    contract, `hookSpecificOutput.permissionDecision`, with the flat fields nested under
-    `straiker`; a flat call answers `action` at the top level. Reading only one of them
-    would silently make block mode a no-op on the other.
+    Straiker answers in two envelopes. A relayed body gets the hook contract,
+    `hookSpecificOutput.permissionDecision`, with the flat fields nested under `straiker`;
+    a flat call answers `action` at the top level. Reading only one of them would silently
+    make block mode a no-op on the other.
     """
     nested: Final = body.get("straiker")
     verdict: Final = nested if isinstance(nested, Mapping) else body
@@ -573,6 +587,8 @@ class StraikerGuardrail(CustomGuardrail):
         api_base: str = DEFAULT_API_BASE,
         api_version: Literal["v1", "v3"] | None = None,
         agent_ref: str | None = None,
+        client: str | None = None,
+        format_hint: Literal["anthropic.messages", "openai.chat"] | None = None,
         source: str = "LiteLLM Gateway",
         timeout: float = 5.0,
         max_retries: int = 2,
@@ -602,6 +618,10 @@ class StraikerGuardrail(CustomGuardrail):
         self.api_base = api_base.rstrip("/")
         self.api_version = api_version
         self.agent_ref = _as_optional_str(agent_ref)
+        self.client = _as_optional_str(client)
+        if format_hint is not None and format_hint not in ("anthropic.messages", "openai.chat"):
+            raise ValueError(f"format_hint must be 'anthropic.messages' or 'openai.chat'; got {format_hint!r}")
+        self.format_hint = format_hint
         self.source = source
         self.timeout = float(timeout)
         self.max_retries = max(0, int(max_retries))
@@ -903,7 +923,7 @@ class StraikerGuardrail(CustomGuardrail):
                 logging_obj=logging_obj,
             )
             payload: Final = _v3_payload(envelope, inputs, request_data, input_type)
-            headers: Final = _v3_headers(envelope, request_data, input_type, self.agent_ref)
+            headers: Final = _v3_headers(request_data, self.agent_ref, self.client, self.format_hint)
         except (ValidationError, TypeError, ValueError) as error:
             return self._fail(
                 inputs=inputs,

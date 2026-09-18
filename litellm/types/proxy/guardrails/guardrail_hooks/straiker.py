@@ -144,6 +144,17 @@ class StraikerGuardrailConfigModelOptionalParams(BaseModel):
             "sharing a value across applications merges them into one agent."
         ),
     )
+    client: str | None = Field(
+        default=None,
+        description=(
+            "v3 only. Optional x-s6r-client routing hint. Leave unset on a shared gateway; set it on a "
+            "route that serves a single application."
+        ),
+    )
+    format_hint: Literal["anthropic.messages", "openai.chat"] | None = Field(
+        default=None,
+        description="v3 only. Optional x-s6r-format hint. Only breaks the messages-array tie between formats.",
+    )
     custom_headers: dict[str, str] | None = Field(
         default=None,
         description="Additional HTTP headers sent to Straiker, excluding Authorization and the webhook-format header.",

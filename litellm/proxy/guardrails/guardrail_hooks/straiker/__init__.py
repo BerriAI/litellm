@@ -11,6 +11,8 @@ if TYPE_CHECKING:
 _OPTIONAL_INIT_FIELDS: Final = (
     "api_version",
     "agent_ref",
+    "client",
+    "format_hint",
     "timeout",
     "max_retries",
     "initial_backoff",
