@@ -64,14 +64,10 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
         const saved = buildUpdatedComplexityRouterConfig(stored, value, undefined, keywordState);
         const forecast = classifier_type !== "heuristic";
         expect(saved.adaptive).toBe(!forecast);
-        expect(saved.enable_context_window_escalation).toBe(!forecast);
+        expect(saved.enable_context_window_escalation).toBe(true);
+        expect(saved.context_window_escalation_buffer).toBe(0.9);
         expect(saved.escalation_keywords).toEqual(forecast ? [] : stored.escalation_keywords);
-        for (const key of [
-          "adaptive_weights",
-          "adaptive_eligible",
-          "tier_distance_penalty",
-          "context_window_escalation_buffer",
-        ]) {
+        for (const key of ["adaptive_weights", "adaptive_eligible", "tier_distance_penalty"]) {
           expect(Object.hasOwn(saved, key)).toBe(!forecast);
         }
         expect(saved.keyword_tier_rules).toEqual(STORED.keyword_tier_rules);
@@ -82,6 +78,19 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
       expect(stored.escalation_keywords).toEqual(["urgent", "outage"]);
     },
   );
+
+  it.each([undefined, false, true])("preserves stored context-window escalation on save: %s", (enabled) => {
+    const stored = {
+      ...STORED,
+      ...(enabled !== undefined && { enable_context_window_escalation: enabled }),
+    };
+    const value = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, value, undefined, hydratedState);
+    const serialized: typeof saved = JSON.parse(JSON.stringify(saved));
+    expect(value.enable_context_window_escalation).toBe(enabled);
+    expect(serialized.enable_context_window_escalation).toBe(enabled);
+    expect(Object.hasOwn(serialized, "enable_context_window_escalation")).toBe(enabled !== undefined);
+  });
 
   it("round-trips an untouched edit without changing any keyword-matching value", () => {
     // Opening the modal hydrates state from STORED; saving with nothing changed must be a
