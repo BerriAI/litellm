@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -274,6 +275,25 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = comprehend_medical_handler_result["result"]  # rebind-ok: elif-chain
             kwargs = comprehend_medical_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+        elif self.is_azure_speech_route(custom_llm_provider):
+            from .llm_provider_handlers.azure_speech_passthrough_logging_handler import (
+                AzureSpeechPassthroughLoggingHandler,
+            )
+
+            azure_speech_handler_result: Final = AzureSpeechPassthroughLoggingHandler.azure_speech_passthrough_handler(
+                httpx_response=httpx_response,
+                response_body=response_body,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
+            )
+            standard_logging_response_object = azure_speech_handler_result["result"]  # rebind-ok: elif-chain
+            kwargs = azure_speech_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         elif self.is_transcribe_route(custom_llm_provider):
             transcribe_handler_result: Final = TranscribePassthroughLoggingHandler.transcribe_passthrough_handler(
                 httpx_response=httpx_response,
@@ -351,7 +371,7 @@ class PassThroughEndpointLogging:
     ):
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
-        if self.is_assemblyai_route(url_route):
+        if self.is_assemblyai_route(url_route) and not self.is_azure_speech_route(custom_llm_provider):
             if AssemblyAIPassthroughLoggingHandler._should_log_request(httpx_response.request.method) is not True:
                 return
             self.assemblyai_passthrough_logging_handler.assemblyai_passthrough_logging_handler(
@@ -457,6 +477,9 @@ class PassThroughEndpointLogging:
 
     def is_comprehend_medical_route(self, custom_llm_provider: str | None) -> bool:
         return custom_llm_provider == "comprehendmedical"
+
+    def is_azure_speech_route(self, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == AZURE_SPEECH_CUSTOM_LLM_PROVIDER
 
     def is_transcribe_route(self, custom_llm_provider: str | None) -> bool:
         return custom_llm_provider == TRANSCRIBE_CUSTOM_LLM_PROVIDER

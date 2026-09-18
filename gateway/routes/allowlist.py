@@ -82,6 +82,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/anthropic/",
     "/azure/",
     "/azure_ai/",
+    "/azure_speech/",
     "/aws/",
     "/bedrock/",
     "/comprehendmedical",
