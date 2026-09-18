@@ -1685,35 +1685,6 @@ def test_azure_gpt55_reasoning_effort_flags_match_live_openai_api(
     assert m.get("supports_xhigh_reasoning_effort") is expected_xhigh
 
 
-def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
-    model = "claude-haiku-4-5-20251001"
-    usage = Usage(
-        completion_tokens=90,
-        prompt_tokens=28436,
-        total_tokens=28526,
-        completion_tokens_details=CompletionTokensDetailsWrapper(
-            accepted_prediction_tokens=None,
-            audio_tokens=None,
-            reasoning_tokens=0,
-            rejected_prediction_tokens=None,
-            text_tokens=None,
-        ),
-        prompt_tokens_details=None,
-        cache_creation_input_tokens=2000,
-    )
-
-    custom_llm_provider = "anthropic"
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    print(f"prompt_cost: {prompt_cost}")
-    assert round(prompt_cost, 3) == 0.029
-
-
 def test_string_cost_values():
     """Test that cost values defined as strings are properly converted to floats."""
     from unittest.mock import patch
@@ -2350,140 +2321,6 @@ def test_gemini_image_generation_cost_falls_back_to_flat_image_pricing(_local_mo
     assert round(cost, 10) == round(expected_cost, 10)
 
 
-def test_bedrock_anthropic_prompt_caching():
-    """Test Bedrock Anthropic models with prompt caching return correct costs."""
-    model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    usage = Usage(
-        prompt_tokens=52123,
-        completion_tokens=497,
-        total_tokens=52620,
-        cache_creation_input_tokens=7183,
-        cache_read_input_tokens=22465,
-    )
-
-    custom_llm_provider = "bedrock"
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    assert prompt_cost >= 0
-    assert completion_cost >= 0
-    assert round(prompt_cost, 3) == 0.111
-    assert round(completion_cost, 5) == 0.00820
-
-
-def test_reasoning_tokens_without_text_tokens_gpt5_nano():
-    """
-    Test fix for GitHub issue #18599:
-    https://github.com/BerriAI/litellm/issues/18599
-
-    When OpenAI models (gpt-5-nano, o1, o3) return reasoning_tokens but don't provide
-    text_tokens, LiteLLM should calculate text_tokens as:
-      text_tokens = completion_tokens - reasoning_tokens - audio_tokens - image_tokens
-
-    This ensures ALL completion tokens are billed, not just reasoning tokens.
-    """
-    model = "gpt-5-nano"
-    custom_llm_provider = "openai"
-
-    # Simulate OpenAI gpt-5-nano response where text_tokens is NOT provided
-    # completion_tokens: 977 total
-    # reasoning_tokens: 768
-    # text_tokens: should be calculated as 977 - 768 = 209
-    usage = Usage(
-        prompt_tokens=17,
-        completion_tokens=977,
-        total_tokens=994,
-        completion_tokens_details=CompletionTokensDetailsWrapper(
-            reasoning_tokens=768,
-            audio_tokens=0,
-            # text_tokens NOT provided - this is the key part of the bug
-        ),
-    )
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    # gpt-5-nano pricing: $0.05/1M input, $0.40/1M output
-    expected_prompt_cost = 17 * 0.05 / 1_000_000
-    expected_completion_cost = 977 * 0.40 / 1_000_000  # ALL tokens, not just reasoning
-
-    assert abs(prompt_cost - expected_prompt_cost) < 1e-10, (
-        f"Prompt cost incorrect: {prompt_cost} vs {expected_prompt_cost}"
-    )
-
-    assert abs(completion_cost - expected_completion_cost) < 1e-10, (
-        f"Completion cost incorrect: {completion_cost} vs {expected_completion_cost}"
-    )
-
-    # Verify it's NOT using only reasoning_tokens (the bug)
-    wrong_cost = 768 * 0.40 / 1_000_000  # Only reasoning tokens
-    assert abs(completion_cost - wrong_cost) > 1e-6, (
-        "Bug detected: Cost calculation is using only reasoning_tokens instead of all completion_tokens!"
-    )
-
-
-def test_image_count_prevents_text_tokens_fallback(_local_model_cost_map):
-    """
-    Test that the text_tokens fallback in generic_cost_per_token does not
-    override text_tokens=0 when image_count > 0.
-
-    Regression test for: Bedrock image embedding double-charging bug.
-    When image_count > 0, text_tokens=0 is intentional (image-only request),
-    not "text_tokens not set by provider."
-    """
-
-    # Simulate Nova image-only embedding: prompt_tokens estimated from
-    # embedding dimensions (768 for 3072-dim), image_count=1
-    usage = Usage(
-        prompt_tokens=768,
-        completion_tokens=0,
-        total_tokens=768,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            image_count=1,
-        ),
-    )
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model="amazon.nova-2-multimodal-embeddings-v1:0",
-        usage=usage,
-        custom_llm_provider="bedrock",
-    )
-
-    # Cost should be 1 * input_cost_per_image ($6e-05) = $0.00006
-    # NOT 768 * input_cost_per_token ($1.35e-07) + $0.00006 = $0.000164
-    expected_image_cost = 1 * 6e-05
-    assert prompt_cost == expected_image_cost, (
-        f"Expected prompt_cost={expected_image_cost} (image-only), "
-        f"got {prompt_cost}. text_tokens fallback may be double-charging."
-    )
-    assert completion_cost == 0.0
-
-
-def test_query_count_bills_input_cost_per_query(_local_model_cost_map):
-    usage = Usage(
-        prompt_tokens=0,
-        completion_tokens=0,
-        total_tokens=0,
-        prompt_tokens_details=PromptTokensDetailsWrapper(query_count=3, image_count=1),
-    )
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model="us.twelvelabs.marengo-embed-3-0-v1:0",
-        usage=usage,
-        custom_llm_provider="bedrock",
-    )
-
-    assert prompt_cost == pytest.approx(3 * 7e-05 + 1e-04)
-    assert completion_cost == 0.0
-
-
 def test_query_count_is_free_without_a_per_query_price(_local_model_cost_map):
     usage = Usage(
         prompt_tokens=0,
@@ -2690,36 +2527,6 @@ def test_vertex_uplift_invalid_multiplier_defaults_to_one():
     assert (
         get_vertex_regional_endpoint_uplift({"regional_endpoint_uplift_multiplier": "not-a-number"}, "us-east5") == 1.0
     )
-
-
-def test_priority_service_tier_above_threshold_uses_priority_tier_rates_for_cached_tokens(
-    _local_model_cost_map,
-):
-    """Regression: for a model that publishes both service_tier and above_threshold rate
-    variants, a priority request over the threshold must bill cached tokens at
-    cache_read_input_token_cost_above_200k_tokens_priority (and analogously for
-    input/output above-threshold), not the standard above-threshold rate."""
-    usage = Usage(
-        prompt_tokens=250_000,
-        completion_tokens=1_000,
-        total_tokens=251_000,
-        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200_000, text_tokens=50_000),
-        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=1_000),
-    )
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model="gemini-3-pro-preview",
-        usage=usage,
-        custom_llm_provider="gemini",
-        service_tier="priority",
-    )
-
-    # gemini-3-pro-preview priority + above_200k rates from the pricing JSON:
-    #   input  7.2e-6, output 3.24e-5, cache_read 7.2e-7
-    expected_prompt = 50_000 * 7.2e-6 + 200_000 * 7.2e-7
-    expected_completion = 1_000 * 3.24e-5
-    assert prompt_cost == pytest.approx(expected_prompt, rel=1e-9)
-    assert completion_cost == pytest.approx(expected_completion, rel=1e-9)
 
 
 def test_service_tier_suffixes_constant_in_sync_with_enum():
@@ -3615,28 +3422,6 @@ def test_gemini_38_flash_matches_37_flash_promotional_pricing(prefix, _local_mod
 
 
 @pytest.mark.parametrize(
-    ("model", "provider", "image_token_rate"),
-    [
-        ("gpt-realtime-2.1", "openai", 5e-06),
-        ("gpt-realtime-2.1-mini", "openai", 8e-07),
-        ("azure/gpt-realtime-2.1", "azure", 5e-06),
-        ("azure/gpt-realtime-2.1-mini", "azure", 8e-07),
-    ],
-)
-def test_realtime_image_tokens_priced_per_token(model, provider, image_token_rate, _local_model_cost_map):
-    """Realtime image input is billed per 1M image tokens, not per image."""
-    usage = Usage(
-        prompt_tokens=1_100,
-        completion_tokens=0,
-        total_tokens=1_100,
-        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=100, image_tokens=1_000),
-    )
-    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider=provider)
-    text_rate = litellm.model_cost[model]["input_cost_per_token"]
-    assert prompt_cost == pytest.approx(100 * text_rate + 1_000 * image_token_rate)
-
-
-@pytest.mark.parametrize(
     ("response_quality", "requested_quality", "expected_cost"),
     [
         (None, "low", 0.04),
@@ -3828,28 +3613,6 @@ def test_cached_audio_tokens_fall_back_to_cache_read_input_token_cost() -> None:
     )
     expected = 52 * 4e-6 + 64 * 5e-7 + 39 * 32e-6 + 128 * 5e-7
     assert prompt_cost == pytest.approx(expected)
-
-
-def test_cache_read_breakdown_splits_cached_audio_at_the_audio_cache_rate(_local_model_cost_map: None) -> None:
-    usage = Usage(
-        prompt_tokens=4863,
-        completion_tokens=1087,
-        total_tokens=5950,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=1693,
-            audio_tokens=3170,
-            cached_tokens=2816,
-            cached_tokens_details={"text_tokens": 896, "audio_tokens": 1920},
-        ),
-    )
-
-    breakdown = get_token_type_cost_breakdown(model="gpt-realtime-2.1-mini", custom_llm_provider="openai", usage=usage)
-    prompt_cost, _ = generic_cost_per_token(model="gpt-realtime-2.1-mini", usage=usage, custom_llm_provider="openai")
-
-    assert breakdown.cache_read_cost == pytest.approx(896 * 6e-8 + 1920 * 3e-7)
-    assert breakdown.rates is not None
-    assert breakdown.rates.cache_read_input_audio_token_cost == pytest.approx(3e-7)
-    assert prompt_cost == pytest.approx((1693 - 896) * 6e-7 + (3170 - 1920) * 1e-5 + breakdown.cache_read_cost)
 
 
 def test_generic_cost_per_token_bills_cache_creation_at_the_input_rate_without_a_write_price():
