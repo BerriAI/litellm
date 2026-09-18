@@ -588,13 +588,6 @@ class SpendLogCleanup:
 
     @staticmethod
     def _log_run_summary(outcome: RunOutcome, results: tuple[TableCleanupResult, ...], elapsed_seconds: float) -> None:
-        """
-        One line per run naming every table's rows deleted and stop reason.
-
-        A run that ends with backlog left is logged at WARNING so an operator
-        running the proxy at warning or error level still sees that retention
-        was not satisfied; a drained run stays at INFO.
-        """
         per_table: Final = ", ".join(
             f"{result.table_name}: deleted={result.rows_deleted} stop_reason={result.stop_reason}" for result in results
         )
