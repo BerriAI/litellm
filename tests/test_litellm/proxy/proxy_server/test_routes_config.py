@@ -15,9 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+from litellm.proxy.config_resolvers import SettingsStore
+from litellm.proxy.config_resolvers.settings_rules import JsonValue
 
 from .conftest import VOLATILE_KEYS, normalize
 
@@ -35,6 +40,21 @@ def _install_litellm_config(mock_prisma: MagicMock) -> MagicMock:
     table.delete = AsyncMock()
     mock_prisma.db.litellm_config = table
     return table
+
+
+def _install_settings_store(
+    monkeypatch: pytest.MonkeyPatch,
+    config_values: Mapping[str, JsonValue],
+    db_values: Mapping[str, JsonValue],
+) -> SettingsStore:
+    from litellm.proxy import proxy_server
+
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml(config_values)
+    store.apply_db_row("general_settings", db_values)
+    monkeypatch.setattr(proxy_server.proxy_config, "settings", store)
+    monkeypatch.setattr(proxy_server, "general_settings", store)
+    return store
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +358,7 @@ def test_config_field_info_happy_admin(client, auth_as, mock_prisma, monkeypatch
     assert normalize(response.json()) == {
         "field_name": "max_parallel_requests",
         "field_value": 7,
+        "source": "db",
     }
 
 
@@ -564,6 +585,122 @@ def test_config_list_happy_admin(client, auth_as, mock_prisma, monkeypatch):
         "has_field_value": True,
         "has_stored_in_db": True,
     }
+
+
+def test_config_read_routes_report_effective_values_and_sources(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    row = MagicMock()
+    row.param_value = {"max_parallel_requests": 7, "max_file_size_mb": 222}
+    table.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _install_settings_store(
+        monkeypatch,
+        {
+            "max_parallel_requests": 5,
+            "max_file_size_mb": 111,
+            "pass_through_endpoints": [{"path": "/synthetic"}],
+        },
+        {"max_parallel_requests": 7, "max_file_size_mb": 222},
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        list_response = client.get("/config/list", params={"config_type": "general_settings"})
+        config_only_response = client.get(
+            "/config/field/info", params={"field_name": "max_file_size_mb"}
+        )
+        db_wins_response = client.get(
+            "/config/field/info", params={"field_name": "max_parallel_requests"}
+        )
+
+    assert list_response.status_code == 200
+    by_name: Final = {entry["field_name"]: entry for entry in list_response.json()}
+    assert by_name["max_file_size_mb"]["field_value"] == 111
+    assert by_name["max_file_size_mb"]["source"] == "config"
+    assert by_name["pass_through_endpoints"]["source"] == "config"
+    assert by_name["pass_through_endpoints"]["nested_fields"][0]["source"] == "config"
+    assert by_name["max_parallel_requests"]["field_value"] == 7
+    assert by_name["max_parallel_requests"]["source"] == "db"
+
+    assert config_only_response.status_code == 200
+    assert config_only_response.json() == {
+        "field_name": "max_file_size_mb",
+        "field_value": 111,
+        "source": "config",
+    }
+    assert db_wins_response.status_code == 200
+    assert db_wins_response.json() == {
+        "field_name": "max_parallel_requests",
+        "field_value": 7,
+        "source": "db",
+    }
+
+
+def test_config_read_routes_report_default_source(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    row = MagicMock()
+    row.param_value = {}
+    table.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _install_settings_store(monkeypatch, {}, {})
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        list_response = client.get("/config/list", params={"config_type": "general_settings"})
+        field_response = client.get(
+            "/config/field/info", params={"field_name": "proxy_config_reload_interval_seconds"}
+        )
+
+    assert list_response.status_code == 200
+    by_name: Final = {entry["field_name"]: entry for entry in list_response.json()}
+    assert by_name["proxy_config_reload_interval_seconds"]["field_value"] == 30
+    assert by_name["proxy_config_reload_interval_seconds"]["source"] == "default"
+    assert field_response.status_code == 200
+    assert field_response.json() == {
+        "field_name": "proxy_config_reload_interval_seconds",
+        "field_value": 30,
+        "source": "default",
+    }
+
+
+def test_config_field_info_uses_store_without_db(client, auth_as, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    monkeypatch.setattr(ps, "prisma_client", None)
+    _install_settings_store(monkeypatch, {"max_file_size_mb": 111}, {})
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/config/field/info", params={"field_name": "max_file_size_mb"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "field_name": "max_file_size_mb",
+        "field_value": 111,
+        "source": "config",
+    }
+
+
+def test_config_field_info_unset_source_remains_an_error(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    row = MagicMock()
+    row.param_value = {}
+    table.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _install_settings_store(monkeypatch, {}, {})
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/config/field/info", params={"field_name": "max_parallel_requests"})
+
+    assert response.status_code == 400
+    assert "not in" in response.json()["detail"]["error"]
 
 
 def test_config_list_exposes_config_reload_interval(client, auth_as, mock_prisma, monkeypatch):

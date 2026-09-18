@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, MutableMapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 from litellm.proxy.config_resolvers._descriptors import FieldSource
 from litellm.proxy.config_resolvers.settings_rules import (
@@ -19,6 +19,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 
 _EMPTY_VALUES: Final[Mapping[str, JsonValue]] = MappingProxyType({})
 _EMPTY_ROWS: Final[Mapping[DbRow, Mapping[str, JsonValue]]] = MappingProxyType({})
+SettingsSource: TypeAlias = Literal["config", "db", "default", "unset"]
 
 
 class SettingsStore(MutableMapping[str, JsonValue]):
@@ -109,3 +110,12 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         yaml_value: Final[SettingValue] = self._yaml_values.get(key, ABSENT)
         db_value: Final[SettingValue] = self._database_rows.get(rule.db_row, _EMPTY_VALUES).get(key, ABSENT)
         return resolve(rule, yaml_value, db_value)
+
+
+def source_for(settings: SettingsStore, key: str, default: object = None) -> SettingsSource:
+    source: Final = settings.source(key)
+    if source == "unset":
+        return "default" if default is not None else "unset"
+    if source in ("config", "db", "default"):
+        return source
+    return "unset"

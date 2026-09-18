@@ -2410,6 +2410,7 @@ class FieldDetail(BaseModel):
     field_description: str
     field_default_value: Any = None
     stored_in_db: bool | None
+    source: Literal["config", "db", "default", "unset"] = "unset"
 
 
 class ConfigList(LiteLLMPydanticObjectBase):
@@ -2418,6 +2419,7 @@ class ConfigList(LiteLLMPydanticObjectBase):
     field_description: str
     field_value: Any
     stored_in_db: bool | None
+    source: Literal["config", "db", "default", "unset"] = "unset"
     field_default_value: Any
     premium_field: bool = False
     nested_fields: list[FieldDetail] | None = None  # For nested dictionary or Pydantic fields
@@ -3693,6 +3695,7 @@ class InvitationClaim(LiteLLMPydanticObjectBase):
 class ConfigFieldInfo(LiteLLMPydanticObjectBase):
     field_name: str
     field_value: Any
+    source: Literal["config", "db", "default", "unset"] = "unset"
 
 
 class CallbackOnUI(LiteLLMPydanticObjectBase):
