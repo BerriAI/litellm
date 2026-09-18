@@ -173,7 +173,7 @@ class _PrismaVectorStoreRow(Protocol):
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
 
 
-class _PrismaUserRow(Protocol):
+class _PrismaUserRow(_PrismaModelDumpRow, Protocol):
     user_id: str
 
     @property
@@ -2486,7 +2486,7 @@ async def _get_fuzzy_user_object(
     if sso_user_id is not None:
         response = await _user_table(UserRepository(prisma_client)).find_unique(
             where={"sso_user_id": sso_user_id},
-            include={"organization_memberships": True},
+            include={"organization_memberships": True, "object_permission": True},
         )
 
     if response is None and user_email is not None:
@@ -2494,7 +2494,7 @@ async def _get_fuzzy_user_object(
         # This matches the pattern used in _check_duplicate_user_email
         response = await _user_table(UserRepository(prisma_client)).find_first(
             where={"user_email": {"equals": user_email, "mode": "insensitive"}},
-            include={"organization_memberships": True},
+            include={"organization_memberships": True, "object_permission": True},
         )
 
         if response is not None and sso_user_id is not None:  # update sso_user_id
@@ -2652,8 +2652,7 @@ async def get_user_object(
             ]
             response.organization_memberships = _dumped_memberships
 
-        _response = LiteLLM_UserTable.model_validate(dict(response))
-
+        _response = LiteLLM_UserTable.model_validate(response.model_dump())
         _response = await _backfill_null_user_email(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,

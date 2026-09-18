@@ -2212,6 +2212,28 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     });
   });
 
+  it("sends an enabled MCP Tool Search setting when selected during team edit", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "MCP Tool Search" }), "Enabled");
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.mcp_tool_search_enabled).toBe(true);
+  });
+
+  it("sends a disabled MCP Tool Search setting when selected during team edit", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "MCP Tool Search" }), "Disabled");
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.mcp_tool_search_enabled).toBe(false);
+  });
+
   const openEditorWithAgents = async (user: ReturnType<typeof userEvent.setup>) => {
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({

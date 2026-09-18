@@ -5,6 +5,7 @@ Test that object_permission is automatically loaded when fetching keys and teams
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
 
 
 from litellm.proxy._types import (
@@ -13,6 +14,11 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import get_key_object, get_team_object
+
+
+class _PrismaObjectPermissionStub(BaseModel):
+    object_permission_id: str
+    mcp_tool_search_enabled: bool
 
 
 @pytest.mark.asyncio
@@ -182,11 +188,12 @@ async def test_get_user_object_loads_object_permission():
         user_id="test_user",
         user_email="test@example.com",
         object_permission_id="test_perm_id",
-        object_permission=LiteLLM_ObjectPermissionTable(
-            object_permission_id="test_perm_id",
-            mcp_servers=["user_server1"],
-            mcp_tool_search_enabled=True,
-        ),
+        object_permission=None,
+    )
+    setattr(
+        mock_user,
+        "object_permission",
+        _PrismaObjectPermissionStub(object_permission_id="test_perm_id", mcp_tool_search_enabled=True),
     )
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
 
