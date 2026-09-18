@@ -26,7 +26,6 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
-
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm.caching.caching import RedisCache
@@ -41,6 +40,7 @@ from litellm.proxy._types import (
     TokenCountRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, initialize, openai_exception_handler
@@ -139,13 +139,14 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     }
     assert response.cookies.get("token") == "signed-token"
 
-    mock_authenticate_user.assert_awaited_once_with(
-        username="alice",
-        password="secret",
-        master_key="test-master-key",
-        prisma_client=mock_prisma_client,
-        general_settings={},
-    )
+    mock_authenticate_user.assert_awaited_once()
+    auth_kwargs = mock_authenticate_user.call_args.kwargs
+    assert auth_kwargs["username"] == "alice"
+    assert auth_kwargs["password"] == "secret"
+    assert auth_kwargs["master_key"] == "test-master-key"
+    assert auth_kwargs["prisma_client"] is mock_prisma_client
+    assert auth_kwargs["general_settings"] == {}
+    assert isinstance(auth_kwargs["throttle"], LoginThrottle), "the endpoint must thread a throttle through"
     mock_create_ui_token_object.assert_called_once_with(
         login_result=mock_login_result,
         general_settings={},
@@ -3411,6 +3412,60 @@ async def test_load_config_user_url_validation_handles_null_and_string_false(tmp
 
 
 @pytest.mark.asyncio
+async def test_load_config_warns_per_worker_login_counters_without_general_settings(tmp_path, monkeypatch, caplog):
+    """Regression: the failed-login throttle is on by default, so a multi-worker proxy with no
+    Redis must hear that its counters are per worker even when the config has no general_settings."""
+    import logging
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.auth.login_throttle import warn_login_counters_are_per_worker
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    for redis_var in ("REDIS_HOST", "REDIS_URL", "REDIS_CLUSTER_NODES", "REDIS_SENTINEL_NODES"):
+        monkeypatch.delenv(redis_var, raising=False)
+    monkeypatch.setenv("NUM_WORKERS", "4")
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    warn_login_counters_are_per_worker.cache_clear()
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("model_list: []\n")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+
+    assert "Running 4 workers but Redis is not configured" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_load_config_warns_that_the_source_login_limit_is_off_without_trusted_proxy_ranges(
+    tmp_path, monkeypatch, caplog
+):
+    """The per-source failed-login limit is skipped when the source cannot be attributed, and the
+    operator must be told so at startup. Both a configured range and an explicit empty list (no
+    proxies, the peer is the source) silence it, since both keep the limit on."""
+    import logging
+
+    from litellm.proxy.auth.login_throttle import warn_source_login_limit_is_off
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("NUM_WORKERS", "1")
+    warn_source_login_limit_is_off.cache_clear()
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("model_list: []\n")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert "trusted_proxy_ranges is not set" in caplog.text
+
+    for configured in ("['10.0.0.0/8']", "[]"):
+        caplog.clear()
+        warn_source_login_limit_is_off.cache_clear()
+        config_file.write_text(f"model_list: []\ngeneral_settings:\n  trusted_proxy_ranges: {configured}\n")
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+        assert "trusted_proxy_ranges is not set" not in caplog.text, configured
+
+
+@pytest.mark.asyncio
 async def test_load_environment_variables_direct_and_os_environ():
     """
     Test _load_environment_variables method with direct values and os.environ/ prefixed values
@@ -4942,6 +4997,69 @@ async def test_add_router_settings_from_db_config_merge_logic():
     assert combined_settings["nested_config"] == {"setting1": "config_value1", "setting2": "config_value2"}
 
     assert combined_settings["retry_delay"] == 2
+
+
+def _routing_groups_router():
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {"model_name": "m1", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"}},
+            {"model_name": "m2", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}},
+        ],
+        routing_groups=[{"group_name": "g1", "models": ["m1"], "routing_strategy": "latency-based-routing"}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_db_routing_groups_do_not_abort_other_router_settings():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    router = _routing_groups_router()
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {
+        "num_retries": 7,
+        "routing_groups": [
+            {"group_name": "g1", "models": ["m1"], "routing_strategy": "latency-based-routing"},
+            {"group_name": "g2", "models": ["m1"], "routing_strategy": "least-busy"},
+        ],
+    }
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
+
+    await ProxyConfig()._add_router_settings_from_db_config(
+        config_data={}, llm_router=router, prisma_client=mock_prisma_client
+    )
+
+    assert router.num_retries == 7
+    assert router._model_to_group == {"m1": "g1"}
+    assert router._get_routing_context("m1", None)[0] == "latency-based-routing"
+
+
+@pytest.mark.asyncio
+async def test_valid_db_routing_groups_still_replace_router_groups():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    router = _routing_groups_router()
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {
+        "num_retries": 7,
+        "routing_groups": [{"group_name": "g2", "models": ["m2"], "routing_strategy": "least-busy"}],
+    }
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=mock_db_config)
+
+    await ProxyConfig()._add_router_settings_from_db_config(
+        config_data={}, llm_router=router, prisma_client=mock_prisma_client
+    )
+
+    assert router.num_retries == 7
+    assert router._model_to_group == {"m2": "g2"}
+    assert router._get_routing_context("m2", None)[0] == "least-busy"
 
 
 @pytest.mark.asyncio
@@ -9271,6 +9389,50 @@ def test_update_config_writes_only_sent_section(_update_config_setup):
         assert written == {"general_settings"}
         assert prisma.db.litellm_config.rows["litellm_settings"] == {"drop_params": True}
         assert prisma.db.litellm_config.rows["environment_variables"] == {"FOO": "enc:bar"}
+    finally:
+        restore()
+
+
+def test_update_config_rejects_overlapping_routing_groups_before_writing(_update_config_setup):
+    existing_groups = [{"group_name": "g1", "models": ["m1"], "routing_strategy": "least-busy"}]
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"router_settings": {"num_retries": 2, "routing_groups": existing_groups}}
+    )
+    try:
+        resp = client.post(
+            "/config/update",
+            json={
+                "router_settings": {
+                    "routing_groups": [
+                        *existing_groups,
+                        {"group_name": "g2", "models": ["m1"], "routing_strategy": "latency-based-routing"},
+                    ]
+                }
+            },
+        )
+        assert resp.status_code == 400
+        assert "'m1' appears in 'g1' and 'g2'" in resp.text
+        assert prisma.db.litellm_config.upsert_calls == []
+        assert prisma.db.litellm_config.rows["router_settings"]["routing_groups"] == existing_groups
+    finally:
+        restore()
+
+
+def test_update_config_accepts_disjoint_routing_groups(_update_config_setup):
+    client, prisma, restore = _update_config_setup(initial_rows={"router_settings": {"num_retries": 2}})
+    groups = [
+        {"group_name": "g1", "models": ["m1"], "routing_strategy": "least-busy"},
+        {"group_name": "g2", "models": ["m2"], "routing_strategy": "latency-based-routing"},
+    ]
+    try:
+        resp = client.post("/config/update", json={"router_settings": {"routing_groups": groups}})
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["router_settings"]
+        assert stored["num_retries"] == 2
+        assert [(g["group_name"], g["models"]) for g in stored["routing_groups"]] == [
+            ("g1", ["m1"]),
+            ("g2", ["m2"]),
+        ]
     finally:
         restore()
 
@@ -13846,6 +14008,35 @@ async def test_authoritative_floor_spend_keeps_a_reset_marker_written_during_the
 
 
 @pytest.mark.asyncio
+async def test_login_throttle_settings_are_not_hot_applied_from_the_database():
+    """LIT-5285: a stored sign-in limit does not take effect on a live worker.
+
+    _update_general_settings copies an allowlist of keys out of the DB row on every config
+    poll. Adding these to it would let a stored value outrank config.yaml without a restart,
+    so an operator locked out by a bad value could not fix it by editing YAML and restarting.
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    original = dict(ps.general_settings)
+    try:
+        ps.general_settings.clear()
+        await ProxyConfig()._update_general_settings(
+            db_general_settings={
+                "max_failed_login_attempts_per_source": 999,
+                "failed_login_window_seconds": 1,
+                "failed_login_block_seconds": 1,
+            }
+        )
+        assert "max_failed_login_attempts_per_source" not in ps.general_settings
+        assert "failed_login_window_seconds" not in ps.general_settings
+        assert "failed_login_block_seconds" not in ps.general_settings
+    finally:
+        ps.general_settings.clear()
+        ps.general_settings.update(original)
+
+
+@pytest.mark.asyncio
 async def test_load_config_router_authorizes_fallback_targets_against_the_calling_key(tmp_path):
     from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
     from litellm.proxy.proxy_server import ProxyConfig
@@ -14196,3 +14387,74 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
         ]
     finally:
         litellm.utils._select_custom_tokenizer_helper.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached_by_this_worker():
+    """A peer worker's BYOK revocation broadcast must reach this worker's BYOK credential cache."""
+    from redis.asyncio import Redis
+
+    from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
+        byok_credential_cache,
+        byok_credential_cache_key,
+        cache_byok_credential,
+        get_cached_byok_credential,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _QueuePubSub:
+        def __init__(self, messages: list[object]) -> None:
+            self.queue: asyncio.Queue[object] = asyncio.Queue()
+            for message in messages:
+                self.queue.put_nowait(message)
+
+        async def subscribe(self, *channels: str) -> None:
+            return None
+
+        async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> object | None:
+            try:
+                return await asyncio.wait_for(self.queue.get(), timeout)
+            except asyncio.TimeoutError:
+                return None
+
+        async def aclose(self) -> None:
+            return None
+
+    class _PubSubRedisClient(Redis):
+        def __init__(self, pubsub: _QueuePubSub) -> None:
+            self._scripted_pubsub = pubsub
+
+        def pubsub(self) -> _QueuePubSub:
+            return self._scripted_pubsub
+
+    class _FakeRedisCache:
+        namespace = None
+
+        def __init__(self, client: object) -> None:
+            self._client = client
+
+        def init_async_client(self) -> object:
+            return self._client
+
+    byok_credential_cache.flush_cache()
+    cache_byok_credential("mallory", "srv-byok", "sk-revoked-elsewhere")
+    message: Final = {
+        "type": "message",
+        "data": json.dumps({"cache_key": byok_credential_cache_key("mallory", "srv-byok")}).encode(),
+    }
+    proxy_config: Final = proxy_server_module.ProxyConfig()
+    proxy_config.start_auth_cache_invalidation_subscriber(
+        redis_cache=_FakeRedisCache(_PubSubRedisClient(_QueuePubSub([message]))),  # pyright: ignore[reportArgumentType]  # fake pub/sub capable redis; no live redis in this unit test
+        user_api_key_cache=UserApiKeyCache(),
+    )
+    try:
+        for _ in range(200):
+            if get_cached_byok_credential("mallory", "srv-byok") is None:
+                break
+            await asyncio.sleep(0.01)
+        evicted: Final = get_cached_byok_credential("mallory", "srv-byok") is None
+    finally:
+        await proxy_config.stop_auth_cache_invalidation_subscriber()
+        byok_credential_cache.flush_cache()
+
+    assert evicted, "the subscriber does not evict the BYOK credential cache on a peer worker's broadcast"

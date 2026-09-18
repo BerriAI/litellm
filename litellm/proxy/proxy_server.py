@@ -145,6 +145,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
+from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     ModelResponse,
@@ -308,6 +309,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.proxy._experimental.mcp_server.byok_credential_cache import byok_credential_cache
 from litellm.proxy._lazy_features import attach_lazy_features, reserve_lazy_slot
 from litellm.proxy._types import *
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
@@ -329,6 +331,12 @@ from litellm.proxy.auth.fallback_budget import router_fallback_budget_check
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
+from litellm.proxy.auth.login_throttle import (
+    LoginThrottle,
+    declared_proxy_ranges,
+    warn_login_counters_are_per_worker,
+    warn_source_login_limit_is_off,
+)
 from litellm.proxy.auth.model_checks import (
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
@@ -780,6 +788,7 @@ from litellm.types.router import (
     ClassifierPlugin,
     DeploymentTypedDict,
     RouterGeneralSettings,
+    RoutingGroup,
     RoutingPlugin,
     SearchToolTypedDict,
     updateDeployment,
@@ -825,6 +834,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     JSONResponse,
     ORJSONResponse,
     RedirectResponse,
@@ -6048,6 +6058,12 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+
+        if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
+            warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
+        if declared_proxy_ranges(general_settings) is None:
+            warn_source_login_limit_is_off()
+
         _bg_hc_model_groups: Final = parse_background_health_check_model_groups(general_settings)
         _enable_hc_routing = False
         _hc_staleness = None
@@ -7097,7 +7113,21 @@ class ProxyConfig:
         self.router_settings.apply_db_row("router_settings", db_values)
         combined_router_settings: Final = self.router_settings.resolved()
         if combined_router_settings:
-            llm_router.update_settings(**combined_router_settings)
+            self._apply_router_settings(llm_router, combined_router_settings)
+
+    @staticmethod
+    def _apply_router_settings(llm_router: Router, router_settings: Mapping[str, object]) -> None:
+        llm_router.update_settings(**{k: v for k, v in router_settings.items() if k != "routing_groups"})
+        if "routing_groups" not in router_settings:
+            return
+        try:
+            llm_router.update_settings(routing_groups=router_settings["routing_groups"])
+        except (TypeError, ValueError) as invalid_groups:
+            verbose_proxy_logger.error(
+                "Ignoring invalid router_settings.routing_groups from config/DB, all other router settings still "
+                "apply. Fix the routing groups in the Admin UI to load them: %s",
+                invalid_groups,
+            )
 
     async def _reschedule_spend_log_cleanup_job(self):
         """
@@ -7521,7 +7551,7 @@ class ProxyConfig:
         subscriber: Final = AuthCacheInvalidationSubscriber(
             redis_cache=redis_cache,
             user_api_key_cache=user_api_key_cache,
-            additional_in_memory_caches=(spend_counter_cache.in_memory_cache,),
+            additional_in_memory_caches=(spend_counter_cache.in_memory_cache, byok_credential_cache),
         )
         self.auth_cache_invalidation_subscriber = subscriber
         subscriber.start()
@@ -15885,8 +15915,6 @@ async def fallback_login(request: Request):
     else:
         redirect_url += "/sso/callback"
 
-    from fastapi.responses import HTMLResponse
-
     hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
     return HTMLResponse(
         content=build_ui_login_form(
@@ -15908,13 +15936,27 @@ async def login(request: Request):
     password: Final = str(form.get("password"))
 
     # Authenticate user and get login result
-    login_result: Final = await authenticate_user(
-        username=username,
-        password=password,
-        master_key=master_key,
-        prisma_client=prisma_client,
-        general_settings=general_settings,
-    )
+    try:
+        login_result: Final = await authenticate_user(
+            username=username,
+            password=password,
+            master_key=master_key,
+            prisma_client=prisma_client,
+            throttle=LoginThrottle.from_request(request, general_settings, redis_usage_cache),
+            general_settings=general_settings,
+        )
+    except ProxyException as exc:
+        if int(exc.code) != status.HTTP_429_TOO_MANY_REQUESTS:
+            raise
+        retry_after: Final = exc.headers.get("Retry-After", "30")
+        return HTMLResponse(
+            content=(
+                "<html><body><h1>Too many sign-in attempts</h1>"
+                f"<p>Try again in about {retry_after} seconds</p></body></html>"
+            ),
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            headers=exc.headers,
+        )
 
     # Create UI token object
     returned_ui_token_object: Final = create_ui_token_object(
@@ -15993,6 +16035,7 @@ async def login_v2(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
+            throttle=LoginThrottle.from_request(request, general_settings, redis_usage_cache),
             general_settings=general_settings,
         )
 
@@ -16064,6 +16107,7 @@ async def login_v3(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
+            throttle=LoginThrottle.from_request(request, general_settings, redis_usage_cache),
             general_settings=general_settings,
         )
 
@@ -16940,6 +16984,12 @@ async def update_config(
                         )
                     },
                 )
+            try:
+                parse_routing_groups(
+                    TypeAdapter(list[RoutingGroup] | None).validate_python(raw_router_settings.get("routing_groups"))
+                )
+            except (ValidationError, ValueError) as invalid_groups:
+                raise HTTPException(status_code=400, detail={"error": str(invalid_groups)})
 
         if prisma_client is None:
             raise Exception("No DB Connected")
