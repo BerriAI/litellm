@@ -43,6 +43,7 @@ DEFAULT_FAILED_LOGIN_WINDOW_SECONDS: Final = 60
 DEFAULT_FAILED_LOGIN_BLOCK_SECONDS: Final = 300
 
 IPV6_SOURCE_PREFIX_LENGTH: Final = 64
+EXEMPT: Final = 0
 
 SOURCE_LIMIT_KEY: Final = "max_failed_login_attempts_per_source"
 SOURCE_LIMIT_OVERRIDES_KEY: Final = "max_failed_login_attempts_per_source_overrides"
@@ -157,6 +158,13 @@ def _int_setting(settings: Mapping[str, object], key: str, default: int) -> int:
     return _positive_int(settings.get(key), key, default)
 
 
+def _override_limit(raw: object, default: int) -> int:
+    """A per-address override: a limit of 1 or more, or ``EXEMPT`` (0) to leave that address unlimited."""
+    if str(raw).strip() == str(EXEMPT):
+        return EXEMPT
+    return _positive_int(raw, SOURCE_LIMIT_OVERRIDES_KEY, default)
+
+
 def _parse_address(client_ip: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     """The address as it is limited and counted: an IPv4-mapped IPv6 address is its IPv4 address."""
     try:
@@ -179,7 +187,10 @@ def _parse_network(raw_range: str) -> _Network | None:
 
 
 def _source_limit(settings: Mapping[str, object], client_ip: str) -> int:
-    """Failure allowance for this address: the most specific configured range containing it, else the default."""
+    """Failure allowance for this address: the most specific configured range containing it, else the default.
+
+    ``EXEMPT`` (0) means the operator opted this address out of both limits.
+    """
     default: Final = _int_setting(settings, SOURCE_LIMIT_KEY, DEFAULT_MAX_FAILED_LOGIN_ATTEMPTS_PER_SOURCE)
     raw_overrides: Final = settings.get(SOURCE_LIMIT_OVERRIDES_KEY)
     if raw_overrides is None:
@@ -195,7 +206,7 @@ def _source_limit(settings: Mapping[str, object], client_ip: str) -> int:
     if address is None:
         return default
     matches: Final = sorted(
-        (network.prefixlen, _positive_int(raw_limit, SOURCE_LIMIT_OVERRIDES_KEY, default))
+        (network.prefixlen, _override_limit(raw_limit, default))
         for raw_range, raw_limit in overrides.items()
         if (network := _parse_network(raw_range)) is not None and address in network
     )
@@ -203,8 +214,8 @@ def _source_limit(settings: Mapping[str, object], client_ip: str) -> int:
 
 
 def user_limit_for(source_limit: int) -> int:
-    """Failures allowed for one username from one address: half the address allowance, rounded up."""
-    return (source_limit + 1) // 2
+    """Failures allowed for one username from one address: half the address allowance, rounded down, at least 1."""
+    return max(source_limit // 2, 1)
 
 
 def source_group(client_ip: str) -> str:
@@ -236,7 +247,8 @@ class LoginThrottle:
 
     ``source_limit`` is None when the source scope is off: ``trusted_proxy_ranges`` is unset, so the peer
     address may be a shared ingress. An empty list means clients connect directly and the peer is the source.
-    ``user_limit`` is derived from the address allowance either way, see ``user_limit_for``.
+    ``user_limit`` is derived from the address allowance either way, see ``user_limit_for``. An address whose
+    override is ``EXEMPT`` gets a disabled throttle: nothing is counted or blocked for it.
     """
 
     client_ip: str
@@ -262,16 +274,17 @@ class LoginThrottle:
             request, TrustedProxyConfig(use_forwarded_for=bool(proxies), trusted_proxy_cidrs=proxies or ())
         )
         source_limit: Final = _source_limit(settings, resolved or LOGIN_THROTTLE_UNKNOWN_SOURCE)
+        exempt: Final = source_limit == EXEMPT
         return cls(
             client_ip=resolved or LOGIN_THROTTLE_UNKNOWN_SOURCE,
-            source_limit=source_limit if proxies is not None and resolved is not None else None,
+            source_limit=source_limit if proxies is not None and resolved is not None and not exempt else None,
             user_limit=user_limit_for(source_limit),
             window_seconds=_int_setting(settings, WINDOW_KEY, DEFAULT_FAILED_LOGIN_WINDOW_SECONDS),
             block_seconds=_int_setting(settings, BLOCK_KEY, DEFAULT_FAILED_LOGIN_BLOCK_SECONDS),
             counters=_COUNTERS,
             blocks=_BLOCKS,
             redis_cache=redis_cache,
-            enabled=not _rate_limit_disabled(),
+            enabled=not exempt and not _rate_limit_disabled(),
         )
 
     def _keys(self, username: str) -> _Keys:
