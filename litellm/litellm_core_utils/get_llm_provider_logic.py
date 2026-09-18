@@ -160,7 +160,7 @@ def get_llm_provider(
         if model is None:
             raise ValueError("model parameter is required but was None. Please provide a valid model name.")
 
-        if litellm.LiteLLMProxyChatConfig._should_use_litellm_proxy_by_default(
+        if litellm.LiteLLMProxyChatConfig.should_use_litellm_proxy_by_default(
             litellm_params=cast(LiteLLM_Params | None, litellm_params)
         ):
             return litellm.LiteLLMProxyChatConfig.litellm_proxy_get_custom_llm_provider_info(

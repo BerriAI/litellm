@@ -526,6 +526,42 @@ async def mistral_proxy_route(
 
 
 @router.api_route(
+    "/typesafe/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
+    tags=["TypeSafe AI Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
+)
+async def typesafe_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)"""
+    base_target_url: Final = get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+    encoded_endpoint: Final = httpx.URL(endpoint).path
+    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
+    base_url: Final = httpx.URL(base_target_url)
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
+    )
+    typesafe_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="typesafe",
+        region_name=None,
+    )
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={  # mutable-ok: pass-through request headers require a mutable mapping
+            "Authorization": f"Bearer {typesafe_api_key}",
+            "Content-Type": "application/json",
+        },
+        custom_llm_provider="typesafe",
+        is_streaming_request=False,
+    )
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+@router.api_route(
     "/milvus/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Milvus Pass-through", "pass-through"],
@@ -1180,9 +1216,8 @@ async def bedrock_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(prepped.url),
-        custom_headers=prepped.headers,
+        custom_headers=_upstream_headers_for_bedrock_agent_runtime_route(request, user_api_key_dict, prepped.headers),
         is_streaming_request=is_streaming_request,
-        _forward_headers=True,
     )  # dynamically construct pass-through endpoint based on incoming path
     setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, data)
     # SigV4 signs an exact payload; pass-through must send prepped.body, not json.dumps
@@ -2001,6 +2036,9 @@ _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset({"authorization", "x-a
 _HEADERS_NEVER_FORWARDED_TO_ANTHROPIC: Final = frozenset({"content-length", "host", "accept-encoding"}) | (
     SpecialHeaders.litellm_credential_header_names() - _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS
 )
+_HEADERS_NEVER_FORWARDED_TO_BEDROCK: Final = (
+    frozenset({"content-length", "host", "accept-encoding"}) | SpecialHeaders.litellm_credential_header_names()
+)
 
 
 _MAPPED_ROUTE_CALLER_KEY_HEADER: Final = "litellm_user_api_key"
@@ -2097,6 +2135,17 @@ def _upstream_headers_for_anthropic_route(
     if proxy_auth_header is None and _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(caller_headers):
         raise HTTPException(status_code=401, detail=_CREDENTIALLESS_ANTHROPIC_MISSING_CREDENTIAL_DETAIL)
     return MappingProxyType({**caller_headers, **(proxy_auth_header or {})})
+
+
+def _upstream_headers_for_bedrock_agent_runtime_route(
+    request: Request, user_api_key_dict: UserAPIKeyAuth, signed_headers: Mapping[str, object]
+) -> Mapping[str, object]:
+    caller_headers: Final = _caller_headers_without_litellm_secrets(
+        request,
+        user_api_key_dict,
+        _HEADERS_NEVER_FORWARDED_TO_BEDROCK | frozenset(name.lower() for name in signed_headers),
+    )
+    return MappingProxyType({**caller_headers, **signed_headers})
 
 
 async def _prepare_vertex_auth_headers(

@@ -856,6 +856,16 @@ BUDGET_ENFORCED_SIDE_EFFECT_ROUTES: Final = frozenset(
 )
 
 
+def route_skips_budget_checks(route: str) -> bool:
+    return route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES and (
+        route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route)
+    )
+
+
+def request_skips_budget_checks(route: str, model: str | list[str] | None, llm_router: Router | None) -> bool:
+    return route_skips_budget_checks(route=route) or _is_model_cost_zero(model=model, llm_router=llm_router)
+
+
 async def common_checks(
     request_body: dict,
     team_object: LiteLLM_TeamTable | None,
@@ -903,10 +913,7 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
-    skip_all_budget_checks: Final = skip_budget_checks or (
-        route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES
-        and (route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route))
-    )
+    skip_all_budget_checks: Final = skip_budget_checks or route_skips_budget_checks(route=route)
 
     membership_user_id: Final = (
         valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
@@ -2104,7 +2111,7 @@ async def _fetch_uncached_tags(
 
 @log_db_metrics
 async def get_tag_objects_batch(
-    tag_names: list[str],
+    tag_names: Sequence[str],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
@@ -3627,6 +3634,22 @@ async def get_jwt_key_mapping_cache_keys_for_token(
     mappings: Final = await _jwt_key_mapping_table(JWTKeyMappingRepository(prisma_client)).find_many(
         where={"token": hashed_token}
     )
+    return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer) for m in mappings)
+
+
+class _TokenInFilter(TypedDict):
+    token: ReadOnly[Mapping[str, Sequence[str]]]
+
+
+async def get_jwt_key_mapping_cache_keys_for_tokens(
+    hashed_tokens: Sequence[str],
+    prisma_client: PrismaClient,
+) -> tuple[str, ...]:
+    """Cache keys of every JWT claim mapped to any of the given virtual keys."""
+    if not hashed_tokens:
+        return ()
+    token_filter: Final[_TokenInFilter] = {"token": {"in": tuple(hashed_tokens)}}
+    mappings: Final = await _jwt_key_mapping_table(JWTKeyMappingRepository(prisma_client)).find_many(where=token_filter)
     return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value, m.jwt_issuer) for m in mappings)
 
 
@@ -5863,15 +5886,25 @@ async def _tag_max_budget_check(
     """
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
 
-    if prisma_client is None:
+    await tag_max_budget_check_for_tags(
+        tags=get_tags_from_request_body(request_body=request_body),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        valid_token=valid_token,
+    )
+
+
+async def tag_max_budget_check_for_tags(
+    tags: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    valid_token: UserAPIKeyAuth | None,
+) -> None:
+    if prisma_client is None or not tags:
         return
 
-    # Get tags from request metadata
-    tags: Final = get_tags_from_request_body(request_body=request_body)
-    if not tags:
-        return
-
-    # Batch fetch all tags in one go
     tag_objects: Final = await get_tag_objects_batch(
         tag_names=tags,
         prisma_client=prisma_client,
