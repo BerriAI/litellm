@@ -152,25 +152,18 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         values_to_update_in_cache: Sequence[tuple[str, CurrentItemRateLimit]],
         parent_otel_span: Span | None,
     ) -> None:
-        if not values_to_update_in_cache:
-            return
-        rolled_back: Final[list[tuple[str, object]]] = [
-            (
+        for key, val in values_to_update_in_cache:
+            await self.internal_usage_cache.async_set_cache(
                 key,
                 CurrentItemRateLimit(
                     current_requests=max(val["current_requests"] - 1, 0),
                     current_tpm=val["current_tpm"],
                     current_rpm=max(val["current_rpm"] - 1, 0),
                 ),
+                ttl=60,
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
             )
-            for key, val in values_to_update_in_cache
-        ]
-        await self.internal_usage_cache.async_batch_set_cache(
-            cache_list=rolled_back,
-            ttl=60,
-            litellm_parent_otel_span=parent_otel_span,
-            local_only=True,
-        )
 
     def time_to_next_minute(self) -> float:
         # Get the current time
@@ -767,10 +760,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 current_minute: Final = datetime.now().strftime("%M")
                 precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
 
-                bucket_ids: Final = [user_api_key] + (
-                    [user_api_key_team_id] if user_api_key_team_id is not None else []
-                )
-                for bucket_id in bucket_ids:
+                for bucket_id in (user_api_key, user_api_key_team_id):
+                    if bucket_id is None:
+                        continue
                     await self._release_parallel_slot_on_failure(
                         request_count_api_key=f"{bucket_id}::{precise_minute}::request_count",
                         litellm_parent_otel_span=litellm_parent_otel_span,
@@ -786,16 +778,12 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         current: Final = await self.internal_usage_cache.async_get_cache(
             key=request_count_api_key,
             litellm_parent_otel_span=litellm_parent_otel_span,
-        ) or {
-            "current_requests": 1,
-            "current_tpm": 0,
-            "current_rpm": 0,
-        }
-        new_val: Final = {
-            "current_requests": max(current["current_requests"] - 1, 0),
-            "current_tpm": current["current_tpm"],
-            "current_rpm": current["current_rpm"],
-        }
+        ) or CurrentItemRateLimit(current_requests=1, current_tpm=0, current_rpm=0)
+        new_val: Final = CurrentItemRateLimit(
+            current_requests=max(current["current_requests"] - 1, 0),
+            current_tpm=current["current_tpm"],
+            current_rpm=current["current_rpm"],
+        )
         self.print_verbose(f"updated_value in failure call: {new_val}")
         await self.internal_usage_cache.async_set_cache(
             request_count_api_key,

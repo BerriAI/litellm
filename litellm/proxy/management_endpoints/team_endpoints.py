@@ -1216,7 +1216,7 @@ async def _check_user_team_limits(
     ):
         raise HTTPException(
             status_code=400,
-            detail={
+            detail={  # mutable-ok: HTTPException detail must be a JSON-serializable dict
                 "error": (
                     "max parallel requests higher than user max. "
                     f"User max parallel requests={user_api_key_dict.max_parallel_requests}. "
