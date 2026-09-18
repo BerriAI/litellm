@@ -13919,3 +13919,55 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
         ]
     finally:
         litellm.utils._select_custom_tokenizer_helper.cache_clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "contents,messages",
+    [
+        (
+            [{"parts": [{"text": "Count every word in this request."}]}],
+            [{"role": "user", "content": "Count every word in this request."}],
+        ),
+        (
+            [{"role": "user", "parts": [{"text": "One part."}, {"text": "Another part."}]}],
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "One part."}, {"type": "text", "text": "Another part."}],
+                }
+            ],
+        ),
+        (
+            [{"role": "user", "parts": [{"text": "Hello"}]}, {"role": "model", "parts": [{"text": "Welcome back"}]}],
+            [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Welcome back"}],
+        ),
+    ],
+)
+async def test_token_counter_counts_gemini_contents(
+    contents: list[dict[str, object]], messages: list[dict[str, object]]
+) -> None:
+    expected: Final = await proxy_server_module.token_counter(
+        TokenCountRequest(model="gemini/gemini-3.8-flash", messages=messages)
+    )
+    actual: Final = await proxy_server_module.token_counter(
+        TokenCountRequest(model="gemini/gemini-3.8-flash", contents=contents)
+    )
+    assert actual.total_tokens == expected.total_tokens
+    assert actual.total_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_token_counter_prefers_explicit_messages_over_contents() -> None:
+    messages: Final = [{"role": "user", "content": "Count this message."}]
+    expected: Final = await proxy_server_module.token_counter(
+        TokenCountRequest(model="gemini/gemini-3.8-flash", messages=messages)
+    )
+    actual: Final = await proxy_server_module.token_counter(
+        TokenCountRequest(
+            model="gemini/gemini-3.8-flash",
+            messages=messages,
+            contents=[{"parts": [{"text": "Do not count this different text."}]}],
+        )
+    )
+    assert actual.total_tokens == expected.total_tokens
