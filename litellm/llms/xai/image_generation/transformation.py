@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -16,11 +16,8 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-
-    LiteLLMLoggingObj = _LiteLLMLoggingObj
-else:
-    LiteLLMLoggingObj = Any
+    import tiktoken
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _SIZE_TO_ASPECT_RATIO: Final = {
     "1024x1024": "1:1",
@@ -156,11 +153,11 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ImageResponse,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj: "LiteLLMLoggingObj",
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:

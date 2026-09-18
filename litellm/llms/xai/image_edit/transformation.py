@@ -1,6 +1,6 @@
 import base64
 from io import BufferedReader, BytesIO
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from httpx._types import RequestFiles
@@ -14,6 +14,9 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _SIZE_TO_ASPECT_RATIO: Final = {
     "1024x1024": "1:1",
@@ -167,7 +170,7 @@ class XAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
     ) -> ImageResponse:
         try:
             response_data: Final = raw_response.json()

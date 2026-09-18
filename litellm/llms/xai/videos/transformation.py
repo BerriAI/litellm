@@ -1,5 +1,5 @@
 import time
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from httpx._types import RequestFiles
@@ -25,11 +25,7 @@ from litellm.types.videos.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-
-    LiteLLMLoggingObj = _LiteLLMLoggingObj
-else:
-    LiteLLMLoggingObj = Any
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _SIZE_TO_ASPECT_RATIO: Final = {
     "1024x1024": "1:1",
@@ -225,7 +221,7 @@ class XAIVideoConfig(BaseVideoConfig):
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
         request_data: dict | None = None,
     ) -> VideoObject:
@@ -268,7 +264,7 @@ class XAIVideoConfig(BaseVideoConfig):
     def transform_video_status_retrieve_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
     ) -> VideoObject:
         response_data: Final = raw_response.json()
@@ -328,7 +324,7 @@ class XAIVideoConfig(BaseVideoConfig):
     def transform_video_content_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj: "LiteLLMLoggingObj",
     ) -> bytes:
         url: Final = self._video_cdn_url(raw_response)
         if url is None:
@@ -341,7 +337,7 @@ class XAIVideoConfig(BaseVideoConfig):
     async def async_transform_video_content_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj: "LiteLLMLoggingObj",
     ) -> bytes:
         url: Final = self._video_cdn_url(raw_response)
         if url is None:
@@ -360,14 +356,14 @@ class XAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         raise NotImplementedError("Video remix is not supported by xAI Imagine API")
 
     def transform_video_remix_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
     ) -> VideoObject:
         raise NotImplementedError("Video remix is not supported by xAI Imagine API")
@@ -380,14 +376,14 @@ class XAIVideoConfig(BaseVideoConfig):
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, Any] | None = None,
+        extra_query: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         raise NotImplementedError("Video listing is not supported by xAI Imagine API")
 
     def transform_video_list_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
     ) -> dict[str, str]:
         raise NotImplementedError("Video listing is not supported by xAI Imagine API")
@@ -404,6 +400,6 @@ class XAIVideoConfig(BaseVideoConfig):
     def transform_video_delete_response(
         self,
         raw_response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj: "LiteLLMLoggingObj",
     ) -> VideoObject:
         raise NotImplementedError("Video delete is not supported by xAI Imagine API")
