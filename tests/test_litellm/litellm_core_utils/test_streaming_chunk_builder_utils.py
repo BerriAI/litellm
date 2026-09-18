@@ -1,4 +1,3 @@
-import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 
@@ -398,7 +397,6 @@ def test_streaming_preserves_anthropic_1hr_cache_creation_breakdown():
     assert breakdown.ephemeral_5m_input_tokens == 0
     assert usage.cache_creation_input_tokens == 50
     assert usage.cache_read_input_tokens == 8728
-
 
 
 def test_streaming_keeps_cache_creation_breakdown_from_final_chunk():
