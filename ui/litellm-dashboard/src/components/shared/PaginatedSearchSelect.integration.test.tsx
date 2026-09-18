@@ -1,5 +1,6 @@
 import { fireEvent, renderWithProviders as render, screen, waitFor } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -405,5 +406,49 @@ describe("PaginatedSearchSelect", () => {
 
     expect(input).toHaveValue("aliasalpha");
     await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("aliasalpha"));
+  });
+
+  it("keeps the latest query results when an earlier response resolves last", async () => {
+    const pending = new Map<string, (options: SearchSelectOption[]) => void>();
+
+    function QueryBackedSelect() {
+      const [query, setQuery] = useState("");
+      const result = useQuery({
+        queryKey: ["paginated-select-race", query],
+        queryFn: () =>
+          new Promise<SearchSelectOption[]>((resolve) => {
+            pending.set(query, resolve);
+          }),
+        enabled: query.length > 0,
+      });
+      return (
+        <>
+          <button type="button" onClick={() => setQuery("A")}>
+            Search A
+          </button>
+          <button type="button" onClick={() => setQuery("B")}>
+            Search B
+          </button>
+          <PaginatedSearchSelect options={result.data ?? []} onValueChange={vi.fn()} onSearchChange={setQuery} />
+        </>
+      );
+    }
+
+    const user = userEvent.setup();
+    render(<QueryBackedSelect />);
+    await user.click(screen.getByRole("button", { name: "Search A" }));
+    await user.click(screen.getByRole("button", { name: "Search B" }));
+    await waitFor(() => {
+      expect(pending.has("A")).toBe(true);
+      expect(pending.has("B")).toBe(true);
+    });
+
+    pending.get("B")?.([{ label: "B result", value: "b" }]);
+    await user.click(screen.getByRole("combobox"));
+    expect(await screen.findByText("B result")).toBeInTheDocument();
+
+    pending.get("A")?.([{ label: "A result", value: "a" }]);
+    await waitFor(() => expect(screen.queryByText("A result")).not.toBeInTheDocument());
+    expect(screen.getByText("B result")).toBeInTheDocument();
   });
 });
