@@ -211,18 +211,21 @@ def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]
         raw_code = None
     message: Final = str(raw_message) if raw_message is not None else "Response API in-stream error"
     error_type: Final = raw_type if isinstance(raw_type, str) else None
-    code: Final = raw_code if isinstance(raw_code, str) else None
+    code: Final = str(raw_code) if isinstance(raw_code, (str, int)) and not isinstance(raw_code, bool) else None
     return message, error_type, code
+
+
+def _status_code_for_error_field(field: str) -> int | None:
+    if field.isdecimal() and 400 <= int(field) <= 599:
+        return int(field)
+    return _ERROR_CODE_HTTP_STATUS.get(field)
 
 
 def _status_code_for_error_fields(error_type: str | None, error_code: str | None) -> int:
     fields: Final = tuple(field for field in (error_code, error_type) if field is not None)
     if any(field.startswith("rate_limit") or field == "insufficient_quota" for field in fields):
         return 429
-    return next(
-        (_ERROR_CODE_HTTP_STATUS[field] for field in fields if field in _ERROR_CODE_HTTP_STATUS),
-        500,
-    )
+    return next((status for status in map(_status_code_for_error_field, fields) if status is not None), 500)
 
 
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:

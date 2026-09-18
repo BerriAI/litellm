@@ -36,6 +36,11 @@ class _FailureDetails(BaseModel):
     type: str | None = None
     status_code: int | None = None
 
+    @field_validator("message", mode="before")
+    @classmethod
+    def normalize_message(cls, value: object) -> str | None:
+        return value if isinstance(value, str) else None
+
     @field_validator("code", mode="before")
     @classmethod
     def normalize_code(cls, value: object) -> str | int | None:
@@ -52,6 +57,20 @@ def _original_failure(exception: Exception) -> Exception:
     while isinstance(current, MidStreamFallbackError) and current.original_exception is not None:
         current = current.original_exception
     return current
+
+
+def _failure_details(original: Exception) -> _FailureDetails:
+    mapped: Final = _FailureDetails.model_validate(original)
+    body: Final = getattr(original, "body", None)
+    if not isinstance(body, Mapping):
+        return mapped
+    upstream: Final = _FailureDetails.model_validate(body)
+    return _FailureDetails(
+        message=upstream.message or mapped.message,
+        code=upstream.code if upstream.code is not None else mapped.code,
+        type=upstream.type or mapped.type,
+        status_code=mapped.status_code,
+    )
 
 
 def _response_error_code(details: _FailureDetails) -> str:
@@ -110,7 +129,7 @@ class ResponsesStreamErrorState:
         if self.terminal_emitted:
             return None
         original: Final = _original_failure(exception)
-        details: Final = _FailureDetails.model_validate(original)
+        details: Final = _failure_details(original)
         response: Final = ResponsesAPIResponse.model_validate(
             MappingProxyType(
                 {

@@ -24,6 +24,7 @@ from litellm.proxy.proxy_server import app
         ("/v1/responses", "numeric_rate_limit"),
         ("/v1/responses", "server_error"),
         ("/v1/responses", "response_failed"),
+        ("/v1/responses", "cyber_policy"),
         ("/cursor/chat/completions", "server_error"),
         ("/v1/chat/completions", "server_error"),
     ],
@@ -31,7 +32,7 @@ from litellm.proxy.proxy_server import app
 async def test_streaming_upstream_errors_keep_the_client_protocol(
     monkeypatch: pytest.MonkeyPatch,
     path: str,
-    error_kind: Literal["rate_limit", "numeric_rate_limit", "server_error", "response_failed"],
+    error_kind: Literal["rate_limit", "numeric_rate_limit", "server_error", "response_failed", "cyber_policy"],
 ) -> None:
     import litellm.proxy.proxy_server as ps
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -40,7 +41,7 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
     message: Final = "Upstream cannot complete this response"
     code: Final = {
         "rate_limit": "rate_limit_exceeded", "numeric_rate_limit": "429",
-        "server_error": "server_error", "response_failed": "server_error",
+        "server_error": "server_error", "response_failed": "server_error", "cyber_policy": "cyber_policy",
     }[error_kind]
     error: Final = {"message": message, "code": code, "type": None, "param": "input"}
     response: Final = {"id": "resp_upstream", "object": "response", "created_at": 1,
@@ -55,13 +56,13 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
     failed: Final = (
         {"type": "response.failed", "sequence_number": 9,
          "response": {**response, "status": "failed", "error": error}}
-        if error_kind == "response_failed" else {"type": "error", "error": error}
+        if error_kind in ("response_failed", "cyber_policy") else {"type": "error", "error": error}
     )
     chat: Final = {"id": "chatcmpl_partial", "object": "chat.completion.chunk", "created": 1,
                   "model": model, "choices": [{"index": 0, "delta": {"content": "partial"},
                                                 "finish_reason": None}]}
     is_chat: Final = path == "/v1/chat/completions"
-    partial: Final = path != "/v1/responses" or error_kind in ("numeric_rate_limit", "response_failed")
+    partial: Final = path != "/v1/responses" or error_kind in ("numeric_rate_limit", "response_failed", "cyber_policy")
     response_events: Final = (created, tool_added, tool_delta, failed) if partial else (failed,)
     upstream_events: Final = (chat, {"error": error}) if is_chat else response_events
     wire: Final = "".join("data: " + json.dumps(event) + "\n\n" for event in upstream_events)
@@ -108,9 +109,11 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
             assert events[0]["sequence_number"] == 0
             assert events[0]["response"]["id"].startswith("resp_")
         assert events[-1]["response"]["status"] == "failed"
-        assert events[-1]["response"]["error"]["code"] == (
-            "rate_limit_exceeded" if error_kind in ("rate_limit", "numeric_rate_limit") else "server_error"
-        )
+        assert events[-1]["response"]["error"]["code"] == {
+            "rate_limit": "rate_limit_exceeded", "numeric_rate_limit": "rate_limit_exceeded",
+            "server_error": "server_error", "response_failed": "server_error", "cyber_policy": "cyber_policy",
+        }[error_kind]
+        assert events[-1]["response"]["error"]["message"] == message
     else:
         assert events[0]["object"] == "chat.completion.chunk", result.text
         assert "response.failed" not in result.text
