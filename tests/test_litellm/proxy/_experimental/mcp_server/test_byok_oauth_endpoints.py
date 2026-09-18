@@ -692,9 +692,15 @@ async def test_invalidate_byok_cred_cache_evicts_locally_and_broadcasts_the_same
     publish = AsyncMock()
 
     with (
-        patch("litellm.proxy._experimental.mcp_server.db.get_user_credential", new=db_lookup),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch.object(server_module, "publish_auth_cache_invalidation", new=publish),
+        patch(  # test-quality-ok: the DB row lookup is the only seam below the credential resolver; no Prisma fake exists
+            "litellm.proxy._experimental.mcp_server.db.get_user_credential", new=db_lookup
+        ),
+        patch(  # test-quality-ok: the resolver reads the module-level prisma_client singleton; the suite's only seam
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        patch.object(  # test-quality-ok: the redis publisher is module-level; asserting the broadcast without a redis
+            server_module, "publish_auth_cache_invalidation", new=publish
+        ),
     ):
         assert await server_module._get_byok_credential(server, user_auth) == "sk-before-revoke"
         assert await server_module._get_byok_credential(server, user_auth) == "sk-before-revoke"

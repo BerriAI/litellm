@@ -3078,7 +3078,9 @@ async def test_admin_terminated_session_id_stays_refused_while_replayed_and_is_f
             "method": "POST",
             "headers": [(b"content-type", b"application/json"), (b"mcp-session-id", session_id.encode())],
         }
-        with patch.object(mcp_server.time, "monotonic", return_value=now):
+        with patch.object(  # test-quality-ok: the stale-session handler reads the clock directly; no injectable now
+            mcp_server.time, "monotonic", return_value=now
+        ):
             handled = await mcp_server._handle_stale_mcp_session(
                 scope, AsyncMock(), AsyncMock(), session_manager_stateful
             )
@@ -3099,7 +3101,9 @@ async def test_admin_terminated_session_id_stays_refused_while_replayed_and_is_f
                 mcp_server._stateful_session_auth_context_last_seen, {}, clear=True
             ),
         ):
-            with patch.object(mcp_server.time, "monotonic", return_value=1000.0):
+            with patch.object(  # test-quality-ok: termination stamps the tombstone from the clock directly; no injectable now
+                mcp_server.time, "monotonic", return_value=1000.0
+            ):
                 closed = await mcp_server.terminate_mcp_gateway_sessions(user_id="alice")
             assert closed.terminated_sessions == 2
 
