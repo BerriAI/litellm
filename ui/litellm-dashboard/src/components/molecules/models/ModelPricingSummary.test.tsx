@@ -48,9 +48,7 @@ describe("ModelPricingSummary", () => {
   });
 
   it("renders a dash when the model has no pricing at all", () => {
-    render(
-      <ModelPricingSummary model={{ input_cost: null, output_cost: null }} />,
-    );
+    render(<ModelPricingSummary model={{ input_cost: null, output_cost: null }} />);
     expect(screen.getByText("-")).toBeInTheDocument();
     expect(screen.queryByText(/\$/)).not.toBeInTheDocument();
   });

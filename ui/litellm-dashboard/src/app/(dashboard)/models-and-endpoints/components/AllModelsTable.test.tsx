@@ -175,12 +175,7 @@ describe("AllModelsTable", () => {
     expect(screen.getByText("$30")).toBeInTheDocument();
     expect(screen.getByText("$60")).toBeInTheDocument();
 
-    rerender(
-      <AllModelsTable
-        {...baseProps}
-        data={[makeModel({ input_cost: null, output_cost: null })]}
-      />,
-    );
+    rerender(<AllModelsTable {...baseProps} data={[makeModel({ input_cost: null, output_cost: null })]} />);
     expect(screen.queryByText(/^\$/)).not.toBeInTheDocument();
   });
 
