@@ -2871,6 +2871,183 @@ def test_remove_stateful_session_tracking_drops_client_info():
         assert session_id not in mcp_server._stateful_session_client_info
 
 
+def _admin_terminate_fixture(mcp_server):
+    def auth_user(user_id: str):
+        return mcp_server.MCPAuthenticatedUser(
+            user_api_key_auth=UserAPIKeyAuth(api_key=f"key-{user_id}", user_id=user_id),
+        )
+
+    contexts = {
+        "alice-session-1": auth_user("alice"),
+        "alice-session-2": auth_user("alice"),
+        "bob-session-1": auth_user("bob"),
+        "anon-session-1": mcp_server.MCPAuthenticatedUser(user_api_key_auth=None),
+        "gone-session-1": auth_user("alice"),
+    }
+    transports = {
+        session_id: MagicMock(terminate=AsyncMock())
+        for session_id in ("alice-session-1", "alice-session-2", "bob-session-1", "anon-session-1")
+    }
+    return contexts, transports
+
+
+@pytest.mark.asyncio
+async def test_terminate_mcp_gateway_sessions_by_user_closes_every_live_session_of_that_user():
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import session_manager_stateful
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    contexts, transports = _admin_terminate_fixture(mcp_server)
+    live_transports = dict(transports)
+    last_seen = {session_id: 100.0 for session_id in contexts}
+    locks = {session_id: asyncio.Lock() for session_id in contexts}
+
+    with (
+        patch.object(  # test-quality-ok: the transport registry is a module-level singleton; the suite's only seam
+            session_manager_stateful, "_server_instances", live_transports
+        ),
+        patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+            mcp_server._stateful_session_auth_contexts, contexts, clear=True
+        ),
+        patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+            mcp_server._stateful_session_auth_context_last_seen, last_seen, clear=True
+        ),
+        patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+            mcp_server._stateful_session_locks, locks, clear=True
+        ),
+        patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+            mcp_server._stateful_session_owners, {session_id: "owner" for session_id in contexts}, clear=True
+        ),
+        patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+            mcp_server._stateful_session_active_request_counts, {}, clear=True
+        ),
+        patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+            mcp_server._stateful_session_client_info, {}, clear=True
+        ),
+    ):
+        result = await mcp_server.terminate_mcp_gateway_sessions(user_id="alice")
+
+        assert set(live_transports) == {"bob-session-1", "anon-session-1"}
+        assert set(mcp_server._stateful_session_auth_contexts) == {"bob-session-1", "anon-session-1", "gone-session-1"}
+        assert set(mcp_server._stateful_session_locks) == {"bob-session-1", "anon-session-1", "gone-session-1"}
+        assert set(mcp_server._stateful_session_owners) == {"bob-session-1", "anon-session-1", "gone-session-1"}
+        assert set(mcp_server._stateful_session_auth_context_last_seen) == {
+            "bob-session-1",
+            "anon-session-1",
+            "gone-session-1",
+        }
+
+    transports["alice-session-1"].terminate.assert_awaited_once()
+    transports["alice-session-2"].terminate.assert_awaited_once()
+    transports["bob-session-1"].terminate.assert_not_awaited()
+    transports["anon-session-1"].terminate.assert_not_awaited()
+    assert result.terminated_sessions == 2
+    assert sorted(session.session_id_prefix for session in result.sessions) == ["alice-se", "alice-se"]
+    assert {session.user_id for session in result.sessions} == {"alice"}
+    assert "key-alice" not in result.model_dump_json()
+    assert "alice-session-1" not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_terminate_mcp_gateway_sessions_prefix_and_user_must_both_match():
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import session_manager_stateful
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    contexts, transports = _admin_terminate_fixture(mcp_server)
+    live_transports = dict(transports)
+
+    with (
+        patch.object(  # test-quality-ok: the transport registry is a module-level singleton; the suite's only seam
+            session_manager_stateful, "_server_instances", live_transports
+        ),
+        patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+            mcp_server._stateful_session_auth_contexts, contexts, clear=True
+        ),
+        patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+            mcp_server._stateful_session_client_info, {}, clear=True
+        ),
+    ):
+        mismatch = await mcp_server.terminate_mcp_gateway_sessions(session_id_prefix="alice-session-1", user_id="bob")
+        assert mismatch.terminated_sessions == 0
+        assert set(live_transports) == set(transports)
+
+        stale = await mcp_server.terminate_mcp_gateway_sessions(session_id_prefix="gone-session-1")
+        assert stale.terminated_sessions == 0
+
+        exact = await mcp_server.terminate_mcp_gateway_sessions(session_id_prefix="alice-session-1", user_id="alice")
+        assert exact.terminated_sessions == 1
+        assert set(live_transports) == {"alice-session-2", "bob-session-1", "anon-session-1"}
+
+
+@pytest.mark.asyncio
+async def test_admin_terminated_session_id_gets_404_instead_of_a_fresh_stateless_session():
+    """Once an admin closes a session, a client replaying its id must not be silently upgraded to a
+    new stateless session by the stale-header path; it gets 404 and has to initialize again."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import session_manager_stateful
+        from starlette.types import Scope
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "admin-closed-session-1"
+    live_transports = {session_id: MagicMock(terminate=AsyncMock())}
+    contexts = {
+        session_id: mcp_server.MCPAuthenticatedUser(
+            user_api_key_auth=UserAPIKeyAuth(api_key="key-alice", user_id="alice"),
+        )
+    }
+
+    def scope_with_session_header() -> Scope:
+        return {
+            "type": "http",
+            "method": "POST",
+            "headers": [(b"content-type", b"application/json"), (b"mcp-session-id", session_id.encode())],
+        }
+
+    try:
+        with (
+            patch.object(  # test-quality-ok: the transport registry is a module-level singleton; the suite's only seam
+                session_manager_stateful, "_server_instances", live_transports
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_auth_contexts, contexts, clear=True
+            ),
+            patch.dict(  # test-quality-ok: the session tables are module-level singletons; the suite's only seam
+                mcp_server._stateful_session_client_info, {}, clear=True
+            ),
+        ):
+            await mcp_server.terminate_mcp_gateway_sessions(session_id_prefix=session_id)
+
+            terminated_scope = scope_with_session_header()
+            send = AsyncMock()
+            handled = await mcp_server._handle_stale_mcp_session(
+                terminated_scope, AsyncMock(), send, session_manager_stateful
+            )
+
+            assert handled is True
+            statuses = [m["status"] for (m,), _ in send.await_args_list if m["type"] == "http.response.start"]
+            assert statuses == [404]
+            assert [k for k, _ in terminated_scope["headers"]] == [b"content-type", b"mcp-session-id"]
+
+            unknown_scope = scope_with_session_header()
+            unknown_scope["headers"][1] = (b"mcp-session-id", b"never-seen-session")
+            assert (
+                await mcp_server._handle_stale_mcp_session(
+                    unknown_scope, AsyncMock(), AsyncMock(), session_manager_stateful
+                )
+                is False
+            )
+            assert [k for k, _ in unknown_scope["headers"]] == [b"content-type"]
+    finally:
+        mcp_server._admin_terminated_session_ids.clear()
+
+
 @pytest.mark.asyncio
 async def test_initialize_request_with_existing_session_tracks_new_session():
     try:

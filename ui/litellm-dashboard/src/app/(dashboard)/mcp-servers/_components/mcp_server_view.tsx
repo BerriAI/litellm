@@ -9,7 +9,9 @@ import { MCPServer, handleTransport, handleAuth } from "@/components/mcp_tools/t
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
+import { MCPServerUserCredentialsPanel } from "./MCPServerUserCredentialsPanel";
 import { getSecureItem } from "@/utils/secureStorage";
+import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
 import { getMaskedAndFullUrl } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
@@ -63,6 +65,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
+  const canViewUserCredentials = userRole !== null && isProxyAdminTierRole(userRole);
+  const canRevokeUserCredentials = userRole !== null && isProxyAdminRole(userRole);
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);
@@ -140,6 +144,11 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           {isProxyAdmin && (
             <TabsTrigger value="2" className="flex-none rounded-none px-4 py-2">
               Settings
+            </TabsTrigger>
+          )}
+          {canViewUserCredentials && (
+            <TabsTrigger value="3" className="flex-none rounded-none px-4 py-2">
+              User Credentials
             </TabsTrigger>
           )}
         </TabsList>
@@ -387,6 +396,18 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
             )}
           </Card>
         </TabsContent>
+
+        {canViewUserCredentials && (
+          <TabsContent value="3">
+            <Card className="p-6">
+              <MCPServerUserCredentialsPanel
+                serverId={mcpServer.server_id}
+                accessToken={accessToken}
+                canRevoke={canRevokeUserCredentials}
+              />
+            </Card>
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );
