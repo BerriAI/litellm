@@ -1,3 +1,5 @@
+use crate::failure::{Phase, Rejection};
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("invalid provider: {0}")]
@@ -29,27 +31,21 @@ pub enum Error {
 }
 
 impl Error {
-    pub fn is_request(&self) -> bool {
+    pub fn phase(&self) -> Phase<'_> {
         match self {
             Self::InvalidProvider(_)
             | Self::MissingField(_)
             | Self::InvalidRequest(_)
-            | Self::Unsupported(_)
-            | Self::Headers(_) => true,
-            Self::Auth(error) => !matches!(error, litellm_auth::Error::MissingApiKey { .. }),
-            _ => false,
-        }
-    }
-
-    pub fn is_response(&self) -> bool {
-        matches!(
-            self,
+            | Self::Headers(_) => Phase::BeforeProvider(Rejection::InvalidRequest),
+            Self::Unsupported(_) => Phase::BeforeProvider(Rejection::Unsupported),
+            Self::Auth(_) => Phase::BeforeProvider(Rejection::Credential),
+            Self::Transport(error) => error.phase(),
             Self::InvalidResponse(_)
-                | Self::StreamFraming(_)
-                | Self::MissingStreamData
-                | Self::InvalidStreamEvent(_)
-                | Self::InvalidBedrockPayload(_)
-                | Self::InvalidBedrockBase64(_)
-        )
+            | Self::StreamFraming(_)
+            | Self::MissingStreamData
+            | Self::InvalidStreamEvent(_)
+            | Self::InvalidBedrockPayload(_)
+            | Self::InvalidBedrockBase64(_) => Phase::AfterProvider,
+        }
     }
 }

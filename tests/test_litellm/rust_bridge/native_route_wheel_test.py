@@ -109,8 +109,8 @@ def assert_success(response: object) -> None:
         raise AssertionError(f"transcription returned {response['text']!r}")
 
 
-def assert_rate_limit(error: BaseException) -> None:
-    if not isinstance(error, RuntimeError) or "429" not in str(error):
+def assert_rate_limit(native: object, error: BaseException) -> None:
+    if not isinstance(error, native.RustUpstreamError) or error.args[0] != 429:
         raise AssertionError(f"transcription returned the wrong 429 error: {error!r}")
 
 
@@ -118,8 +118,8 @@ def exercise_sync(native: object, api_base: str) -> None:
     assert_success(native.transcription(**route_kwargs(api_base, "success")))
     try:
         native.transcription(**route_kwargs(api_base, "429"))
-    except RuntimeError as error:
-        assert_rate_limit(error)
+    except native.RustUpstreamError as error:
+        assert_rate_limit(native, error)
     else:
         raise AssertionError("transcription accepted a 429 response")
 
@@ -128,8 +128,8 @@ async def exercise_async(native: object, api_base: str) -> None:
     assert_success(await native.atranscription(**route_kwargs(api_base, "success")))
     try:
         await native.atranscription(**route_kwargs(api_base, "429"))
-    except RuntimeError as error:
-        assert_rate_limit(error)
+    except native.RustUpstreamError as error:
+        assert_rate_limit(native, error)
     else:
         raise AssertionError("atranscription accepted a 429 response")
 

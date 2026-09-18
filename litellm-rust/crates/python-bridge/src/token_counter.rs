@@ -94,7 +94,7 @@ fn token_count_error_to_pyerr(error: Error) -> PyErr {
         | Error::ContentBlock
         | Error::ArrayItems
         | Error::JsonSerialization(_)
-        | Error::JsonUtf8(_) => RustBridgeDeclined::new_err(message),
+        | Error::JsonUtf8(_) => RustBridgeDeclined::new_err((message, "invalid_request")),
         Error::Encode(_) | Error::Task(_) => PyRuntimeError::new_err(message),
     }
 }

@@ -5,8 +5,11 @@ from typing import Never, final
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 
-class RustBridgeDeclined(Exception): ...
-class RustUpstreamError(Exception): ...
+class RustBridgeDeclined(Exception):
+    """Rejected before any provider I/O. Args are (message, rejection)."""
+
+class RustUpstreamError(Exception):
+    """The provider was called and did not succeed. Args are (status, body, headers)."""
 
 def ocr(
     request: LiteLLMOcrRequest,

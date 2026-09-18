@@ -1,3 +1,5 @@
+use crate::failure::{Phase, Rejection};
+
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     #[error("upstream OCR error ({status}): {body}")]
@@ -111,56 +113,70 @@ impl From<crate::call_arguments::ArgumentError> for Error {
 }
 
 impl Error {
-    pub fn http_status_code(&self) -> Option<u16> {
+    pub fn phase(&self) -> Phase<'_> {
         match self {
-            Self::Provider { status, .. }
-            | Self::Transport(crate::transport::Error::Http { status, .. }) => Some(*status),
-            error if error.is_request() => Some(400),
-            _ => None,
+            Self::Provider {
+                status,
+                body,
+                headers,
+            } => Phase::Upstream {
+                status: *status,
+                body,
+                headers,
+            },
+            Self::FileRead { path, source } if source.kind() == std::io::ErrorKind::NotFound => {
+                Phase::BeforeProvider(Rejection::FileNotFound(path))
+            }
+            Self::FileRead { source, .. } => Phase::BeforeProvider(Rejection::FileRead(source)),
+            Self::EmptyFile
+            | Self::InvalidMimeType(_)
+            | Self::CohereImageOnly
+            | Self::RequestField { .. }
+            | Self::MissingField(_)
+            | Self::MissingDocumentUrl
+            | Self::InvalidDataUri
+            | Self::ReductoSource
+            | Self::InlineDocumentTooLarge
+            | Self::BlockedDocumentUrl
+            | Self::DownloadDisabled
+            | Self::DownloadTooLarge
+            | Self::TooManyRedirects
+            | Self::Pages(_)
+            | Self::Features
+            | Self::DotModel
+            | Self::InvalidProvider(_)
+            | Self::InvalidRequest(_)
+            | Self::Params(_)
+            | Self::Headers(_) => Phase::BeforeProvider(Rejection::InvalidRequest),
+            Self::RequestFormat => Phase::BeforeProvider(Rejection::RequestFormat),
+            Self::Unsupported(_) => Phase::BeforeProvider(Rejection::Unsupported),
+            Self::MissingAzureAiCredentials
+            | Self::MissingAzureDocumentIntelligenceCredentials
+            | Self::MissingReductoApiKey
+            | Self::Auth(_) => Phase::BeforeProvider(Rejection::Credential),
+            Self::DocumentTask(_) => Phase::BeforeProvider(Rejection::Internal),
+            Self::Transport(error) => error.phase(),
+            Self::TooLarge { .. }
+            | Self::ResponseField { .. }
+            | Self::EmptyContent
+            | Self::MissingRedirectLocation
+            | Self::InvalidRedirect
+            | Self::OperationStatus(_)
+            | Self::NumericRange(_)
+            | Self::PollLocation
+            | Self::PollOrigin
+            | Self::PollTimeout
+            | Self::InvalidResponse(_) => Phase::AfterProvider,
         }
     }
 
-    pub fn is_request(&self) -> bool {
-        matches!(
-            self,
-            Self::EmptyFile
-                | Self::InvalidMimeType(_)
-                | Self::CohereImageOnly
-                | Self::RequestFormat
-                | Self::RequestField { .. }
-                | Self::MissingField(_)
-                | Self::MissingDocumentUrl
-                | Self::InvalidDataUri
-                | Self::ReductoSource
-                | Self::InlineDocumentTooLarge
-                | Self::BlockedDocumentUrl
-                | Self::DownloadDisabled
-                | Self::DownloadTooLarge
-                | Self::TooManyRedirects
-                | Self::Pages(_)
-                | Self::Features
-                | Self::DotModel
-                | Self::InvalidRequest(_)
-                | Self::InvalidProvider(_)
-                | Self::Params(_)
-                | Self::Headers(_)
-        )
-    }
-
-    pub fn is_response(&self) -> bool {
-        matches!(
-            self,
-            Self::TooLarge { .. }
-                | Self::ResponseField { .. }
-                | Self::EmptyContent
-                | Self::MissingRedirectLocation
-                | Self::InvalidRedirect
-                | Self::OperationStatus(_)
-                | Self::NumericRange(_)
-                | Self::PollLocation
-                | Self::PollOrigin
-                | Self::PollTimeout
-                | Self::InvalidResponse(_)
-        )
+    pub fn http_status_code(&self) -> Option<u16> {
+        match self.phase() {
+            Phase::Upstream { status, .. } => Some(status),
+            Phase::BeforeProvider(Rejection::InvalidRequest | Rejection::RequestFormat) => {
+                Some(400)
+            }
+            Phase::BeforeProvider(_) | Phase::AfterProvider => None,
+        }
     }
 }

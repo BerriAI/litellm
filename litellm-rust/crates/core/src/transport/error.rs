@@ -1,3 +1,5 @@
+use crate::failure::{Phase, Rejection};
+
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
     #[error("upstream request failed with status {status}: {body}")]
@@ -9,6 +11,18 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn phase(&self) -> Phase<'_> {
+        match self {
+            Self::Http { status, body } => Phase::Upstream {
+                status: *status,
+                body,
+                headers: &[],
+            },
+            Self::Network(_) => Phase::AfterProvider,
+            Self::Connect(_) => Phase::BeforeProvider(Rejection::Unreachable),
+        }
+    }
+
     pub fn from_reqwest_before_dispatch(error: reqwest::Error) -> Self {
         let before_dispatch = !error.is_timeout() && (error.is_connect() || error.is_builder());
         let message = error.without_url().to_string();

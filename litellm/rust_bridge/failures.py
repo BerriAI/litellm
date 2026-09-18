@@ -3,9 +3,49 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final, Protocol, cast  # noqa: TID251  # adapts the public exception mapper
 
+from pydantic import TypeAdapter
+
 import litellm
+from litellm.rust_bridge.bindings import native_exception_types
+
+
+@dataclass(frozen=True, slots=True)
+class Declined:
+    """The native route rejected the call before any provider I/O."""
+
+    message: str
+    rejection: str
+
+
+@dataclass(frozen=True, slots=True)
+class Upstream:
+    """The provider was called and did not succeed; status 0 means no response arrived."""
+
+    status: int
+    body: str
+    headers: tuple[tuple[str, str], ...]
+
+
+_DECLINED_ARGS: Final = TypeAdapter(tuple[str, str])
+_UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str, tuple[tuple[str, str], ...]])
+
+
+def native_failure(error: BaseException) -> Declined | Upstream | None:
+    """Decode a native exception's args once, for every consumer of the bridge."""
+    exceptions: Final = native_exception_types()
+    if exceptions is None:
+        return None
+    declined, upstream = exceptions
+    if isinstance(error, declined):
+        message, rejection = _DECLINED_ARGS.validate_python(error.args)
+        return Declined(message, rejection)
+    if isinstance(error, upstream):
+        status, body, headers = _UPSTREAM_ARGS.validate_python(error.args)
+        return Upstream(status, body, headers)
+    return None
 
 
 class ExceptionMapper(Protocol):

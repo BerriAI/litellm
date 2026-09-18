@@ -2,7 +2,7 @@ pub mod audio_transcription;
 pub mod call_arguments;
 pub mod chat_completions;
 pub mod constants;
-pub mod error;
+pub mod failure;
 pub mod http_utils;
 pub mod litellm_core_utils;
 pub mod llms;
@@ -16,5 +16,3 @@ mod serde_compat;
 pub mod timeout;
 pub mod transport;
 mod url_utils;
-
-pub use error::Error;
