@@ -2581,7 +2581,10 @@ class Router:
                         model=model, reason=self._get_mapped_finish_reason(response)
                     )
                 self._account_mapped_finish_reason_failure(
-                    model=model, deployment=deployment, response=response, kwargs=kwargs
+                    model=model,
+                    deployment=deployment,
+                    reason=self._get_mapped_finish_reason(response),
+                    kwargs=kwargs,
                 )
 
             if (
@@ -3715,7 +3718,10 @@ class Router:
                             model=model, reason=self._get_mapped_finish_reason(response)
                         )
                     self._account_mapped_finish_reason_failure(
-                        model=model, deployment=deployment, response=response, kwargs=kwargs
+                        model=model,
+                        deployment=deployment,
+                        reason=self._get_mapped_finish_reason(response),
+                        kwargs=kwargs,
                     )
 
                 if (
@@ -5434,6 +5440,17 @@ class Router:
 
                 refusal_details: Final = cast(dict, response["stop_details"])  # cast-ok: gate verified the shape
                 raise safeguard_refusal_error(model=model, stop_details=refusal_details)
+
+            if getattr(original_generic_function, "__name__", "") == "anthropic_messages" and isinstance(
+                response, dict
+            ):
+                stop_reason: Final = response.get("stop_reason")
+                if stop_reason in (self.treat_finish_reason_as_failure or {}):
+                    if self._finish_reason_failure_fallback_available(model, kwargs):
+                        raise self._finish_reason_failure_error(model=model, reason=stop_reason)
+                    self._account_mapped_finish_reason_failure(
+                        model=model, deployment=deployment, reason=stop_reason, kwargs=kwargs
+                    )
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("ageneric_api_call_with_fallbacks(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -8694,15 +8711,12 @@ class Router:
             return exception_cls(status_code=500, message=message, llm_provider="", model=model)
         return exception_cls(message=message, llm_provider="", model=model)
 
-    def _account_mapped_finish_reason_failure(
-        self, model: str, deployment: dict, response: ModelResponse, kwargs: dict
-    ) -> None:
+    def _account_mapped_finish_reason_failure(self, model: str, deployment: dict, reason: str, kwargs: dict) -> None:
         """
         Count and park a mapped finish-reason failure when nothing is raised (no fallback can
         serve the retry): increment the per-minute failure counter and set the cooldown the way a
         raised exception would. In the raising branch the normal exception flow does the accounting.
         """
-        reason: Final = self._get_mapped_finish_reason(response)
         if reason is None:
             return
         model_info: Final = deployment.get("model_info") or {}
