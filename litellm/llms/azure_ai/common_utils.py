@@ -52,8 +52,8 @@ AZURE_ENTRA_LITELLM_PARAM_KEYS: Final = AZURE_ENTRA_CREDENTIAL_PARAM_KEYS | froz
     {"tenant_id", "client_id", "azure_username", "azure_scope"}
 )
 AZURE_ENTRA_CREDENTIAL_HELP: Final = (
-    "Set `tenant_id` + `client_id` + `client_secret`, `azure_ad_token`, or "
-    "`client_id` + `azure_username` + `azure_password` in the agent's `litellm_params`"
+    "Set `tenant_id` + `client_id` + `client_secret`, `azure_ad_token` (an `oidc/` token also needs "
+    "`tenant_id` + `client_id`), or `client_id` + `azure_username` + `azure_password` in the agent's `litellm_params`"
 )
 
 
@@ -95,11 +95,12 @@ def get_azure_ai_agent_entra_token(litellm_params: Mapping[str, object]) -> str:
         return get_azure_ad_token_from_username_password(
             client_id=client_id, azure_username=azure_username, azure_password=azure_password, scope=scope
         )()
-    if azure_ad_token and azure_ad_token.startswith("oidc/"):
+    federated: Final = azure_ad_token is not None and azure_ad_token.startswith("oidc/")
+    if azure_ad_token and federated and tenant_id and client_id:
         return get_azure_ad_token_from_oidc(
             azure_ad_token=azure_ad_token, azure_client_id=client_id, azure_tenant_id=tenant_id, scope=scope
         )
-    if azure_ad_token:
+    if azure_ad_token and not federated:
         return azure_ad_token
     raise ValueError(f"Azure AI agent Entra ID credentials did not resolve to a token. {AZURE_ENTRA_CREDENTIAL_HELP}")
 
