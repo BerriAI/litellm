@@ -30,6 +30,14 @@ GET_CREDENTIALS: Final = (
 )
 USER_API_KEY_AUTH: Final = "litellm.proxy.auth.user_api_key_auth.user_api_key_auth"
 LISTEN_PATHS: Final = ("/deepgram/v1/listen", "/deepgram/listen")
+NOVA_2_STREAMING_KEY: Final = "deepgram/streaming/nova-2"
+
+pytestmark: Final = pytest.mark.usefixtures("local_model_cost_map")
+
+
+def _price_nova_2_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An operator-supplied streaming row: the bundled map prices only nova-3 for streaming."""
+    monkeypatch.setitem(litellm.model_cost, NOVA_2_STREAMING_KEY, dict(litellm.model_cost["deepgram/streaming/nova-3"]))
 
 
 class _FakeWebSocket:
@@ -138,6 +146,7 @@ async def test_deepgram_listen_forwards_query_and_injects_only_provider_auth(pat
 @pytest.mark.asyncio
 async def test_deepgram_listen_keeps_caller_chosen_model(monkeypatch):
     monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    _price_nova_2_streaming(monkeypatch)
     websocket = _FakeWebSocket("/deepgram/v1/listen", "model=nova-2&language=en")
 
     with patch(GET_CREDENTIALS, return_value="dg-provider-key"):
@@ -236,6 +245,53 @@ async def test_deepgram_listen_rejects_callback_delivery_that_would_go_unbilled(
     assert "dg-provider-key" not in websocket.closed[1]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "missing_key"),
+    [
+        pytest.param("model=nova-2", "deepgram/streaming/nova-2", id="model with only a pre-recorded price"),
+        pytest.param("model=nova-99", "deepgram/streaming/nova-99", id="model unknown to the registry"),
+        pytest.param(
+            "model=nova-3&language=multi",
+            "deepgram/streaming/nova-3-multilingual",
+            id="multilingual session without its own price",
+        ),
+    ],
+)
+async def test_deepgram_listen_refuses_sessions_it_cannot_price(query, missing_key, monkeypatch):
+    """A session with no streaming price would be logged at zero (or at the pre-recorded rate), letting a caller run
+    up unmetered spend, so the proxy closes it before Deepgram is contacted and names the registry row to add."""
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    monkeypatch.delitem(litellm.model_cost, missing_key, raising=False)
+    assert "deepgram/nova-2" in litellm.model_cost
+    websocket = _FakeWebSocket("/deepgram/v1/listen", query)
+
+    with patch(GET_CREDENTIALS, return_value="dg-provider-key"):
+        relay = await _serve(websocket)
+
+    assert relay.calls == []
+    assert websocket.closed is not None
+    assert websocket.closed[0] == 1008
+    assert missing_key in websocket.closed[1]
+    assert "dg-provider-key" not in websocket.closed[1]
+
+
+@pytest.mark.asyncio
+async def test_deepgram_listen_relays_once_the_operator_prices_the_model(monkeypatch):
+    monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
+    websocket = _FakeWebSocket("/deepgram/v1/listen", "model=nova-2")
+    with patch(GET_CREDENTIALS, return_value="dg-provider-key"):
+        assert (await _serve(websocket)).calls == []
+
+    _price_nova_2_streaming(monkeypatch)
+    priced_websocket = _FakeWebSocket("/deepgram/v1/listen", "model=nova-2")
+    with patch(GET_CREDENTIALS, return_value="dg-provider-key"):
+        relay = await _serve(priced_websocket)
+
+    assert [call.target for call in relay.calls] == ["wss://api.deepgram.com/v1/listen?model=nova-2"]
+    assert priced_websocket.closed is None
+
+
 def _app_with_relay(relay: _FakeRelay) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -332,6 +388,7 @@ def test_deepgram_listen_authorizes_the_model_it_will_actually_send_upstream(que
     in its default: the real key auth path must see the same model the upstream target will carry."""
     monkeypatch.delenv("DEEPGRAM_API_BASE", raising=False)
     monkeypatch.setattr(litellm, "max_budget", 0.0)
+    _price_nova_2_streaming(monkeypatch)
     cache = asyncio.run(_cache_restricted_key("sk-only-nova-2", ["nova-2"]))
     relay = _FakeRelay()
     client = TestClient(_app_with_relay(relay))

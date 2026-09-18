@@ -9,9 +9,11 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.deepgram.common_utils import (
     deepgram_listen_addon_pricing_models,
     deepgram_listen_audio_seconds,
-    deepgram_listen_base_pricing_models,
     deepgram_listen_channel_count,
+    deepgram_listen_is_priced,
     deepgram_listen_model,
+    deepgram_listen_pricing_model,
+    deepgram_listen_registry_key,
     deepgram_listen_transcript,
 )
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
@@ -34,18 +36,13 @@ def _registry_cost(response: TranscriptionResponse, pricing_model: str) -> float
 
 
 def _audio_cost(response: TranscriptionResponse, upstream_url: str) -> float | None:
-    base_cost: Final = next(
-        (
-            cost
-            for pricing_model in deepgram_listen_base_pricing_models(upstream_url)
-            if (cost := _registry_cost(response, pricing_model)) is not None
-        ),
-        None,
-    )
-    if base_cost is None:
+    if not deepgram_listen_is_priced(upstream_url):
         verbose_proxy_logger.warning(
-            "Deepgram listen passthrough: no pricing for model '%s'", deepgram_listen_model(upstream_url)
+            "Deepgram listen passthrough: no registry entry '%s'", deepgram_listen_registry_key(upstream_url)
         )
+        return None
+    base_cost: Final = _registry_cost(response, deepgram_listen_pricing_model(upstream_url))
+    if base_cost is None:
         return None
     addon_costs: Final = tuple(
         _registry_cost(response, pricing_model) for pricing_model in deepgram_listen_addon_pricing_models(upstream_url)

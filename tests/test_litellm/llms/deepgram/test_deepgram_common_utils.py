@@ -8,10 +8,12 @@ import litellm
 from litellm.llms.deepgram.common_utils import (
     deepgram_listen_addon_pricing_models,
     deepgram_listen_audio_seconds,
-    deepgram_listen_base_pricing_models,
     deepgram_listen_callback_params,
     deepgram_listen_channel_count,
+    deepgram_listen_is_priced,
     deepgram_listen_model,
+    deepgram_listen_pricing_model,
+    deepgram_listen_registry_key,
     deepgram_listen_requested_model,
     deepgram_listen_transcript,
     deepgram_listen_websocket_target,
@@ -220,27 +222,51 @@ def test_requested_model_is_the_model_the_upstream_target_will_carry(query_strin
 @pytest.mark.parametrize(
     ("upstream_url", "expected"),
     [
-        pytest.param(NOVA_3_URL, ("streaming/nova-3", "nova-3"), id="monolingual"),
-        pytest.param(f"{NOVA_3_URL}&language=en", ("streaming/nova-3", "nova-3"), id="explicit language"),
-        pytest.param(
-            f"{NOVA_3_URL}&language=multi",
-            ("streaming/nova-3-multilingual", "streaming/nova-3", "nova-3"),
-            id="multilingual",
-        ),
-        pytest.param(
-            f"{NOVA_3_URL}&language=MULTI",
-            ("streaming/nova-3-multilingual", "streaming/nova-3", "nova-3"),
-            id="multilingual any case",
-        ),
+        pytest.param(NOVA_3_URL, "streaming/nova-3", id="monolingual"),
+        pytest.param(f"{NOVA_3_URL}&language=en", "streaming/nova-3", id="explicit language"),
+        pytest.param(f"{NOVA_3_URL}&language=multi", "streaming/nova-3-multilingual", id="multilingual"),
+        pytest.param(f"{NOVA_3_URL}&language=MULTI", "streaming/nova-3-multilingual", id="multilingual any case"),
         pytest.param(
             "wss://api.deepgram.com/v1/listen?model=nova-2&language=multi",
-            ("streaming/nova-2-multilingual", "streaming/nova-2", "nova-2"),
+            "streaming/nova-2-multilingual",
             id="other model",
         ),
+        pytest.param("wss://api.deepgram.com/v1/listen?encoding=linear16", "streaming/nova-3", id="default model"),
     ],
 )
-def test_deepgram_listen_base_pricing_models(upstream_url: str, expected: tuple[str, ...]):
-    assert deepgram_listen_base_pricing_models(upstream_url) == expected
+def test_deepgram_listen_pricing_model_is_the_streaming_entry_never_the_prerecorded_one(
+    upstream_url: str, expected: str
+):
+    assert deepgram_listen_pricing_model(upstream_url) == expected
+    assert deepgram_listen_registry_key(upstream_url) == f"deepgram/{expected}"
+
+
+NOVA_2_URL: Final = "wss://api.deepgram.com/v1/listen?model=nova-2"
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("upstream_url", "extra_rows", "expected"),
+    [
+        pytest.param(NOVA_3_URL, (), True, id="streaming entry present"),
+        pytest.param(f"{NOVA_3_URL}&language=multi", (), True, id="multilingual entry present"),
+        pytest.param(NOVA_2_URL, (), False, id="only the pre-recorded entry"),
+        pytest.param(f"{NOVA_2_URL}&language=multi", ("deepgram/streaming/nova-2",), False, id="needs multilingual"),
+        pytest.param("wss://api.deepgram.com/v1/listen?model=nova-99-unmapped", (), False, id="nothing priced"),
+        pytest.param(NOVA_2_URL, ("deepgram/streaming/nova-2",), True, id="operator-supplied streaming entry"),
+        pytest.param(NOVA_2_URL, ("streaming/nova-2",), False, id="a row under another key is not the entry"),
+    ],
+)
+def test_deepgram_listen_is_priced(
+    monkeypatch: pytest.MonkeyPatch, upstream_url: str, extra_rows: tuple[str, ...], expected: bool
+):
+    """The bundled map prices only nova-3 for streaming; nova-2 has a pre-recorded row, which must never count."""
+    monkeypatch.delitem(litellm.model_cost, "deepgram/streaming/nova-2", raising=False)
+    assert "deepgram/nova-2" in litellm.model_cost
+    for row in extra_rows:
+        monkeypatch.setitem(litellm.model_cost, row, dict(litellm.model_cost["deepgram/streaming/nova-3"]))
+
+    assert deepgram_listen_is_priced(upstream_url) is expected
 
 
 @pytest.mark.parametrize(

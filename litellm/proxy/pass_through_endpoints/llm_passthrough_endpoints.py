@@ -38,6 +38,8 @@ from litellm.llms.azure.passthrough.transformation import foreign_azure_deployme
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.deepgram.common_utils import (
     deepgram_listen_callback_params,
+    deepgram_listen_is_priced,
+    deepgram_listen_registry_key,
     deepgram_listen_requested_model,
     deepgram_listen_websocket_target,
 )
@@ -2897,6 +2899,9 @@ _DEEPGRAM_WS_MISSING_KEY_REASON: Final = (
     "Required 'DEEPGRAM_API_KEY' in environment to make pass-through calls to Deepgram."
 )
 _DEEPGRAM_WS_CALLBACK_REASON: Final = "Deepgram callback delivery is not supported through the proxy: remove {params}"
+_DEEPGRAM_WS_UNPRICED_REASON: Final = (
+    "No streaming price for '{registry_key}': add it to the model cost map to enable it"
+)
 
 
 async def deepgram_listen_user_api_key_auth(websocket: WebSocket) -> UserAPIKeyAuth:
@@ -2929,12 +2934,20 @@ async def deepgram_listen_websocket_route(
         )
         return
 
+    target: Final = deepgram_listen_websocket_target(
+        api_base=get_secret_str("DEEPGRAM_API_BASE"),
+        query_string=websocket.url.query,
+    )
+    if not deepgram_listen_is_priced(target):
+        await websocket.close(
+            code=1008,
+            reason=_DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_listen_registry_key(target)),
+        )
+        return
+
     await relay(
         websocket=websocket,
-        target=deepgram_listen_websocket_target(
-            api_base=get_secret_str("DEEPGRAM_API_BASE"),
-            query_string=websocket.url.query,
-        ),
+        target=target,
         custom_headers={  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
             "Authorization": f"Token {deepgram_api_key}"
         },
