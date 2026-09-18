@@ -65,13 +65,17 @@ def setup(
 
 
 def check_limits(kwargs: Mapping[str, object]) -> None:
-    import litellm
+    from litellm import (
+        BudgetExceededError,
+        _current_cost,  # pyright: ignore[reportPrivateUsage]  # shared SDK budget counter has no public accessor
+        max_budget,
+        num_retries_per_request,
+    )
     from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
 
-    current_cost: Final = litellm._current_cost  # pyright: ignore[reportPrivateUsage]  # shared SDK budget counter has no public accessor
-    if litellm.max_budget and current_cost > litellm.max_budget:
-        raise litellm.BudgetExceededError(current_cost=current_cost, max_budget=litellm.max_budget)
-    if max_retries_per_request_hit(kwargs, litellm.num_retries_per_request):
+    if max_budget and _current_cost > max_budget:
+        raise BudgetExceededError(current_cost=_current_cost, max_budget=max_budget)
+    if max_retries_per_request_hit(kwargs, num_retries_per_request):
         raise RuntimeError("Max retries per request hit!")
 
 
@@ -281,9 +285,9 @@ def is_internal_call() -> bool:
 
 
 def credential_list() -> list[CredentialItem]:
-    import litellm
+    from litellm import credential_list as credentials
 
-    return litellm.credential_list
+    return credentials
 
 
 def warn_unknown_credential(name: str, loaded: int) -> None:
