@@ -2,12 +2,12 @@ use std::{sync::Mutex, time::Duration};
 
 use bytes::Bytes;
 use litellm_auth::SecretValue;
-use litellm_callbacks::{
+use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
+use litellm_host::{
     event::{MachineEvent, RawResponse, RequestContext, WireRequest},
     host::{Demand, Host},
     route::Route,
 };
-use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use serde_json::{Map, Value};
 

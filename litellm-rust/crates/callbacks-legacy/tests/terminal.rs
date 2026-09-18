@@ -1,6 +1,6 @@
 use std::ffi::CStr;
 
-use litellm_callbacks::event::{FailureOrigin, Timing};
+use litellm_host::event::{FailureOrigin, Timing};
 use litellm_host_python::{LifecycleEvent, LifecycleStep, PythonLifecycle};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::asyncio::CancelledError;

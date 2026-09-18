@@ -33,7 +33,7 @@ pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesR
         extra_headers: request.extra_headers,
         timeout: request.timeout,
     };
-    match litellm_callbacks::run::run(messages_machine(), &LocalMessagesHost::new(call)).await? {
+    match litellm_host::run::run(messages_machine(), &LocalMessagesHost::new(call)).await? {
         MessagesOutput::Message(message) => Ok(message),
         MessagesOutput::Streamed => Err(Error::Unsupported(
             "streamed responses need a streaming host",

@@ -2,7 +2,7 @@
 //! raises is answered with the same `Logging` calls, in the same order, as the Python
 //! `@client` path makes them.
 
-use litellm_callbacks::event::{
+use litellm_host::event::{
     FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest, epoch_seconds,
 };
 use litellm_host_python::{

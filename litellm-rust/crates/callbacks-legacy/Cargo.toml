@@ -7,7 +7,7 @@ repository.workspace = true
 autotests = false
 
 [dependencies]
-litellm-callbacks.workspace = true
+litellm-host.workspace = true
 litellm-host-python.workspace = true
 
 pyo3.workspace = true

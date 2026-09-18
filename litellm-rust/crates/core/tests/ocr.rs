@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use litellm_callbacks::{
+use litellm_host::{
     event::{CallEvent, MachineEvent, WireRequest},
     host::{Host, HostOp, HostResult},
     machine::{HostFailure, Machine, MachineStep},
@@ -820,7 +820,7 @@ impl Host<crate::ocr::route::Ocr> for CallerTokenHost {
     async fn before_send(
         &self,
         wire: WireRequest,
-        _: &litellm_callbacks::event::RequestContext,
+        _: &litellm_host::event::RequestContext,
     ) -> Result<WireRequest, OcrError> {
         let is_authorization = |name: &str| name.eq_ignore_ascii_case("authorization");
         let authorization = wire
@@ -855,7 +855,7 @@ async fn the_callers_azure_token_is_acquired_before_before_send_which_can_still_
         trace: Mutex::new(Vec::new()),
     };
 
-    litellm_callbacks::run::run(ocr_machine(ocr_client()), &host)
+    litellm_host::run::run(ocr_machine(ocr_client()), &host)
         .await
         .unwrap();
     server.await.unwrap();

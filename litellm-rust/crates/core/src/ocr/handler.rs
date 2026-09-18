@@ -1,6 +1,6 @@
 use futures_util::future::BoxFuture;
 use litellm_auth::SecretValue;
-use litellm_callbacks::event::{MachineEvent, RawResponse, RequestContext, WireRequest};
+use litellm_host::event::{MachineEvent, RawResponse, RequestContext, WireRequest};
 use litellm_llms::{
     base_llm::ocr::{
         error::Error,

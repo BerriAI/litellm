@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
-use litellm_callbacks::event::WireRequest;
+use litellm_host::event::WireRequest;
 use litellm_llms::{
     base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse},
     custom_httpx::llm_http_handler::{CallHooks, OcrClient},
@@ -45,7 +45,7 @@ pub(crate) async fn perform_ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcr
 }
 
 pub(crate) async fn perform_ocr_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
-    litellm_callbacks::run::run(ocr_machine(ocr_client()), &host).await
+    litellm_host::run::run(ocr_machine(ocr_client()), &host).await
 }
 
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOcrRequest {

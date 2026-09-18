@@ -3,7 +3,7 @@ use litellm_core::messages::{
     Error,
     route::{Messages, MessagesCall, MessagesOp, MessagesOpResult, MessagesOutput},
 };
-use litellm_host_python::{HostOpError, RouteHost, from_py, lookup, to_py};
+use litellm_host_python::{InvokeError, RouteHost, from_py, lookup, to_py};
 use litellm_llms::custom_httpx::transport::Error as TransportError;
 use pyo3::{
     exceptions::{PyException, PyValueError},
@@ -136,12 +136,12 @@ impl RouteHost for MessagesRouteHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
         op: MessagesOp,
-    ) -> Result<MessagesOpResult, HostOpError<Error>> {
+    ) -> Result<MessagesOpResult, InvokeError<Error>> {
         match op {
             MessagesOp::ProjectRequest => self
                 .project(py, arguments)
                 .map(|call| MessagesOpResult::Request(Box::new(call)))
-                .map_err(|error| HostOpError::Python(self.map_failure(py, error))),
+                .map_err(|error| InvokeError::Python(self.map_failure(py, error))),
         }
     }
 
