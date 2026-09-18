@@ -288,6 +288,41 @@ wrong = {'file': Wrong()}",
         });
     }
 
+    #[rstest::rstest]
+    #[case::read("read")]
+    #[case::name("name")]
+    fn reader_attribute_failures_keep_their_identity(#[case] attribute: &str) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = eval(
+                py,
+                c"failure = LookupError('file property failed')
+class File:
+    def __getattribute__(self, name):
+        if name == attribute:
+            raise failure
+        return super().__getattribute__(name)
+    name = 'scan.pdf'
+    def read(self):
+        return b'abc'
+document = {'file': File()}",
+            );
+            locals.set_item("attribute", attribute).unwrap();
+            let error = locals
+                .get_item("document")
+                .unwrap()
+                .unwrap()
+                .extract::<FileDocumentInput>()
+                .err()
+                .unwrap();
+            assert!(
+                error
+                    .value(py)
+                    .is(locals.get_item("failure").unwrap().unwrap())
+            );
+        });
+    }
+
     #[test]
     fn exact_python_bytes_transfer_without_copying_and_outlive_the_input() {
         Python::initialize();

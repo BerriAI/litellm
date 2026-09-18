@@ -1,22 +1,29 @@
 use strum::{EnumString, IntoStaticStr};
 
-use super::OcrClient;
-use super::types::{
-    LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument, PreparedOcrRequest,
-    ResolvedOcrCredentials,
+use super::{
+    OcrClient,
+    types::{
+        LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument, PreparedOcrRequest,
+        ResolvedOcrCredentials,
+    },
 };
-use crate::litellm_core_utils::get_llm_provider_logic::{
-    CustomLlmProvider, get_custom_llm_provider,
+use crate::{
+    litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider},
+    llms::{
+        azure_ai::ocr::{
+            cohere_parse_transformation::AzureAICohereParseConfig,
+            document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig,
+            transformation::AzureAiOcrConfig,
+        },
+        base_llm::ocr::transformation::{BaseOcrConfig, OcrResponseContext},
+        cohere::ocr::transformation::CohereParseConfig,
+        mistral::ocr::transformation::MistralOcrConfig,
+        reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config},
+        vertex_ai::ocr::{
+            deepseek_transformation::VertexAIDeepSeekOCRConfig, transformation::VertexAiOcrConfig,
+        },
+    },
 };
-use crate::llms::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig;
-use crate::llms::azure_ai::ocr::document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig;
-use crate::llms::azure_ai::ocr::transformation::AzureAiOcrConfig;
-use crate::llms::base_llm::ocr::transformation::{BaseOcrConfig, OcrResponseContext};
-use crate::llms::cohere::ocr::transformation::CohereParseConfig;
-use crate::llms::mistral::ocr::transformation::MistralOcrConfig;
-use crate::llms::reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config};
-use crate::llms::vertex_ai::ocr::deepseek_transformation::VertexAIDeepSeekOCRConfig;
-use crate::llms::vertex_ai::ocr::transformation::VertexAiOcrConfig;
 
 macro_rules! dispatch_config {
     ($config:expr, $method:ident($($argument:expr),* $(,)?)) => {

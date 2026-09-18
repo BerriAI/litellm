@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use litellm_python_interop::{from_py, to_py};
+use litellm_host_python::{from_py, to_py};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{Value, json};
