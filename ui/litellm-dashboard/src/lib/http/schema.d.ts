@@ -25970,6 +25970,8 @@ export interface components {
             /** Allowed Callers */
             allowed_callers?: string[];
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
+            /** Eager Input Streaming */
+            eager_input_streaming?: boolean;
             function: components["schemas"]["ChatCompletionToolParamFunctionChunk"];
             /** Type */
             type: "function" | string;
@@ -25978,6 +25980,8 @@ export interface components {
         ChatCompletionToolParamFunctionChunk: {
             /** Description */
             description?: string;
+            /** Eager Input Streaming */
+            eager_input_streaming?: boolean;
             /** Name */
             name: string;
             /** Parameters */
