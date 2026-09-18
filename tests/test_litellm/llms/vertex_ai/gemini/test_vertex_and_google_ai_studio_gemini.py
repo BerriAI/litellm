@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 from copy import deepcopy
-from typing import Final, List, cast
+from typing import Final, List, cast, get_args
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -18,7 +18,7 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.llms.vertex_ai import UsageMetadata
+from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import CustomStreamWrapper
 
@@ -938,6 +938,11 @@ def test_check_finish_reason():
             )
             == v
         )
+
+
+def test_every_documented_gemini_finish_reason_has_an_explicit_mapping():
+    documented: Final = frozenset(get_args(GeminiFinishReason))
+    assert set(VertexGeminiConfig.get_finish_reason_mapping()) == documented
 
 
 def test_finish_reason_unspecified_and_malformed_function_call():

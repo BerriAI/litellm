@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 import httpx
 
@@ -57,6 +57,7 @@ from litellm.types.llms.vertex_ai import (
     ContentType,
     FunctionCallingConfig,
     FunctionDeclaration,
+    GeminiFinishReason,
     GeminiThinkingConfig,
     GenerateContentResponseBody,
     HttpxPartType,
@@ -1330,31 +1331,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "IMAGE_PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for prohibited image content.",
         }
 
-    _GEMINI_FINISH_REASON_KEYS = frozenset(
-        {
-            "STOP",
-            "MAX_TOKENS",
-            "SAFETY",
-            "RECITATION",
-            "FINISH_REASON_UNSPECIFIED",
-            "MALFORMED_FUNCTION_CALL",
-            "LANGUAGE",
-            "OTHER",
-            "BLOCKLIST",
-            "PROHIBITED_CONTENT",
-            "SPII",
-            "IMAGE_SAFETY",
-            "IMAGE_PROHIBITED_CONTENT",
-            "TOO_MANY_TOOL_CALLS",
-            "MALFORMED_RESPONSE",
-            "NO_IMAGE",
-            "IMAGE_RECITATION",
-            "IMAGE_OTHER",
-            "ESCALATION",
-            "UNEXPECTED_TOOL_CALL",
-            "MISSING_THOUGHT_SIGNATURE",
-        }
-    )
+    _GEMINI_FINISH_REASON_KEYS: Final[frozenset[str]] = frozenset(get_args(GeminiFinishReason))
 
     @staticmethod
     def get_finish_reason_mapping() -> dict[str, OpenAIChatCompletionFinishReason]:
