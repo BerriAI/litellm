@@ -84,3 +84,56 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
             f"expected 50 tokens counted for {scope_id}, "
             f"got {current['current_tpm']}"
         )
+
+
+@pytest.mark.asyncio
+async def test_team_max_parallel_requests_is_enforced_across_keys_in_the_team():
+    """
+    The legacy limiter used to cap the team bucket at sys.maxsize, so a team's
+    max_parallel_requests was silently ignored. Two keys in one team must now
+    share the team's parallel slots, while a key outside the team is unaffected.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache)
+    )
+    team_id = "legacy-team"
+
+    def team_key(raw: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key=hash_token(raw), team_id=team_id, team_max_parallel_requests=2
+        )
+
+    for raw in ("sk-a", "sk-b"):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=team_key(raw),
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=team_key("sk-a"),
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
+    assert "rate limit type = team" in exc_info.value.detail
+    assert "max_parallel_requests: 2" in exc_info.value.detail
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=hash_token("sk-c"),
+            team_id="other-team",
+            team_max_parallel_requests=2,
+        ),
+        cache=cache,
+        data={"model": "gpt-4o-mini"},
+        call_type="",
+    )

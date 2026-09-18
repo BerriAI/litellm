@@ -4726,6 +4726,7 @@ class PrismaClient:
                             t.soft_budget AS team_soft_budget,
                             t.tpm_limit AS team_tpm_limit,
                             t.rpm_limit AS team_rpm_limit,
+                            t.max_parallel_requests AS team_max_parallel_requests,
                             t.models AS team_models,
                             t.metadata AS team_metadata,
                             t.blocked AS team_blocked,

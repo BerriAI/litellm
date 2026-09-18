@@ -429,11 +429,14 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if team_id is not None:
             team_tpm_limit = user_api_key_dict.team_tpm_limit
             team_rpm_limit = user_api_key_dict.team_rpm_limit
+            team_max_parallel_requests = user_api_key_dict.team_max_parallel_requests
 
             if team_tpm_limit is None:
                 team_tpm_limit = sys.maxsize
             if team_rpm_limit is None:
                 team_rpm_limit = sys.maxsize
+            if team_max_parallel_requests is None:
+                team_max_parallel_requests = sys.maxsize
 
             request_count_api_key = f"{team_id}::{precise_minute}::request_count"
             # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
@@ -442,7 +445,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 cache=cache,
                 data=data,
                 call_type=call_type,
-                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a team
+                max_parallel_requests=team_max_parallel_requests,
                 current=cache_objects["request_count_team_id"],
                 request_count_api_key=request_count_api_key,
                 tpm_limit=team_tpm_limit,

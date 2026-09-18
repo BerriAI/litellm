@@ -77,6 +77,7 @@ const teamCreateFieldsSchema = z.object({
   budget_duration: z.string().nullish(),
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
+  max_parallel_requests: numericInputSchema,
   metadata: metadataPairsSchema.optional(),
   team_id: z.string().optional(),
   team_member_budget: z.number().optional(),
@@ -113,6 +114,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   budget_duration: undefined,
   tpm_limit: undefined,
   rpm_limit: undefined,
+  max_parallel_requests: undefined,
   metadata: [],
   team_id: undefined,
   team_member_budget: undefined,
@@ -817,6 +819,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                     )}
                   </FormField>
                   <FormField control={form.control} name="rpm_limit" label="Requests per minute Limit (RPM)">
+                    {({ ref, value, ...field }) => (
+                      <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
+                    )}
+                  </FormField>
+                  <FormField control={form.control} name="max_parallel_requests" label="Max Parallel Requests">
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
                     )}

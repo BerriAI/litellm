@@ -71,6 +71,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     metadata: dict | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    max_parallel_requests: int | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
     budget_duration: str | None = None
@@ -85,7 +86,6 @@ class TeamBase(LiteLLMPydanticObjectBase):
 class LiteLLM_TeamTable(TeamBase):
     team_id: str
     spend: float | None = None
-    max_parallel_requests: int | None = None
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
     model_id: int | None = None
