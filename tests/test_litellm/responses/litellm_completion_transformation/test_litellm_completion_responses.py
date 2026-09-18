@@ -1900,6 +1900,38 @@ class TestToolTransformation:
         assert "defer_loading" not in result_tool
         assert "allowed_callers" not in result_tool
         assert "input_examples" not in result_tool
+        assert "eager_input_streaming" not in result_tool
+
+    @pytest.mark.parametrize("eager_input_streaming", [True, False])
+    def test_transform_function_tools_forwards_eager_input_streaming(self, eager_input_streaming: bool) -> None:
+        function_tool: Final = {
+            "type": "function",
+            "name": "write_file",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+            "eager_input_streaming": eager_input_streaming,
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[function_tool]
+        )
+
+        assert result_tools[0]["eager_input_streaming"] is eager_input_streaming
+
+    @pytest.mark.parametrize("eager_input_streaming", [True, False])
+    def test_chat_completion_tools_to_responses_tools_keeps_eager_input_streaming(
+        self, eager_input_streaming: bool
+    ) -> None:
+        chat_tool: Final = {
+            "type": "function",
+            "function": {"name": "write_file", "parameters": {"type": "object"}},
+            "eager_input_streaming": eager_input_streaming,
+        }
+
+        result_tools: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
+            [chat_tool]
+        )
+
+        assert result_tools[0]["eager_input_streaming"] is eager_input_streaming
 
     def test_transform_code_execution_tools(self):
         """Test that code_execution tools are passed through as-is"""
