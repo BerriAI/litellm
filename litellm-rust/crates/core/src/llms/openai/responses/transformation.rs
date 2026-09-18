@@ -1,6 +1,8 @@
-use crate::responses::Error;
-use crate::responses::types::{ResponsesWsEvent, ResponsesWsTransformResult};
-use crate::responses::websocket::{ResponsesWebSocketProviderConfig, enforce_model};
+use crate::responses::{
+    Error,
+    types::{ResponsesWsEvent, ResponsesWsTransformResult},
+    websocket::{ResponsesWebSocketProviderConfig, enforce_model},
+};
 
 pub struct OpenAiResponsesApiConfig;
 

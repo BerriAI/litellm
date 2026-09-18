@@ -1,20 +1,18 @@
-use std::collections::BTreeMap as Map;
-use std::io::Read;
-use std::path::Path;
+use std::{collections::BTreeMap as Map, io::Read, path::Path};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use data_url::mime::Mime;
-use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError};
+use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError, mime::Mime};
 use reqwest::Url;
 
-use super::Error as OcrError;
-use super::Error as OcrRequestError;
-use super::Error as OcrResponseError;
-use super::types::{OcrConnection, OcrDocument, OcrDocumentInput};
-use crate::constants::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS};
-use crate::media::Error as MediaError;
-use crate::media::{DownloadPolicy, MediaFetcher};
-use crate::transport::Error as TransportError;
+use super::{
+    Error as OcrError, Error as OcrRequestError, Error as OcrResponseError,
+    types::{OcrConnection, OcrDocument, OcrDocumentInput},
+};
+use crate::{
+    constants::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS},
+    media::{DownloadPolicy, Error as MediaError, MediaFetcher},
+    transport::Error as TransportError,
+};
 
 pub fn prepare_document(input: OcrDocumentInput) -> Result<OcrDocument, super::Error> {
     match input {
@@ -396,8 +394,10 @@ mod tests {
 
     #[tokio::test]
     async fn remote_conversion_preserves_kind_and_isolates_provider_credentials() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
