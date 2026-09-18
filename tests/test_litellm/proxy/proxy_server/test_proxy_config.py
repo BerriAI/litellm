@@ -2709,6 +2709,37 @@ def test_ProxyConfig__add_deployment_pinned_row_follows_the_cost_map_across_relo
     assert litellm.model_cost["typed-row"]["input_cost_per_token"] == 3e-06
 
 
+def test_ProxyConfig__add_deployment_ptu_row_with_a_cost_map_copy_still_bills_zero(monkeypatch, local_model_cost_map):
+    """A PTU deployment bills nothing per token: the proxy writes zeros to both blobs. When such
+    a row also carries the echoed cost map, dropping the ``model_info`` copy must not send it
+    back to the per-token price, because the ``litellm_params`` zeros are the operator's."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    router = litellm.Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    ptu = SimpleNamespace(
+        model_id="ptu-row",
+        model_name="gpt-5.6-ptu",
+        model_info={**PINNED_MODEL_INFO, "id": "ptu-row", "input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+        litellm_params={
+            "model": "openai/gpt-5.6",
+            "api_key": "sk-test",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+        blocked=False,
+    )
+
+    assert ProxyConfig()._add_deployment(db_models=[ptu]) == 1
+    router._replay_model_cost_registrations()
+
+    assert litellm.model_cost["ptu-row"]["input_cost_per_token"] == 0.0
+    assert litellm.model_cost["ptu-row"]["output_cost_per_token"] == 0.0
+    assert router.get_deployment(model_id="ptu-row").model_info.input_cost_per_token == 0.0
+
+
 def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     pc = ProxyConfig()

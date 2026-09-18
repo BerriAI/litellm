@@ -328,6 +328,49 @@ def test_get_proxy_model_info_names_config_model_info_pricing_as_an_override(mon
     assert info["output_cost_per_token"] == 7e-06
 
 
+def test_v2_model_info_reports_pricing_overrides_to_the_admin_ui(client, auth_as, monkeypatch, local_model_cost_map):
+    """LIT-8064. The Admin UI model page reads ``GET /v2/model/info``, so the override report
+    has to ride that route too, not only ``/model/info``."""
+    model_list: Final = [
+        {
+            "model_name": "gpt-5.6",
+            "litellm_params": {"model": "openai/gpt-5.6", "input_cost_per_token": 3e-06},
+            "model_info": {"id": "dep-typed", "db_model": True},
+        },
+        {
+            "model_name": "gpt-5.6",
+            "litellm_params": {"model": "openai/gpt-5.6"},
+            "model_info": {"id": "dep-synced", "db_model": True},
+        },
+    ]
+    router: Final = MagicMock()
+    router.model_list = model_list
+    router.get_discovered_model_info = MagicMock(return_value={})
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        proxy_server,
+        "_apply_search_filter_to_models",
+        AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
+    )
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(mlh, "append_agents_to_model_info", AsyncMock(side_effect=lambda models, **kw: models))
+
+    with auth_as():
+        response = client.get("/v2/model/info")
+
+    assert response.status_code == 200, response.text
+    by_id: Final = {m["model_info"]["id"]: m["model_info"] for m in response.json()["data"]}
+    assert by_id["dep-typed"]["pricing_overrides"] == ["input_cost_per_token"]
+    assert by_id["dep-typed"]["input_cost_per_token"] == 3e-06
+    assert by_id["dep-synced"]["pricing_overrides"] == []
+    assert by_id["dep-synced"]["input_cost_per_token"] == litellm.model_cost["gpt-5.6"]["input_cost_per_token"]
+
+
 def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
     from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
     from litellm.proxy.auth import model_checks
