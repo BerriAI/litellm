@@ -16515,7 +16515,9 @@ export interface paths {
          *
          *     The request body is forwarded to the AWS JSON 1.1 API and signed with SigV4 using the
          *     proxy's AWS credentials. Standard jobs are tagged with the calling key's owner so that
-         *     only that owner (or a proxy admin) can read or delete them; account-wide operations
+         *     only that owner (or a proxy admin) can read or delete them, and keys other than proxy
+         *     admins may only read media from and write transcripts to the S3 buckets listed in
+         *     `general_settings.transcribe_media_buckets`; account-wide operations
          *     such as ListTranscriptionJobs are limited to proxy admins. Streaming transcription
          *     (`transcribestreaming`) uses a separate HTTP/2 event-stream protocol and is not served
          *     by this route.
@@ -26859,6 +26861,11 @@ export interface components {
              * @description Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).
              */
             supported_db_objects?: components["schemas"]["SupportedDBObjectType"][] | null;
+            /**
+             * Transcribe Media Buckets
+             * @description S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.
+             */
+            transcribe_media_buckets?: string[] | null;
             /**
              * Trusted Proxy Ranges
              * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.

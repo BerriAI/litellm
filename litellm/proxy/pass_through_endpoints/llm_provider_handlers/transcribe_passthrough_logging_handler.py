@@ -60,6 +60,9 @@ TRANSCRIBE_TERMINAL_JOB_STATUSES: Final = frozenset({"COMPLETED", "FAILED"})
 TRANSCRIBE_MISSING_JOB_ERRORS: Final = frozenset({"BadRequestException", "NotFoundException"})
 TRANSCRIBE_OWNER_TAG: Final = "litellm-owner"
 TRANSCRIBE_OWNED_JOB_OPERATIONS: Final = frozenset({"GetTranscriptionJob", "DeleteTranscriptionJob"})
+TRANSCRIBE_MEDIA_BUCKETS_SETTING: Final = "transcribe_media_buckets"
+TRANSCRIBE_ROLE_MEMBERS: Final = ("DataAccessRoleArn", "JobExecutionSettings")
+TRANSCRIBE_MEDIA_URI_MEMBERS: Final = ("MediaFileUri", "RedactedMediaFileUri")
 
 JobLookup: TypeAlias = Callable[[str], Awaitable[Mapping[str, object]]]  # mutable-ok: Callable parameter syntax
 MediaDurationProbe: TypeAlias = Callable[[str, float], Awaitable[float | None]]  # mutable-ok: Callable parameter syntax
@@ -109,6 +112,7 @@ class _PricedCostMapEntry(BaseModel):
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_BUCKET_NAMES: Final = TypeAdapter(frozenset[str])
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +233,68 @@ def transcribe_admin_only_refusal(operation: str, user_api_key_dict: UserAPIKeyA
         f" other keys may {TRANSCRIBE_PRICED_OPERATION} and {' or '.join(sorted(TRANSCRIBE_OWNED_JOB_OPERATIONS))}"
         " for the jobs they started",
     )
+
+
+def transcribe_media_buckets(general_settings: Mapping[str, object]) -> frozenset[str] | None:
+    try:
+        return _BUCKET_NAMES.validate_python(general_settings.get(TRANSCRIBE_MEDIA_BUCKETS_SETTING))
+    except ValidationError:
+        return None
+
+
+def s3_bucket_name(uri: object) -> str | None:
+    if not isinstance(uri, str) or not uri.startswith("s3://"):
+        return None
+    bucket, _, _ = uri.removeprefix("s3://").partition("/")
+    return bucket or None
+
+
+def transcribe_storage_refusal(
+    request_body: Mapping[str, object],
+    allowed_buckets: frozenset[str] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> TranscribeRefusal | None:
+    """
+    Transcribe reads the media and writes the transcript with the proxy's own AWS credentials, so a
+    non-admin key may only point a job at buckets the operator listed; otherwise any object those
+    credentials can reach could be transcribed and read back through the caller's own job.
+    """
+    if is_proxy_admin(user_api_key_dict):
+        return None
+    if allowed_buckets is None:
+        return TranscribeRefusal(
+            403,
+            f"general_settings.{TRANSCRIBE_MEDIA_BUCKETS_SETTING} is not a list of S3 bucket names, so only a proxy"
+            f" admin may {TRANSCRIBE_PRICED_OPERATION}; list the buckets other keys may read media from and write"
+            " transcripts to",
+        )
+    roles: Final = tuple(m for m in TRANSCRIBE_ROLE_MEMBERS if m in request_body)
+    if roles:
+        return TranscribeRefusal(
+            403,
+            f"{', '.join(roles)} would run the job under a role other than the proxy's own AWS credentials, so"
+            " only a proxy admin may set it",
+        )
+    media: Final = request_body.get("Media")
+    media_uris: Final = (
+        tuple((f"Media.{m}", s3_bucket_name(media.get(m))) for m in TRANSCRIBE_MEDIA_URI_MEMBERS if m in media)
+        if isinstance(media, Mapping)
+        else ()
+    )
+    output: Final = request_body.get("OutputBucketName")
+    locations: Final = media_uris + (
+        (("OutputBucketName", output if isinstance(output, str) else None),)
+        if "OutputBucketName" in request_body
+        else ()
+    )
+    offending: Final = tuple(member for member, bucket in locations if bucket not in allowed_buckets)
+    if offending:
+        return TranscribeRefusal(
+            403,
+            f"{', '.join(offending)} must name one of the S3 buckets in general_settings."
+            f"{TRANSCRIBE_MEDIA_BUCKETS_SETTING} ({', '.join(sorted(allowed_buckets))}), as s3://bucket/key for media",
+        )
+    return None
 
 
 def transcribe_owned_start_request(

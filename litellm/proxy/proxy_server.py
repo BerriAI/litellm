@@ -7108,6 +7108,9 @@ class ProxyConfig:
         if "blocked_file_extensions" not in self._yaml_general_settings_keys:
             general_settings["blocked_file_extensions"] = _general_settings.get("blocked_file_extensions")
 
+        if "transcribe_media_buckets" not in self._yaml_general_settings_keys:
+            general_settings["transcribe_media_buckets"] = _general_settings.get("transcribe_media_buckets")
+
         ## ALERTING ARGS ##
         if "alerting_args" in _general_settings:
             general_settings["alerting_args"] = _general_settings["alerting_args"]
@@ -17146,6 +17149,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "disable_auto_add_proxy_admin_to_teams": "Boolean",
         "apply_user_budget_to_team_keys": "Boolean",
         "user_api_key_cache_max_size": "Integer",
+        "transcribe_media_buckets": "List",
     }
 )
 

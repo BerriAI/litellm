@@ -25,7 +25,9 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.transcribe_passt
     transcribe_admin_only_refusal,
     transcribe_cost_per_second,
     transcribe_job_access_refusal,
+    transcribe_media_buckets,
     transcribe_owned_start_request,
+    transcribe_storage_refusal,
     transcribe_supported_operations,
     transcribe_unpriceable_request_reason,
     write_media_within_limit,
@@ -501,6 +503,84 @@ class TestTranscribeAdminOnlyRefusal:
     @pytest.mark.parametrize("operation", ["ListTranscriptionJobs", "DeleteVocabulary"])
     def test_account_wide_operations_are_open_to_proxy_admins(self, operation: str):
         assert transcribe_admin_only_refusal(operation, ADMIN_KEY) is None
+
+
+ALLOWED_BUCKETS = frozenset({"tenant-media", "tenant-transcripts"})
+
+
+def _start_body(media_uri: str = "s3://tenant-media/call.wav", **members: object) -> dict[str, object]:
+    return {"TranscriptionJobName": "j", "Media": {"MediaFileUri": media_uri}, **members}
+
+
+class TestTranscribeMediaBuckets:
+    def test_a_list_of_bucket_names_is_read_from_general_settings(self):
+        assert transcribe_media_buckets({"transcribe_media_buckets": ["a", "b"]}) == frozenset({"a", "b"})
+
+    @pytest.mark.parametrize("settings", [{}, {"transcribe_media_buckets": "a"}, {"transcribe_media_buckets": [1]}])
+    def test_a_missing_or_malformed_setting_reads_as_unset(self, settings: dict[str, object]):
+        assert transcribe_media_buckets(settings) is None
+
+
+class TestTranscribeStorageRefusal:
+    def test_media_and_output_in_listed_buckets_are_allowed(self):
+        body = _start_body(OutputBucketName="tenant-transcripts", OutputKey="out/")
+
+        assert transcribe_storage_refusal(body, ALLOWED_BUCKETS, VIRTUAL_KEY) is None
+
+    @pytest.mark.parametrize(
+        "media_uri",
+        [
+            "s3://other-tenant/call.wav",
+            "https://tenant-media.s3.us-west-2.amazonaws.com/call.wav",
+            "s3://",
+        ],
+    )
+    def test_media_outside_the_listed_buckets_is_refused(self, media_uri: str):
+        refusal = transcribe_storage_refusal(_start_body(media_uri), ALLOWED_BUCKETS, VIRTUAL_KEY)
+
+        assert refusal is not None
+        assert refusal.status_code == 403
+        assert "Media.MediaFileUri" in refusal.detail
+
+    def test_redacted_media_outside_the_listed_buckets_is_refused(self):
+        body = {
+            "TranscriptionJobName": "j",
+            "Media": {"MediaFileUri": "s3://tenant-media/call.wav", "RedactedMediaFileUri": "s3://other-tenant/c.wav"},
+        }
+
+        refusal = transcribe_storage_refusal(body, ALLOWED_BUCKETS, VIRTUAL_KEY)
+
+        assert refusal is not None
+        assert "Media.RedactedMediaFileUri" in refusal.detail
+
+    @pytest.mark.parametrize("output", ["other-tenant", 7])
+    def test_an_output_bucket_outside_the_listed_buckets_is_refused(self, output: object):
+        refusal = transcribe_storage_refusal(_start_body(OutputBucketName=output), ALLOWED_BUCKETS, VIRTUAL_KEY)
+
+        assert refusal is not None
+        assert refusal.status_code == 403
+        assert "OutputBucketName" in refusal.detail
+
+    @pytest.mark.parametrize("member", ["DataAccessRoleArn", "JobExecutionSettings"])
+    def test_a_caller_chosen_role_is_refused(self, member: str):
+        refusal = transcribe_storage_refusal(_start_body(**{member: "x"}), ALLOWED_BUCKETS, VIRTUAL_KEY)
+
+        assert refusal is not None
+        assert refusal.status_code == 403
+        assert member in refusal.detail
+
+    def test_an_unset_bucket_list_refuses_virtual_keys(self):
+        refusal = transcribe_storage_refusal(_start_body(), None, VIRTUAL_KEY)
+
+        assert refusal is not None
+        assert refusal.status_code == 403
+        assert "transcribe_media_buckets" in refusal.detail
+
+    @pytest.mark.parametrize("allowed", [None, ALLOWED_BUCKETS])
+    def test_proxy_admins_are_not_restricted(self, allowed: frozenset[str] | None):
+        body = _start_body("s3://other-tenant/call.wav", DataAccessRoleArn="arn:aws:iam::1:role/r")
+
+        assert transcribe_storage_refusal(body, allowed, ADMIN_KEY) is None
 
 
 class TestTranscribeOwnedStartRequest:

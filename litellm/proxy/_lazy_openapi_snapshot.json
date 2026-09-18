@@ -20400,7 +20400,7 @@
       },
       "/transcribe/{operation}": {
         "post": {
-          "description": "Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.\n\nThe request body is forwarded to the AWS JSON 1.1 API and signed with SigV4 using the\nproxy's AWS credentials. Standard jobs are tagged with the calling key's owner so that\nonly that owner (or a proxy admin) can read or delete them; account-wide operations\nsuch as ListTranscriptionJobs are limited to proxy admins. Streaming transcription\n(`transcribestreaming`) uses a separate HTTP/2 event-stream protocol and is not served\nby this route.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/transcribe)",
+          "description": "Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.\n\nThe request body is forwarded to the AWS JSON 1.1 API and signed with SigV4 using the\nproxy's AWS credentials. Standard jobs are tagged with the calling key's owner so that\nonly that owner (or a proxy admin) can read or delete them, and keys other than proxy\nadmins may only read media from and write transcripts to the S3 buckets listed in\n`general_settings.transcribe_media_buckets`; account-wide operations\nsuch as ListTranscriptionJobs are limited to proxy admins. Streaming transcription\n(`transcribestreaming`) uses a separate HTTP/2 event-stream protocol and is not served\nby this route.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/transcribe)",
           "operationId": "transcribe_proxy_route_transcribe__operation__post",
           "parameters": [
             {

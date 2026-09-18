@@ -2784,6 +2784,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=None,
         description="Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.",
     )
+    transcribe_media_buckets: list[str] | None = Field(
+        default=None,
+        description="S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.",
+    )
     user_header_name: str | None = Field(
         None,
         description="[DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.",
