@@ -9,6 +9,7 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -43,6 +44,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     mistral_proxy_route,
     relay_nvidia_nim_request,
     openai_proxy_route,
+    typesafe_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
@@ -6387,3 +6389,51 @@ class TestAzureRelayDeploymentSegment:
             )
 
         assert [call["model"] for call in captured] == ["gpt", "gpt"]
+
+
+class TestTypeSafePassthroughRoute:
+    @staticmethod
+    def _request(body: object, query_params: Mapping[str, str] | None = None) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.query_params = query_params or {}
+        request.json = AsyncMock(return_value=body)
+        return request
+
+    @pytest.mark.asyncio
+    async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch):
+        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
+        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
+
+        async def fake_upstream(request, *_args):
+            target: Final = create_route.call_args.kwargs["target"]
+            upstream_url: Final = httpx.URL(target).copy_merge_params(request.query_params)
+            return {"upstream_query": parse_qs(upstream_url.query.decode())}
+
+        endpoint_func = AsyncMock(side_effect=fake_upstream)
+        create_route = Mock(return_value=endpoint_func)
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            create_route,
+        )
+
+        request = self._request({"state": "x"}, {"trace": "yes"})
+        result = await typesafe_proxy_route(
+            endpoint="v1/systemone",
+            request=request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
+        )
+
+        assert result == {"upstream_query": {"trace": ["yes"]}}
+        endpoint_func.assert_awaited_once()
+        create_route.assert_called_once_with(
+            endpoint="v1/systemone",
+            target="https://typesafe.example/base/v1/systemone",
+            custom_headers={
+                "Authorization": "Bearer typesafe-test-key",
+                "Content-Type": "application/json",
+            },
+            custom_llm_provider="typesafe",
+            is_streaming_request=False,
+        )
