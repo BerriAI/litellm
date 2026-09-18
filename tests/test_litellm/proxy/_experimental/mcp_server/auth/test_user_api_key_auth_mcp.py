@@ -4341,7 +4341,9 @@ class TestAgentMCPPermissions:
                 stack.enter_context(patcher)
             stack.enter_context(
                 patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
-                    MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server-a", "server-b"])
+                    MCPRequestHandler,
+                    "_get_allowed_mcp_servers_for_key",
+                    AsyncMock(return_value=["server-a", "server-b"]),
                 )
             )
             stack.enter_context(
@@ -4367,7 +4369,9 @@ class TestAgentMCPPermissions:
                 await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth)
             stack.enter_context(
                 patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
-                    MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server-a", "server-b"])
+                    MCPRequestHandler,
+                    "_get_allowed_mcp_servers_for_key",
+                    AsyncMock(return_value=["server-a", "server-b"]),
                 )
             )
             stack.enter_context(
@@ -4391,9 +4395,15 @@ class TestAgentMCPPermissions:
         with contextlib.ExitStack() as stack:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
-            server_a_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-a", user_api_key_auth)
-            server_b_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-b", user_api_key_auth)
-            server_c_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-c", user_api_key_auth)
+            server_a_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+                "server-a", user_api_key_auth
+            )
+            server_b_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+                "server-b", user_api_key_auth
+            )
+            server_c_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+                "server-c", user_api_key_auth
+            )
 
         assert sorted(server_a_tools) == ["tool_direct", "tool_via_toolset"]
         assert server_b_tools == ["tool_b"]
@@ -9431,3 +9441,198 @@ class TestScopedSessionAdmission:
     def test_scope_field_cannot_be_forged_through_construction(self):
         forged = UserAPIKeyAuth(user_id="u1", mcp_session_resource_server_id="any-server")
         assert forged.mcp_session_resource_server_id is None
+
+
+def _jwt_auth(scope, **fields):
+    """A JWT-authenticated caller with NO key row and NO team row: the only thing it carries is the
+    decoded token, whose ``scope`` claim is what the scope mappings are evaluated against."""
+    return UserAPIKeyAuth(user_id="oidc-sub", jwt_claims={"sub": "oidc-sub", "scope": scope}, **fields)
+
+
+@contextlib.contextmanager
+def _jwt_scope_mappings(*mappings):
+    """A real ``JWTHandler`` configured with the given ``scope_mappings``, installed where the MCP
+    resolver reads it, alongside the proxy globals the key/team resolvers touch."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth, ScopeMapping
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
+    handler = JWTHandler()
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            enforce_scope_based_access=True,
+            scope_mappings=[ScopeMapping(**m) for m in mappings],
+        )
+        if mappings
+        else LiteLLM_JWTAuth(),
+    )
+    with (
+        patch(  # test-quality-ok: the MCP resolver reads the proxy's jwt_handler module global; no injection seam
+            "litellm.proxy.proxy_server.jwt_handler", handler
+        ),
+    ):
+        yield
+
+
+_ALPHA_SCOPE = {"scope": "litellm.mcp.alpha", "mcp_servers": ["math_alpha"]}
+_BETA_ADD_SCOPE = {"scope": "litellm.mcp.beta_add", "mcp_tool_permissions": {"math_beta": ["add"]}}
+_OPS_GROUP_SCOPE = {"scope": "litellm.mcp.ops", "mcp_access_groups": ["ops-tools"]}
+
+
+def test_scope_mapping_accepts_mcp_fields():
+    from litellm.proxy._types import ScopeMapping
+
+    mapping = ScopeMapping(scope="s", mcp_servers=["a"], mcp_access_groups=["g"], mcp_tool_permissions={"b": ["add"]})
+    assert (mapping.mcp_servers, mapping.mcp_access_groups, mapping.mcp_tool_permissions) == (
+        ["a"],
+        ["g"],
+        {"b": ["add"]},
+    )
+
+
+@pytest.mark.asyncio
+class TestJwtScopeMcpGrants:
+    """LIT-4505: ``litellm_jwtauth.scope_mappings`` can name MCP servers, access groups, and tools, and a
+    JWT caller with no key or team row in the DB gets exactly what its ``scope`` claim maps to."""
+
+    async def test_scope_grants_server_to_caller_with_no_key_or_team_row(self):
+        with _jwt_scope_mappings(_ALPHA_SCOPE, _BETA_ADD_SCOPE):
+            access = await MCPRequestHandler.get_mcp_server_access(_jwt_auth("openid litellm.mcp.alpha"))
+        assert access.server_ids == ("math_alpha",)
+        assert access.scope == "scoped", "a scope grant must never let allow_all widen the caller"
+
+    async def test_tool_scope_grants_its_server_and_only_the_named_tool(self):
+        with _jwt_scope_mappings(_ALPHA_SCOPE, _BETA_ADD_SCOPE):
+            auth = _jwt_auth("litellm.mcp.beta_add")
+            servers = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+            can_add = await MCPRequestHandler.is_tool_allowed_for_server("add", "math_beta", auth)
+            can_multiply = await MCPRequestHandler.is_tool_allowed_for_server("multiply", "math_beta", auth)
+        assert servers == ["math_beta"]
+        assert tools == ["add"]
+        assert (can_add, can_multiply) == (True, False)
+
+    async def test_server_scope_places_no_tool_restriction_on_its_server(self):
+        with _jwt_scope_mappings(_ALPHA_SCOPE, _BETA_ADD_SCOPE):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_alpha", _jwt_auth("litellm.mcp.alpha"))
+        assert tools is None
+
+    async def test_scopes_union_across_mappings_and_accept_list_claims(self):
+        with _jwt_scope_mappings(_ALPHA_SCOPE, _BETA_ADD_SCOPE):
+            auth = _jwt_auth(["litellm.mcp.alpha", "litellm.mcp.beta_add"])
+            servers = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+            beta_tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+        assert sorted(servers) == ["math_alpha", "math_beta"]
+        assert beta_tools == ["add"]
+
+    @pytest.mark.parametrize("scope", ["openid profile", "", "litellm.mcp.alph", "LITELLM.MCP.ALPHA"])
+    async def test_unmatched_scopes_grant_nothing(self, scope):
+        with _jwt_scope_mappings(_ALPHA_SCOPE, _BETA_ADD_SCOPE):
+            access = await MCPRequestHandler.get_mcp_server_access(_jwt_auth(scope))
+        assert access.server_ids == ()
+
+    async def test_missing_scope_claim_grants_nothing(self):
+        auth = UserAPIKeyAuth(user_id="oidc-sub", jwt_claims={"sub": "oidc-sub"})
+        with _jwt_scope_mappings(_ALPHA_SCOPE):
+            assert await MCPRequestHandler.get_allowed_mcp_servers(auth) == []
+
+    async def test_malformed_scope_claim_grants_nothing_and_takes_nothing_away(self):
+        auth = _jwt_auth(
+            {"nested": "litellm.mcp.alpha"},
+            api_key="sk-h",
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["key_srv"]),
+        )
+        with _jwt_scope_mappings(_ALPHA_SCOPE):
+            access = await MCPRequestHandler.get_mcp_server_access(auth)
+        assert access.server_ids == ("key_srv",)
+        assert access.scope == "scoped"
+
+    async def test_no_jwt_claims_means_scope_mappings_do_not_apply(self):
+        with _jwt_scope_mappings(_ALPHA_SCOPE):
+            servers = await MCPRequestHandler.get_allowed_mcp_servers(UserAPIKeyAuth(user_id="u1", api_key="sk-h"))
+        assert servers == []
+
+    async def test_matching_scope_without_mcp_fields_grants_nothing(self):
+        with _jwt_scope_mappings({"scope": "litellm.mcp.alpha", "models": ["gpt-4.1-mini"]}):
+            servers = await MCPRequestHandler.get_allowed_mcp_servers(_jwt_auth("litellm.mcp.alpha"))
+        assert servers == []
+
+    async def test_access_group_scope_resolves_to_group_members(self):
+        with (
+            _jwt_scope_mappings(_OPS_GROUP_SCOPE),
+            patch.object(  # test-quality-ok: stub the DB access-group loader, same seam as the key/team tests above
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=["ops_srv"],
+            ) as resolve_groups,
+        ):
+            servers = await MCPRequestHandler.get_allowed_mcp_servers(_jwt_auth("litellm.mcp.ops"))
+        assert servers == ["ops_srv"]
+        resolve_groups.assert_awaited_once_with(["ops-tools"])
+
+    async def test_scope_grants_union_with_key_grants_and_stay_under_team_ceiling(self):
+        auth = _jwt_auth(
+            "litellm.mcp.alpha",
+            api_key="sk-h",
+            team_id="team-a",
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["key_srv"]),
+        )
+        with (
+            _jwt_scope_mappings(_ALPHA_SCOPE),
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-ceiling path, as above
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_team",
+                new_callable=AsyncMock,
+                return_value=["math_alpha", "other_srv"],
+            ),
+        ):
+            servers = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert servers == ["math_alpha"], "the team ceiling intersects scope grants exactly as it does key grants"
+
+    async def test_scope_tool_grants_stay_under_key_tool_allowlist(self):
+        auth = _jwt_auth(
+            "litellm.mcp.beta_add",
+            api_key="sk-h",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-key",
+                mcp_servers=["math_beta"],
+                mcp_tool_permissions={"math_beta": ["multiply"]},
+            ),
+        )
+        with _jwt_scope_mappings(_BETA_ADD_SCOPE):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+        assert sorted(tools) == ["add", "multiply"], "scope tool grants union with the caller's own key grants"
+
+    async def test_key_opt_out_of_all_servers_beats_scope_grants(self):
+        auth = _jwt_auth(
+            "litellm.mcp.alpha",
+            api_key="sk-h",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-key", mcp_servers=[SpecialMCPServerNames.no_mcp_servers.value]
+            ),
+        )
+        with _jwt_scope_mappings(_ALPHA_SCOPE):
+            servers = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert servers == []
+
+    @pytest.mark.parametrize(
+        ("mappings", "auth"),
+        [
+            ((_ALPHA_SCOPE,), UserAPIKeyAuth(user_id="u1", api_key="sk-h")),
+            ((), _jwt_auth("litellm.mcp.alpha")),
+        ],
+        ids=["key caller without jwt claims", "jwt caller without scope mappings"],
+    )
+    async def test_callers_outside_scope_mappings_are_not_treated_as_resolver_failures(self, mappings, auth):
+        with (
+            _jwt_scope_mappings(*mappings),
+            patch(  # test-quality-ok: the operator-visible outcome under test is the resolver's warning log
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.verbose_logger"
+            ) as log,
+        ):
+            access = await MCPRequestHandler.get_mcp_server_access(auth)
+        assert access.server_ids == ()
+        log.warning.assert_not_called()

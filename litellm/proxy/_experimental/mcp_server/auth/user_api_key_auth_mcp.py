@@ -35,6 +35,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
 )
 from litellm.proxy._types import (
     UI_TEAM_ID,
+    LiteLLM_ObjectPermissionBase,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     ProxyException,
@@ -1466,10 +1467,14 @@ class MCPRequestHandler:
 
             key_access_group_grants = await MCPRequestHandler._get_key_access_group_mcp_server_extras(user_api_key_auth)
 
+            allowed_mcp_servers_for_scopes: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_jwt_scopes(
+                user_api_key_auth
+            )
+
             #########################################################
             # Calculate key/team allowed servers using inheritance and intersection logic
             #########################################################
-            key_set: Final = set(allowed_mcp_servers_for_key)
+            key_set: Final = set(allowed_mcp_servers_for_key) | set(allowed_mcp_servers_for_scopes)
             team_set: Final = set(allowed_mcp_servers_for_team)
             grants_set: Final = set(key_access_group_grants)
 
@@ -2089,9 +2094,16 @@ class MCPRequestHandler:
                 else None
             )
 
+            scope_obj_perm: Final = MCPRequestHandler._get_jwt_scope_object_permission(user_api_key_auth)
+            scope_tools: Final = (
+                global_mcp_server_manager.expand_tool_permissions(scope_obj_perm.mcp_tool_permissions).get(server_id)
+                if scope_obj_perm is not None
+                else None
+            )
+
             key_tools: Final = (
-                list(set(key_direct_tools or []) | set(key_toolset_tools or []))
-                if key_direct_tools is not None or key_toolset_tools is not None
+                list(set(key_direct_tools or []) | set(key_toolset_tools or []) | set(scope_tools or []))
+                if key_direct_tools is not None or key_toolset_tools is not None or scope_tools is not None
                 else None
             )
             team_direct_tools: Final = (
@@ -2297,6 +2309,49 @@ class MCPRequestHandler:
         except Exception as e:
             verbose_logger.warning("Failed to get key access group MCP server grants: %s", e)
             return []
+
+    @staticmethod
+    def _get_jwt_scope_object_permission(
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> LiteLLM_ObjectPermissionBase | None:
+        """MCP grants the caller's JWT scopes map to through ``litellm_jwtauth.scope_mappings``, or None
+        for callers without JWT claims, deployments without scope mappings, and malformed scope claims."""
+        if user_api_key_auth is None or not user_api_key_auth.jwt_claims:
+            return None
+        from litellm.proxy.auth.handle_jwt import JWTAuthManager
+        from litellm.proxy.proxy_server import jwt_handler
+
+        scope_mappings: Final = jwt_handler.litellm_jwtauth.scope_mappings
+        if not scope_mappings:
+            return None
+        try:
+            scopes: Final = jwt_handler.get_scopes(token=user_api_key_auth.jwt_claims)
+        except Exception as e:  # noqa: BLE001  # get_scopes raises a bare Exception on a malformed scope claim
+            verbose_logger.warning("Ignoring malformed JWT scope claim for MCP authorization: %s", e)
+            return None
+        return JWTAuthManager.mcp_permissions_from_scopes(scope_mappings=scope_mappings, scopes=scopes)
+
+    @staticmethod
+    async def _get_allowed_mcp_servers_for_jwt_scopes(
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> list[str]:
+        """Server ids the caller's JWT scopes grant: direct servers, tag-style access groups, and the
+        servers named by scope tool permissions, expanded exactly as a key's object_permission is."""
+        scope_obj_perm: Final = MCPRequestHandler._get_jwt_scope_object_permission(user_api_key_auth)
+        if scope_obj_perm is None:
+            return []
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        direct_servers: Final = global_mcp_server_manager.expand_permission_list(scope_obj_perm.mcp_servers or [])
+        access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            scope_obj_perm.mcp_access_groups or []
+        )
+        tool_perm_servers: Final = list(
+            global_mcp_server_manager.expand_tool_permissions(scope_obj_perm.mcp_tool_permissions).keys()
+        )
+        return list({*direct_servers, *access_group_servers, *tool_perm_servers})
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_key(

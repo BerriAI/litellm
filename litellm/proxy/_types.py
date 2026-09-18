@@ -4917,7 +4917,13 @@ class JWTLiteLLMRoleMap(BaseModel):
 
 
 class ScopeMapping(OIDCPermissions):
+    """Permissions a JWT scope grants. The MCP fields use the same entry shapes as
+    ``LiteLLM_ObjectPermissionBase`` (server ids or names, access group names, server -> tool names)."""
+
     scope: str
+    mcp_servers: list[str] | None = None
+    mcp_access_groups: list[str] | None = None
+    mcp_tool_permissions: dict[str, list[str]] | None = None
 
     model_config = {
         "extra": "forbid",
