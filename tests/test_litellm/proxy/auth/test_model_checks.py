@@ -14,8 +14,8 @@ def test_get_team_models_for_all_models_and_team_only_models():
     result = get_team_models(
         team_models, proxy_model_list, model_access_groups, include_model_access_groups
     )
-    combined_models = team_models + proxy_model_list
-    assert set(result) == set(combined_models)
+    expected_models = [model for model in team_models + proxy_model_list if model != "all-proxy-models"]
+    assert set(result) == set(expected_models)
 
 
 def test_get_team_models_all_proxy_models_includes_access_groups():
@@ -43,6 +43,7 @@ def test_get_team_models_all_proxy_models_includes_access_groups():
     assert "group-b" in result
     assert "model1" in result
     assert "model2" in result
+    assert "all-proxy-models" not in result
     assert len(result) == len(set(result)), "result should have no duplicates"
 
 
@@ -70,6 +71,7 @@ def test_get_team_models_all_proxy_models_without_include_flag():
     assert "group-b" not in result
     assert "model1" in result
     assert "model2" in result
+    assert "all-proxy-models" not in result
 
 
 def test_get_key_models_all_proxy_models_includes_access_groups():
