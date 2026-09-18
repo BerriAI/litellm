@@ -2,19 +2,22 @@ import json
 from typing import Final, List, Optional
 from unittest.mock import ANY, AsyncMock, MagicMock
 
+import httpx
 import pytest
 import respx
-import httpx
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
-
+from starlette.requests import Request
 
 import litellm
-from litellm import Router
+from litellm import CreateFileRequest, Router
 from litellm.files.types import FileContentStreamingResult
-from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
+from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+from litellm.proxy import proxy_server
+from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
+from litellm.proxy.openai_files_endpoints import files_endpoints
 from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
     FileContentStreamingHandler,
 )
@@ -5224,3 +5227,113 @@ def test_get_file_content_keeps_the_status_of_a_rejection_raised_inside_the_rout
     error = response.json()["error"]
     assert error["message"].startswith("Storage backend error")
     assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "file_id", "400")
+
+
+@pytest.mark.parametrize(
+    ("form_fields", "expected_project"),
+    [
+        ({}, "proj-request"),
+        ({"project": "proj-form"}, "proj-form"),
+        ({"model": "gpt-4o"}, "proj-request"),
+    ],
+)
+def test_upload_forwards_openai_project(
+    monkeypatch: pytest.MonkeyPatch,
+    form_fields: dict[str, str],
+    expected_project: str,
+) -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+            }
+        ]
+    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache(default_in_memory_ttl=1))
+    proxy_logging_obj._add_proxy_hooks(router)
+    proxy_logging_obj.update_request_status = AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging_obj)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "master_key", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(files_endpoints, "files_config", [])
+
+    captured_kwargs: dict[str, object] = {}
+
+    async def fake_acreate_file(**kwargs: object) -> OpenAIFileObject:
+        captured_kwargs.update(kwargs)
+        return OpenAIFileObject(
+            id="file-openai-123",
+            object="file",
+            bytes=2,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(litellm, "acreate_file", fake_acreate_file)
+    proxy_server.app.dependency_overrides[proxy_server.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+
+    try:
+        response = TestClient(proxy_server.app).post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
+            data={"purpose": "batch", **form_fields},
+            headers={"Authorization": "Bearer test-key", "OpenAI-Project": "proj-request"},
+        )
+    finally:
+        proxy_server.app.dependency_overrides.pop(proxy_server.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert captured_kwargs["extra_headers"] == {"OpenAI-Project": expected_project}
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("managed", [False, True])
+async def test_routed_upload_forwards_openai_project(monkeypatch: pytest.MonkeyPatch, managed: bool) -> None:
+    request: Final = Request({"type": "http", "headers": [(b"openai-project", b"proj-request")], "query_string": b""})
+    file_request: Final = CreateFileRequest(file=("batch.jsonl", VALID_BATCH_LINE), purpose="batch")
+    file_response: Final = OpenAIFileObject(
+        id="file-openai-123",
+        object="file",
+        bytes=2,
+        created_at=1234567890,
+        filename="batch.jsonl",
+        purpose="batch",
+        status="uploaded",
+    )
+    router: Final = MagicMock(spec=Router)
+    router.acreate_file = AsyncMock(return_value=file_response)
+    managed_files: Final = MagicMock(spec=BaseFileEndpoints)
+    managed_files.acreate_file = AsyncMock(return_value=file_response)
+    proxy_logging: Final = MagicMock(spec=ProxyLogging)
+    proxy_logging.get_proxy_hook.return_value = managed_files
+    monkeypatch.setattr(litellm, "enable_loadbalancing_on_batch_endpoints", True)
+
+    await files_endpoints.route_create_file(
+        llm_router=router,
+        _create_file_request=file_request,
+        purpose="batch",
+        proxy_logging_obj=proxy_logging,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        target_model_names_list=["gpt-4o"] if managed else [],
+        is_router_model=not managed,
+        router_model="gpt-4o",
+        custom_llm_provider="openai",
+        request=request,
+    )
+
+    sent: Final = (
+        managed_files.acreate_file.call_args.kwargs["create_file_request"]
+        if managed
+        else router.acreate_file.call_args.kwargs
+    )
+    assert sent["extra_headers"] == {"OpenAI-Project": "proj-request"}

@@ -555,7 +555,7 @@ async def test_create__unified_file_id_single_model_disables_cross_model_fallbac
         patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
         patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gpt-4o-mini"]),
     ):
-        resp = await call_create(harness)
+        resp = await call_create(harness, headers={"openai-project": "proj-request"})
 
     # DISPATCH - router fired, direct litellm did not.
     assert harness.router_acreate.call_count == 1
@@ -563,6 +563,7 @@ async def test_create__unified_file_id_single_model_disables_cross_model_fallbac
     # model injected from the unified id, input_file_id restored, hidden param set
     assert harness.router_kwargs()["model"] == "gpt-4o-mini"
     assert harness.router_kwargs()["disable_fallbacks"] is True
+    assert harness.router_kwargs()["extra_headers"] == {"OpenAI-Project": "proj-request"}
     assert resp.input_file_id == "litellm_proxy_unified_id"
     assert resp._hidden_params["unified_file_id"] == "unified-xyz"
 
@@ -802,10 +803,11 @@ async def test_create__loadbalancing_routes_to_router(harness):
     )
     harness.is_known_model.return_value = True
     with patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", True):
-        await call_create(harness)
+        await call_create(harness, headers={"openai-project": "proj-request"})
 
     harness.is_known_model.assert_called_once_with(model="lb-model", llm_router=harness.router)
     assert harness.router_acreate.call_count == 1
+    assert harness.router_kwargs()["extra_headers"] == {"OpenAI-Project": "proj-request"}
     harness.litellm_acreate.assert_not_called()
     harness.creds_resolver.assert_not_called()
 

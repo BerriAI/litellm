@@ -334,6 +334,12 @@ async def route_create_file(
                 param=None,
                 code=500,
             )
+        if request is not None:
+            add_openai_project_header(
+                cast(dict[str, object], _create_file_request),  # cast-ok: TypedDict is a dict at runtime
+                request,
+                custom_llm_provider,
+            )
         # Managed files internally calls llm_router.acreate_file() which includes loadbalancing
         response = await managed_files_obj.acreate_file(
             llm_router=llm_router,
@@ -344,6 +350,12 @@ async def route_create_file(
         )
     # EXISTING: Deprecated loadbalancing approach (for backwards compatibility when not using managed files)
     elif litellm.enable_loadbalancing_on_batch_endpoints is True and is_router_model and router_model is not None:
+        if request is not None:
+            add_openai_project_header(
+                cast(dict[str, object], _create_file_request),  # cast-ok: TypedDict is a dict at runtime
+                request,
+                custom_llm_provider,
+            )
         response = await _deprecated_loadbalanced_create_file(
             llm_router=llm_router,
             router_model=router_model,

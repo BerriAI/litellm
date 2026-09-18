@@ -287,6 +287,11 @@ async def create_batch(
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
                 )
 
+            add_openai_project_header(
+                cast(dict[str, object], _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
+                request,
+                custom_llm_provider,
+            )
             response = await llm_router.acreate_batch(**_create_batch_data)
         elif (
             unified_file_id and input_file_id
@@ -312,6 +317,11 @@ async def create_batch(
                 )
 
             _create_batch_data.update(disable_fallbacks=True)  # pyright: ignore[reportCallIssue]  # router flag
+            add_openai_project_header(
+                cast(dict[str, object], _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
+                request,
+                custom_llm_provider,
+            )
             response = await llm_router.acreate_batch(**_create_batch_data)
             response.input_file_id = input_file_id
             response._hidden_params["unified_file_id"] = unified_file_id
