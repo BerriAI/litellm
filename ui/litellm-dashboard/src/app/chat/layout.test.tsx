@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import ChatLayout from "./layout";
 
-const { mockUseAuthorized, mockUseUISettings, mockReplace, mockUiHref, state } = vi.hoisted(() => {
+const { mockUseAuthorized, mockUseUISettings, mockReplace, state } = vi.hoisted(() => {
   const state = {
     enableChatUI: false,
     isUISettingsLoading: false,
@@ -10,7 +10,6 @@ const { mockUseAuthorized, mockUseUISettings, mockReplace, mockUiHref, state } =
   return {
     state,
     mockReplace: vi.fn(),
-    mockUiHref: vi.fn((segment: string) => `/mocked-ui/${segment}`),
     mockUseAuthorized: vi.fn(() => ({
       accessToken: "token-123",
       userRole: "Internal User",
@@ -30,7 +29,6 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: mockUseAuthorized }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: mockUseUISettings }));
-vi.mock("@/utils/uiHref", () => ({ uiHref: mockUiHref }));
 vi.mock("@/components/navbar", () => ({ default: () => <div data-testid="navbar" /> }));
 vi.mock("@/contexts/ThemeContext", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -47,7 +45,6 @@ describe("ChatLayout", () => {
     state.enableChatUI = false;
     state.isUISettingsLoading = false;
     mockReplace.mockClear();
-    mockUiHref.mockClear();
   });
 
   it("renders the chat shell when enable_chat_ui is on", () => {
@@ -70,7 +67,7 @@ describe("ChatLayout", () => {
       </ChatLayout>,
     );
     expect(screen.queryByTestId("chat-shell")).not.toBeInTheDocument();
-    expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/");
+    expect(mockReplace).toHaveBeenCalledWith("/");
   });
 
   it("renders nothing while UI settings are still loading", () => {

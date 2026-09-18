@@ -13,7 +13,6 @@ import { NoRedisWarningBanner } from "@/components/NoRedisWarningBanner";
 import { EnvCredentialLoginWarningBanner } from "@/components/EnvCredentialLoginWarningBanner";
 import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
 import { UserBanner } from "@/components/UserBanner";
-import { uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
@@ -150,10 +149,10 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
 
   // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
-  // /onboarding route. Redirect once ui-config has loaded so uiHref resolves the SERVER_ROOT_PATH base.
+  // /onboarding route.
   useEffect(() => {
     if (!authLoading && isInvitationFlow) {
-      router.replace(`${uiHref("onboarding")}?${searchParams.toString()}`);
+      router.replace(`/onboarding?${searchParams.toString()}`);
     }
   }, [authLoading, isInvitationFlow, router, searchParams]);
 

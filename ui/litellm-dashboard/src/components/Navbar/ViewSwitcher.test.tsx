@@ -9,7 +9,7 @@ const { mockUsePluginMode, mockUseUISettings, mockUsePathname, state } = vi.hois
     plugins: [] as { name: string; display_name: string; url: string }[],
     activePlugin: null as { name: string; display_name: string; url: string } | null,
     enableChatUI: false,
-    pathname: "/ui/",
+    pathname: "/",
   };
   return {
     state,
@@ -45,7 +45,7 @@ describe("ViewSwitcher", () => {
     state.mode = "ai-gateway";
     state.plugins = [];
     state.enableChatUI = false;
-    state.pathname = "/ui/";
+    state.pathname = "/";
     state.setMode.mockClear();
   });
 
@@ -120,7 +120,7 @@ describe("ViewSwitcher", () => {
 
   it("navigates back to the dashboard when a mode entry is picked from the chat route", async () => {
     state.enableChatUI = true;
-    state.pathname = "/ui/chat";
+    state.pathname = "/chat";
     state.plugins = [{ name: "litellm-platform-plugin", display_name: "Chat UI", url: "http://localhost:3300" }];
     render(<ViewSwitcher />);
 

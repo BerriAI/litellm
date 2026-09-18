@@ -28,9 +28,8 @@ export default function ViewSwitcher() {
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
 
-  const chatHref = uiHref(CHAT);
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
-  const isChatRoute = chatEnabled && (normalizedPathname === chatHref || normalizedPathname.startsWith(`${chatHref}/`));
+  const isChatRoute = chatEnabled && (normalizedPathname === `/${CHAT}` || normalizedPathname.startsWith(`/${CHAT}/`));
 
   const activeLabel = isChatRoute ? "Chat" : plugins.find((p) => p.name === mode)?.display_name ?? "AI Gateway";
 

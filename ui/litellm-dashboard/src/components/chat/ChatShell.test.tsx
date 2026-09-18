@@ -4,7 +4,7 @@ import ChatShell from "./ChatShell";
 
 const { mockPush, mockUsePathname, mockUseChatShell } = vi.hoisted(() => ({
   mockPush: vi.fn(),
-  mockUsePathname: vi.fn(() => "/ui/chat"),
+  mockUsePathname: vi.fn(() => "/chat"),
   mockUseChatShell: vi.fn(() => ({
     conversations: [],
     activeConversationId: null,
@@ -18,14 +18,13 @@ vi.mock("next/navigation", () => ({
   usePathname: mockUsePathname,
 }));
 // Deterministic hrefs so navigation/active-state assertions don't depend on server_root_path.
-vi.mock("@/utils/uiHref", () => ({ uiHref: (seg: string) => `/ui/${seg}`.replace(/\/$/, "") || "/ui" }));
 vi.mock("@/contexts/ChatShellContext", () => ({ useChatShell: mockUseChatShell }));
 vi.mock("./ConversationList", () => ({ default: () => <div data-testid="conversation-list" /> }));
 
 describe("ChatShell", () => {
   afterEach(() => {
     mockPush.mockClear();
-    mockUsePathname.mockReturnValue("/ui/chat");
+    mockUsePathname.mockReturnValue("/chat");
   });
 
   it("marks Chats active and shows the conversation list on the base chat route", () => {
@@ -40,7 +39,7 @@ describe("ChatShell", () => {
   });
 
   it("marks API Keys active while still showing the conversation list", () => {
-    mockUsePathname.mockReturnValue("/ui/chat/api-keys");
+    mockUsePathname.mockReturnValue("/chat/api-keys");
     render(
       <ChatShell>
         <div />
@@ -58,17 +57,17 @@ describe("ChatShell", () => {
       </ChatShell>,
     );
     fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
-    expect(mockPush).toHaveBeenCalledWith("/ui/chat/integrations");
+    expect(mockPush).toHaveBeenCalledWith("/chat/integrations");
 
     fireEvent.click(screen.getByRole("button", { name: "Usage" }));
-    expect(mockPush).toHaveBeenCalledWith("/ui/chat/usage");
+    expect(mockPush).toHaveBeenCalledWith("/chat/usage");
 
     fireEvent.click(screen.getByRole("button", { name: "Logs" }));
-    expect(mockPush).toHaveBeenCalledWith("/ui/chat/logs");
+    expect(mockPush).toHaveBeenCalledWith("/chat/logs");
   });
 
   it("marks Logs active on the logs route", () => {
-    mockUsePathname.mockReturnValue("/ui/chat/logs");
+    mockUsePathname.mockReturnValue("/chat/logs");
     render(
       <ChatShell>
         <div />
@@ -79,7 +78,7 @@ describe("ChatShell", () => {
   });
 
   it("tolerates a trailing slash on the current pathname when matching the active route", () => {
-    mockUsePathname.mockReturnValue("/ui/chat/usage/");
+    mockUsePathname.mockReturnValue("/chat/usage/");
     render(
       <ChatShell>
         <div />

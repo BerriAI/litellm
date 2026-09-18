@@ -1,4 +1,3 @@
-import { uiHref } from "@/utils/uiHref";
 
 const LEGACY_PAGE_ROUTES: ReadonlyMap<string, string> = new Map(
   Object.entries({
@@ -50,5 +49,5 @@ export function legacyPageRedirectHref(searchParams: URLSearchParams): string | 
   const rest = new URLSearchParams(searchParams);
   rest.delete("page");
   const query = rest.toString();
-  return query ? `${uiHref(route)}?${query}` : uiHref(route);
+  return query ? `/${route}?${query}` : `/${route}`;
 }

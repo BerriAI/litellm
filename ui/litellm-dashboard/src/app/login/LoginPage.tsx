@@ -102,7 +102,7 @@ function LoginPageContent() {
         params.delete("code");
         const cleanSearch = params.toString();
         window.history.replaceState(null, "", window.location.pathname + (cleanSearch ? `?${cleanSearch}` : ""));
-        router.replace("/ui/?login=success");
+        router.replace("/?login=success");
       });
       return;
     }
@@ -120,9 +120,10 @@ function LoginPageContent() {
       // User already logged in - redirect to return URL or default
       const returnUrl = consumeReturnUrl();
       if (returnUrl) {
-        router.replace(returnUrl);
+        // Browser-absolute (may be a full URL or a /ui path), so bypass the basePath-aware router
+        window.location.replace(returnUrl);
       } else {
-        router.replace("/ui");
+        router.replace("/");
       }
       return;
     }
@@ -134,7 +135,7 @@ function LoginPageContent() {
       if (returnUrl && isValidReturnUrl(returnUrl)) {
         ssoUrl += `?redirect_to=${encodeURIComponent(returnUrl)}`;
       }
-      router.push(ssoUrl);
+      window.location.assign(ssoUrl);
       return;
     }
 
@@ -156,15 +157,12 @@ function LoginPageContent() {
           if (selectedWorker) {
             selectWorker(selectedWorker.worker_id);
             // Stay on the CP's UI — proxyBaseUrl already points at the worker
-            router.push("/ui/?login=success");
+            router.push("/?login=success");
           } else {
             // Normal (non-control-plane) login — follow the server's redirect
             const returnUrl = consumeReturnUrl();
-            if (returnUrl) {
-              router.push(returnUrl);
-            } else {
-              router.push(data.redirect_url);
-            }
+            // Both values are browser-absolute, so bypass the basePath-aware router
+            window.location.assign(returnUrl ?? data.redirect_url);
           }
         },
         onError: () => {
@@ -339,7 +337,7 @@ function LoginPageContent() {
                         // include return_to so the callback redirects back here
                         const ssoBase = selectedWorker?.url ?? getProxyBaseUrl();
                         const returnTo = encodeURIComponent(getLoginUrl(window.location.origin));
-                        router.push(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
+                        window.location.assign(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
                       }}
                       className="w-full"
                     >

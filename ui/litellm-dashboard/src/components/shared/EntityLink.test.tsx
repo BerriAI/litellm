@@ -18,11 +18,11 @@ describe("EntityLink", () => {
     expect(screen.getByRole("link", { name: "alice" })).toHaveAttribute("href", "/ui/users?user=u1");
   });
 
-  it("navigates client-side on plain click", async () => {
+  it("navigates client-side with the /ui base stripped so the basePath router does not double-prefix", async () => {
     const user = userEvent.setup();
     render(<EntityLink href="/ui/users?user=u1">alice</EntityLink>);
     await user.click(screen.getByRole("link", { name: "alice" }));
-    expect(push).toHaveBeenCalledWith("/ui/users?user=u1");
+    expect(push).toHaveBeenCalledWith("/users?user=u1");
   });
 
   it("renders the label as plain text when there is no href to point at", () => {

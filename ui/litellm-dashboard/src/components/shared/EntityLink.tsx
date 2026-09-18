@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import * as React from "react";
 
 import { cn } from "@/lib/cva.config";
+import { appHrefFromUiHref } from "@/utils/uiHref";
 
 export function useEntityLinkClick(href: string): (e: React.MouseEvent) => void {
   const router = useRouter();
@@ -14,7 +15,7 @@ export function useEntityLinkClick(href: string): (e: React.MouseEvent) => void 
     const isNativeNewTabClick = hasModifierKey || e.button === 1;
     if (isNativeNewTabClick) return;
     e.preventDefault();
-    router.push(href);
+    router.push(appHrefFromUiHref(href));
   };
 }
 

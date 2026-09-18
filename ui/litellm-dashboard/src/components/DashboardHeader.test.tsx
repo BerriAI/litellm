@@ -7,7 +7,7 @@ const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
   const state = {
     plugins: [] as { name: string; display_name: string; url: string }[],
     enableChatUI: false,
-    pathname: "/ui/logs",
+    pathname: "/logs",
   };
   return {
     state,
@@ -32,18 +32,18 @@ describe("DashboardHeader breadcrumb", () => {
   afterEach(() => {
     state.plugins = [];
     state.enableChatUI = false;
-    state.pathname = "/ui/logs";
+    state.pathname = "/logs";
   });
 
   it("titles the breadcrumb from the current route, not from a sidebar page id", () => {
-    state.pathname = "/ui/models-and-endpoints";
+    state.pathname = "/models-and-endpoints";
     render(<DashboardHeader />);
 
     expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
   });
 
   it("titles the dashboard root as Virtual Keys", () => {
-    state.pathname = "/ui/";
+    state.pathname = "/";
     render(<DashboardHeader />);
 
     expect(screen.getByText("Virtual Keys")).toBeInTheDocument();

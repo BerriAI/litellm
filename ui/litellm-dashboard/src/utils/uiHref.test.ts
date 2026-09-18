@@ -1,10 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { setServerRootPath } from "@/lib/serverRootPath";
-import { routeSegmentForPathname, uiHref } from "./uiHref";
+import { appHrefFromUiHref, routeSegmentForPathname, uiHref } from "./uiHref";
 
 afterEach(() => {
   setServerRootPath("/");
-  vi.unstubAllEnvs();
 });
 
 describe("uiHref", () => {
@@ -20,36 +19,38 @@ describe("uiHref", () => {
   it("tolerates a leading slash in the route segment", () => {
     expect(uiHref("/api-reference")).toBe("/ui/api-reference");
   });
+});
 
-  it("stays root-relative under next dev, which serves the app at /", () => {
-    vi.stubEnv("NODE_ENV", "development");
-    expect(uiHref("logs")).toBe("/logs");
+describe("appHrefFromUiHref", () => {
+  it("strips the /ui base so the basePath-aware router does not double-prefix", () => {
+    expect(appHrefFromUiHref("/ui/teams?team=x")).toBe("/teams?team=x");
+  });
+
+  it("maps the bare base to the app root", () => {
+    expect(appHrefFromUiHref("/ui")).toBe("/");
+  });
+
+  it("strips a non-root serverRootPath base too", () => {
+    setServerRootPath("/team-x/");
+    expect(appHrefFromUiHref("/team-x/ui/guardrails")).toBe("/guardrails");
+  });
+
+  it("passes through an href that is already app-relative", () => {
+    expect(appHrefFromUiHref("/guardrails")).toBe("/guardrails");
   });
 });
 
 describe("routeSegmentForPathname", () => {
-  it("strips the /ui base and any trailing slash", () => {
-    expect(routeSegmentForPathname("/ui/api-reference")).toBe("api-reference");
-    expect(routeSegmentForPathname("/ui/api-reference/")).toBe("api-reference");
+  it("reads the first segment of the basePath-stripped pathname", () => {
+    expect(routeSegmentForPathname("/api-reference")).toBe("api-reference");
+    expect(routeSegmentForPathname("/api-reference/")).toBe("api-reference");
   });
 
   it("returns an empty segment for the dashboard root", () => {
-    expect(routeSegmentForPathname("/ui/")).toBe("");
-    expect(routeSegmentForPathname("/ui")).toBe("");
+    expect(routeSegmentForPathname("/")).toBe("");
   });
 
   it("keeps only the first segment of a nested path", () => {
-    expect(routeSegmentForPathname("/ui/models-and-endpoints/anything")).toBe("models-and-endpoints");
-  });
-
-  it("strips a non-root serverRootPath too", () => {
-    setServerRootPath("/team-x/");
-    expect(routeSegmentForPathname("/team-x/ui/guardrails")).toBe("guardrails");
-  });
-
-  it("reads the segment straight after / under next dev", () => {
-    vi.stubEnv("NODE_ENV", "development");
-    expect(routeSegmentForPathname("/logs")).toBe("logs");
-    expect(routeSegmentForPathname("/")).toBe("");
+    expect(routeSegmentForPathname("/models-and-endpoints/anything")).toBe("models-and-endpoints");
   });
 });

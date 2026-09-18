@@ -1,23 +1,27 @@
 import { serverRootPath } from "@/lib/serverRootPath";
 
 function uiBase(): string {
-  // next dev serves the app at the root; only the proxy mounts the static export under /ui
-  // (and optionally under server_root_path). Inlined at build time, so production is unaffected.
-  if (process.env.NODE_ENV === "development") {
-    return "";
-  }
   const root = serverRootPath && serverRootPath !== "/" ? `/${serverRootPath.replace(/^\/+|\/+$/g, "")}` : "";
   return `${root}/ui`;
 }
 
-/** Absolute (same-origin) href for a dashboard route segment, e.g. "api-reference" -> "/ui/api-reference". */
+/**
+ * Browser-absolute (same-origin) href for a dashboard route segment, e.g. "api-reference" -> "/ui/api-reference".
+ * Use for raw <a> tags and window.location navigations. For <Link> and router.push, pass the app-relative
+ * path ("/api-reference") instead: the router prepends the /ui basePath itself.
+ */
 export function uiHref(routeSegment: string): string {
   return `${uiBase()}/${routeSegment.replace(/^\/+/, "")}`;
 }
 
-/** First route segment under the UI base, e.g. "/ui/api-reference/" -> "api-reference" and "/ui/" -> "". */
-export function routeSegmentForPathname(pathname: string): string {
+/** App-relative path for router.push, from a uiHref-built href: "/ui/teams?team=x" -> "/teams?team=x". */
+export function appHrefFromUiHref(href: string): string {
   const base = uiBase();
-  const relative = pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
-  return relative.replace(/^\/+/, "").split("/")[0];
+  if (href === base) return "/";
+  return href.startsWith(`${base}/`) || href.startsWith(`${base}?`) ? href.slice(base.length) : href;
+}
+
+/** First route segment of an app-relative pathname (usePathname already strips the /ui basePath). */
+export function routeSegmentForPathname(pathname: string): string {
+  return pathname.replace(/^\/+/, "").split("/")[0];
 }

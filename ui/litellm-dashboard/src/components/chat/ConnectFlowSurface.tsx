@@ -2,6 +2,7 @@
 
 import React, { useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { appHrefFromUiHref } from "@/utils/uiHref";
 import { useQuery } from "@tanstack/react-query";
 import MCPAppsPanel from "@/components/chat/MCPAppsPanel";
 import ConnectFlowBanner from "@/components/chat/ConnectFlowBanner";
@@ -24,7 +25,7 @@ const ConnectFlowSurface: React.FC<Props> = ({ accessToken, selectedServers, onC
     if (oauthReturn) {
       const url = new URL(window.location.href);
       url.searchParams.delete("mcpOauthReturn");
-      router.replace(url.pathname + url.search);
+      router.replace(appHrefFromUiHref(url.pathname + url.search));
     }
   }, [oauthReturn, router]);
 

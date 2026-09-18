@@ -6,7 +6,7 @@ interface KeyRow {
   token: string;
 }
 
-const { mockReplace, mockUseKeys, mockUiHref, state } = vi.hoisted(() => {
+const { mockReplace, mockUseKeys, state } = vi.hoisted(() => {
   const state = {
     search: "login=success",
     userRole: "Internal User",
@@ -16,7 +16,6 @@ const { mockReplace, mockUseKeys, mockUiHref, state } = vi.hoisted(() => {
   return {
     state,
     mockReplace: vi.fn(),
-    mockUiHref: vi.fn((segment: string) => `/mocked-ui/${segment}`),
     mockUseKeys: vi.fn(() => ({
       data: { keys: state.keys, total_count: state.keys.length },
       isLoading: false,
@@ -44,7 +43,6 @@ vi.mock("@/components/common_components/LoadingScreen", () => ({
   default: () => <div data-testid="loading-screen" />,
 }));
 vi.mock("@/components/networking", () => ({ proxyBaseUrl: "" }));
-vi.mock("@/utils/uiHref", () => ({ uiHref: mockUiHref }));
 vi.mock("@/utils/returnUrlUtils", () => ({
   buildLoginUrlWithReturn: (u: string) => u,
   consumeReturnUrl: () => state.returnUrl,
@@ -77,7 +75,6 @@ describe("dashboard landing", () => {
     state.returnUrl = null;
     mockReplace.mockClear();
     mockUseKeys.mockClear();
-    mockUiHref.mockClear();
     mockLocationReplace.mockClear();
   });
 
@@ -89,7 +86,6 @@ describe("dashboard landing", () => {
       expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
       expect(screen.queryByTestId("loading-screen")).not.toBeInTheDocument();
       expect(mockReplace).not.toHaveBeenCalled();
-      expect(mockUiHref).not.toHaveBeenCalledWith("connect");
     },
   );
 
@@ -108,7 +104,7 @@ describe("dashboard landing", () => {
   it("redirects an old ?page= bookmark to its path route without rendering the keys dashboard", () => {
     state.search = "page=logs";
     render(<CreateKeyPage />);
-    expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/logs");
+    expect(mockReplace).toHaveBeenCalledWith("/logs");
     expect(screen.getByTestId("loading-screen")).toBeInTheDocument();
     expect(screen.queryByTestId("api-keys-dashboard")).not.toBeInTheDocument();
   });
@@ -116,7 +112,7 @@ describe("dashboard landing", () => {
   it("carries the MCP env-var deep link's other params through the legacy redirect", () => {
     state.search = "page=mcp-servers&fill_env_vars=srv-1";
     render(<CreateKeyPage />);
-    expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/mcp-servers?fill_env_vars=srv-1");
+    expect(mockReplace).toHaveBeenCalledWith("/mcp-servers?fill_env_vars=srv-1");
   });
 
   it("still sends the user to an explicit stored return URL", () => {

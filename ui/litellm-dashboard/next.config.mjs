@@ -18,7 +18,11 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  basePath: "",
+  // The proxy mounts the static export under /ui. Baking that into basePath lets
+  // next/link and router.push do client-side navigation instead of full reloads.
+  // server_root_path deployments must rebuild with UI_BASE_PATH=<root>/ui
+  // (see build_ui_custom_path.sh).
+  basePath: process.env.UI_BASE_PATH || "/ui",
   assetPrefix: "/litellm-asset-prefix",
   trailingSlash: true,
   turbopack: {

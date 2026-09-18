@@ -5,12 +5,11 @@ import { usePathname, useRouter } from "next/navigation";
 import { Plus, MessageSquare, LayoutGrid, KeyRound, Lock, BarChart3, ScrollText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { uiHref } from "@/utils/uiHref";
 import { useChatShell } from "@/contexts/ChatShellContext";
 import ConversationList from "./ConversationList";
 
 export function getChatRoutes() {
-  const base = uiHref("chat");
+  const base = "/chat";
   return {
     chats: base,
     integrations: `${base}/integrations`,
