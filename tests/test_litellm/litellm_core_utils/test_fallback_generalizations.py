@@ -1,0 +1,992 @@
+"""
+Tests for the declarative fallback-generalizations mechanism.
+
+Covers the pure module (litellm.litellm_core_utils.fallback_generalizations): the
+routing/capability rule split, install-time validation, capability unioning; and
+its end-to-end wiring into provider routing (get_llm_provider) and model-info
+resolution (get_model_info) including the shipped rules in the bundled cost map.
+"""
+
+import logging
+
+import pytest
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.fallback_generalizations import (
+    get_fallback_generalization_rules,
+    match_capability_generalizations,
+    match_fill_missing_generalizations,
+    match_routing_generalization,
+    set_fallback_generalizations,
+)
+
+
+@pytest.fixture
+def restore_generalizations():
+    """Save the active rules, let the test install its own, then restore."""
+    previous = list(get_fallback_generalization_rules())
+    try:
+        yield set_fallback_generalizations
+    finally:
+        set_fallback_generalizations(previous)
+
+
+class _RecordingHandler(logging.Handler):
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+        self.messages = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+
+@pytest.fixture
+def warning_messages():
+    handler = _RecordingHandler()
+    previous_level = verbose_logger.level
+    verbose_logger.setLevel(logging.WARNING)
+    verbose_logger.addHandler(handler)
+    try:
+        yield handler.messages
+    finally:
+        verbose_logger.removeHandler(handler)
+        verbose_logger.setLevel(previous_level)
+
+
+# --------------------------------------------------------------------------- #
+# Engine: routing rules
+# --------------------------------------------------------------------------- #
+
+
+def test_routing_inference_first_match_wins(restore_generalizations):
+    restore_generalizations(
+        [
+            {"name": "first", "pattern": r"^acme-", "model_info": {"litellm_provider": "openai"}},
+            {"name": "second", "pattern": r"^acme-pro-", "model_info": {"litellm_provider": "anthropic"}},
+        ]
+    )
+    assert match_routing_generalization("acme-pro-1") == "openai"
+    assert match_routing_generalization("gpt-4o") is None
+    assert match_routing_generalization("") is None
+
+
+def test_capability_rules_do_not_route(restore_generalizations):
+    restore_generalizations([{"name": "caps", "pattern": r"^acme-", "model_info": {"supports_vision": True}}])
+    assert match_routing_generalization("acme-pro-1") is None
+
+
+def test_routing_match_is_case_insensitive(restore_generalizations):
+    restore_generalizations(
+        [{"name": "r", "pattern": r"^claude-opus", "model_info": {"litellm_provider": "anthropic"}}]
+    )
+    assert match_routing_generalization("CLAUDE-OPUS-9-9") == "anthropic"
+
+
+# --------------------------------------------------------------------------- #
+# Engine: capability rules
+# --------------------------------------------------------------------------- #
+
+
+def test_capability_union_is_last_wins_in_file_order(restore_generalizations):
+    restore_generalizations(
+        [
+            {
+                "name": "broad",
+                "pattern": r"^acme-",
+                "model_info": {"mode": "chat", "supports_vision": True, "max_input_tokens": 1000},
+            },
+            {
+                "name": "narrow",
+                "pattern": r"^acme-pro-",
+                "model_info": {"supports_vision": False, "supports_reasoning": True},
+            },
+        ]
+    )
+    assert match_capability_generalizations("acme-pro-1") == {
+        "mode": "chat",
+        "supports_vision": False,
+        "max_input_tokens": 1000,
+        "supports_reasoning": True,
+    }
+    assert match_capability_generalizations("acme-basic-1") == {
+        "mode": "chat",
+        "supports_vision": True,
+        "max_input_tokens": 1000,
+    }
+
+
+def test_fill_missing_requires_per_rule_opt_in(restore_generalizations):
+    restore_generalizations(
+        [
+            {"name": "base", "pattern": r"^acme-", "model_info": {"supports_reasoning": True}},
+            {
+                "name": "opt-in",
+                "pattern": r"^acme-",
+                "fill_missing_for_providers": ["openai"],
+                "model_info": {"supports_vision": True},
+            },
+        ]
+    )
+    assert match_fill_missing_generalizations("acme-1", "openai") == {"supports_vision": True}
+    assert match_fill_missing_generalizations("acme-1", "azure") is None
+    assert match_capability_generalizations("acme-1") == {
+        "supports_reasoning": True,
+        "supports_vision": True,
+    }
+
+    restore_generalizations([{"name": "base", "pattern": r"^acme-", "model_info": {"supports_reasoning": True}}])
+    assert match_fill_missing_generalizations("acme-1", "openai") is None
+
+    restore_generalizations(
+        [
+            {
+                "name": "mixed",
+                "pattern": r"^acme-",
+                "fill_missing_for_providers": ["openai"],
+                "model_info": {"litellm_provider": "openai", "supports_vision": True},
+            }
+        ]
+    )
+    assert match_fill_missing_generalizations("acme-1", "openai") == {"supports_vision": True}
+
+    restore_generalizations(
+        [
+            {
+                "name": "route",
+                "pattern": r"^acme-",
+                "fill_missing_for_providers": ["openai"],
+                "model_info": {"litellm_provider": "openai"},
+            }
+        ]
+    )
+    assert match_fill_missing_generalizations("acme-1", "openai") is None
+
+    restore_generalizations(
+        [
+            {
+                "name": "malformed",
+                "pattern": r"^acme-",
+                "fill_missing_for_providers": "openai",
+                "model_info": {"supports_vision": True},
+            }
+        ]
+    )
+    assert match_fill_missing_generalizations("acme-1", "openai") is None
+
+
+def test_routing_rules_are_excluded_from_capability_results(restore_generalizations):
+    restore_generalizations(
+        [
+            {"name": "route", "pattern": r"^acme-", "model_info": {"litellm_provider": "openai"}},
+            {"name": "caps", "pattern": r"^acme-pro-", "model_info": {"supports_vision": True}},
+        ]
+    )
+    assert match_capability_generalizations("acme-pro-1") == {"supports_vision": True}
+    assert match_capability_generalizations("acme-basic-1") is None
+
+
+def test_no_capability_match_returns_none(restore_generalizations):
+    restore_generalizations([{"name": "r", "pattern": r"^claude-", "model_info": {"ok": True}}])
+    assert match_capability_generalizations("gpt-4o") is None
+    assert match_capability_generalizations("") is None
+    restore_generalizations([])
+    assert match_capability_generalizations("claude-opus-9-9") is None
+
+
+def test_reinstalling_rules_replaces_compiled_rules(restore_generalizations):
+    restore_generalizations([{"name": "r", "pattern": r"^aaa", "model_info": {"v": 1}}])
+    assert match_capability_generalizations("aaa-1") == {"v": 1}
+    set_fallback_generalizations([{"name": "r", "pattern": r"^bbb", "model_info": {"v": 2}}])
+    assert match_capability_generalizations("aaa-1") is None
+    assert match_capability_generalizations("bbb-1") == {"v": 2}
+
+
+# --------------------------------------------------------------------------- #
+# Engine: install-time validation and legacy-schema shim
+# --------------------------------------------------------------------------- #
+
+
+def test_legacy_mixed_rule_acts_as_both_kinds(restore_generalizations):
+    """A legacy rule mixing ``litellm_provider`` with capability keys routes AND
+    contributes its full model_info (provider included) to the capability union."""
+    restore_generalizations(
+        [
+            {
+                "name": "legacy-mixed",
+                "pattern": r"^acme-",
+                "model_info": {"litellm_provider": "anthropic", "supports_vision": True},
+            },
+            {"name": "new-caps", "pattern": r"^acme-pro-", "model_info": {"supports_reasoning": True}},
+        ]
+    )
+    assert match_routing_generalization("acme-pro-1") == "anthropic"
+    assert match_capability_generalizations("acme-pro-1") == {
+        "litellm_provider": "anthropic",
+        "supports_vision": True,
+        "supports_reasoning": True,
+    }
+
+
+LEGACY_MAIN_RULES = [
+    {
+        "name": "anthropic-claude-adaptive-thinking",
+        "pattern": "(?:opus|sonnet|haiku)[-._](?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d{1,})[-._]\\d{1,2}(?!\\d))",
+        "description": "Claude opus/sonnet/haiku at version 4.6 or higher: 4.6 through 4.99, then any 5.x, 6.x or later major. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new families with no code change.",
+        "extends": "anthropic-claude",
+        "model_info": {"supports_adaptive_thinking": True},
+    },
+    {
+        "name": "anthropic-claude",
+        "pattern": "^claude-[a-z]+-\\d+[-.]\\d+(?:-\\d{8})?$",
+        "description": "Any Claude family-major-minor id, optionally with an 8-digit date suffix, anchored to the whole name. Version-neutral fallback that gives an unmapped Claude provider routing and baseline capabilities; it carries no pricing, so cost stays on the standard unpriced behavior rather than a guessed number.",
+        "model_info": {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "max_input_tokens": 200000,
+            "max_output_tokens": 64000,
+            "max_tokens": 64000,
+            "supports_function_calling": True,
+            "supports_parallel_function_calling": True,
+            "supports_vision": True,
+            "supports_tool_choice": True,
+            "supports_assistant_prefill": True,
+            "supports_prompt_caching": True,
+            "supports_response_schema": True,
+            "supports_reasoning": True,
+            "supports_pdf_input": True,
+            "supports_system_messages": True,
+        },
+    },
+]
+
+
+def test_legacy_main_schema_keeps_unmapped_claude_working(restore_generalizations):
+    """Pins the remote-map transition window: a released proxy running this engine
+    against main's old-schema block (mixed provider+capability rule plus ``extends``,
+    copied verbatim above) must keep unmapped-Claude inference and info resolution
+    working until the new-schema JSON reaches main."""
+    restore_generalizations([dict(rule) for rule in LEGACY_MAIN_RULES])
+    litellm.get_model_info.cache_clear()
+
+    _, provider, _, _ = litellm.get_llm_provider(model="claude-opus-9-9")
+    assert provider == "anthropic"
+
+    info = litellm.get_model_info("claude-opus-9-9")
+    assert info["litellm_provider"] == "anthropic"
+    assert info["supports_adaptive_thinking"] is True
+    assert info["supports_function_calling"] is True
+    assert info["max_input_tokens"] == 200000
+    assert not info.get("input_cost_per_token")
+
+    low = litellm.get_model_info("claude-opus-4-0")
+    assert low["litellm_provider"] == "anthropic"
+    assert low["supports_function_calling"] is True
+    assert low.get("supports_adaptive_thinking") is None
+
+
+def test_non_string_provider_rule_warns_and_is_skipped(restore_generalizations, warning_messages):
+    restore_generalizations([{"name": "bad-provider", "pattern": r"^acme-", "model_info": {"litellm_provider": 42}}])
+    assert any("bad-provider" in message for message in warning_messages)
+    assert match_routing_generalization("acme-1") is None
+    assert match_capability_generalizations("acme-1") is None
+
+
+def test_malformed_rules_are_skipped_not_fatal(restore_generalizations):
+    restore_generalizations(
+        [
+            "not-even-a-dict",
+            None,
+            {"name": "no-pattern", "model_info": {"x": 1}},
+            {"name": "bad-info", "pattern": r"^a", "model_info": "not-a-dict"},
+            {"name": "bad-regex", "pattern": r"^claude-(", "model_info": {"x": 1}},
+            {"name": "good", "pattern": r"^claude-", "model_info": {"good": True}},
+        ]
+    )
+    assert match_capability_generalizations("claude-opus-9-9") == {"good": True}
+
+
+# --------------------------------------------------------------------------- #
+# End-to-end: provider routing + model-info resolution
+# --------------------------------------------------------------------------- #
+
+
+def test_unknown_model_routes_via_routing_rule(restore_generalizations):
+    restore_generalizations([{"name": "myco", "pattern": r"^myco-", "model_info": {"litellm_provider": "openai"}}])
+    _, provider, _, _ = litellm.get_llm_provider(model="myco-fast-1")
+    assert provider == "openai"
+
+
+def test_capability_info_backfills_requested_provider(restore_generalizations):
+    restore_generalizations(
+        [
+            {
+                "name": "beeco-caps",
+                "pattern": r"^beeco-[a-z]+-\d+$",
+                "model_info": {
+                    "mode": "chat",
+                    "max_input_tokens": 12345,
+                    "supports_vision": True,
+                    "supports_function_calling": True,
+                },
+            }
+        ]
+    )
+    litellm.get_model_info.cache_clear()
+    info = litellm.get_model_info("beeco-fast-1", custom_llm_provider="groq")
+    assert info["litellm_provider"] == "groq"
+    assert info["max_input_tokens"] == 12345
+    assert info["supports_vision"] is True
+    other = litellm.get_model_info("beeco-fast-1", custom_llm_provider="openai")
+    assert other["litellm_provider"] == "openai"
+
+
+def test_routing_only_match_does_not_resolve_model_info(restore_generalizations):
+    restore_generalizations([{"name": "route", "pattern": r"^ceeco-", "model_info": {"litellm_provider": "openai"}}])
+    litellm.get_model_info.cache_clear()
+    with pytest.raises(Exception, match="This model isn't mapped yet"):
+        litellm.get_model_info("ceeco-fast-1", custom_llm_provider="openai")
+
+
+def test_exact_entry_takes_precedence_over_rule(restore_generalizations):
+    restore_generalizations(
+        [{"name": "shadow-gpt4o", "pattern": r"^gpt-4o$", "model_info": {"input_cost_per_token": 999.0}}]
+    )
+    litellm.get_model_info.cache_clear()
+    info = litellm.get_model_info("gpt-4o")
+    assert info["litellm_provider"] == "openai"
+    assert info["input_cost_per_token"] != 999.0
+
+
+def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            "acme-full": {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "max_tokens": 7,
+                "supports_reasoning": False,
+            },
+            "acme-bare": {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 4e-6,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            },
+            "acme-image": {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 6e-6,
+                "litellm_provider": "openai",
+                "mode": "image_generation",
+            },
+            "acme-other": {
+                "input_cost_per_token": 7e-6,
+                "output_cost_per_token": 8e-6,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            },
+        },
+    )
+    restore_generalizations(
+        [
+            {
+                "name": "acme-backfill",
+                "pattern": r"^acme-",
+                "fill_missing_for_providers": ["openai"],
+                "model_info": {"supports_reasoning": True, "max_tokens": 5},
+            }
+        ]
+    )
+    litellm.get_model_info.cache_clear()
+
+    full = litellm.get_model_info("acme-full", custom_llm_provider="openai")
+    assert full["supports_reasoning"] is False
+    assert full["max_tokens"] == 7
+
+    bare = litellm.get_model_info("acme-bare", custom_llm_provider="openai")
+    assert bare["supports_reasoning"] is True
+    assert bare["max_tokens"] == 5
+    assert bare["input_cost_per_token"] == 3e-6
+    assert bare["key"] == "acme-bare"
+
+    other = litellm.get_model_info("acme-other", custom_llm_provider="openrouter")
+    assert other.get("supports_reasoning") is None
+
+    image = litellm.get_model_info("acme-image", custom_llm_provider="openai")
+    assert image.get("supports_reasoning") is None
+
+    restore_generalizations(
+        [{"name": "acme-backfill", "pattern": r"^acme-", "model_info": {"supports_reasoning": True, "max_tokens": 5}}]
+    )
+    litellm.get_model_info.cache_clear()
+    unflagged = litellm.get_model_info("acme-bare", custom_llm_provider="openai")
+    assert unflagged.get("supports_reasoning") is None
+
+
+# --------------------------------------------------------------------------- #
+# Shipped rules (bundled cost map)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def shipped_cost_map(monkeypatch):
+    """Activate the bundled cost map so the shipped rules are installed."""
+    original_cost = litellm.model_cost
+    previous_rules = list(get_fallback_generalization_rules())
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_cost
+        litellm.get_model_info.cache_clear()
+        set_fallback_generalizations(previous_rules)
+
+
+@pytest.mark.parametrize(
+    "model,provider",
+    [
+        ("gemini-4-pro", "gemini"),
+        ("gemini/gemini-4-pro", None),
+        ("gemini-3.9-flash-lite-preview-09-2026", "vertex_ai"),
+        ("vertex_ai/gemini-4-pro", None),
+        ("gemini-4-pro-preview-customtools", "gemini"),
+        ("google/gemini-4-pro", "openrouter"),
+        ("google/gemini-4-pro", "deepinfra"),
+        ("google/gemini-4-pro", "vercel_ai_gateway"),
+        ("google.gemini-4-pro", "oci"),
+        ("databricks-gemini-4-1-pro", "databricks"),
+    ],
+)
+def test_shipped_gemini_chat_baseline_resolves_unmapped_ids(shipped_cost_map, model, provider):
+    assert model not in litellm.model_cost
+    if provider == "gemini":
+        assert f"gemini/{model}" not in litellm.model_cost
+    elif provider in {"openrouter", "deepinfra", "vercel_ai_gateway", "oci", "databricks"}:
+        assert f"{provider}/{model}" not in litellm.model_cost
+
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info["litellm_provider"] == (provider or model.split("/")[0])
+    assert info["mode"] == "chat"
+    assert not info.get("max_input_tokens")
+    assert info["supports_reasoning"] is True
+    assert info["supports_function_calling"] is True
+    assert info["supports_tool_choice"] is True
+    assert info["supports_system_messages"] is True
+    assert info["supports_vision"] is True
+    assert info["supports_response_schema"] is True
+    assert info["supports_pdf_input"] is True
+    assert info["supports_prompt_caching"] is True
+    assert info["supports_web_search"] is True
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
+
+
+def test_shipped_gemini_chat_baseline_skips_non_chat_and_pre_2_5_ids(shipped_cost_map):
+    for model in (
+        "gemini/gemini-4-flash-image",
+        "gemini/gemini-3.9-flash-preview-tts",
+        "gemini/gemini-4-flash-live-preview",
+        "gemini/gemini-4-flash-native-audio",
+        "gemini/gemini-embedding-4",
+        "gemini/gemini-2.5-computer-use-preview-12-2026",
+        "gemini/gemini-2.0-flash-new",
+        "gemini/gemini-1.5-pro-new",
+        "gemini/gemini-4-flashy",
+        "gemini/gemini-4-flash-transcribe",
+        "gemini/gemini-4-flash-live-translate-preview",
+        "databricks-gemini-3-1-flash-image",
+        "openrouter/google/gemini-2.0-flash-001",
+    ):
+        assert match_capability_generalizations(model) is None, model
+
+
+def test_shipped_gemini_chat_baseline_keeps_reasoning_effort_on_unmapped_model(shipped_cost_map):
+    assert litellm.supports_reasoning(model="gemini-4-pro", custom_llm_provider="gemini") is True
+
+    optional_params = litellm.utils.get_optional_params(
+        model="gemini-4-pro",
+        custom_llm_provider="gemini",
+        reasoning_effort="medium",
+        drop_params=False,
+    )
+    assert isinstance(optional_params, dict)
+    assert optional_params["thinkingConfig"]["thinkingBudget"] > 0
+    assert optional_params["thinkingConfig"]["includeThoughts"] is True
+
+
+def test_shipped_gemini_chat_baseline_loses_to_exact_entries(shipped_cost_map):
+    model = "gemini-2.5-flash-lite"
+    info = litellm.get_model_info(model, custom_llm_provider="gemini")
+    entry = litellm.model_cost["gemini/gemini-2.5-flash-lite"]
+    assert info["max_tokens"] == entry["max_tokens"]
+    assert info["input_cost_per_token"] == entry["input_cost_per_token"]
+    assert entry["input_cost_per_token"] > 0
+
+
+def test_shipped_bare_claude_id_routes_to_anthropic(shipped_cost_map):
+    _, provider, _, _ = litellm.get_llm_provider(model="claude-haiku-4-6")
+    assert provider == "anthropic"
+
+
+def test_shipped_bedrock_syntax_claude_id_routes_to_bedrock(shipped_cost_map):
+    """Regression: a bedrock-syntax id must infer bedrock even when its version also
+    matches an unanchored Anthropic capability pattern. The old first-match-wins engine
+    routed global.anthropic.claude-haiku-4-6 to anthropic via the adaptive rule."""
+    for model in [
+        "global.anthropic.claude-haiku-4-6",
+        "us.anthropic.claude-haiku-4-6",
+        "anthropic.claude-haiku-4-6",
+        "eu.anthropic.claude-opus-5-0",
+    ]:
+        assert model not in litellm.model_cost
+        _, provider, _, _ = litellm.get_llm_provider(model=model)
+        assert provider == "bedrock", model
+
+
+def test_shipped_rules_resolve_unmapped_bedrock_claude_with_bedrock_provider(shipped_cost_map):
+    model = "us.anthropic.claude-haiku-4-6"
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider="bedrock")
+    assert info["litellm_provider"] == "bedrock"
+    assert info["supports_adaptive_thinking"] is True
+    assert info["supports_function_calling"] is True
+    assert info["max_input_tokens"] == 200000
+    assert info.get("supports_mid_conversation_system") is None
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
+
+
+def test_shipped_rules_stack_adaptive_and_mid_conversation_flags(shipped_cost_map):
+    model = "claude-opus-4-9"
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider="anthropic")
+    assert info["litellm_provider"] == "anthropic"
+    assert info["supports_adaptive_thinking"] is True
+    assert info["supports_mid_conversation_system"] is True
+    assert info["supports_function_calling"] is True
+
+
+def test_shipped_rules_flag_unmapped_fable_as_always_on_thinking(shipped_cost_map):
+    """An unmapped Fable/Mythos id picks up ``thinking_always_on`` from the
+    claude-always-on-thinking rule, while other unmapped Claudes stay unflagged."""
+    model = "claude-fable-6-1"
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider="anthropic")
+    assert info["thinking_always_on"] is True
+    other = litellm.get_model_info("claude-opus-4-9", custom_llm_provider="anthropic")
+    assert other.get("thinking_always_on") is None
+
+
+@pytest.mark.parametrize(
+    "model,provider",
+    [
+        ("claude-opus-4-9@20260101", "vertex_ai"),
+        ("databricks-claude-haiku-5-1", "databricks"),
+    ],
+)
+def test_shipped_rules_are_provider_neutral_for_unmapped_ids(shipped_cost_map, model, provider):
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info["litellm_provider"] == provider
+    assert info["supports_adaptive_thinking"] is True
+    assert info["supports_mid_conversation_system"] is True
+    assert info["supports_function_calling"] is True
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
+
+
+@pytest.mark.parametrize(
+    "model,provider,adaptive,mid_conversation",
+    [
+        ("us.anthropic.claude-opus-4-5", "bedrock", None, None),
+        ("claude-haiku-4-6", "anthropic", True, None),
+        ("claude-haiku-4-7", "anthropic", True, None),
+        ("claude-haiku-4-8", "anthropic", True, True),
+        ("claude-haiku-4-9", "anthropic", True, True),
+        ("claude-haiku-4-10", "anthropic", True, True),
+        ("claude-haiku-5-0", "anthropic", True, True),
+        ("claude-sonnet-5-1", "anthropic", True, True),
+    ],
+)
+def test_shipped_version_boundaries(shipped_cost_map, model, provider, adaptive, mid_conversation):
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info["litellm_provider"] == provider
+    assert info["supports_function_calling"] is True
+    assert not info.get("input_cost_per_token")
+    assert info.get("supports_adaptive_thinking") is adaptive, model
+    assert info.get("supports_mid_conversation_system") is mid_conversation, model
+
+
+def test_shipped_claude_version_regex_excludes_undelimited_41(shipped_cost_map):
+    unmatched = match_capability_generalizations("github_copilot/claude-opus-41")
+    assert unmatched is None or "supports_adaptive_thinking" not in unmatched
+    assert unmatched is None or "supports_mid_conversation_system" not in unmatched
+
+    for model in ("claude-opus-5", "claude-sonnet-4-8"):
+        matched = match_capability_generalizations(model)
+        assert matched is not None
+        assert matched["supports_adaptive_thinking"] is True
+        assert matched["supports_mid_conversation_system"] is True
+
+
+def test_shipped_rules_cover_new_families_like_fable_at_5_plus(shipped_cost_map):
+    """Both version gates accept any claude-<family>- id at major 5 or higher, bare
+    major or major-minor, so a new family shaped like claude-fable-5 gets adaptive
+    thinking and mid-conversation system support without a cost-map entry."""
+    model = "claude-fable-6-1"
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider="anthropic")
+    assert info["supports_mid_conversation_system"] is True
+    assert info["supports_adaptive_thinking"] is True
+    assert info["supports_function_calling"] is True
+
+
+def test_shipped_rules_flag_bare_5_plus_majors_of_any_family(shipped_cost_map):
+    """A bare 5+ major with no minor gets both flags at the rule level; the mapped
+    claude-fable-5 entry itself still resolves from the cost map, so this pins the
+    pattern via the capability union rather than get_model_info."""
+    matched = match_capability_generalizations("claude-fable-5")
+    assert matched is not None
+    assert matched["supports_adaptive_thinking"] is True
+    assert matched["supports_mid_conversation_system"] is True
+
+
+def test_shipped_version_gates_are_family_agnostic_at_4x(shipped_cost_map):
+    """Both version gates apply to any claude-<family>- id, 4.x included: a non-core
+    family at 4.9 gets adaptive and mid-conversation, while the same family at 4.5
+    gets baseline only. Only opus/sonnet/haiku ever shipped 4.x ids, so the
+    family-agnostic 4.6+ gate changes nothing for real models."""
+    high = litellm.get_model_info("claude-newfam-4-9", custom_llm_provider="anthropic")
+    assert high["supports_adaptive_thinking"] is True
+    assert high["supports_mid_conversation_system"] is True
+    assert high["supports_function_calling"] is True
+
+    low = litellm.get_model_info("claude-newfam-4-5", custom_llm_provider="anthropic")
+    assert low.get("supports_adaptive_thinking") is None
+    assert low.get("supports_mid_conversation_system") is None
+    assert low["supports_function_calling"] is True
+
+
+def test_shipped_rules_give_bare_majors_the_full_baseline_union(shipped_cost_map):
+    """A bare-major unmapped id (no minor) resolves the same baseline union as its
+    major-minor sibling: the baseline pattern's minor is optional, so claude-newt-5
+    is not left with version flags but no mode, token limits, or capability facts."""
+    model = "anthropic/claude-newt-5"
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model)
+    assert info["litellm_provider"] == "anthropic"
+    assert info["mode"] == "chat"
+    assert info["max_tokens"] == 64000
+    assert info["supports_function_calling"] is True
+    assert info["supports_adaptive_thinking"] is True
+    assert info["supports_mid_conversation_system"] is True
+
+
+def test_shipped_routing_rule_covers_bare_majors(shipped_cost_map):
+    _, provider, _, _ = litellm.get_llm_provider(model="claude-newt-5")
+    assert provider == "anthropic"
+
+
+def test_shipped_adaptive_rule_requires_claude_prefix(shipped_cost_map):
+    """A non-Claude name embedding a core-family 4.6+/5.x version substring must not
+    resolve from the rules; serving it a zero-priced rule entry would silently
+    swallow cost tracking for arbitrary custom deployment names."""
+    model = "openai/team-sonnet-5-1-alias"
+    assert model not in litellm.model_cost
+    assert match_capability_generalizations("team-sonnet-5-1-alias") is None
+    with pytest.raises(Exception, match="This model isn't mapped yet"):
+        litellm.get_model_info(model)
+
+
+def test_shipped_rules_lose_to_exact_entries_across_cost_ladder_variants(shipped_cost_map):
+    """A route-mangled variant of an exactly-mapped model must never resolve from
+    rules. The cost calculator tries model-name variants in order; a rule-derived
+    unpriced entry served for an early variant (here bedrock/claude-haiku-4-5-20251001,
+    whose bare form is exactly mapped under anthropic) would zero out the bill even
+    though the exact priced bedrock entry is one variant later. An exactly-mapped id
+    under a mismatched provider raises instead of resolving from rules."""
+    from litellm import completion_cost
+    from litellm.types.utils import ModelResponse, Usage
+
+    assert "claude-haiku-4-5-20251001" in litellm.model_cost
+    with pytest.raises(Exception, match="This model isn't mapped yet"):
+        litellm.get_model_info("claude-haiku-4-5-20251001", custom_llm_provider="bedrock")
+
+    entry = litellm.model_cost["us.anthropic.claude-haiku-4-5-20251001-v1:0"]
+    response = ModelResponse(model="claude-haiku-4-5-20251001", usage=Usage(prompt_tokens=100, completion_tokens=50))
+    cost = completion_cost(
+        completion_response=response,
+        model="bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        custom_llm_provider="bedrock",
+    )
+    assert cost == 100 * entry["input_cost_per_token"] + 50 * entry["output_cost_per_token"]
+    assert cost > 0
+
+
+def test_shipped_adaptive_rule_gates_on_version_not_pricing(shipped_cost_map):
+    """The version-gated adaptive-thinking capability rule marks an unmapped Claude
+    adaptive only from >= 4.6, including provider-prefixed ids the anchored routing
+    rule cannot match, while leaving the dated Opus 4.0 form non-adaptive."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    adaptive = "us.anthropic.claude-opus-4-9"
+    non_adaptive = "us.anthropic.claude-opus-4-20250514"
+    assert adaptive not in litellm.model_cost
+    assert non_adaptive not in litellm.model_cost
+    assert AnthropicModelInfo._is_adaptive_thinking_model(adaptive, "anthropic") is True
+    assert AnthropicModelInfo._is_adaptive_thinking_model(non_adaptive, "anthropic") is False
+
+
+def test_shipped_rules_resolve_unmapped_future_bedrock_claude_with_both_flags(shipped_cost_map):
+    """An unmapped Bedrock Claude >= 4.8 resolves for custom_llm_provider="bedrock" with
+    baseline capabilities, both version-gated flags, the bedrock provider backfilled, and
+    no fabricated pricing."""
+    model = "us.anthropic.claude-opus-4-9"
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider="bedrock")
+    assert info["litellm_provider"] == "bedrock"
+    assert info["supports_mid_conversation_system"] is True
+    assert info["supports_adaptive_thinking"] is True
+    assert info["supports_function_calling"] is True
+    assert not info.get("input_cost_per_token")
+
+
+def test_shipped_mid_conversation_gate_on_bedrock_ids(shipped_cost_map):
+    """Bedrock-syntax ids gain ``supports_mid_conversation_system`` only from 4.8 upward,
+    bare 5+ majors and new families included; 4.7-and-below Bedrock ids never gain it.
+    The flag comes from the provider-neutral capability rule rather than a bedrock-scoped
+    one, so the same gate covers native and vertex-shaped ids too."""
+    for flagged in (
+        "us.anthropic.claude-opus-4-8",
+        "jp.anthropic.claude-opus-4-8",
+        "anthropic.claude-sonnet-5",
+        "us.anthropic.claude-fable-5",
+        "anthropic.claude-sonnet-5-20260101-v1:0",
+    ):
+        matched = match_capability_generalizations(flagged)
+        assert matched is not None, flagged
+        assert matched["supports_mid_conversation_system"] is True, flagged
+    for unflagged in (
+        "us.anthropic.claude-opus-4-7",
+        "us.anthropic.claude-sonnet-4-6",
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic.claude-3-5-sonnet-20240620-v1:0",
+    ):
+        matched = match_capability_generalizations(unflagged)
+        assert matched is None or not matched.get("supports_mid_conversation_system"), unflagged
+
+
+def test_shipped_rules_flag_unmapped_wandb_ids_as_reasoning(shipped_cost_map):
+    """W&B ships reasoning models faster than the registry names them, so an unmapped
+    wandb id resolves as reasoning-capable and its reasoning_effort survives instead of
+    being dropped. The rule carries no mode and no pricing, so cost stays on the standard
+    unpriced behavior and the deployment does not read as catalog-mapped."""
+    model = "wandb/zai-org/GLM-6-Turbo"
+    assert model not in litellm.model_cost
+
+    info = litellm.get_model_info(model, custom_llm_provider="wandb")
+    assert info["litellm_provider"] == "wandb"
+    assert info["supports_reasoning"] is True
+    assert info.get("mode") is None
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
+
+    assert litellm.supports_reasoning(model="zai-org/GLM-6-Turbo", custom_llm_provider="wandb") is True
+
+
+def test_shipped_wandb_rule_does_not_fill_missing_mapped_entries(shipped_cost_map):
+    assert match_fill_missing_generalizations("wandb/meta-llama/Llama-3.1-8B-Instruct", "wandb") is None
+
+
+def test_shipped_wandb_rule_is_anchored_to_the_wandb_namespace(shipped_cost_map):
+    """``^wandb/`` is anchored, so it cannot leak onto another provider's ids."""
+    assert match_capability_generalizations("wandb/some-new-model") == {"supports_reasoning": True}
+    for foreign in ("openai/some-new-model", "notwandb/some-new-model", "together_ai/wandb/some-new-model"):
+        matched = match_capability_generalizations(foreign)
+        assert matched is None or not matched.get("supports_reasoning"), foreign
+
+
+def test_shipped_wandb_rule_keeps_reasoning_effort_on_an_unmapped_model(shipped_cost_map):
+    """End to end through the provider config: the gate WandbConfig applies reads the
+    rule, so reasoning_effort is advertised and survives get_optional_params rather than
+    raising UnsupportedParamsError."""
+    model = "zai-org/GLM-6-Turbo"
+    assert f"wandb/{model}" not in litellm.model_cost
+
+    supported = litellm.get_supported_openai_params(model=f"wandb/{model}")
+    assert supported is not None
+    assert "reasoning_effort" in supported
+
+    optional_params = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="wandb",
+        reasoning_effort="medium",
+        drop_params=False,
+    )
+    assert optional_params["reasoning_effort"] == "medium"
+
+
+def test_router_registration_does_not_shadow_shipped_rules(shipped_cost_map):
+    """Regression: Router writes every configured deployment into ``litellm.model_cost``,
+    and an exact entry ends the lookup ladder before the rules are consulted. Registering
+    an unmapped model has to carry the rule defaults forward, or configuring a model on a
+    proxy silently strips the capabilities the same model resolves to off-proxy."""
+    from litellm import Router
+
+    unmapped_wandb = "wandb/zai-org/GLM-6-Turbo"
+    unmapped_claude = "anthropic/claude-opus-9"
+    assert unmapped_wandb not in litellm.model_cost
+    assert unmapped_claude not in litellm.model_cost
+
+    Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": name, "api_key": "fake"}}
+            for name in (unmapped_wandb, unmapped_claude)
+        ]
+    )
+
+    assert unmapped_wandb in litellm.model_cost
+    assert unmapped_claude in litellm.model_cost
+    assert litellm.supports_reasoning(model="zai-org/GLM-6-Turbo", custom_llm_provider="wandb") is True
+    assert litellm.supports_reasoning(model="claude-opus-9", custom_llm_provider="anthropic") is True
+
+
+def test_deployment_model_info_beats_the_seeded_rule_defaults(shipped_cost_map):
+    """Seeding a registration from the rules is a floor, not an override: an explicit
+    model_info on the deployment still wins, so a non-reasoning model can be configured
+    under a reasoning-first namespace."""
+    from litellm import Router
+
+    model = "wandb/some-org/NoThink-1"
+    Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {"model": model, "api_key": "fake"},
+                "model_info": {"supports_reasoning": False},
+            }
+        ]
+    )
+
+    assert litellm.model_cost[model]["supports_reasoning"] is False
+    assert litellm.supports_reasoning(model="some-org/NoThink-1", custom_llm_provider="wandb") is False
+
+
+def test_shipped_rules_flag_unmapped_openai_reasoning_families(shipped_cost_map):
+    for model in (
+        "gpt-5.7-nova",
+        "openai/gpt-6",
+        "ft:gpt-5.1-2025-11-13:org::abc",
+        "o5-mini",
+        "gpt-5.6-codex-max",
+        "o4-mini-deep-research-2027-01-01",
+        "gpt-5.7-chat-latest",
+        "azure/gpt-5.7-cyber",
+        "openai/codex-mini-latest-2027",
+    ):
+        assert model not in litellm.model_cost, model
+        assert match_capability_generalizations(model) == {"supports_reasoning": True}, model
+    info = litellm.get_model_info("gpt-5.7-nova", custom_llm_provider="openai")
+    assert info["litellm_provider"] == "openai"
+    assert info["supports_reasoning"] is True
+    assert info.get("mode") is None
+    assert not info.get("input_cost_per_token")
+    assert litellm.supports_reasoning(model="gpt-5.7-nova", custom_llm_provider="openai") is True
+
+
+def test_shipped_openai_reasoning_rule_skips_non_reasoning_gpt_ids(shipped_cost_map):
+    for model in (
+        "gpt-4o",
+        "gpt-4.1-nano-new",
+        "gpt-oss-120b",
+        "gpt-realtime-2027",
+        "gpt-image-2",
+        "gpt-5-search-api-2027-01-01",
+        "omni-moderation-new",
+        "text-embedding-4",
+        "vendor/my-codex-embedding",
+        "some-codex-model",
+        "azure/gpt-35-turbo-0125-custom",
+        "github_copilot/gpt-41-copilot-new",
+    ):
+        assert match_capability_generalizations(model) is None, model
+
+
+def test_shipped_openai_reasoning_rule_matches_only_openai(shipped_cost_map):
+    assert match_fill_missing_generalizations("gpt-5.4", "openai") == {"supports_reasoning": True}
+    assert match_fill_missing_generalizations("gpt-5.4", "openrouter") is None
+
+
+def test_shipped_claude_thinking_rules_backfill_only_anthropic(shipped_cost_map):
+    model = "perplexity/anthropic/claude-sonnet-4-6"
+    assert model in litellm.model_cost
+    raw_entry = litellm.model_cost[model]
+    assert "supports_adaptive_thinking" not in raw_entry
+    assert "max_input_tokens" not in raw_entry
+
+    info = litellm.get_model_info(model="anthropic/claude-sonnet-4-6", custom_llm_provider="perplexity")
+    assert info.get("supports_adaptive_thinking") is None
+    assert info.get("supports_legacy_thinking") is None
+    assert info.get("max_input_tokens") is None
+    assert match_fill_missing_generalizations("claude-sonnet-4-6", "anthropic") == {
+        "supports_adaptive_thinking": True,
+        "supports_legacy_thinking": True,
+        "supports_tool_search": True,
+    }
+    assert match_fill_missing_generalizations("claude-sonnet-4-6", "perplexity") is None
+
+
+@pytest.mark.parametrize(
+    "model,provider,tool_search",
+    [
+        ("us.anthropic.claude-opus-4-5", "bedrock", True),
+        ("claude-haiku-4-4", "anthropic", None),
+        ("claude-haiku-4-6", "anthropic", True),
+        ("claude-opus-4.5", "anthropic", True),
+        ("claude-opus-4_5", "anthropic", True),
+        ("claude-haiku-4-10", "anthropic", True),
+        ("claude-haiku-5-0", "anthropic", True),
+        ("claude-sonnet-5-1", "anthropic", True),
+        ("claude-newfam-6", "anthropic", True),
+        ("claude-haiku-4-20250514", "anthropic", None),
+    ],
+)
+def test_shipped_tool_search_rule_version_boundaries(shipped_cost_map, model, provider, tool_search):
+    """The claude-tool-search rule flags Claude 4.5 and newer in any family, bare major
+    or major-minor with a dash, dot or underscore delimiter, and leaves 4.4 and
+    date-suffixed 4.x ids without an opinion."""
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info.get("supports_tool_search") is tool_search, model
+
+
+def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipped_cost_map):
+    """A mapped Claude 4.5+ entry with no supports_tool_search key gets it from the rule
+    on Anthropic direct, Vertex and Bedrock, a mapped pre-4.5 entry stays without one,
+    and Azure Foundry and reseller copies of the same model are not touched."""
+    for key, model, provider in (
+        ("claude-opus-4-7", "claude-opus-4-7", "anthropic"),
+        ("vertex_ai/claude-opus-5", "claude-opus-5", "vertex_ai"),
+    ):
+        assert "supports_tool_search" not in litellm.model_cost[key]
+        assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_tool_search"] is True
+
+    assert "supports_tool_search" not in litellm.model_cost["claude-opus-4-1"]
+    opus_4_1_info = litellm.get_model_info("claude-opus-4-1", custom_llm_provider="anthropic")
+    assert opus_4_1_info.get("supports_tool_search") is None
+
+    assert "supports_tool_search" not in litellm.model_cost["azure_ai/claude-opus-5"]
+    azure_opus_5_info = litellm.get_model_info("claude-opus-5", custom_llm_provider="azure_ai")
+    assert azure_opus_5_info.get("supports_tool_search") is None
+
+    assert match_fill_missing_generalizations("claude-opus-5", "bedrock")["supports_tool_search"] is True
+    assert "supports_tool_search" not in match_fill_missing_generalizations("claude-opus-5", "azure_ai")
+    assert match_fill_missing_generalizations("claude-opus-5", "perplexity") is None

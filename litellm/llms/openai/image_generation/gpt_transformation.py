@@ -1,0 +1,89 @@
+from typing import TYPE_CHECKING, Final
+
+import httpx
+
+from litellm.llms.base_llm.image_generation.transformation import (
+    BaseImageGenerationConfig,
+)
+from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
+from litellm.types.utils import ImageResponse
+from litellm.utils import convert_to_model_response_object
+
+if TYPE_CHECKING:
+    import tiktoken
+    from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
+
+
+class GPTImageGenerationConfig(BaseImageGenerationConfig):
+    """
+    OpenAI gpt-image image generation config
+    """
+
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
+        return [
+            "background",
+            "moderation",
+            "n",
+            "output_compression",
+            "output_format",
+            "quality",
+            "size",
+            "user",
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        supported_params: Final = self.get_supported_openai_params(model)
+        for k in non_default_params:
+            if k not in optional_params:
+                if k in supported_params:
+                    optional_params[k] = non_default_params[k]
+                elif drop_params:
+                    pass
+                else:
+                    raise ValueError(
+                        f"Parameter {k} is not supported for model {model}. Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
+                    )
+
+        return optional_params
+
+    def transform_image_generation_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ImageResponse,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: "tiktoken.Encoding | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ImageResponse:
+        response: Final = raw_response.json()
+
+        stringified_response: Final = response
+        ## LOGGING
+        logging_obj.post_call(
+            input=request_data.get("prompt", ""),
+            api_key=api_key,
+            additional_args={"complete_input_dict": request_data},
+            original_response=stringified_response,
+        )
+        image_response: Final[ImageResponse] = convert_to_model_response_object(
+            response_object=stringified_response,
+            model_response_object=model_response,
+            response_type="image_generation",
+        )
+
+        # set optional params
+        image_response.size = image_response.size or optional_params.get("size", "1024x1024")
+        image_response.quality = image_response.quality or optional_params.get("quality", "high")
+        image_response.output_format = image_response.output_format or optional_params.get("output_format", "png")
+
+        return image_response

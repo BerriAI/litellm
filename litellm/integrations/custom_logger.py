@@ -1,0 +1,1116 @@
+#### What this does ####
+#    On success, logs events to Promptlayer
+import re
+import traceback
+from collections.abc import AsyncGenerator, Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
+
+from pydantic import BaseModel
+
+from litellm._logging import verbose_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER, EMPTY_MAPPING
+from litellm.types.integrations.argilla import ArgillaItem
+from litellm.types.integrations.custom_logger import AgenticLoopPlan
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
+from litellm.types.prompts.init_prompts import PromptSpec
+from litellm.types.utils import (
+    AdapterCompletionStreamWrapper,
+    CallTypes,
+    CallTypesLiteral,
+    LLMResponseTypes,
+    ModelResponse,
+    ModelResponseStream,
+    StandardAuditLogPayload,
+    StandardCallbackDynamicParams,
+    StandardLoggingPayload,
+)
+
+if TYPE_CHECKING:
+    from fastapi import HTTPException
+    from opentelemetry.trace import Span as _Span
+
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.anthropic_messages.transformation import (
+        BaseAnthropicMessagesConfig,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp import (
+        MCPPostCallResponseObject,
+        MCPPreCallRequestObject,
+        MCPPreCallResponseObject,
+    )
+    from litellm.types.router import PreRoutingHookResponse
+
+    Span = _Span
+else:
+    Span = Any
+    LiteLLMLoggingObj = Any
+    UserAPIKeyAuth = Any
+    MCPPostCallResponseObject = Any
+    MCPPreCallRequestObject = Any
+    MCPPreCallResponseObject = Any
+    MCPDuringCallRequestObject: Final = Any
+    MCPDuringCallResponseObject: Final = Any
+    PreRoutingHookResponse = Any
+
+
+_BASE64_INLINE_PATTERN: Final = re.compile(
+    r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
+    re.MULTILINE,
+)
+
+
+class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
+    # Class variables or attributes
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset()
+
+    enforces_request_content: bool = False
+    """
+    Whether this hook's ``async_pre_call_hook`` judges the request payload itself.
+
+    False for the accounting hooks, which count a request rather than read it: rate limits,
+    parallel slots, budgets, cache lookups. Those must run once per request and never once per
+    record of a batch upload, which would charge a caller once for every line of their file.
+
+    Set it to True on a hook that inspects or rejects content, so that scanning a payload which
+    is not itself a request, such as one record of a batch input file, still reaches it. A
+    ``CustomGuardrail`` does not need it; guardrails are dispatched by their own branch.
+
+    Judging content is necessary but not sufficient. A hook that also rewrites the payload for
+    routing, as the managed-files and managed-vector-store hooks do, stays False: a per-record
+    rewrite would read as a redaction and ship embedded in the record. Only the leaf class is
+    consulted, so a subclass that does not override ``async_pre_call_hook`` inherits nothing.
+    """
+
+    def __init__(
+        self,
+        turn_off_message_logging: bool = False,
+        # deprecated param, use `turn_off_message_logging` instead
+        message_logging: bool = True,
+        **kwargs,
+    ) -> None:
+        """
+        Args:
+            turn_off_message_logging: bool - if True, the message logging will be turned off. Message and response will be redacted from StandardLoggingPayload.
+            message_logging: bool - deprecated param, use `turn_off_message_logging` instead
+        """
+        self.message_logging = message_logging
+        self.turn_off_message_logging = turn_off_message_logging
+
+    @staticmethod
+    def get_callback_env_vars(callback_name: str | None = None) -> list[str]:
+        """
+        Return the environment variables associated with a given callback
+        name as defined in the proxy callback registry.
+
+        Args:
+            callback_name: The name of the callback to look up.
+
+        Returns:
+            List[str]: A list of required environment variable names.
+        """
+        if callback_name is None:
+            return []
+
+        normalized_name: Final = callback_name.lower()
+
+        alias_map: Final = {
+            "langfuse_otel": "langfuse",
+            "s3_v2": "s3",
+        }
+        lookup_name: Final = alias_map.get(normalized_name, normalized_name)
+
+        try:
+            from litellm.proxy._types import AllCallbacks
+        except Exception:
+            return []
+
+        callbacks: Final = AllCallbacks()
+        callback_info: Final[object] = getattr(callbacks, lookup_name, None)
+        if callback_info is None:
+            return []
+
+        params: Final[Sequence[str] | None] = getattr(callback_info, "litellm_callback_params", None)
+        if not params:
+            return []
+
+        return list(params)
+
+    def log_pre_api_call(self, model, messages, kwargs):
+        pass
+
+    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    #### ASYNC ####
+
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    async def async_log_pre_api_call(self, model, messages, kwargs):
+        pass
+
+    async def async_pre_request_hook(self, model: str, messages: list, kwargs: dict) -> dict | None:
+        """
+        Hook called before making the API request to allow modifying request parameters.
+
+        This is specifically designed for modifying the request before it's sent to the provider.
+        Unlike async_log_pre_api_call (which is for logging), this hook is meant for transformations.
+
+        Args:
+            model: The model name
+            messages: The messages list
+            kwargs: The request parameters (tools, stream, temperature, etc.)
+
+        Returns:
+            Optional[Dict]: Modified kwargs to use for the request, or None if no modifications
+
+        Example:
+            ```python
+            async def async_pre_request_hook(self, model, messages, kwargs):
+                # Convert native tools to standard format
+                if kwargs.get("tools"):
+                    kwargs["tools"] = convert_tools(kwargs["tools"])
+                return kwargs
+            ```
+        """
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    async def async_log_audit_log_event(self, audit_log: "StandardAuditLogPayload"):
+        """Called when an audit log is created. Override in subclasses to handle."""
+
+    #### PROMPT MANAGEMENT HOOKS ####
+
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: str | None,
+        prompt_variables: dict | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        prompt_spec: PromptSpec | None = None,
+        tools: list[dict] | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
+        """
+        Returns:
+        - model: str - the model to use (can be pulled from prompt management tool)
+        - messages: List[AllMessageValues] - the messages to use (can be pulled from prompt management tool)
+        - non_default_params: dict - update with any optional params (e.g. temperature, max_tokens, etc.) to use (can be pulled from prompt management tool)
+        """
+        return model, messages, non_default_params
+
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: str | None,
+        prompt_variables: dict | None,
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: PromptSpec | None = None,
+        prompt_label: str | None = None,
+        prompt_version: int | None = None,
+        ignore_prompt_manager_model: bool | None = False,
+        ignore_prompt_manager_optional_params: bool | None = False,
+    ) -> tuple[str, list[AllMessageValues], dict]:
+        """
+        Returns:
+        - model: str - the model to use (can be pulled from prompt management tool)
+        - messages: List[AllMessageValues] - the messages to use (can be pulled from prompt management tool)
+        - non_default_params: dict - update with any optional params (e.g. temperature, max_tokens, etc.) to use (can be pulled from prompt management tool)
+        """
+        return model, messages, non_default_params
+
+    #### PRE-CALL CHECKS - router/proxy only ####
+    """
+    Allows usage-based-routing-v2 to run pre-call rpm checks within the picked deployment's semaphore (concurrency-safe tpm/rpm checks).
+    """
+
+    async def async_pre_routing_hook(
+        self,
+        model: str,
+        request_kwargs: dict,
+        messages: list[dict[str, Any]] | None = None,
+        input: str | list | None = None,
+        specific_deployment: bool | None = False,
+    ) -> PreRoutingHookResponse | None:
+        """
+        This hook is called before the routing decision is made.
+
+        Used for the litellm auto-router to modify the request before the routing decision is made.
+        """
+        return None
+
+    async def async_filter_deployments(
+        self,
+        model: str,
+        healthy_deployments: list,
+        messages: list[AllMessageValues] | None,
+        request_kwargs: dict | None = None,
+        parent_otel_span: Span | None = None,
+    ) -> list[dict]:
+        return healthy_deployments
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict | None:
+        """
+        Allow modifying the request just before it's sent to the deployment.
+
+        Use this instead of 'async_pre_call_hook' when you need to modify the request AFTER a deployment is selected, but BEFORE the request is sent.
+
+        Used in managed_files.py
+        """
+
+    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict | None:
+        pass
+
+    def pre_call_check(self, deployment: dict) -> dict | None:
+        pass
+
+    async def async_post_call_success_deployment_hook(
+        self,
+        request_data: dict,
+        response: LLMResponseTypes,
+        call_type: CallTypes | None,
+    ) -> LLMResponseTypes | None:
+        """
+        Allow modifying / reviewing the response just after it's received from the deployment.
+        """
+
+    async def async_post_call_failure_deployment_hook(
+        self,
+        request_data: Mapping[str, object],
+        exception: Exception,
+        call_type: CallTypes | None,
+        fallback_depth: int | None = None,
+    ) -> None:
+        """
+        Called once per failed deployment attempt - attempt 1, every retry, and
+        every fallback chain step - because the router re-invokes the wrapped
+        function on each attempt, re-entering this hook's call site fresh
+        every time.
+
+        This is a DEPLOYMENT-LEVEL signal, distinct from the REQUEST-LEVEL
+        ``async_log_failure_event``, which fires once per logical client
+        request behind a dedup gate. ``request_data`` is mostly this
+        attempt's own kwargs, with one exception: it omits
+        ``attempted_targets``, the router's own bookkeeping of which fallback
+        targets this request has already tried, since that one object *is*
+        shared by reference across every hop of the live fallback walk.
+
+        Pairs with ``async_pre_call_deployment_hook`` and
+        ``async_post_call_success_deployment_hook`` to complete the
+        pre-call/success/failure lifecycle for a single deployment attempt.
+
+        ``fallback_depth`` is best-effort: ``None`` on the first attempt and on
+        any call made without a ``Router`` (a bare SDK call has no fallback
+        chain to be at a depth in), ``1`` on the first fallback hop, ``2`` on
+        the second, and so on. It reflects ``Router``'s own internal fallback
+        bookkeeping (``kwargs["fallback_depth"]``), not a value this hook
+        computes or guarantees the shape of across versions. It tracks
+        fallback hops only, not retries within the same model group - a
+        retry-only failure (no fallback yet) also reports ``None``. If an
+        override predates this field it's simply never passed, rather than
+        raising - safe to leave off an override written before it existed.
+
+        ``exception`` is a same-class snapshot, not the exact object about to
+        be re-raised to the real caller: read it freely, but setting an
+        attribute on it (e.g. ``status_code``) has no effect on what the
+        caller actually receives.
+
+        Default: no-op. Opt in by overriding. Keep overrides fast - this
+        runs on the request's exception path, so a slow implementation
+        delays error propagation to the caller. The reported failure
+        duration is captured before this hook runs, so a slow override
+        doesn't inflate that metric, but the caller still waits for it.
+        """
+
+    async def async_post_call_streaming_deployment_hook(
+        self,
+        request_data: dict,
+        response_chunk: object,
+        call_type: CallTypes | None,
+    ) -> object | None:
+        """
+        Allow modifying streaming chunks just before they're returned to the user.
+
+        This is called for each streaming chunk in the response.
+        """
+
+    #### Fallback Events - router/proxy only ####
+    async def log_model_group_rate_limit_error(
+        self, exception: Exception, original_model_group: str | None, kwargs: dict
+    ):
+        pass
+
+    async def log_success_fallback_event(self, original_model_group: str, kwargs: dict, original_exception: Exception):
+        pass
+
+    async def log_failure_fallback_event(self, original_model_group: str, kwargs: dict, original_exception: Exception):
+        pass
+
+    #### ADAPTERS #### Allow calling 100+ LLMs in custom format - https://github.com/BerriAI/litellm/pulls
+
+    def translate_completion_input_params(self, kwargs) -> ChatCompletionRequest | None:
+        """
+        Translates the input params, from the provider's native format to the litellm.completion() format.
+        """
+
+    def translate_completion_output_params(self, response: ModelResponse) -> BaseModel | None:
+        """
+        Translates the output params, from the OpenAI format to the custom format.
+        """
+
+    def translate_completion_output_params_streaming(
+        self, completion_stream: object
+    ) -> AdapterCompletionStreamWrapper | None:
+        """
+        Translates the streaming chunk, from the OpenAI format to the custom format.
+        """
+
+    ### DATASET HOOKS #### - currently only used for Argilla
+
+    async def async_dataset_hook(
+        self,
+        logged_item: ArgillaItem,
+        standard_logging_payload: StandardLoggingPayload | None,
+    ) -> ArgillaItem | None:
+        """
+        - Decide if the result should be logged to Argilla.
+        - Modify the result before logging to Argilla.
+        - Return None if the result should not be logged to Argilla.
+        """
+        raise NotImplementedError("async_dataset_hook not implemented")
+
+    #### CALL HOOKS - proxy only ####
+    """
+    Control the modify incoming / outgoung data before calling the model
+    """
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: "DualCache",
+        data: dict,
+        call_type: CallTypesLiteral,
+    ) -> (
+        Exception | str | dict | None
+    ):  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
+        pass
+
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: object,
+        request_headers: dict[str, str] | None = None,
+        litellm_call_info: dict[str, object] | None = None,
+    ) -> dict[str, str] | None:
+        """
+        Called after an LLM API call (success or failure) to allow injecting custom HTTP response headers.
+
+        Args:
+            - data: dict - The request data.
+            - user_api_key_dict: UserAPIKeyAuth - The user API key dictionary.
+            - response: Any - The response object (None for failure cases).
+            - request_headers: Optional[Dict[str, str]] - The original request headers.
+            - litellm_call_info: Optional[Dict[str, Any]] - Normalized routing metadata:
+                - custom_llm_provider: str - The LLM provider (e.g. "openai", "azure")
+                - model_info: dict - The model_info from router config
+                - api_base: str - The API base URL used
+                - model_id: str - The deployment model ID
+
+        Returns:
+            - Optional[Dict[str, str]]: A dictionary of headers to inject into the HTTP response.
+                                        Return None to not inject any headers.
+        """
+        return None
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> Optional["HTTPException"]:
+        """
+        Called after an LLM API call fails. Can return or raise HTTPException to transform error responses.
+
+        Args:
+            - request_data: dict - The request data.
+            - original_exception: Exception - The original exception that occurred.
+            - user_api_key_dict: UserAPIKeyAuth - The user API key dictionary.
+            - traceback_str: Optional[str] - The traceback string.
+
+        Returns:
+            - Optional[HTTPException]: Return an HTTPException to transform the error response sent to the client.
+                                      Return None to use the original exception.
+        """
+
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: LLMResponseTypes,
+    ) -> Any:
+        pass
+
+    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+        """For masking logged request/response. Return a modified version of the request/result."""
+        return kwargs, result
+
+    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+        """For masking logged request/response. Return a modified version of the request/result."""
+        return kwargs, result
+
+    async def async_moderation_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> Any:
+        pass
+
+    async def async_post_call_streaming_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: str,
+    ) -> Any:
+        pass
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        async for item in response:
+            yield item
+
+    #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function
+
+    def log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
+        try:
+            kwargs["model"] = model
+            kwargs["messages"] = messages
+            kwargs["log_event_type"] = "pre_api_call"
+            callback_func(
+                kwargs,
+            )
+            print_verbose(f"Custom Logger - model call details: {kwargs}")
+        except Exception:
+            print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
+
+    async def async_log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
+        try:
+            kwargs["model"] = model
+            kwargs["messages"] = messages
+            kwargs["log_event_type"] = "pre_api_call"
+            await callback_func(
+                kwargs,
+            )
+            print_verbose(f"Custom Logger - model call details: {kwargs}")
+        except Exception:
+            print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
+
+    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
+        # Method definition
+        try:
+            kwargs["log_event_type"] = "post_api_call"
+            callback_func(
+                kwargs,  # kwargs to func
+                response_obj,
+                start_time,
+                end_time,
+            )
+        except Exception:
+            print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
+
+    async def async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
+        # Method definition
+        try:
+            kwargs["log_event_type"] = "post_api_call"
+            await callback_func(
+                kwargs,  # kwargs to func
+                response_obj,
+                start_time,
+                end_time,
+            )
+        except Exception:
+            print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
+
+    #########################################################
+    # MCP TOOL CALL HOOKS
+    #########################################################
+
+    async def async_post_mcp_tool_call_hook(
+        self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
+    ) -> MCPPostCallResponseObject | None:
+        """
+        This log gets called after the MCP tool call is made.
+
+        Useful if you want to modify the standard logging payload after the MCP tool call is made.
+
+        To change what the caller sends back to the MCP client, mutate ``response_obj``
+        in place: every call site discards the returned object, because the
+        dispatcher unwraps it to ``mcp_tool_call_response`` (a raw content list, not
+        a ``CallToolResult``) which the tool-call paths cannot forward. Guardrails
+        that mask or reject tool output should use ``post_mcp_call`` instead.
+        """
+        return None
+
+    #########################################################
+    # AGENTIC LOOP HOOKS (for litellm.messages + future completion support)
+    #########################################################
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        """
+        Hook to determine if agentic loop should be executed.
+
+        Called after receiving response from model, before returning to user.
+
+        USE CASE: Enables transparent server-side tool execution for models that
+        don't natively support server-side tools. User makes ONE API call and gets
+        back the final answer - the agentic loop happens transparently on the server.
+
+        Example use cases:
+        - WebSearch: Intercept WebSearch tool calls for Bedrock/Claude, execute
+          litellm.search(), return final answer with search results
+        - Code execution: Execute code in sandboxed environment, return results
+        - Database queries: Execute queries server-side, return data to model
+        - API calls: Make external API calls and inject responses back into context
+
+        Flow:
+        1. User calls litellm.messages.acreate(tools=[...])
+        2. Model responds with tool_use
+        3. THIS HOOK checks if tool should run server-side
+        4. If True, async_run_agentic_loop executes the tool
+        5. User receives final answer (never sees intermediate tool_use)
+
+        Args:
+            response: Response from model (AnthropicMessagesResponse or AsyncIterator)
+            model: Model name
+            messages: Original messages sent to model
+            tools: List of tool definitions from request
+            stream: Whether response is streaming
+            custom_llm_provider: Provider name (e.g., "bedrock", "anthropic")
+            kwargs: Additional request parameters
+
+        Returns:
+            (should_run, tools):
+                should_run: True if agentic loop should execute
+                tools: Dict with tool_calls and metadata for execution
+
+        Example:
+            # Detect WebSearch tool call
+            if has_websearch_tool_use(response):
+                return True, {
+                    "tool_calls": extract_tool_calls(response),
+                    "tool_type": "websearch"
+                }
+            return False, {}
+        """
+        return False, {}
+
+    async def async_run_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        anthropic_messages_provider_config: "BaseAnthropicMessagesConfig | None",
+        anthropic_messages_optional_request_params: dict,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: bool,
+        kwargs: dict,
+    ) -> Any:
+        """
+        Hook to execute agentic loop based on context from should_run hook.
+
+        Called only if async_messages_should_run_agentic_loop returns True.
+
+        USE CASE: Execute server-side tools and orchestrate the agentic loop to
+        return a complete answer to the user in a single API call.
+
+        What to do here:
+        1. Extract tool calls from tools dict
+        2. Execute the tools (litellm.search, code execution, DB queries, etc.)
+        3. Build assistant message with tool_use blocks
+        4. Build user message with tool_result blocks containing results
+        5. Make follow-up litellm.messages.acreate() call with results
+        6. Return the final response
+
+        Args:
+            tools: Dict from async_should_run_agentic_loop
+                  Contains tool_calls and metadata
+            model: Model name
+            messages: Original messages sent to model
+            response: Original response from model (with tool_use)
+            anthropic_messages_provider_config: Provider config for making requests
+            anthropic_messages_optional_request_params: Request parameters (tools, etc.)
+            logging_obj: LiteLLM logging object
+            stream: Whether response is streaming
+            kwargs: Additional request parameters
+
+        Returns:
+            Final response after executing agentic loop
+            (AnthropicMessagesResponse with final answer)
+
+        Example:
+            # Extract tool calls
+            tool_calls = agentic_context["tool_calls"]
+
+            # Execute searches in parallel
+            search_results = await asyncio.gather(
+                *[litellm.asearch(tc["input"]["query"]) for tc in tool_calls]
+            )
+
+            # Build messages with tool results
+            assistant_msg = {"role": "assistant", "content": [...tool_use blocks...]}
+            user_msg = {"role": "user", "content": [...tool_result blocks...]}
+
+            # Make follow-up request
+            from litellm.anthropic_interface import messages
+            final_response = await messages.acreate(
+                model=model,
+                messages=messages + [assistant_msg, user_msg],
+                max_tokens=anthropic_messages_optional_request_params.get("max_tokens"),
+                **anthropic_messages_optional_request_params
+            )
+
+            return final_response
+        """
+
+    async def async_build_agentic_loop_plan(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        anthropic_messages_provider_config: "BaseAnthropicMessagesConfig | None",
+        anthropic_messages_optional_request_params: dict,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: bool,
+        kwargs: dict,
+    ) -> AgenticLoopPlan:
+        """
+        Build a typed rerun plan for Anthropic Messages agentic loops.
+
+        Override this method to separate callback decision/tool execution from
+        follow-up request execution (handled by BaseLLMHTTPHandler).
+        """
+        return AgenticLoopPlan(run_agentic_loop=False)
+
+    async def async_post_agentic_loop_response_hook(
+        self,
+        response: object,
+        plan: AgenticLoopPlan,
+        kwargs: dict,
+    ) -> Any:
+        """
+        Post-process the response returned by the agentic-loop follow-up call.
+
+        Called after BaseLLMHTTPHandler executes ``AgenticLoopPlan.request_patch``
+        and receives the final response from the provider. Lets callbacks shape
+        what the client sees without bypassing the loop's safety / observability
+        machinery (depth tracking, fingerprinting, etc.).
+
+        Use ``plan.metadata`` to carry whatever the build step decided to expose
+        for post-processing (e.g. native tool_result blocks to inject).
+
+        Default returns ``response`` unchanged.
+        """
+        return response
+
+    async def async_agentic_loop_cleanup_hook(
+        self,
+        plan: AgenticLoopPlan,
+        kwargs: dict,
+    ) -> None:
+        """
+        Release resources held for an agentic-loop iteration.
+
+        Runs in a ``finally`` around the follow-up provider call, so it fires
+        whether the rerun returns normally, hits a loop safety abort, or raises
+        an upstream error. Implementations must be idempotent because the
+        post-response hook may already have released the same resource on the
+        success path. Use ``plan.metadata`` to locate what to clean up.
+
+        Default does nothing.
+        """
+        return
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
+        """
+        Hook to determine if chat completion agentic loop should be executed.
+        """
+        return False, {}
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: bool,
+        kwargs: dict,
+    ) -> object:
+        """
+        Hook to execute chat completion agentic loop based on context from should_run hook.
+        """
+
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: dict,
+        model: str,
+        messages: list[dict],
+        response: object,
+        optional_params: dict,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: bool,
+        kwargs: dict,
+    ) -> AgenticLoopPlan:
+        """
+        Build a typed rerun plan for chat-completions agentic loops.
+        """
+        return AgenticLoopPlan(run_agentic_loop=False)
+
+    # Useful helpers for custom logger classes
+
+    def truncate_standard_logging_payload_content(
+        self,
+        standard_logging_object: StandardLoggingPayload,
+    ) -> StandardLoggingPayload:
+        """
+        Return a copy of the logging payload with error_str, messages, and response truncated
+
+        Some loggers like DataDog/ GCS Bucket have a limit on the size of the payload. (1MB)
+
+        Every callback of a request shares one standard logging object, so the payload passed in is left
+        untouched and the callbacks that run later (the prompt caching router check, spend logs) still see
+        the original fields.
+        """
+        max_str_length: Final = 10_000
+        candidates: Final = {
+            field: self._truncate_field(field_value=standard_logging_object.get(field), max_length=max_str_length)
+            for field in ("error_str", "messages", "response")
+        }
+        truncated_fields: Final = {field: text for field, text in candidates.items() if text is not None}
+        return {**standard_logging_object, **truncated_fields}
+
+    def _truncate_field(self, field_value: object, max_length: int) -> str | None:
+        """
+        Return the truncated text of a field that exceeds max_length, or None when the field fits
+
+        The field is measured as a string because users send poorly formatted lists for `messages`, so there is
+        no fixed place the content would be.
+        """
+        text: Final = str(field_value or "")
+        return self._truncate_text(text=text, max_length=max_length) if len(text) > max_length else None
+
+    def _truncate_text(self, text: str, max_length: int) -> str:
+        """Truncate text if it exceeds max_length"""
+        return (
+            text[:max_length] + "...truncated by litellm, this logger does not support large content"
+            if len(text) > max_length
+            else text
+        )
+
+    def _select_metadata_field(self, request_kwargs: dict | None = None) -> str | None:
+        """
+        Select the metadata field to use for logging
+
+        1. If `litellm_metadata` is in the request kwargs, use it
+        2. Otherwise, use `metadata`
+        """
+        from litellm.constants import LITELLM_METADATA_FIELD, OLD_LITELLM_METADATA_FIELD
+
+        if request_kwargs is None:
+            return None
+        if LITELLM_METADATA_FIELD in request_kwargs:
+            return LITELLM_METADATA_FIELD
+        return OLD_LITELLM_METADATA_FIELD
+
+    def redacts_messages_itself(self) -> bool:
+        return False
+
+    def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict:
+        """
+        Redacts or excludes fields from StandardLoggingPayload before callbacks receive it.
+
+        This method handles two features:
+        1. turn_off_message_logging: When True, redacts messages and responses (unless the callback
+           redacts them itself, see `redacts_messages_itself`)
+        2. standard_logging_payload_excluded_fields: Removes specified fields entirely
+
+        Return a modified copy of the provided logging payload.
+
+        This is useful for logging payloads that contain sensitive information.
+        """
+        import litellm
+        from litellm import Choices, Message, ModelResponse
+        from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS, without_classifier_audit
+
+        turn_off_message_logging: Final[bool] = getattr(self, "turn_off_message_logging", False)
+        excluded_fields: Final[list[str] | None] = getattr(litellm, "standard_logging_payload_excluded_fields", None)
+
+        # Early return if no processing needed
+        if turn_off_message_logging is False and not excluded_fields:
+            return model_call_details
+
+        standard_logging_object: Final = model_call_details.get("standard_logging_object")
+        if standard_logging_object is None:
+            return model_call_details.copy()
+
+        # Make a copy of just the standard_logging_object to avoid modifying the original
+        standard_logging_object_copy: Final = {
+            key: value
+            for key, value in standard_logging_object.items()
+            if key not in (excluded_fields or ()) and not (turn_off_message_logging and key in CLASSIFIER_AUDIT_FIELDS)
+        }
+
+        # Handle turn_off_message_logging - redact messages and responses (if not already excluded)
+        if turn_off_message_logging and not self.redacts_messages_itself():
+            redacted_str: Final = "redacted-by-litellm"
+
+            if "messages" not in (excluded_fields or ()) and standard_logging_object_copy.get("messages") is not None:
+                standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
+
+            if "response" not in (excluded_fields or ()) and standard_logging_object_copy.get("response") is not None:
+                response: Final = standard_logging_object_copy["response"]
+                # Check if this is a ResponsesAPIResponse (has "output" field)
+                if isinstance(response, dict) and "output" in response:
+                    # Make a copy to avoid modifying the original
+                    from copy import deepcopy
+
+                    response_copy: Final = deepcopy(response)
+                    # Redact content in output array
+                    if isinstance(response_copy.get("output"), list):
+                        for output_item in response_copy["output"]:
+                            if isinstance(output_item, dict) and "content" in output_item:
+                                if isinstance(output_item["content"], list):
+                                    # Redact text in content items
+                                    for content_item in output_item["content"]:
+                                        if isinstance(content_item, dict) and "text" in content_item:
+                                            content_item["text"] = redacted_str
+                    standard_logging_object_copy["response"] = response_copy
+                else:
+                    # Standard ModelResponse format
+                    model_response: Final = ModelResponse(choices=[Choices(message=Message(content=redacted_str))])
+                    model_response_dict: Final = model_response.model_dump()
+                    standard_logging_object_copy["response"] = model_response_dict
+
+        params: Final = model_call_details.get("litellm_params")
+        request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
+        redacted_params: Final = (
+            MappingProxyType({"litellm_params": {**params, "proxy_server_request": without_classifier_audit(request)}})
+            if turn_off_message_logging and isinstance(params, dict) and isinstance(request, dict)
+            else EMPTY_MAPPING
+        )
+        return {
+            **model_call_details,
+            **redacted_params,
+            "standard_logging_object": standard_logging_object_copy,
+        }
+
+    async def get_proxy_server_request_from_cold_storage_with_object_key(
+        self,
+        object_key: str,
+    ) -> dict | None:
+        """
+        Get the proxy server request from cold storage using the object key directly.
+        """
+
+    def handle_callback_failure(self, callback_name: str):
+        """
+        Handle callback logging failures by incrementing Prometheus metrics.
+
+        Call this method in exception handlers within your callback when logging fails.
+        """
+        try:
+            import litellm
+            from litellm._logging import verbose_logger
+
+            all_callbacks: Final = litellm.logging_callback_manager._get_all_callbacks()
+
+            for callback_obj in all_callbacks:
+                if hasattr(callback_obj, "increment_callback_logging_failure"):
+                    verbose_logger.debug("Incrementing callback failure metric for %s", callback_name)
+                    callback_obj.increment_callback_logging_failure(callback_name=callback_name)
+                    return
+
+            verbose_logger.debug(
+                "No callback with increment_callback_logging_failure method found for %s. Ensure 'prometheus' is in your callbacks config.",
+                callback_name,
+            )
+
+        except Exception as e:
+            from litellm._logging import verbose_logger
+
+            verbose_logger.debug("Error in handle_callback_failure for %s: %s", callback_name, e)
+
+    async def _strip_base64_from_messages(
+        self,
+        payload: "StandardLoggingPayload",
+        max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
+    ) -> "StandardLoggingPayload":
+        """
+        Removes or redacts base64-encoded file data (e.g., PDFs, images, audio)
+        from messages and responses before sending to SQS.
+
+        Behavior:
+          • Drop entries with a 'file' key.
+          • Drop entries with type == 'file' or any non-text type.
+          • Keep untyped or text content.
+          • Recursively redact inline base64 blobs in *any* string field, at any depth.
+        """
+        raw_messages: Final[object] = payload.get("messages", [])
+        messages: Final[list[object]] = raw_messages if isinstance(raw_messages, list) else []
+        verbose_logger.debug("[CustomLogger] Stripping base64 from %s messages", len(messages))
+
+        if messages:
+            payload["messages"] = self._process_messages(messages=messages, max_depth=max_depth)
+
+        total_items = 0
+        for m in payload.get("messages", []) or []:
+            if isinstance(m, dict):
+                content = m.get("content", [])
+                if isinstance(content, list):
+                    total_items += len(content)
+
+        verbose_logger.debug("[CustomLogger] Completed base64 strip; retained %s content items", total_items)
+        return payload
+
+    def _strip_base64_from_messages_sync(
+        self,
+        payload: "StandardLoggingPayload",
+        max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
+    ) -> "StandardLoggingPayload":
+        """
+        Removes or redacts base64-encoded file data (e.g., PDFs, images, audio)
+        from messages and responses before sending to SQS.
+
+        Behavior:
+          • Drop entries with a 'file' key.
+          • Drop entries with type == 'file' or any non-text type.
+          • Keep untyped or text content.
+          • Recursively redact inline base64 blobs in *any* string field, at any depth.
+        """
+        raw_messages: Final[object] = payload.get("messages", [])
+        messages: Final[list[object]] = raw_messages if isinstance(raw_messages, list) else []
+        verbose_logger.debug("[CustomLogger] Stripping base64 from %s messages", len(messages))
+
+        if messages:
+            payload["messages"] = self._process_messages(messages=messages, max_depth=max_depth)
+
+        total_items = 0
+        for m in payload.get("messages", []) or []:
+            if isinstance(m, dict):
+                content = m.get("content", [])
+                if isinstance(content, list):
+                    total_items += len(content)
+
+        verbose_logger.debug("[CustomLogger] Completed base64 strip; retained %s content items", total_items)
+        return payload
+
+    def _redact_base64(
+        self,
+        value: object,
+        depth: int = 0,
+        max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
+    ) -> object:
+        """Recursively redact inline base64 from any nested structure with a max recursion depth limit."""
+        if depth > max_depth:
+            verbose_logger.warning("[CustomLogger] Max recursion depth %s reached while redacting base64", max_depth)
+            return "[MAX_DEPTH_REACHED]"
+
+        if isinstance(value, str):
+            if _BASE64_INLINE_PATTERN.search(value):
+                verbose_logger.debug("[CustomLogger] Redacted inline base64 string: %s...", value[:40])
+                return _BASE64_INLINE_PATTERN.sub("[BASE64_REDACTED]", value)
+            return value
+
+        if isinstance(value, list):
+            return [self._redact_base64(value=v, depth=depth + 1, max_depth=max_depth) for v in value]
+
+        if isinstance(value, dict):
+            return {k: self._redact_base64(value=v, depth=depth + 1, max_depth=max_depth) for k, v in value.items()}
+
+        return value
+
+    def _should_keep_content(self, content: object) -> bool:
+        """Return True if this content item should be retained."""
+        if not isinstance(content, dict):
+            return True
+        if "file" in content:
+            return False
+        ctype: Final = content.get("type")
+        return not (isinstance(ctype, str) and ctype != "text")
+
+    def _process_messages(
+        self,
+        messages: list[object],
+        max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
+    ) -> list[dict[str, object]]:
+        filtered_messages: Final[list[dict[str, object]]] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            contents: object = msg.get("content")
+            if isinstance(contents, list):
+                cleaned: list[object] = []
+                for c in contents:
+                    if self._should_keep_content(content=c):
+                        cleaned.append(self._redact_base64(value=c, max_depth=max_depth))
+                msg["content"] = cleaned
+            else:
+                msg["content"] = self._redact_base64(value=contents, max_depth=max_depth)
+
+            for key, val in list(msg.items()):
+                if key != "content":
+                    msg[key] = self._redact_base64(value=val, max_depth=max_depth)
+            filtered_messages.append(msg)
+        return filtered_messages

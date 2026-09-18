@@ -1,0 +1,33 @@
+---
+model: claude-3-5-sonnet-20241022
+temperature: 0.2
+max_tokens: 2000
+input:
+  schema:
+    language: string
+    task: string
+    code?: string
+    requirements?: array
+output:
+  format: text
+---
+
+You are a helpful coding assistant. {% if language %}Focus on {{language}} programming.{% endif %}
+
+Task: {{task}}
+
+{% if code %}
+Current code:
+```{{language}}
+{{code}}
+```
+{% endif %}
+
+{% if requirements %}
+Requirements:
+{% for req in requirements %}
+- {{req}}
+{% endfor %}
+{% endif %}
+
+Please provide a clear and well-documented solution.

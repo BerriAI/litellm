@@ -1,0 +1,6 @@
+include:
+  - models_file_1.yaml
+  - models_file_2.yaml
+
+litellm_settings:
+  callbacks: ["prometheus"]

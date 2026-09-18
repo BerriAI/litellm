@@ -1,0 +1,451 @@
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
+import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
+import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { KeyResponse } from "../key_team_helpers/key_list";
+import { Organization } from "../networking";
+
+vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
+  useKeys: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
+vi.mock("../key_team_helpers/fetch_available_models_team_key", () => ({
+  getModelDisplayName: vi.fn((model: string) => model),
+}));
+
+vi.mock("../templates/key_info_view", () => ({
+  default: vi.fn(({ onClose }: { onClose: () => void }) => (
+    <div>
+      <span>Key Info View</span>
+      <button onClick={onClose}>Close</button>
+    </div>
+  )),
+}));
+
+// Resolve the debounced search synchronously so typed input lands in the useKeys query within the test tick.
+vi.mock("@tanstack/react-pacer/debouncer", () => ({
+  useDebouncedValue: (value: unknown) => [value, { cancel: vi.fn(), flush: vi.fn() }],
+}));
+
+const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
+
+const KEY_HASH = "88a145505dd6e87e2ea166fcef1e4b53948dbdb32af6431dfd05ec06b571ee52";
+
+const createMockKey = (overrides: Partial<KeyResponse> = {}): KeyResponse =>
+  ({
+    token: "sk-test123",
+    token_id: "key-1",
+    key_alias: "alice_key_team1",
+    key_name: "sk-...abc",
+    user_id: "user-1",
+    organization_id: null,
+    user: { user_id: "user-1", user_email: "alice@example.com" },
+    created_at: "2024-01-01T00:00:00Z",
+    team_id: "team-1",
+    spend: 0,
+    max_budget: 100,
+    models: ["gpt-4"],
+    ...overrides,
+  }) as KeyResponse;
+
+const mockOrganization: Organization = {
+  organization_id: "org-123",
+  organization_alias: "Test Org",
+  budget_id: "budget-1",
+  metadata: {},
+  models: [],
+  spend: 0,
+  model_spend: {},
+  created_at: "",
+  created_by: "",
+  updated_at: "",
+  updated_by: "",
+  litellm_budget_table: {},
+  teams: [],
+  users: [],
+  members: [],
+};
+
+describe("TeamVirtualKeysTable", () => {
+  const defaultProps = {
+    teamId: "team-1",
+    teamAlias: "team1",
+    organization: null as Organization | null,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseKeys.mockReturnValue({
+      data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+  });
+
+  it("should call useKeys with page, pageSize, and expand user for server-side pagination", async () => {
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenCalledWith(
+        1,
+        50,
+        expect.objectContaining({
+          teamID: "team-1",
+          expand: "user",
+        }),
+      );
+    });
+  });
+
+  it("should enrich keys with organization_id when organization is provided", async () => {
+    const keyWithoutOrg = createMockKey({ organization_id: null });
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [keyWithoutOrg],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} organization={mockOrganization} />);
+
+    // Key with org_id should display in table - org-123 from organization
+    await waitFor(() => {
+      expect(screen.getByText("org-123")).toBeInTheDocument();
+    });
+  });
+
+  it("should show table with Key ID column header", async () => {
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Key ID")).toBeInTheDocument();
+    });
+  });
+
+  it("should display keys in table when data is loaded", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [
+          createMockKey({ key_alias: "alice_key_team1" }),
+          createMockKey({ token: "sk-2", token_id: "key-2", key_alias: "bob_key_team1" }),
+        ],
+        total_count: 2,
+        current_page: 1,
+        total_pages: 1,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("alice_key_team1")).toBeInTheDocument();
+    });
+    expect(screen.getByText("bob_key_team1")).toBeInTheDocument();
+  });
+
+  it("should show the current range from total_count when multiple pages exist", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [createMockKey()],
+        total_count: 100,
+        current_page: 1,
+        total_pages: 3,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 100");
+    });
+  });
+
+  it("should fetch page 2 when Next is clicked", async () => {
+    const user = userEvent.setup();
+    mockUseKeys.mockImplementation(
+      (page: number) =>
+        ({
+          data: {
+            keys: page === 1 ? [createMockKey()] : [createMockKey({ token: "sk-page2", key_alias: "page2_key" })],
+            total_count: 100,
+            current_page: page,
+            total_pages: 3,
+          } as KeysResponse,
+          isPending: false,
+          isFetching: false,
+          refetch: vi.fn(),
+        }) as any,
+    );
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 100");
+    });
+
+    await user.click(screen.getByTestId("pagination-next"));
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(2, 50, expect.objectContaining({ teamID: "team-1" }));
+    });
+  });
+
+  it("routes a sort-header click to useKeys as a server-side sort", async () => {
+    const user = userEvent.setup();
+    mockUseKeys.mockReturnValue({
+      data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useKeys>);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    expect(await screen.findByTestId("sort-header-created_at")).toBeInTheDocument();
+    await user.click(screen.getByTestId("sort-header-created_at"));
+
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ sortBy: "created_at", sortOrder: "asc" }),
+      ),
+    );
+  });
+
+  it("resets to the first page when the sort changes", async () => {
+    const user = userEvent.setup();
+    mockUseKeys.mockImplementation(
+      (page: number) =>
+        ({
+          data: {
+            keys: [createMockKey({ token: `sk-p${page}`, key_alias: `page${page}_key` })],
+            total_count: 100,
+            current_page: page,
+            total_pages: 2,
+          },
+          isPending: false,
+          isFetching: false,
+          refetch: vi.fn(),
+        }) as unknown as ReturnType<typeof useKeys>,
+    );
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await user.click(await screen.findByTestId("pagination-next"));
+    await waitFor(() => expect(mockUseKeys).toHaveBeenLastCalledWith(2, 50, expect.anything()));
+
+    await user.click(screen.getByTestId("sort-header-created_at"));
+    await waitFor(() => expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.anything()));
+  });
+
+  it("maps the User ID drawer filter to a server-side useKeys query and clears it", async () => {
+    const user = userEvent.setup();
+    mockUseKeys.mockReturnValue({
+      data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 },
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useKeys>);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await user.click(await screen.findByTestId("datatable-filters-trigger"));
+    const drawerBody = await screen.findByTestId("filter-drawer-body");
+    const userInput = within(drawerBody).getByPlaceholderText("Filter by user ID…");
+    fireEvent.change(userInput, { target: { value: "user-42" } });
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "user-42" })),
+    );
+
+    await user.click(screen.getByTestId("datatable-clear-filters"));
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: undefined })),
+    );
+  });
+
+  it("maps the Key ID drawer filter to a server-side useKeys query and clears it", async () => {
+    const user = userEvent.setup();
+    mockUseKeys.mockReturnValue({
+      data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 },
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useKeys>);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await user.click(await screen.findByTestId("datatable-filters-trigger"));
+    const drawerBody = await screen.findByTestId("filter-drawer-body");
+    fireEvent.change(within(drawerBody).getByPlaceholderText("Enter Key ID…"), { target: { value: KEY_HASH } });
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ keyHash: KEY_HASH })),
+    );
+    expect(screen.getByTestId("filter-chip-key_hash")).toHaveTextContent("Key ID");
+
+    await user.click(screen.getByTestId("datatable-clear-filters"));
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ keyHash: undefined })),
+    );
+  });
+
+  it("maps the search box to the combined alias-or-ID search rather than the key-alias filter", async () => {
+    mockUseKeys.mockReturnValue({
+      data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 },
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useKeys>);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    const searchBox = await screen.findByTestId("datatable-search");
+    expect(searchBox).toHaveAttribute("placeholder", "Search by key alias or ID…");
+    fireEvent.change(searchBox, { target: { value: KEY_HASH } });
+
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ search: KEY_HASH })),
+    );
+    const lastOptions = mockUseKeys.mock.calls.at(-1)?.[2];
+    expect(lastOptions?.selectedKeyAlias).toBeUndefined();
+    expect(lastOptions?.keyHash).toBeUndefined();
+  });
+
+  it("should show Loading keys when isPending", async () => {
+    mockUseKeys.mockReturnValue({
+      data: undefined,
+      isPending: true,
+      isFetching: true,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Loading keys...")).toBeInTheDocument();
+    });
+  });
+
+  it("should show the empty state when keys array is empty", async () => {
+    mockUseKeys.mockReturnValue({
+      data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No rows match your search or filters.")).toBeInTheDocument();
+    });
+  });
+
+  it("should open Key Info View when key is clicked", async () => {
+    mockUseKeys.mockReturnValue({
+      data: {
+        keys: [createMockKey({ token: "sk-click-me", key_alias: "clickable_key" })],
+        total_count: 1,
+        current_page: 1,
+        total_pages: 1,
+      } as KeysResponse,
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as any);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("clickable_key")).toBeInTheDocument();
+    });
+
+    const keyButton = screen.getByRole("button", { name: /sk-click-me|clickable_key/ });
+    await userEvent.click(keyButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Key Info View")).toBeInTheDocument();
+    });
+  });
+
+  describe("entity links out of the key rows", () => {
+    const renderRow = async (key: KeyResponse, organization: Organization | null = null) => {
+      mockUseKeys.mockReturnValue({
+        data: { keys: [key], total_count: 1, current_page: 1, total_pages: 1 } as KeysResponse,
+        isPending: false,
+        isFetching: false,
+        refetch: vi.fn(),
+      } as any);
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} organization={organization} />);
+      await screen.findByText(key.key_alias as string);
+      return screen.getByRole("row", { name: new RegExp(key.key_alias as string) });
+    };
+
+    it("points the Organization ID cell at the org's detail page", async () => {
+      const row = await renderRow(createMockKey({ organization_id: null }), mockOrganization);
+      expect(within(row).getByRole("link", { name: "org-123" })).toHaveAttribute(
+        "href",
+        "/ui/organizations?org=org-123",
+      );
+    });
+
+    it("points the User Email and User ID cells at the owning user's detail page", async () => {
+      const row = await renderRow(
+        createMockKey({ user_id: "user-1", user: { user_id: "user-1", user_email: "alice@example.com" } }),
+      );
+      expect(within(row).getByRole("link", { name: "alice@example.com" })).toHaveAttribute(
+        "href",
+        "/ui/users?user=user-1",
+      );
+      expect(within(row).getByRole("link", { name: "user-1" })).toHaveAttribute("href", "/ui/users?user=user-1");
+    });
+
+    it("points the Created By cell at the creator's detail page", async () => {
+      const row = await renderRow(
+        createMockKey({
+          created_by: "creator-1",
+          created_by_user: { user_id: "creator-1", user_email: "creator@example.com", user_alias: "The Creator" },
+        }),
+      );
+      expect(within(row).getByRole("link", { name: "The Creator" })).toHaveAttribute(
+        "href",
+        "/ui/users?user=creator-1",
+      );
+    });
+
+    it("leaves the default_user_id placeholder unlinked in the User ID and Created By cells", async () => {
+      const placeholder = { user_id: "default_user_id", user_email: "admin@example.com", user_alias: "Proxy Admin" };
+      const ownedAndCreatedByPlaceholder = {
+        user_id: placeholder.user_id,
+        user: placeholder,
+        created_by: placeholder.user_id,
+        created_by_user: placeholder,
+      };
+      const row = await renderRow(createMockKey(ownedAndCreatedByPlaceholder));
+      expect(within(row).getByText("Default Proxy Admin")).toBeInTheDocument();
+      expect(within(row).getByText("Proxy Admin")).toBeInTheDocument();
+      expect(within(row).queryByRole("link", { name: "Proxy Admin" })).not.toBeInTheDocument();
+      expect(within(row).queryByRole("link", { name: placeholder.user_email })).not.toBeInTheDocument();
+      expect(within(row).queryByRole("link", { name: "Default Proxy Admin" })).not.toBeInTheDocument();
+    });
+  });
+});

@@ -1,0 +1,1308 @@
+"""
+Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
+
+1. Implements a way to call /applyGuardrail endpoint for `/chat/completions` + `/v1/messages` requests on async_pre_call_hook
+2. Implements a way to call /applyGuardrail endpoint for `/chat/completions` + `/v1/messages` requests on async_post_call_success_hook
+3. Implements a way to call /applyGuardrail endpoint for `/chat/completions` + `/v1/messages` requests on async_post_call_streaming_iterator_hook
+"""
+
+import copy
+import json
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Protocol
+
+from fastapi import HTTPException
+
+from litellm._logging import verbose_proxy_logger
+from litellm.caching.caching import DualCache
+from litellm.cost_calculator import _infer_call_type
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import (
+    CallTypes,
+    CallTypesLiteral,
+    Delta,
+    ModelResponseStream,
+    StreamingChoices,
+)
+
+if TYPE_CHECKING:
+    # Imported lazily at runtime (inside the streaming hook) to avoid a
+    # module-level cyclic import with litellm.integrations.custom_guardrail.
+    from litellm.integrations.custom_guardrail import ModifyResponseException
+    from litellm.llms.base_llm.guardrail_translation.base_translation import (
+        BaseTranslation,
+        StreamingScanKey,
+    )
+
+# Call types that stream JSON-RPC events (A2A); guardrail HTTPException is emitted as in-stream error
+A2A_CALL_TYPES: Final = (CallTypes.asend_message, CallTypes.send_message)
+
+GUARDRAIL_NAME: Final = "unified_llm_guardrails"
+
+
+class _EndpointTranslation(Protocol):
+    @property
+    def process_input_messages(self) -> "Callable[..., Awaitable[dict[str, object]]]": ...
+
+    @property
+    def process_output_response(self) -> "Callable[..., Awaitable[object]]": ...
+
+    @property
+    def process_output_streaming_response(self) -> "Callable[..., Awaitable[object]]": ...
+
+    @property
+    def get_streaming_scan_key(self) -> "Callable[[Sequence[object]], StreamingScanKey | None]": ...
+
+    @property
+    def build_block_sse_chunks(self) -> "Callable[..., Sequence[bytes] | None]": ...
+
+    @property
+    def build_stream_error_items(self) -> "Callable[..., Sequence[object] | None]": ...
+
+
+def _as_endpoint_translation(translation: _EndpointTranslation) -> _EndpointTranslation:
+    return translation
+
+
+def resolve_endpoint_translation(
+    user_api_key_dict: UserAPIKeyAuth, first_response_item: object | None
+) -> "tuple[str, BaseTranslation] | None":
+    """
+    Resolve the endpoint guardrail translation for a streamed response: the
+    request route wins, falling back to inferring the call type from the first
+    response chunk (the same resolution order the streaming iterator hook uses).
+    Returns None when the call type is unresolvable or has no translation.
+    """
+    route_call_types: Final = (
+        get_call_types_for_route(user_api_key_dict.request_route) if user_api_key_dict.request_route else None
+    )
+    call_type: Final = (
+        route_call_types[0].value
+        if route_call_types
+        else (
+            _infer_call_type(call_type=None, completion_response=first_response_item)
+            if first_response_item is not None
+            else None
+        )
+    )
+    if call_type is None:
+        return None
+    try:
+        handler_cls: Final = get_guardrail_translation_mapping(CallTypes(call_type))
+    except ValueError:
+        return None
+    return call_type, handler_cls()
+
+
+def _chunk_choices(item: object) -> Sequence[object]:
+    choices: Final[Sequence[object]] = getattr(item, "choices", None) or []
+    return choices
+
+
+def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
+    return frozenset(idx for idx, held in held_chars_per_choice.items() if held > 0)
+
+
+def _is_redundant_scan(scan_key: "StreamingScanKey | None", last_scan_key: "StreamingScanKey | None") -> bool:
+    if scan_key is None:
+        return False
+    return scan_key == last_scan_key or scan_key.has_nothing_to_scan
+
+
+class _StreamTerminated(Exception):
+    """Internal signal that the incremental transform stream has already emitted
+    its terminal chunks (block message or in-stream error) and must stop."""
+
+
+def _get_a2a_request_id(responses_so_far: Sequence[object], request_data: dict) -> str | None:
+    """Get JSON-RPC request id from first A2A chunk or request body for in-stream error reporting."""
+    for item in responses_so_far:
+        if isinstance(item, dict) and "id" in item:
+            return item.get("id")
+        if isinstance(item, str):
+            try:
+                obj = json.loads(item.strip())
+                if isinstance(obj, dict) and "id" in obj:
+                    return obj.get("id")
+            except (json.JSONDecodeError, TypeError):
+                continue
+    body: Final = request_data.get("body") or request_data.get("data") or {}
+    if isinstance(body, dict):
+        return body.get("id")
+    return None
+
+
+def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapping[str, object]:
+    """Build the in-stream JSON-RPC error object for a mid-stream A2A failure.
+
+    Returned as an object, not a serialized string: the A2A endpoint owns wire
+    framing and serializes whatever the stream yields.
+    """
+    detail: Final = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": -32603,
+            "message": detail.get("error", detail.get("message", str(exc.detail))),
+            "data": {k: v for k, v in detail.items() if k not in ("error", "message")},
+        },
+    }
+
+
+def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
+    if "litellm_metadata" not in data:
+        from litellm.llms.base_llm.guardrail_translation.base_translation import (
+            BaseTranslation,
+        )
+
+        user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+        if user_metadata:
+            data["litellm_metadata"] = user_metadata
+
+
+class UnifiedLLMGuardrails(CustomLogger):
+    def __init__(
+        self,
+        **kwargs,
+    ):
+        # store kwargs as optional_params
+        self.optional_params = kwargs
+
+        super().__init__(**kwargs)
+
+        verbose_proxy_logger.debug(
+            "UnifiedLLMGuardrails initialized with optional_params: %s",
+            self.optional_params,
+        )
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: CallTypesLiteral,
+    ) -> Exception | str | dict | None:
+        """
+        Runs before the LLM API call
+        Runs on only Input
+        Use this if you want to MODIFY the input
+        """
+
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+
+        verbose_proxy_logger.debug("Running UnifiedLLMGuardrails pre-call hook")
+
+        guardrail_to_apply: Final[CustomGuardrail] = data.pop("guardrail_to_apply", None)
+        if guardrail_to_apply is None:
+            return data
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.pre_mcp_call
+
+        if guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type) is not True:
+            verbose_proxy_logger.debug(
+                "UnifiedLLMGuardrails: Pre-call scanning disabled for %s",
+                guardrail_to_apply.guardrail_name,
+            )
+            return data
+
+        mappings: Final = load_guardrail_translation_mappings()
+
+        try:
+            if CallTypes(call_type) not in mappings:
+                return data
+        except ValueError:
+            return data  # handle unmapped call types
+
+        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
+
+        _ensure_litellm_metadata(data, user_api_key_dict)
+
+        data = await endpoint_translation.process_input_messages(
+            data=data,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=data.get("litellm_logging_obj"),
+        )
+
+        if not guardrail_to_apply.records_own_guardrail_information:
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
+            )
+        return data
+
+    async def async_moderation_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, call_type: CallTypesLiteral
+    ) -> object:
+        """
+        Runs in parallel to LLM API call
+        Runs on only Input
+
+        This can NOT modify the input, only used to reject or accept a call before going to LLM API
+        """
+        verbose_proxy_logger.debug("Running UnifiedLLMGuardrails moderation hook")
+
+        guardrail_to_apply: Final[CustomGuardrail] = data.pop("guardrail_to_apply", None)
+        if guardrail_to_apply is None:
+            return data
+
+        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.during_mcp_call
+
+        if guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type) is not True:
+            verbose_proxy_logger.debug(
+                "UnifiedLLMGuardrails: Pre-call scanning disabled for %s",
+                guardrail_to_apply.guardrail_name,
+            )
+            return data
+
+        mappings: Final = load_guardrail_translation_mappings()
+        if call_type is not None and CallTypes(call_type) not in mappings:
+            return data
+
+        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
+
+        _ensure_litellm_metadata(data, user_api_key_dict)
+
+        return await endpoint_translation.process_input_messages(
+            data=data,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=data.get("litellm_logging_obj"),
+        )
+
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response,
+    ) -> object:
+        """
+        Runs on response from LLM API call
+
+        It can be used to reject a response
+
+        Uses Enkrypt AI guardrails to check the response for policy violations, PII, and injection attacks
+        """
+        # Local import avoids a module-level cyclic import with
+        # litellm.integrations.custom_guardrail.
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail_to_apply: Final[CustomGuardrail] = data.pop("guardrail_to_apply", None)
+
+        if guardrail_to_apply is None:
+            return
+
+        if guardrail_to_apply.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is not True:
+            return
+
+        verbose_proxy_logger.debug("async_post_call_success_hook response: %s", response)
+
+        call_type: CallTypesLiteral | None = None
+        if user_api_key_dict.request_route is not None:
+            call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
+            if call_types is not None and len(call_types) > 0:
+                call_type = call_types[0]
+        if call_type is None:
+            call_type = _infer_call_type(call_type=None, completion_response=response)
+
+        if call_type is None:
+            litellm_logging_obj: Final = data.get("litellm_logging_obj")
+            logging_call_type: Final = (
+                getattr(litellm_logging_obj, "call_type", None) if litellm_logging_obj is not None else None
+            )
+            if logging_call_type in (
+                CallTypes.pass_through.value,
+                CallTypes.allm_passthrough_route.value,
+                CallTypes.ocr.value,
+                CallTypes.aocr.value,
+            ):
+                call_type = logging_call_type
+
+        if call_type is None:
+            verbose_proxy_logger.warning(
+                "Guardrail '%s' selected for route '%s' but its call type could not be resolved; "
+                "skipping post-call scanning. Add the route to API_ROUTE_TO_CALL_TYPES.",
+                guardrail_to_apply.guardrail_name,
+                user_api_key_dict.request_route,
+            )
+            return response
+
+        mappings: Final = load_guardrail_translation_mappings()
+
+        if CallTypes(call_type) not in mappings:
+            verbose_proxy_logger.warning(
+                "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; "
+                "skipping post-call scanning.",
+                guardrail_to_apply.guardrail_name,
+                user_api_key_dict.request_route,
+                call_type,
+            )
+            return response
+
+        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
+
+        try:
+            response = await endpoint_translation.process_output_response(
+                response=response,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=data.get("litellm_logging_obj"),
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
+            )
+        except ModifyResponseException as e:
+            # The guardrail blocked the response. Attach the original LLM
+            # response so the endpoint handler can report its real token usage
+            # instead of discarding it (the block replaces the content, but the
+            # upstream call already consumed those tokens).
+            if e.original_response is None:
+                e.original_response = response
+            raise
+        if not guardrail_to_apply.records_own_guardrail_information:
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=guardrail_to_apply.guardrail_name
+            )
+
+        return response
+
+    async def handle_streaming_block(
+        self,
+        exc: "ModifyResponseException",
+        endpoint_translation: _EndpointTranslation,
+        stream_started: bool,
+        responses_so_far: Sequence[object],
+    ) -> AsyncGenerator[object, None]:
+        """
+        Terminate a streamed response cleanly when a guardrail blocks it.
+
+        Format-agnostic routing: delegates to the provider translation handler's
+        ``build_block_sse_chunks`` (see ``BaseTranslation.build_block_sse_chunks``
+        for the ``stream_started`` / ``responses_so_far`` contract). When the
+        format has no safe terminator the handler returns None and we re-raise
+        ``exc`` so the proxy can surface a clean error.
+        """
+        block_chunks: Final = endpoint_translation.build_block_sse_chunks(
+            exc, stream_started=stream_started, responses_so_far=responses_so_far
+        )
+        if block_chunks is None:
+            raise exc
+        for chunk in block_chunks:
+            yield chunk
+
+    @staticmethod
+    def _resolve_transform_call_type(
+        user_api_key_dict: UserAPIKeyAuth,
+        mappings: Mapping[CallTypes, type["BaseTranslation"]],
+    ) -> str | None:
+        """Resolve the call type for the incremental_diff path, or None if the
+        route is unresolvable / unsupported.
+
+        Incremental transformation needs a route we can resolve before the first
+        chunk and a handler that supports the streaming text-diff protocol (v1:
+        the OpenAI chat completions handler only). Returning None makes the caller
+        fall back to block_only.
+        """
+        from litellm.llms.openai.chat.guardrail_translation.handler import (
+            OpenAIChatCompletionsHandler,
+        )
+
+        if user_api_key_dict.request_route is None:
+            return None
+        call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
+        if not call_types:
+            return None
+        call_type: Final = call_types[0].value
+        try:
+            mapped: Final = CallTypes(call_type)
+        except ValueError:
+            return None
+        handler_cls: Final = mappings.get(mapped)
+        if handler_cls is None or not issubclass(handler_cls, OpenAIChatCompletionsHandler):
+            return None
+        return call_type
+
+    async def emit_streaming_http_error(
+        self,
+        exc: HTTPException,
+        call_type: str | None,
+        responses_so_far: Sequence[object],
+        request_data: dict,
+        endpoint_translation: _EndpointTranslation | None = None,
+        stream_started: bool = False,
+        responses_yielded: Sequence[object] | None = None,
+    ) -> AsyncGenerator[object, None]:
+        """Surface a mid-stream HTTPException (a guardrail block with the default
+        exception-on-block config, or a failed scan).
+
+        A2A call types emit an in-stream JSON-RPC error chunk. For other call
+        types, once chunks have already reached the client the HTTP status is
+        gone, so the failure is delegated to the endpoint translation's
+        ``build_stream_error_items`` and travels as an in-stream error frame in
+        that endpoint's wire format. Before the first chunk (or when the format
+        has no in-stream error frame) the exception is re-raised so the proxy
+        can report it with a real HTTP status.
+        """
+        if call_type is not None and CallTypes(call_type) in A2A_CALL_TYPES:
+            yield _a2a_jsonrpc_error_chunk(exc, _get_a2a_request_id(responses_so_far, request_data))
+            return
+        if stream_started and endpoint_translation is not None:
+            error_items: Final = endpoint_translation.build_stream_error_items(
+                exc, responses_so_far=tuple(responses_yielded) if responses_yielded is not None else None
+            )
+            if error_items is not None:
+                for error_item in error_items:
+                    yield error_item
+                return
+        raise exc
+
+    def _build_transform_chunk(
+        self,
+        *,
+        reference_chunk: object,
+        mutated_text_per_choice: dict[int, str],
+        emitted_text_per_choice: dict[int, str],
+        holdback_per_choice: dict[int, int],
+        finish_reason_per_choice: dict[int, str | None],
+        held_chars_per_choice: dict[int, int],
+        is_final: bool,
+    ) -> ModelResponseStream | None:
+        """Build the synthetic chunk carrying the newly-guardrailed deltas.
+
+        For each choice, the new delta is the mutated accumulated text past what
+        has already been emitted, minus a trailing holdback (forced to 0 on the
+        final flush). ``emitted_text_per_choice`` holds the exact bytes already
+        sent per choice and is extended in place; ``held_chars_per_choice`` is
+        updated in place with how many mutated chars per choice are still withheld
+        after this round. Returns None when there is no
+        text to emit (e.g. a tool-call-only turn) or nothing new and this is not
+        the final chunk.
+
+        Raises HTTPException(400, stream_transform_underflow) when the guardrail's
+        transform is not a forward extension of what has already been streamed
+        (shorter than, or rewrites, the already-sent prefix), since emitted bytes
+        cannot be retracted. This makes the framework fail closed rather than
+        silently leave un-transformed text on the wire; a guardrail that needs to
+        rewrite recent output must withhold it first via ``stream_holdback_chars``.
+        """
+        if not mutated_text_per_choice:
+            # Fix #4 — on the final flush a deferred finish_reason (from a mixed
+            # content+tool_calls chunk whose passthrough suppressed it) still
+            # needs to reach the client, even if the guardrail returned no text
+            # to emit. Build a terminator chunk carrying finish_reason per choice.
+            if is_final and finish_reason_per_choice:
+                terminator_choices: Final[list[StreamingChoices]] = []
+                for choice_idx, finish_reason in finish_reason_per_choice.items():
+                    if finish_reason is None:
+                        continue
+                    terminator_choices.append(
+                        StreamingChoices(
+                            index=choice_idx,
+                            delta=Delta(content="", role=None, tool_calls=None),
+                            finish_reason=finish_reason,
+                        )
+                    )
+                if terminator_choices:
+                    return ModelResponseStream(
+                        id=getattr(reference_chunk, "id", None),
+                        created=getattr(reference_chunk, "created", None),
+                        model=getattr(reference_chunk, "model", None),
+                        choices=terminator_choices,
+                    )
+            return None
+
+        deltas: Final[dict[int, str]] = {}
+        for choice_idx, text in mutated_text_per_choice.items():
+            already = emitted_text_per_choice.get(choice_idx, "")
+            if not text.startswith(already):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "stream_transform_underflow",
+                        "message": (
+                            f"Guardrail streaming transform for choice {choice_idx} is not a forward "
+                            f"extension of the {len(already)} chars already streamed to the client "
+                            "(it is shorter than, or rewrites, the emitted prefix); emitted bytes "
+                            "cannot be retracted. Withhold recent output via stream_holdback_chars "
+                            "before rewriting it."
+                        ),
+                    },
+                )
+            holdback = 0 if is_final else max(0, holdback_per_choice.get(choice_idx, 0))
+            end = max(len(already), len(text) - holdback)
+            deltas[choice_idx] = text[len(already) : end]
+            held_chars_per_choice[choice_idx] = len(text) - end
+
+        # Iterate the mutated choices (not just those in reference_chunk) so a
+        # choice with pending text is never dropped for n > 1. finish_reason is
+        # taken per choice from the accumulated map (a choice can finish in an
+        # earlier chunk than the stream's last one); tool_calls are dropped since
+        # v1 does not transform streamed tool calls (they pass through raw).
+        synthetic_choices: Final[list[StreamingChoices]] = []
+        for choice_idx in mutated_text_per_choice:
+            delta_text = deltas.get(choice_idx, "")
+            finish_reason = finish_reason_per_choice.get(choice_idx) if is_final else None
+            # Skip a choice with nothing to say: no new content and no
+            # finish_reason to deliver. This avoids emitting an empty delta for an
+            # already-finished choice (e.g. one that terminated via a passed-through
+            # tool-call chunk, which already carried its own finish_reason).
+            if not delta_text and finish_reason is None:
+                continue
+            # role="assistant" on this choice's first emitted delta only.
+            role = "assistant" if not emitted_text_per_choice.get(choice_idx) else None
+            synthetic_choices.append(
+                StreamingChoices(
+                    index=choice_idx,
+                    delta=Delta(content=delta_text, role=role, tool_calls=None),
+                    finish_reason=finish_reason,
+                )
+            )
+
+        if not synthetic_choices:
+            return None
+
+        for choice_idx in mutated_text_per_choice:
+            emitted_text_per_choice[choice_idx] = emitted_text_per_choice.get(choice_idx, "") + deltas.get(
+                choice_idx, ""
+            )
+
+        return ModelResponseStream(
+            id=getattr(reference_chunk, "id", None),
+            created=getattr(reference_chunk, "created", None),
+            model=getattr(reference_chunk, "model", None),
+            choices=synthetic_choices,
+        )
+
+    async def _emit_transform_round(
+        self,
+        *,
+        endpoint_translation: _EndpointTranslation,
+        guardrail_to_apply: CustomGuardrail,
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: str,
+        reference_chunk: object,
+        responses_so_far: Sequence[object],
+        responses_yielded: list[object],
+        emitted_text_per_choice: dict[int, str],
+        finish_reason_per_choice: dict[int, str | None],
+        held_chars_per_choice: dict[int, int],
+        is_final: bool,
+    ) -> AsyncGenerator[object, None]:
+        """Run one guardrail processing round and emit the resulting diff chunk.
+
+        Raises ``_StreamTerminated`` (after emitting the terminal block message or
+        in-stream error) when the guardrail blocks or an underflow occurs.
+        """
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+        from litellm.llms.base_llm.guardrail_translation.base_translation import (
+            StreamTransformSink,
+        )
+
+        sink: Final = StreamTransformSink()
+        try:
+            await endpoint_translation.process_output_streaming_response(
+                responses_so_far=responses_so_far,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                stream_transform_sink=sink,
+            )
+            synthetic: Final = self._build_transform_chunk(
+                reference_chunk=reference_chunk,
+                mutated_text_per_choice=sink.mutated_text_per_choice,
+                emitted_text_per_choice=emitted_text_per_choice,
+                holdback_per_choice=sink.holdback_per_choice,
+                finish_reason_per_choice=finish_reason_per_choice,
+                held_chars_per_choice=held_chars_per_choice,
+                is_final=is_final,
+            )
+        except ModifyResponseException as e:
+            if e.original_response is None:
+                e.original_response = responses_so_far
+            async for block_chunk in self.handle_streaming_block(
+                e,
+                endpoint_translation,
+                stream_started=bool(responses_yielded),
+                responses_so_far=responses_yielded,
+            ):
+                yield block_chunk
+            raise _StreamTerminated()
+        except HTTPException as e:
+            async for error_item in self.emit_streaming_http_error(
+                e,
+                call_type,
+                responses_so_far,
+                request_data,
+                endpoint_translation=endpoint_translation,
+                stream_started=bool(responses_yielded),
+                responses_yielded=responses_yielded,
+            ):
+                yield error_item
+            raise _StreamTerminated()
+
+        if synthetic is not None:
+            responses_yielded.append(synthetic)
+            yield synthetic
+
+    async def _run_incremental_transform_stream(
+        self,
+        *,
+        guardrail_to_apply: CustomGuardrail,
+        response: AsyncIterable[object],
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: str,
+        sampling_rate: int,
+        end_of_stream_only: bool,
+        mappings: Mapping[CallTypes, type["BaseTranslation"]],
+    ) -> AsyncGenerator[object, None]:
+        """Emit guardrail text transformations as new deltas on the stream.
+
+        Raw chunks are withheld and accumulated; on each sampled processing round
+        (and once at end of stream) the guardrailed accumulated text is diffed
+        against what has already been emitted and the new portion is sent as a
+        synthetic chunk. A BLOCK terminates the stream via the shared block
+        handler; an underflow surfaces as an HTTPException.
+        """
+        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
+        responses_so_far: Final[list[object]] = []
+        responses_yielded: Final[list[object]] = []
+        emitted_text_per_choice: Final[dict[int, str]] = {}
+        finish_reason_per_choice: Final[dict[int, str | None]] = {}
+        held_chars_per_choice: Final[dict[int, int]] = {}
+        chunk_counter = 0
+        last_chunk: object | None = None
+
+        def _round(reference_chunk: object, is_final: bool) -> AsyncGenerator[object, None]:
+            return self._emit_transform_round(
+                endpoint_translation=endpoint_translation,
+                guardrail_to_apply=guardrail_to_apply,
+                request_data=request_data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                reference_chunk=reference_chunk,
+                responses_so_far=responses_so_far,
+                responses_yielded=responses_yielded,
+                emitted_text_per_choice=emitted_text_per_choice,
+                finish_reason_per_choice=finish_reason_per_choice,
+                held_chars_per_choice=held_chars_per_choice,
+                is_final=is_final,
+            )
+
+        saw_tool_calls = False
+        saw_text_content = False
+
+        try:
+            async for item in response:
+                # v1 transforms only text. A chunk carrying tool_calls is passed
+                # through raw so function-calling turns are not dropped, but ONLY
+                # its tool-call fields are forwarded: content is stripped so any
+                # response text (in the same delta, or in another choice of an n>1
+                # chunk) can never bypass the transform. The original chunk is kept
+                # in responses_so_far so its text is still accumulated + redacted +
+                # emitted as synthetic deltas, and so the guardrail inspects the
+                # assembled tool calls at end of stream (see the block inspection
+                # below), matching block_only. finish_reason rides on the raw
+                # tool-only chunk, so it is not recorded for the text flush.
+                if self._chunk_has_tool_calls(item):
+                    saw_tool_calls = True
+                    responses_so_far.append(item)
+                    last_chunk = item
+                    # Fix #3 — flush accumulated text BEFORE the tool-call
+                    # passthrough. Without this, a stream of text chunks that
+                    # hasn't yet hit a sampled round can be trailed by a
+                    # tool-call chunk carrying finish_reason="tool_calls"; an
+                    # SSE-compliant client stops reading at that finish_reason
+                    # and drops the end-of-stream text flush that would follow.
+                    if saw_text_content:
+                        async for out in _round(item, is_final=False):
+                            yield out
+                    # Fix #1 — pass finish_reason_per_choice into the
+                    # passthrough so a mixed content+tool_call chunk defers its
+                    # finish_reason to the final text terminator (see the
+                    # _tool_call_passthrough_chunk docstring).
+                    tool_only = self._tool_call_passthrough_chunk(
+                        item,
+                        finish_reason_per_choice=finish_reason_per_choice,
+                        held_choices=_held_choices(held_chars_per_choice),
+                    )
+                    responses_yielded.append(tool_only)
+                    yield tool_only
+                    continue
+
+                if self._is_trailing_metadata_chunk(item):
+                    responses_so_far.append(item)
+                    continue
+
+                chunk_counter += 1
+                responses_so_far.append(item)
+                last_chunk = item
+                self._record_finish_reasons(item, finish_reason_per_choice)
+                if self._chunk_carries_text(item):
+                    saw_text_content = True
+                # Skip the sampled round for a terminal chunk: the end-of-stream
+                # flush below processes it once with holdback forced to 0, so a
+                # sampled round here would guardrail the same content twice.
+                if (
+                    not end_of_stream_only
+                    and not self._chunk_has_finish_reason(item)
+                    and chunk_counter % sampling_rate == 0
+                ):
+                    async for out in _round(item, is_final=False):
+                        yield out
+
+            # v1 does not transform streamed tool calls, but they must still go
+            # through the guardrail's block decision. Run the block_only inspection
+            # over the full assembled response so tool calls cannot bypass it.
+            #
+            # Pass a deep copy of responses_so_far — the block path routes through
+            # ``_process_streaming_block_only`` which mutates ``delta.content``
+            # in-place on the chunk objects it receives. For an n>1 chunk carrying
+            # text on one choice and tool_calls (with finish_reason) on another,
+            # ``has_stream_ended`` reads ``choices[0]`` alone and can miss the
+            # terminal signal, letting the block path rewrite the raw accumulator.
+            # The subsequent final ``_round`` would then re-read the already-mutated
+            # text, producing double-application for a non-idempotent guardrail or a
+            # ``stream_transform_underflow`` 400 from mismatched prefixes. A shallow
+            # list copy wouldn't help — the mutation is on the chunk objects
+            # themselves — so we deepcopy.
+            if saw_tool_calls:
+                async for out in self._inspect_full_response_for_block(
+                    endpoint_translation=endpoint_translation,
+                    guardrail_to_apply=guardrail_to_apply,
+                    request_data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                    responses_so_far=copy.deepcopy(responses_so_far),
+                    responses_yielded=responses_yielded,
+                ):
+                    yield out
+
+            async for out in self._emit_stream_tail(
+                last_chunk=last_chunk,
+                final_round=_round,
+                responses_so_far=responses_so_far,
+                responses_yielded=responses_yielded,
+            ):
+                yield out
+        except _StreamTerminated:
+            return
+
+    async def _emit_stream_tail(
+        self,
+        *,
+        last_chunk: object | None,
+        final_round: Callable[[object, bool], AsyncGenerator[object, None]],
+        responses_so_far: Sequence[object],
+        responses_yielded: list[object],
+    ) -> AsyncGenerator[object, None]:
+        """Flush the held text with holdback 0, then replay metadata-only chunks
+        (usage) so they land after the text and its finish_reason, as upstream sent them."""
+        if last_chunk is not None:
+            async for out in final_round(last_chunk, True):
+                yield out
+        for trailing in self._trailing_metadata_chunks(responses_so_far):
+            responses_yielded.append(trailing)
+            yield trailing
+
+    async def _inspect_full_response_for_block(
+        self,
+        *,
+        endpoint_translation: _EndpointTranslation,
+        guardrail_to_apply: CustomGuardrail,
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        responses_so_far: Sequence[object],
+        responses_yielded: Sequence[object],
+    ) -> AsyncGenerator[object, None]:
+        """Run the block-only guardrail inspection over the full assembled
+        response (text + tool calls) so nothing bypasses the block decision.
+
+        The guardrail's returned transforms are discarded here (v1 does not
+        transform tool calls); only its block decision matters. A block is
+        surfaced the same way as elsewhere: ModifyResponseException terminates the
+        stream via the shared block handler; a GenericGuardrailAPI block raises and
+        propagates, matching block_only.
+        """
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+
+        try:
+            await endpoint_translation.process_output_streaming_response(
+                responses_so_far=responses_so_far,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                stream_transform_sink=None,
+            )
+        except ModifyResponseException as e:
+            if e.original_response is None:
+                e.original_response = responses_so_far
+            async for block_chunk in self.handle_streaming_block(
+                e,
+                endpoint_translation,
+                stream_started=bool(responses_yielded),
+                responses_so_far=responses_yielded,
+            ):
+                yield block_chunk
+            raise _StreamTerminated()
+
+    @staticmethod
+    def _chunk_has_tool_calls(item: object) -> bool:
+        for choice in _chunk_choices(item):
+            delta = getattr(choice, "delta", None)
+            if getattr(delta, "tool_calls", None):
+                return True
+        return False
+
+    @classmethod
+    def _is_trailing_metadata_chunk(cls, item: object) -> bool:
+        """True for a chunk that carries only stream metadata (no choices, or a
+        ``usage`` chunk whose deltas are empty); such chunks are replayed after
+        the final text flush instead of being folded into the transform."""
+        if not _chunk_choices(item):
+            return True
+        return (
+            getattr(item, "usage", None) is not None
+            and not cls._chunk_carries_text(item)
+            and not cls._chunk_has_finish_reason(item)
+        )
+
+    @classmethod
+    def _trailing_metadata_chunks(cls, items: Sequence[object]) -> tuple[object, ...]:
+        return tuple(item for item in items if cls._is_trailing_metadata_chunk(item))
+
+    @staticmethod
+    def _chunk_carries_text(item: object) -> bool:
+        """True if any choice in this chunk has non-empty string ``delta.content``."""
+        for choice in _chunk_choices(item):
+            delta = getattr(choice, "delta", None)
+            content = getattr(delta, "content", None)
+            if isinstance(content, str) and content != "":
+                return True
+        return False
+
+    @staticmethod
+    def _tool_call_passthrough_chunk(
+        item: object,
+        finish_reason_per_choice: "dict[int, str | None] | None" = None,
+        held_choices: frozenset[int] = frozenset(),
+    ) -> ModelResponseStream:
+        """Copy of a chunk carrying tool calls with all text content stripped.
+
+        Only tool_calls, role and finish_reason are forwarded; content is set to
+        None so response text can never be delivered raw (it flows through the
+        transform instead). Applies per choice so an n>1 chunk mixing a text
+        choice and a tool-call choice does not leak the text choice.
+
+        For a choice that carries BOTH text content AND tool_calls, or whose earlier
+        text is still withheld (``held_choices``), ``finish_reason`` is suppressed on
+        the passthrough and recorded on
+        ``finish_reason_per_choice`` (when provided) so the final synthetic text
+        chunk delivers it. Emitting the passthrough's ``finish_reason`` before the
+        text flush would let a spec-compliant SSE client stop reading at
+        ``finish_reason`` and silently drop the guardrailed text, defeating the
+        redaction purpose.
+        """
+        synthetic_choices: Final[list[StreamingChoices]] = []
+        for choice in _chunk_choices(item):
+            delta = getattr(choice, "delta", None)
+            idx = getattr(choice, "index", 0) or 0
+            original_finish = getattr(choice, "finish_reason", None)
+            has_text = isinstance(getattr(delta, "content", None), str) and getattr(delta, "content", "") != ""
+            text_pending = has_text or idx in held_choices
+            if text_pending and original_finish is not None and finish_reason_per_choice is not None:
+                finish_reason_per_choice[idx] = original_finish
+                passthrough_finish: str | None = None
+            else:
+                passthrough_finish = original_finish
+            synthetic_choices.append(
+                StreamingChoices(
+                    index=idx,
+                    delta=Delta(
+                        content=None,
+                        role=getattr(delta, "role", None),
+                        tool_calls=getattr(delta, "tool_calls", None),
+                    ),
+                    finish_reason=passthrough_finish,
+                )
+            )
+        return ModelResponseStream(
+            id=getattr(item, "id", None),
+            created=getattr(item, "created", None),
+            model=getattr(item, "model", None),
+            choices=synthetic_choices,
+        )
+
+    @staticmethod
+    def _record_finish_reasons(item: object, finish_reason_per_choice: dict[int, str | None]) -> None:
+        for choice in _chunk_choices(item):
+            finish_reason = getattr(choice, "finish_reason", None)
+            if finish_reason is not None:
+                finish_reason_per_choice[getattr(choice, "index", 0) or 0] = finish_reason
+
+    @staticmethod
+    def _chunk_has_finish_reason(item: object) -> bool:
+        choices: Final = _chunk_choices(item)
+        return any(getattr(choice, "finish_reason", None) is not None for choice in choices)
+
+    def resolve_streaming_flag(self, guardrail_to_apply: CustomGuardrail | None, name: str, default: object) -> object:
+        """Streaming flag resolution order (later wins): default < guardrail
+        attribute < guardrail_config dict < this callback's optional_params."""
+        attribute_value: Final = default if guardrail_to_apply is None else getattr(guardrail_to_apply, name, default)
+        config: Final = None if guardrail_to_apply is None else getattr(guardrail_to_apply, "guardrail_config", None)
+        config_value: Final = config.get(name, attribute_value) if isinstance(config, dict) else attribute_value
+        return self.optional_params.get(name, config_value)
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncIterable[object],
+        request_data: dict,
+        guardrail_to_apply: CustomGuardrail | None = None,
+        buffer_until_moderated_default: bool = False,
+    ) -> AsyncGenerator[Any, None]:
+        """
+        Passes the entire stream to the guardrail
+
+        This is useful for guardrails that need to see the entire response, such as PII masking.
+
+        See Aim guardrail implementation for an example - https://github.com/BerriAI/litellm/blob/d0e022cfacb8e9ebc5409bb652059b6fd97b45c0/litellm/proxy/guardrails/guardrail_hooks/aim.py#L168
+
+        Triggered by mode: 'post_call'
+
+        Supports sampling_rate parameter to control how often chunks are processed.
+        sampling_rate=1 means every chunk, sampling_rate=5 means every 5th chunk, etc.
+        """
+
+        # Local import avoids a module-level cyclic import with
+        # litellm.integrations.custom_guardrail.
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+
+        if guardrail_to_apply is None:
+            guardrail_to_apply = request_data.pop("guardrail_to_apply", None)
+
+        def _streaming_flag(name: str, default: object) -> Any:
+            return self.resolve_streaming_flag(guardrail_to_apply, name, default)
+
+        sampling_rate: Final[int] = _streaming_flag("streaming_sampling_rate", 5)
+        # Only apply the guardrail at end of stream (not per chunk).
+        end_of_stream_only: bool = _streaming_flag("streaming_end_of_stream_only", False)
+        # "block_only" (default) drops guardrail text rewrites on the streaming
+        # path; "incremental_diff" emits them as synthetic deltas (see
+        # _run_incremental_transform_stream).
+        streaming_transform_mode: Final[str] = _streaming_flag("streaming_transform_mode", "block_only")
+        # Withhold every chunk until end-of-stream moderation passes, then
+        # release the original chunks (clean) or only the block message
+        # (blocked) -- moderating the whole response *before* any content
+        # reaches the client. Only safe for allow/block guardrails: on
+        # release the original chunks are replayed as-is, so a
+        # content-rewriting guardrail (e.g. PII masking) would leak
+        # unredacted content. Guarded below via mask_response_content.
+        buffer_until_moderated: bool = _streaming_flag(
+            "streaming_buffer_until_moderated", buffer_until_moderated_default
+        )
+        release_on_scan: Final[bool] = _streaming_flag("streaming_buffer_release_on_scan", False)
+
+        if (
+            buffer_until_moderated
+            and guardrail_to_apply is not None
+            and getattr(guardrail_to_apply, "mask_response_content", False)
+        ):
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails: streaming_buffer_until_moderated is disabled for %s "
+                "because mask_response_content=True -- buffered replay would release "
+                "unredacted original chunks instead of the moderated output.",
+                guardrail_to_apply.guardrail_name,
+            )
+            buffer_until_moderated = False
+
+        if buffer_until_moderated and not release_on_scan:
+            end_of_stream_only = True
+
+        if guardrail_to_apply is None:
+            async for item in response:
+                yield item
+            return
+
+        event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.post_call
+        if guardrail_to_apply.should_run_guardrail(data=request_data, event_type=event_type) is not True:
+            verbose_proxy_logger.debug(
+                "UnifiedLLMGuardrails: Post-call streaming scanning disabled for %s",
+                guardrail_to_apply.guardrail_name,
+            )
+            async for item in response:
+                yield item
+            return
+
+        mappings: Final = load_guardrail_translation_mappings()
+
+        # Streaming text transformation (incremental_diff) diverges enough from the
+        # block_only path that it runs as its own iterator. It requires a route we
+        # can resolve up front to an OpenAI-chat handler (the only supported v1
+        # surface); anything else falls back to the block_only behavior below.
+        if streaming_transform_mode == "incremental_diff":
+            transform_call_type: Final = self._resolve_transform_call_type(
+                user_api_key_dict=user_api_key_dict,
+                mappings=mappings,
+            )
+            if transform_call_type is not None:
+                async for transformed_item in self._run_incremental_transform_stream(
+                    guardrail_to_apply=guardrail_to_apply,
+                    response=response,
+                    request_data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=transform_call_type,
+                    sampling_rate=sampling_rate,
+                    end_of_stream_only=end_of_stream_only,
+                    mappings=mappings,
+                ):
+                    yield transformed_item
+                return
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails: streaming_transform_mode=incremental_diff is only supported "
+                "for the OpenAI chat completions streaming path with a resolvable request route; "
+                "falling back to block_only for %s",
+                getattr(guardrail_to_apply, "guardrail_name", None),
+            )
+
+        # Infer call type from first chunk
+        call_type = None
+        chunk_counter = 0
+        responses_so_far: Final[list[object]] = []
+        responses_yielded: Final[list[object]] = []
+        withheld_items: Final[list[object]] = []  # mutable-ok: streaming window must be released incrementally
+        pending_end_of_stream_items: Final[list[object]] = []
+        # Whether any real response chunk has been forwarded to the client.
+        # Drives how a block terminates the stream: continue the in-progress
+        # message (True) vs emit a standalone block message (False, buffered).
+        chunks_yielded = False
+        last_scan_key: StreamingScanKey | None = None  # rebind-ok: replaced after every scan round
+        tool_calls_in_flight = False  # rebind-ok: tracks the latest scan key's unscanned tool calls
+
+        async for item in response:
+            chunk_counter += 1
+            responses_so_far.append(item)
+
+            # Infer call type from first chunk if not already done
+            if call_type is None and user_api_key_dict.request_route is not None:
+                call_types = get_call_types_for_route(user_api_key_dict.request_route)
+                if call_types is not None:
+                    call_type = call_types[0].value
+
+            if call_type is None:
+                call_type = _infer_call_type(call_type=None, completion_response=item)
+
+            # If call type not supported, just pass through all chunks
+            if call_type is None or CallTypes(call_type) not in mappings:
+                yield item
+                async for remaining_item in response:
+                    yield remaining_item
+                return
+
+            # If end_of_stream_only mode, yield chunks without processing.
+            # When buffering, withhold them instead -- they are released (or
+            # replaced by the block message) only after end-of-stream
+            # moderation runs below.
+            if end_of_stream_only:
+                if not buffer_until_moderated:
+                    endpoint_translation = mappings[CallTypes(call_type)]()
+                    stream_has_ended = hasattr(
+                        endpoint_translation, "_check_streaming_has_ended"
+                    ) and endpoint_translation._check_streaming_has_ended(responses_so_far)
+                    if pending_end_of_stream_items or stream_has_ended:
+                        pending_end_of_stream_items.append(item)
+                    else:
+                        chunks_yielded = True
+                        responses_yielded.append(item)
+                        yield item
+                else:
+                    withheld_items.append(item)
+                continue
+
+            # Process chunk based on sampling rate
+            if buffer_until_moderated:
+                withheld_items.append(item)
+            if chunk_counter % sampling_rate == 0:
+                endpoint_translation = mappings[CallTypes(call_type)]()
+                scan_key = endpoint_translation.get_streaming_scan_key(responses_so_far)
+                if scan_key is not None:
+                    tool_calls_in_flight = scan_key.tool_calls_in_flight
+                hold_window = buffer_until_moderated and (scan_key is None or tool_calls_in_flight)
+                if _is_redundant_scan(scan_key, last_scan_key):
+                    verbose_proxy_logger.debug(
+                        "Skipping streaming chunk %s for guardrail %s: nothing new to scan since the last round",
+                        chunk_counter,
+                        guardrail_to_apply.guardrail_name,
+                    )
+                    if buffer_until_moderated:
+                        if hold_window:
+                            continue
+                        for withheld_item in withheld_items:
+                            chunks_yielded = True
+                            responses_yielded.append(withheld_item)
+                            yield withheld_item
+                        withheld_items.clear()
+                    else:
+                        chunks_yielded = True
+                        responses_yielded.append(item)
+                        yield item
+                    continue
+
+                verbose_proxy_logger.debug(
+                    "Processing streaming chunk %s (sampling_rate=%s) with guardrail %s",
+                    chunk_counter,
+                    sampling_rate,
+                    guardrail_to_apply.guardrail_name,
+                )
+
+                original_items = (
+                    tuple(copy.deepcopy(withheld_items)) if buffer_until_moderated else (copy.deepcopy(item),)
+                )
+
+                try:
+                    await endpoint_translation.process_output_streaming_response(
+                        responses_so_far=responses_so_far,
+                        guardrail_to_apply=guardrail_to_apply,
+                        litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=request_data,
+                    )
+                except ModifyResponseException as e:
+                    if e.original_response is None:
+                        e.original_response = responses_so_far
+                    # Guardrail blocked the response mid-stream. Emit a clean
+                    # terminating SSE sequence delivering the block message
+                    # instead of letting the exception propagate into a bare
+                    # `data: {"error": ...}` blob (which truncates the stream).
+                    # Chunks have already been forwarded here, so the block
+                    # continues the in-progress message (stream_started=True).
+                    # The current chunk was appended to responses_so_far but not
+                    # yet yielded, so exclude it: the continuation must reflect
+                    # only what the client has actually received.
+                    async for block_chunk in self.handle_streaming_block(
+                        e,
+                        endpoint_translation,
+                        stream_started=chunks_yielded,
+                        responses_so_far=responses_yielded,
+                    ):
+                        yield block_chunk
+                    return
+                except HTTPException as e:
+                    # Response already started (we already yielded chunks); cannot send 400.
+                    async for error_item in self.emit_streaming_http_error(
+                        e,
+                        call_type,
+                        responses_so_far,
+                        request_data,
+                        endpoint_translation=endpoint_translation,
+                        stream_started=chunks_yielded,
+                        responses_yielded=responses_yielded,
+                    ):
+                        yield error_item
+                    return
+                if scan_key is not None:
+                    last_scan_key = scan_key
+                if hold_window:
+                    verbose_proxy_logger.debug(
+                        "Holding %s buffered chunks for guardrail %s: this round could not scan the whole window",
+                        len(withheld_items),
+                        guardrail_to_apply.guardrail_name,
+                    )
+                    withheld_items[:] = original_items
+                    continue
+                for original_item in original_items:
+                    chunks_yielded = True
+                    responses_yielded.append(original_item)
+                    yield original_item
+                withheld_items.clear()
+            else:
+                if not buffer_until_moderated:
+                    chunks_yielded = True
+                    responses_yielded.append(item)
+                    yield item
+
+        # Stream has ended - do final processing with all collected chunks
+        if call_type is not None and CallTypes(call_type) in mappings:
+            verbose_proxy_logger.debug(
+                "Processing final streaming response with all %s chunks for guardrail %s",
+                len(responses_so_far),
+                guardrail_to_apply.guardrail_name,
+            )
+
+            endpoint_translation = mappings[CallTypes(call_type)]()
+
+            buffered_items: Final = (
+                tuple(copy.deepcopy(withheld_items))
+                if buffer_until_moderated and release_on_scan and not end_of_stream_only
+                else tuple(withheld_items)
+                if buffer_until_moderated
+                else None
+            )
+            end_scan_key: Final = endpoint_translation.get_streaming_scan_key(responses_so_far)
+            if _is_redundant_scan(end_scan_key, last_scan_key):
+                verbose_proxy_logger.debug(
+                    "Skipping end-of-stream scan for guardrail %s: the last sampled round already scanned it all",
+                    guardrail_to_apply.guardrail_name,
+                )
+                for buffered_item in buffered_items or ():
+                    yield buffered_item
+                for pending_item in pending_end_of_stream_items:
+                    responses_yielded.append(pending_item)
+                    yield pending_item
+                return
+
+            try:
+                await endpoint_translation.process_output_streaming_response(
+                    responses_so_far=responses_so_far,
+                    guardrail_to_apply=guardrail_to_apply,
+                    litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                )
+                # Moderation passed: release the withheld original chunks.
+                if buffered_items is not None:
+                    for buffered_item in buffered_items:
+                        yield buffered_item
+                for pending_item in pending_end_of_stream_items:
+                    responses_yielded.append(pending_item)
+                    yield pending_item
+            except ModifyResponseException as e:
+                if e.original_response is None:
+                    e.original_response = responses_so_far
+                # Block detected during end-of-stream processing. Emit a clean
+                # terminating SSE sequence with the block message rather than
+                # propagating into a bare error blob that truncates the stream.
+                # The withheld original chunks are never released.
+                async for block_chunk in self.handle_streaming_block(
+                    e,
+                    endpoint_translation,
+                    stream_started=bool(responses_yielded),
+                    responses_so_far=responses_yielded,
+                ):
+                    yield block_chunk
+                return
+            except HTTPException as e:
+                async for error_item in self.emit_streaming_http_error(
+                    e,
+                    call_type,
+                    responses_so_far,
+                    request_data,
+                    endpoint_translation=endpoint_translation,
+                    stream_started=bool(responses_yielded),
+                    responses_yielded=responses_yielded,
+                ):
+                    yield error_item

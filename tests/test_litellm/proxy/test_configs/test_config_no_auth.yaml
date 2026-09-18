@@ -1,0 +1,6 @@
+model_list:
+- litellm_params:
+    model: hosted_vllm/embed_model
+  model_info:
+    description: this is a test embedding hosted_vllm model
+  model_name: vllm_embed_model

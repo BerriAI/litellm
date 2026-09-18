@@ -1,0 +1,5 @@
+include:
+  - included_models.yaml
+
+litellm_settings:
+  callbacks: ["prometheus"]

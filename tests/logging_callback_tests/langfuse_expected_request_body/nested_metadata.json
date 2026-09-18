@@ -1,0 +1,105 @@
+{
+    "batch": [
+        {
+            "id": "44f179be-e3b9-486f-986f-030fc50614f0",
+            "type": "trace-create",
+            "body": {
+                "id": "litellm-test-8a04085c-1859-48fa-9fd8-1ec487fe455e",
+                "timestamp": "2025-01-22T17:55:28.854927Z",
+                "name": "litellm-acompletion",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hello!"
+                        }
+                    ]
+                },
+                "output": {
+                    "content": "Hello! How can I assist you today?",
+                    "role": "assistant",
+                    "tool_calls": null,
+                    "function_call": null,
+                    "provider_specific_fields": null
+                },
+                "tags": []
+            },
+            "timestamp": "2025-01-22T17:55:28.855187Z"
+        },
+        {
+            "id": "2175ee64-58a3-41ab-96df-405b76695f5f",
+            "type": "generation-create",
+            "body": {
+                "traceId": "litellm-test-8a04085c-1859-48fa-9fd8-1ec487fe455e",
+                "name": "litellm-acompletion",
+                "startTime": "2025-01-22T09:55:28.852503-08:00",
+                "metadata": {
+                    "a": {
+                        "nested_a": 1
+                    },
+                    "b": {
+                        "nested_b": 2
+                    },
+                    "hidden_params": {
+                        "model_id": null,
+                        "cache_key": null,
+                        "api_base": "https://api.openai.com",
+                        "response_cost": 5.4999999999999995e-05,
+                        "additional_headers": {},
+                        "litellm_overhead_time_ms": null,
+                        "batch_models": null,
+                        "litellm_model_name": "gpt-3.5-turbo",
+                        "usage_object": null
+                    },
+                    "litellm_response_cost": 5.4999999999999995e-05,
+                    "cache_hit": false,
+                    "requester_metadata": {}
+                },
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Hello!"
+                        }
+                    ]
+                },
+                "output": {
+                    "content": "Hello! How can I assist you today?",
+                    "role": "assistant",
+                    "tool_calls": null,
+                    "function_call": null,
+                    "provider_specific_fields": null
+                },
+                "level": "DEFAULT",
+                "id": "time-09-55-28-852503_chatcmpl-131cf0da-a47b-4cd1-850b-50fa077362ac",
+                "endTime": "2025-01-22T09:55:28.853979-08:00",
+                "completionStartTime": "2025-01-22T09:55:28.853979-08:00",
+                "model": "gpt-3.5-turbo",
+                "modelParameters": {
+                    "extra_body": "{}"
+                },
+                "usage": {
+                    "input": 10,
+                    "output": 20,
+                    "unit": "TOKENS",
+                    "totalCost": 3.5e-05
+                },
+                "usageDetails": {
+                    "input": 10,
+                    "output": 20,
+                    "total": 30,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0
+                }
+            },
+            "timestamp": "2025-01-22T17:55:28.855732Z"
+        }
+    ],
+    "metadata": {
+        "batch_size": 2,
+        "sdk_integration": "litellm",
+        "sdk_name": "python",
+        "sdk_version": "2.44.1",
+        "public_key": "pk-lf-e02aaea3-8668-4c9f-8c69-771a4ea1f5c9"
+    }
+}

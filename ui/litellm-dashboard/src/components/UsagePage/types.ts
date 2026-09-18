@@ -1,0 +1,120 @@
+export interface SpendMetrics {
+  spend: number;
+  flat_cost?: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  api_requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  compression_saved_tokens?: number;
+  compression_savings_spend?: number;
+  prompt_caching_savings_spend?: number;
+  gateway_injected_caching_savings_spend?: number;
+  autorouter_savings_spend?: number;
+  total_response_time_ms?: number;
+  timed_requests?: number;
+}
+
+export type DailyData = {
+  date: string;
+  metrics: SpendMetrics;
+  breakdown: BreakdownMetrics;
+};
+
+export interface BreakdownMetrics {
+  models: { [key: string]: MetricWithMetadata };
+  model_groups: { [key: string]: MetricWithMetadata };
+  mcp_servers: { [key: string]: MetricWithMetadata };
+  providers: { [key: string]: MetricWithMetadata };
+  api_keys: { [key: string]: KeyMetricWithMetadata };
+  entities: { [key: string]: MetricWithMetadata };
+  endpoints?: { [key: string]: MetricWithMetadata };
+}
+
+export interface MetricWithMetadata {
+  metrics: SpendMetrics;
+  metadata: object;
+  api_key_breakdown: { [key: string]: KeyMetricWithMetadata };
+}
+
+export interface KeyMetricWithMetadata {
+  metrics: SpendMetrics;
+  metadata: KeyMetadata;
+}
+
+export interface KeyMetadata {
+  key_alias: string | null;
+  team_id: string | null;
+  user_id?: string | null;
+  user_email?: string | null;
+  tags?: { tag: string; usage: number }[];
+}
+
+export interface TopApiKeyData {
+  api_key: string;
+  key_alias: string | null;
+  team_id: string | null;
+  spend: number;
+  requests: number;
+  tokens: number;
+}
+
+export interface TopModelData {
+  model: string;
+  spend: number;
+  requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  tokens: number;
+}
+
+export interface ModelActivityData {
+  label: string;
+  key_metadata?: KeyMetadata;
+  total_requests: number;
+  total_successful_requests: number;
+  total_failed_requests: number;
+  total_cache_read_input_tokens: number;
+  total_cache_creation_input_tokens: number;
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_spend: number;
+  total_response_time_ms?: number;
+  total_timed_requests?: number;
+  top_api_keys: TopApiKeyData[];
+  top_models: TopModelData[];
+  daily_data: {
+    date: string;
+    metrics: {
+      prompt_tokens: number;
+      completion_tokens: number;
+      total_tokens: number;
+      api_requests: number;
+      spend: number;
+      successful_requests: number;
+      failed_requests: number;
+      cache_read_input_tokens: number;
+      cache_creation_input_tokens: number;
+      avg_response_time_ms?: number | null;
+    };
+  }[];
+}
+
+export interface EntityMetadata {
+  alias: string;
+  id: string;
+}
+
+export interface EntityMetricWithMetadata {
+  metrics: SpendMetrics;
+  metadata: EntityMetadata;
+}
+
+export interface TagUsage {
+  tag: string;
+  usage: number;
+}

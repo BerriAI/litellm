@@ -1,0 +1,281 @@
+from collections.abc import Mapping
+from typing import Final, Literal
+from urllib.parse import urlparse
+
+import litellm
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.router import GenericLiteLLMParams
+
+AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-Subscription-Key"]
+AZURE_OPENAI_V1_HOST_SUFFIXES: Final = (".services.ai.azure.com", ".openai.azure.com")
+
+
+def is_foundry_model_inference_base(api_base: str) -> bool:
+    parsed: Final = urlparse(api_base)
+    host: Final = parsed.hostname
+    if host is None or not host.endswith(".services.ai.azure.com"):
+        return False
+    return "/openai/deployments" not in parsed.path
+
+
+def is_azure_openai_v1_host(api_base: str | None) -> bool:
+    host: Final = urlparse(api_base).hostname if api_base else None
+    return host is not None and host.endswith(AZURE_OPENAI_V1_HOST_SUFFIXES)
+
+
+def api_key_header_for_base(api_base: str | None) -> AzureAIApiKeyHeader:
+    return "api-key" if is_azure_openai_v1_host(api_base) else "Authorization"
+
+
+def get_azure_ai_entra_token(litellm_params: Mapping[str, object] | None = None) -> str | None:
+    """
+    Resolve an Entra ID / OAuth access token for an Azure AI Foundry deployment.
+
+    Accepts the same credential set as the `azure` provider: service principal
+    (`tenant_id` / `client_id` / `client_secret`), a pre-fetched `azure_ad_token`, an OIDC
+    federated token, username/password, or `DefaultAzureCredential` / managed identity.
+    """
+    from litellm.llms.azure.common_utils import get_azure_ad_token
+
+    params = GenericLiteLLMParams.model_validate(litellm_params) if litellm_params else GenericLiteLLMParams()
+
+    return get_azure_ad_token(params)
+
+
+def get_azure_ai_auth_headers(
+    api_key: str | None,
+    litellm_params: Mapping[str, object] | None = None,
+    api_key_header: AzureAIApiKeyHeader = "Authorization",
+    api_key_env_var: str = "AZURE_AI_API_KEY",
+) -> Mapping[str, str]:
+    """
+    Build the auth headers for an Azure AI Foundry route.
+
+    Prefers the API key when one is configured, and otherwise falls back to Entra ID / OAuth,
+    sending the access token as a bearer token.
+    """
+    if api_key:
+        return {api_key_header: f"Bearer {api_key}" if api_key_header == "Authorization" else api_key}
+
+    azure_ad_token = get_azure_ai_entra_token(litellm_params=litellm_params)
+    if azure_ad_token:
+        return {"Authorization": f"Bearer {azure_ad_token}"}
+
+    raise ValueError(
+        f"Missing Azure AI credentials - set an API key (`api_key` or {api_key_env_var}), or Entra ID / OAuth "
+        "credentials (`tenant_id` + `client_id` + `client_secret`, `azure_ad_token`, an OIDC token, or a managed "
+        "identity with `litellm.enable_azure_ad_token_refresh = True`)"
+    )
+
+
+AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: Final = "azure_model_router_selected_model"
+
+
+def azure_ai_supports_native_responses(model: str | None, api_base: str | None) -> bool:
+    resolved_base: Final = AzureFoundryModelInfo.get_api_base(api_base)
+    if resolved_base is not None and not is_azure_openai_v1_host(resolved_base):
+        return False
+    if model is None:
+        return True
+    if "claude" in model.lower():
+        return False
+    return AzureFoundryModelInfo.get_azure_ai_route(model) == "default"
+
+
+class AzureFoundryModelInfo(BaseLLMModelInfo):
+    """Model info for Azure AI / Azure Foundry models."""
+
+    def __init__(self, model: str | None = None):
+        self._model = model
+
+    @staticmethod
+    def get_azure_ai_route(model: str) -> Literal["agents", "model_router", "default"]:
+        """
+        Get the Azure AI route for the given model.
+
+        Similar to BedrockModelInfo.get_bedrock_route().
+
+        Supported routes:
+        - agents: azure_ai/agents/<agent_id>
+        - model_router: azure_ai/model_router/<actual-model-name> or models with "model-router"/"model_router" in name
+        - default: standard models
+        """
+        if "agents/" in model:
+            return "agents"
+        # Detect model router by prefix (model_router/<name>) or by name containing "model-router"/"model_router"
+        model_lower: Final = model.lower()
+        if (
+            "model_router/" in model_lower
+            or "model-router/" in model_lower
+            or "model-router" in model_lower
+            or "model_router" in model_lower
+        ):
+            return "model_router"
+        return "default"
+
+    @staticmethod
+    def get_model_router_selected_model(hidden_params: Mapping[str, object] | None) -> str | None:
+        """The model Azure Model Router actually served, stamped by ``AzureModelRouterConfig``.
+
+        Reading this beats re-deriving the route from a model string: the stamp is set on the
+        code path that was actually taken, so it holds no matter what the caller named the model.
+        """
+        if not hidden_params:
+            return None
+        selected: Final = hidden_params.get(AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY)
+        if isinstance(selected, str) and selected:
+            return selected
+        return None
+
+    @staticmethod
+    def is_model_router_call(
+        model: str | None = None,
+        hidden_params: Mapping[str, object] | None = None,
+    ) -> bool:
+        """Whether a request went down the Azure Model Router route.
+
+        Prefers the response stamp, then the deployment's litellm model path, and only then the
+        caller-supplied name. The last two go through ``get_azure_ai_route`` so the model-router
+        name heuristic lives in exactly one place.
+        """
+        if AzureFoundryModelInfo.get_model_router_selected_model(hidden_params) is not None:
+            return True
+        deployment_model: Final = (
+            hidden_params.get("litellm_model_name") or hidden_params.get("model") if hidden_params is not None else None
+        )
+        return any(
+            isinstance(candidate, str) and AzureFoundryModelInfo.get_azure_ai_route(candidate) == "model_router"
+            for candidate in (deployment_model, model)
+        )
+
+    @staticmethod
+    def get_api_base(api_base: str | None = None) -> str | None:
+        return api_base or litellm.api_base or get_secret_str("AZURE_AI_API_BASE")
+
+    @staticmethod
+    def get_api_key(api_key: str | None = None) -> str | None:
+        return api_key or litellm.api_key or get_secret_str("AZURE_AI_API_KEY")
+
+    @staticmethod
+    def get_api_version(api_version: str | None = None) -> str | None:
+        return api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+
+    @property
+    def api_version(self) -> str | None:
+        return AzureFoundryModelInfo.get_api_version()
+
+    def get_token_counter(self) -> BaseTokenCounter | None:
+        """
+        Factory method to create a token counter for Azure AI.
+
+        Returns:
+            AzureAIAnthropicTokenCounter for Claude models, None otherwise.
+        """
+        # Only return token counter for Claude models
+        if self._model and "claude" in self._model.lower():
+            from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import (
+                AzureAIAnthropicTokenCounter,
+            )
+
+            return AzureAIAnthropicTokenCounter()
+        return None
+
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+        """
+        Returns a list of models supported by Azure AI.
+
+        Azure AI doesn't have a standard model listing endpoint,
+        so this returns an empty list.
+        """
+        return []
+
+    #########################################################
+    # Not implemented methods
+    #########################################################
+
+    @staticmethod
+    def strip_model_router_prefix(model: str) -> str:
+        """
+        Strip the model_router prefix from model name.
+
+        Examples:
+        - "model_router/gpt-4o" -> "gpt-4o"
+        - "model-router/gpt-4o" -> "gpt-4o"
+        - "gpt-4o" -> "gpt-4o"
+
+        Args:
+            model: Model name potentially with model_router prefix
+
+        Returns:
+            Model name without the prefix
+        """
+        if "model_router/" in model:
+            return model.split("model_router/", 1)[1]
+        if "model-router/" in model:
+            return model.split("model-router/", 1)[1]
+        return model
+
+    @staticmethod
+    def get_base_model(model: str) -> str:
+        """
+        Get the base model name, stripping any Azure AI routing prefixes.
+
+        Args:
+            model: Model name potentially with routing prefixes
+
+        Returns:
+            Base model name
+        """
+        # Strip model_router prefix if present
+        model = AzureFoundryModelInfo.strip_model_router_prefix(model)
+        return model
+
+    @staticmethod
+    def get_azure_ai_config_for_model(model: str):
+        """
+        Get the appropriate Azure AI config class for the given model.
+
+        Routes to specialized configs based on model type:
+        - Model Router: AzureModelRouterConfig
+        - Claude models: AzureAnthropicConfig
+        - Default: AzureAIStudioConfig
+
+        Args:
+            model: The model name
+
+        Returns:
+            The appropriate config instance
+        """
+        azure_ai_route: Final = AzureFoundryModelInfo.get_azure_ai_route(model)
+
+        if azure_ai_route == "model_router":
+            from litellm.llms.azure_ai.azure_model_router.transformation import (
+                AzureModelRouterConfig,
+            )
+
+            return AzureModelRouterConfig()
+        elif "claude" in model.lower():
+            from litellm.llms.azure_ai.anthropic.transformation import (
+                AzureAnthropicConfig,
+            )
+
+            return AzureAnthropicConfig()
+        else:
+            from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+
+            return AzureAIStudioConfig()
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        """Azure Foundry sends api key in query params"""
+        raise NotImplementedError("Azure Foundry does not support environment validation")

@@ -1,0 +1,37 @@
+name: Check Duplicate Issues
+
+# Flagging only. "Auto-close duplicate issues" closes a flagged issue 3 days later,
+# and only when its title is identical to an older open issue and nobody replied.
+# The HTML marker below is the handshake between the two, so keep it in the template.
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions: {}
+
+jobs:
+  check-duplicate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Check for potential duplicates
+        uses: wow-actions/potential-duplicates@4d4ea0352e0383859279938e255179dd1dbb67b5 # v1.1.0
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          label: potential-duplicate
+          threshold: 0.6
+          reaction: eyes
+          comment: |
+            <!-- litellm:potential-duplicate candidates={{#issues}}{{number}},{{/issues}} -->
+            **Potential duplicate detected**
+
+            This looks similar to:
+            {{#issues}}
+            - #{{number}} - {{title}}
+            {{/issues}}
+
+            If this is a duplicate, add a thumbs-up reaction to the existing issue and follow along there. When the title is identical to an older open issue, this issue closes automatically in 3 days unless someone responds. If it is not a duplicate, comment here or add a thumbs-down reaction to this comment and it stays open.

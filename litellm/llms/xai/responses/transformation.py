@@ -1,0 +1,294 @@
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
+
+import httpx
+from pydantic import TypeAdapter
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.constants import XAI_API_BASE
+from litellm.exceptions import AuthenticationError
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.xai.common_utils import XAIModelInfo, xai_reported_cost_in_usd
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import (
+    ResponseAPIUsage,
+    ResponseCompletedEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
+)
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as _LiteLLMLoggingObj,
+    )
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
+
+_STR_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _usage_restated_from_xai_ticks(usage: ResponseAPIUsage | None) -> ResponseAPIUsage | None:
+    reported_cost: Final = xai_reported_cost_in_usd(getattr(usage, "cost_in_usd_ticks", None))
+    if usage is None or reported_cost is None:
+        return None
+    return usage.model_copy(update=MappingProxyType({"cost": reported_cost}))
+
+
+class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
+    """
+    Configuration for XAI's Responses API.
+
+    Inherits from OpenAIResponsesAPIConfig since XAI's Responses API is largely
+    compatible with OpenAI's, with a few differences:
+    - Requires code_interpreter tools to have 'container' field removed
+    - Recommends store=false when sending images
+
+    Reference: https://docs.x.ai/docs/api-reference#create-new-response
+    """
+
+    @property
+    def custom_llm_provider(self) -> LlmProviders:
+        return LlmProviders.XAI
+
+    def _transform_web_search_tool(self, tool: Mapping[str, object]) -> Mapping[str, object]:
+        """
+        Transform web_search tool to XAI format.
+
+        XAI supports web_search with specific filters:
+        - allowed_domains (max 5)
+        - excluded_domains (max 5)
+        - enable_image_understanding
+
+        XAI does NOT support search_context_size (OpenAI-specific).
+
+        Domains may come nested under 'filters' (the OpenAI/XAI documented shape) or flat on the tool.
+        """
+        xai_tool: Final[dict[str, object]] = {"type": "web_search"}
+
+        if "search_context_size" in tool:
+            verbose_logger.info(
+                "XAI does not support 'search_context_size' parameter. Removing it from web_search tool."
+            )
+
+        nested_filters: Final = tool.get("filters")
+        domains: Final = (
+            _STR_MAPPING_ADAPTER.validate_python(nested_filters) if isinstance(nested_filters, Mapping) else tool
+        )
+        filters: Final = {key: domains[key] for key in ("allowed_domains", "excluded_domains") if key in domains}
+
+        if filters:
+            xai_tool["filters"] = filters
+
+        if "enable_image_understanding" in tool:
+            xai_tool["enable_image_understanding"] = tool["enable_image_understanding"]
+
+        return xai_tool
+
+    def _transform_x_search_tool(self, tool: Mapping[str, object]) -> Mapping[str, object]:
+        """
+        Transform x_search tool to XAI format.
+
+        XAI supports x_search with specific parameters:
+        - allowed_x_handles (max 10)
+        - excluded_x_handles (max 10)
+        - from_date (ISO8601: YYYY-MM-DD)
+        - to_date (ISO8601: YYYY-MM-DD)
+        - enable_image_understanding
+        - enable_video_understanding
+        """
+        xai_tool: Final[dict[str, object]] = {"type": "x_search"}
+
+        # Handle allowed_x_handles
+        if "allowed_x_handles" in tool:
+            allowed_handles: Final = tool["allowed_x_handles"]
+            xai_tool["allowed_x_handles"] = allowed_handles
+
+        # Handle excluded_x_handles
+        if "excluded_x_handles" in tool:
+            excluded_handles: Final = tool["excluded_x_handles"]
+            xai_tool["excluded_x_handles"] = excluded_handles
+
+        # Handle date range
+        if "from_date" in tool:
+            xai_tool["from_date"] = tool["from_date"]
+
+        if "to_date" in tool:
+            xai_tool["to_date"] = tool["to_date"]
+
+        # Handle media understanding flags
+        if "enable_image_understanding" in tool:
+            xai_tool["enable_image_understanding"] = tool["enable_image_understanding"]
+
+        if "enable_video_understanding" in tool:
+            xai_tool["enable_video_understanding"] = tool["enable_video_understanding"]
+
+        return xai_tool
+
+    def map_openai_params(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        """
+        Map parameters for XAI Responses API.
+
+        Handles XAI-specific transformations:
+        1. Transforms code_interpreter tools to remove 'container' field
+        2. Transforms web_search tools to XAI format (removes search_context_size, adds filters)
+        3. Transforms x_search tools to XAI format
+        4. Sets store=false when images are detected (recommended by XAI)
+        """
+        params: Final = dict(response_api_optional_params)
+
+        if "metadata" in params:
+            verbose_logger.debug("XAI Responses API does not support 'metadata' parameter. Dropping it.")
+            params.pop("metadata")
+
+        # Transform tools
+        if "tools" in params and params["tools"]:
+            tools_list = params["tools"]
+            # Ensure tools is a list for iteration
+            if not isinstance(tools_list, list):
+                tools_list = [tools_list]
+
+            transformed_tools: Final[list[object]] = []
+            for tool in tools_list:
+                if isinstance(tool, dict):
+                    tool_type = tool.get("type")
+
+                    if tool_type == "code_interpreter":
+                        # XAI supports code_interpreter but doesn't use the container field
+                        verbose_logger.debug("XAI: Transforming code_interpreter tool, removing container field")
+                        transformed_tools.append({"type": "code_interpreter"})
+
+                    elif tool_type == "web_search":
+                        # Transform web_search to XAI format
+                        verbose_logger.debug("XAI: Transforming web_search tool to XAI format")
+                        transformed_tools.append(self._transform_web_search_tool(tool))
+
+                    elif tool_type == "x_search":
+                        # Transform x_search to XAI format
+                        verbose_logger.debug("XAI: Transforming x_search tool to XAI format")
+                        transformed_tools.append(self._transform_x_search_tool(tool))
+
+                    else:
+                        # Keep other tools as-is
+                        transformed_tools.append(tool)
+                else:
+                    transformed_tools.append(tool)
+
+            params["tools"] = transformed_tools
+
+        return params
+
+    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+        """
+        Validate environment and set up headers for XAI API.
+
+        Uses the shared xAI key resolver with Responses API legacy precedence.
+        """
+        litellm_params = litellm_params or GenericLiteLLMParams()
+        api_key = XAIModelInfo.get_api_key(litellm_params.api_key, legacy_generic_before_env=True)
+
+        if not api_key:
+            from litellm.llms.xai.oauth import (
+                XAIOAuthAuthenticator,
+                XAIOAuthError,
+                should_use_xai_oauth,
+            )
+
+            if should_use_xai_oauth(litellm_params.model_dump()):
+                try:
+                    api_key = XAIOAuthAuthenticator().get_access_token()
+                except XAIOAuthError as exc:
+                    raise AuthenticationError(
+                        model=model,
+                        llm_provider=self.custom_llm_provider.value,
+                        message=str(exc),
+                    ) from exc
+
+        if not api_key:
+            raise ValueError(
+                "XAI API key is required. Set api_key, litellm.xai_key, "
+                "litellm.api_key, XAI_API_KEY, or use_xai_oauth=True."
+            )
+
+        headers.update(
+            {
+                "Authorization": f"Bearer {api_key}",
+            }
+        )
+        return headers
+
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        litellm_params: dict,
+    ) -> str:
+        """
+        Get the complete URL for XAI Responses API endpoint.
+
+        Returns:
+            str: The full URL for the XAI /responses endpoint
+        """
+        from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
+
+        api_key: Final = XAIModelInfo.get_api_key(litellm_params.get("api_key"), legacy_generic_before_env=True)
+        if should_use_xai_oauth(litellm_params) and not api_key:
+            api_base = XAIOAuthAuthenticator().get_api_base()
+        else:
+            api_base = api_base or litellm.api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE
+
+        # Remove trailing slashes
+        api_base = api_base.rstrip("/")
+
+        return f"{api_base}/responses"
+
+    def transform_response_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        response: Final = super().transform_response_api_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+
+        restated_usage: Final = _usage_restated_from_xai_ticks(response.usage)
+        if restated_usage is not None:
+            response.usage = restated_usage
+        return response
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,  # mutable-ok: overrides the base class signature
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIStreamingResponse:
+        event: Final = super().transform_streaming_response(
+            model=model,
+            parsed_chunk=parsed_chunk,
+            logging_obj=logging_obj,
+        )
+        if not isinstance(event, (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent)):
+            return event
+        restated_usage: Final = _usage_restated_from_xai_ticks(event.response.usage)
+        if restated_usage is not None:
+            event.response.usage = restated_usage
+        return event
+
+    def supports_native_websocket(self) -> bool:
+        """XAI does not support native WebSocket for Responses API"""
+        return False

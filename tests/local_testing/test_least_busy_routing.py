@@ -1,0 +1,278 @@
+#### What this tests ####
+#    This tests the router's ability to identify the least busy deployment
+
+import asyncio
+import random
+import time
+import traceback
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+import pytest
+
+import litellm
+from litellm import Router
+from litellm.caching.caching import DualCache
+from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
+
+### UNIT TESTS FOR LEAST BUSY LOGGING ###
+
+
+def test_model_added():
+    test_cache = DualCache()
+    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": "1234"},
+        }
+    }
+    least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
+    request_count_api_key = "gpt-3.5-turbo_request_count:1234"
+    assert test_cache.get_cache(key=request_count_api_key) == 1
+
+
+def test_get_available_deployments():
+    test_cache = DualCache()
+    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
+    model_group = "gpt-3.5-turbo"
+    deployment = "azure/gpt-4.1-mini"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": deployment,
+            },
+            "model_info": {"id": "1234"},
+        }
+    }
+    least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
+    request_count_api_key = f"{model_group}_request_count:1234"
+    assert test_cache.get_cache(key=request_count_api_key) == 1
+
+
+# test_get_available_deployments()
+
+
+@pytest.mark.parametrize("async_test", [True, False])
+@pytest.mark.asyncio
+async def test_router_get_available_deployments(async_test):
+    """
+    Tests if 'get_available_deployments' returns the least busy deployment
+    """
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
+                "rpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
+                "rpm": 6,
+            },
+            "model_info": {"id": 2},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
+                "rpm": 6,
+            },
+            "model_info": {"id": 3},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="least-busy",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
+
+    router.leastbusy_logger.test_flag = True
+
+    model_group = "azure-model"
+    request_count_dict = {"1": 10, "2": 54, "3": 100}
+    cache_keys = {
+        deployment_id: f"{model_group}_request_count:{deployment_id}"
+        for deployment_id in request_count_dict
+    }
+    if async_test is True:
+        for deployment_id, count in request_count_dict.items():
+            await router.cache.async_set_cache(key=cache_keys[deployment_id], value=count)
+        deployment = await router.async_get_available_deployment(
+            model=model_group, messages=None, request_kwargs={}
+        )
+    else:
+        for deployment_id, count in request_count_dict.items():
+            router.cache.set_cache(key=cache_keys[deployment_id], value=count)
+        deployment = router.get_available_deployment(model=model_group, messages=None)
+    print(f"deployment: {deployment}")
+    assert deployment["model_info"]["id"] == "1"
+
+    ## run router completion - assert completion event, no change in 'busy'ness once calls are complete
+
+    router.completion(
+        model=model_group,
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+
+    # wait 2 seconds
+    time.sleep(2)
+
+    return_dict = {
+        deployment_id: router.cache.get_cache(key=cache_key)
+        for deployment_id, cache_key in cache_keys.items()
+    }
+
+    assert router.leastbusy_logger.logged_success == 1
+    assert return_dict["1"] == 10
+    assert return_dict["2"] == 54
+    assert return_dict["3"] == 100
+
+
+## Test with Real calls ##
+
+
+@pytest.mark.asyncio
+async def test_router_atext_completion_streaming():
+    prompt = "Hello, can you generate a 500 words poem?"
+    model = "azure-model"
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
+                "rpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
+                "rpm": 6,
+            },
+            "model_info": {"id": 2},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
+                "rpm": 6,
+            },
+            "model_info": {"id": 3},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="least-busy",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
+
+    ### Call the async calls in sequence, so we start 1 call before going to the next.
+
+    ## CALL 1
+    await asyncio.sleep(random.uniform(0, 2))
+    await router.atext_completion(model=model, prompt=prompt, stream=True)
+
+    ## CALL 2
+    await asyncio.sleep(random.uniform(0, 2))
+    await router.atext_completion(model=model, prompt=prompt, stream=True)
+
+    ## CALL 3
+    await asyncio.sleep(random.uniform(0, 2))
+    await router.atext_completion(model=model, prompt=prompt, stream=True)
+
+    ## check if calls equally distributed
+    cache_dict = {
+        deployment_id: router.cache.get_cache(key=f"{model}_request_count:{deployment_id}")
+        for deployment_id in ("1", "2", "3")
+    }
+    for k, v in cache_dict.items():
+        assert v == 1, f"Failed. K={k} called v={v} times, cache_dict={cache_dict}"
+
+
+# asyncio.run(test_router_atext_completion_streaming())
+
+
+@pytest.mark.asyncio
+async def test_router_completion_streaming():
+    litellm.set_verbose = True
+    messages = [
+        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
+    ]
+    model = "azure-model"
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
+                "rpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
+                "rpm": 6,
+            },
+            "model_info": {"id": 2},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "openai/gpt-4.1-mini",
+                "api_key": "os.environ/OPENAI_API_KEY",
+                "rpm": 6,
+            },
+            "model_info": {"id": 3},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="least-busy",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
+
+    ### Call the async calls in sequence, so we start 1 call before going to the next.
+
+    ## CALL 1
+    await asyncio.sleep(random.uniform(0, 2))
+    await router.acompletion(model=model, messages=messages, stream=True)
+
+    ## CALL 2
+    await asyncio.sleep(random.uniform(0, 2))
+    await router.acompletion(model=model, messages=messages, stream=True)
+
+    ## CALL 3
+    await asyncio.sleep(random.uniform(0, 2))
+    await router.acompletion(model=model, messages=messages, stream=True)
+
+    ## check if calls equally distributed
+    cache_dict = {
+        deployment_id: router.cache.get_cache(key=f"{model}_request_count:{deployment_id}")
+        for deployment_id in ("1", "2", "3")
+    }
+    for k, v in cache_dict.items():
+        assert v == 1, f"Failed. K={k} called v={v} times, cache_dict={cache_dict}"

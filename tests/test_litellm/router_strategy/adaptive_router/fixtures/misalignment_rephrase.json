@@ -1,0 +1,16 @@
+[
+  {
+    "user_content": "can you help me write a function to parse json",
+    "assistant_content": "Sure, use the json module's loads function.",
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 200
+  },
+  {
+    "user_content": "actually I need to parse yaml instead",
+    "assistant_content": "Use the pyyaml library and yaml.safe_load.",
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 200
+  }
+]

@@ -1,0 +1,490 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor
+
+from pydantic import BaseModel
+
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
+    ChatCompletionTextObject,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolParam,
+    ResponseAPIUsage,
+)
+
+if TYPE_CHECKING:
+    from litellm.types.utils import ChatCompletionMessageToolCall
+
+
+def _anthropic_stream_chunk_events(item: object) -> list[dict]:
+    if isinstance(item, dict):
+        return [item]
+    if isinstance(item, bytes):
+        chunk = item.decode("utf-8", errors="replace")
+    elif isinstance(item, str):
+        chunk = item
+    else:
+        return []
+
+    events: Final[list[dict]] = []
+    for block in chunk.split("\n\n"):
+        for line in block.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("data:"):
+                continue
+            payload = stripped[len("data:") :].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                events.append(parsed)
+    return events
+
+
+def _usage_from_anthropic_stream_chunks(original_response: Sequence[object]) -> AnthropicUsage | None:
+    input_tokens = 0
+    output_tokens = 0
+    found_usage = False
+
+    for item in original_response:
+        for event in _anthropic_stream_chunk_events(item):
+            event_type = event.get("type")
+            if event_type == "message_start":
+                message = event.get("message") or {}
+                usage_obj = message.get("usage") or {}
+            elif event_type == "message_delta":
+                usage_obj = event.get("usage") or {}
+            else:
+                usage_obj = {}
+            if not isinstance(usage_obj, dict):
+                continue
+            if usage_obj.get("input_tokens") is not None:
+                input_tokens = int(usage_obj.get("input_tokens") or 0)
+                found_usage = True
+            if usage_obj.get("output_tokens") is not None:
+                output_tokens = int(usage_obj.get("output_tokens") or 0)
+                found_usage = True
+
+    if not found_usage:
+        return None
+    return AnthropicUsage(input_tokens=input_tokens, output_tokens=output_tokens)
+
+
+def _blocked_usage_obj(original_response: object) -> object:
+    if isinstance(original_response, dict):
+        return original_response.get("usage")
+    if original_response is not None and not isinstance(original_response, list):
+        return getattr(original_response, "usage", None)
+    return None
+
+
+def _usage_tokens(usage_obj: object, key: str, fallback_key: str) -> int:
+    if isinstance(usage_obj, dict):
+        return int(usage_obj.get(key, usage_obj.get(fallback_key, 0)) or 0)
+    return int(getattr(usage_obj, key, getattr(usage_obj, fallback_key, 0)) or 0)
+
+
+def blocked_response_usage(original_response: object) -> AnthropicUsage:
+    """
+    Token usage for a synthetic guardrail-blocked response.
+
+    A post-call block replaces the LLM's response with the violation message,
+    but the upstream call already consumed tokens -- report that real usage
+    (carried on ``ModifyResponseException.original_response``) rather than
+    discarding it. Pre-call blocks never invoked the LLM (no original_response),
+    so usage is zero.
+    """
+    if isinstance(original_response, list):
+        stream_usage: Final = _usage_from_anthropic_stream_chunks(original_response)
+        if stream_usage is not None:
+            return stream_usage
+
+    usage_obj: Final = _blocked_usage_obj(original_response)
+    return AnthropicUsage(
+        input_tokens=_usage_tokens(usage_obj, "input_tokens", "prompt_tokens"),
+        output_tokens=_usage_tokens(usage_obj, "output_tokens", "completion_tokens"),
+    )
+
+
+def blocked_responses_api_usage(original_response: object) -> ResponseAPIUsage:
+    """
+    Token usage for a synthetic guardrail-blocked /v1/responses reply.
+
+    Same contract as ``blocked_response_usage`` in Responses API shape: a
+    native ``ResponsesAPIResponse`` usage passes through unchanged, a bridged
+    chat ``ModelResponse`` usage maps prompt/completion tokens to input/output
+    tokens, and a pre-call block (no original_response) reports zeros.
+    """
+    usage_obj: Final = _blocked_usage_obj(original_response)
+    if isinstance(usage_obj, ResponseAPIUsage):
+        return usage_obj
+
+    input_tokens: Final = _usage_tokens(usage_obj, "input_tokens", "prompt_tokens")
+    output_tokens: Final = _usage_tokens(usage_obj, "output_tokens", "completion_tokens")
+    total_tokens: Final = _usage_tokens(usage_obj, "total_tokens", "total_tokens")
+    return ResponseAPIUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens or input_tokens + output_tokens,
+    )
+
+
+def stream_item_field(item: object, field: str) -> object | None:
+    if isinstance(item, dict):
+        return item.get(field)
+    return getattr(item, field, None)
+
+
+def stream_item_fingerprint(item: object) -> str:
+    plain: Final = item.model_dump() if isinstance(item, BaseModel) else item
+    return json.dumps(plain, sort_keys=True, default=str)
+
+
+def stream_item_items(item: object, field: str) -> tuple[object, ...]:
+    value: Final = stream_item_field(item, field)
+    return tuple(value) if isinstance(value, (list, tuple)) else ()
+
+
+def blocked_chat_stream_usage(original_response: object) -> tuple[int, int]:
+    """
+    ``(prompt_tokens, completion_tokens)`` for a synthetic guardrail-blocked
+    chat completions stream.
+
+    A mid-stream block carries the chunks received so far as a list; real usage
+    rides on the final chunk when the upstream sent one
+    (``stream_options.include_usage``). Non-list originals defer to
+    ``blocked_response_usage``.
+    """
+    if not isinstance(original_response, list):
+        usage: Final = blocked_response_usage(original_response)
+        return usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+    usage_obj: Final = next(
+        (
+            chunk_usage
+            for item in reversed(original_response)
+            if (chunk_usage := stream_item_field(item, "usage")) is not None
+        ),
+        None,
+    )
+    return (
+        _usage_tokens(usage_obj, "prompt_tokens", "input_tokens"),
+        _usage_tokens(usage_obj, "completion_tokens", "output_tokens"),
+    )
+
+
+def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsage:
+    """
+    ``ResponseAPIUsage`` for a synthetic guardrail-blocked /v1/responses stream.
+
+    A mid-stream block carries the events received so far as a list; real usage
+    rides on the ``response.completed`` event's response when the upstream sent
+    one. Non-list originals defer to ``blocked_responses_api_usage``.
+    """
+    if not isinstance(original_response, list):
+        return blocked_responses_api_usage(original_response)
+    completed: Final = next(
+        (
+            response
+            for item in reversed(original_response)
+            if stream_item_field(item, "type") == "response.completed"
+            and (response := stream_item_field(item, "response")) is not None
+        ),
+        None,
+    )
+    return blocked_responses_api_usage(completed)
+
+
+def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> bool:
+    per: Final = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
+    if per is not None:
+        return bool(per)
+    import litellm
+
+    return bool(getattr(litellm, "skip_system_message_in_guardrail", False))
+
+
+def effective_skip_tool_message_for_guardrail(guardrail_to_apply: object) -> bool:
+    per: Final = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
+    if per is not None:
+        return bool(per)
+    import litellm
+
+    return bool(getattr(litellm, "skip_tool_message_in_guardrail", False))
+
+
+def _message_role(message: AllMessageValues) -> str:
+    return str((message or {}).get("role") or "").lower()
+
+
+def openai_messages_without_system(
+    messages: Sequence[AllMessageValues],
+) -> tuple[AllMessageValues, ...]:
+    return tuple(m for m in messages if _message_role(m) != "system")
+
+
+def openai_messages_without_tool(
+    messages: Sequence[AllMessageValues],
+) -> tuple[AllMessageValues, ...]:
+    return tuple(m for m in messages if _message_role(m) != "tool")
+
+
+def filter_messages_by_skip_flags(
+    guardrail_to_apply: object, messages: Sequence[AllMessageValues]
+) -> tuple[tuple[AllMessageValues, ...], bool]:
+    system_filtered = (
+        openai_messages_without_system(messages)
+        if effective_skip_system_message_for_guardrail(guardrail_to_apply)
+        else tuple(messages)
+    )
+    fully_filtered = (
+        openai_messages_without_tool(system_filtered)
+        if effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        else system_filtered
+    )
+    return fully_filtered, len(fully_filtered) != len(messages)
+
+
+def effective_scan_only_tool_results_for_guardrail(guardrail_to_apply: object) -> bool:
+    return getattr(guardrail_to_apply, "scan_only_tool_results", None) is True
+
+
+def role_out_of_guardrail_scope(
+    role: str,
+    *,
+    skip_system_message: bool,
+    skip_tool_message: bool,
+    scan_only_tool_results: bool = False,
+) -> bool:
+    if skip_system_message and role == "system":
+        return True
+    if skip_tool_message and role == "tool":
+        return True
+    return scan_only_tool_results and role not in ("tool", "function")
+
+
+def scoped_structured_message_indices(
+    messages: Sequence[AllMessageValues],
+    *,
+    scan_only_tool_results: bool,
+    skip_system: bool,
+    skip_tool: bool,
+) -> tuple[int, ...]:
+    return tuple(
+        index
+        for index, message in enumerate(messages)
+        if not role_out_of_guardrail_scope(
+            _message_role(message),
+            skip_system_message=skip_system,
+            skip_tool_message=skip_tool,
+            scan_only_tool_results=scan_only_tool_results,
+        )
+    )
+
+
+def _assistant_tool_call(
+    tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall,
+) -> ChatCompletionAssistantToolCall:
+    function: Final = stream_item_field(tool_call, "function")
+    tool_call_id: Final = stream_item_field(tool_call, "id")
+    name: Final = stream_item_field(function, "name")
+    arguments: Final = stream_item_field(function, "arguments")
+    return ChatCompletionAssistantToolCall(
+        id=tool_call_id if isinstance(tool_call_id, str) else None,
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name=name if isinstance(name, str) else None,
+            arguments=arguments if isinstance(arguments, str) else "",
+        ),
+    )
+
+
+def response_assistant_turn(
+    texts: Sequence[str],
+    tool_calls: Sequence[ChatCompletionToolCallChunk] | Sequence[ChatCompletionMessageToolCall],
+) -> ChatCompletionAssistantMessage | None:
+    """The scanned reply as the assistant turn closing the request conversation."""
+    assistant_tool_calls: Final = tuple(_assistant_tool_call(tool_call) for tool_call in tool_calls)
+    if not texts and not assistant_tool_calls:
+        return None
+    content: Final = (
+        texts[0]
+        if len(texts) == 1
+        else tuple(ChatCompletionTextObject(type="text", text=text) for text in texts) or None
+    )
+    if not assistant_tool_calls:
+        return ChatCompletionAssistantMessage(role="assistant", content=content)
+    return ChatCompletionAssistantMessage(
+        role="assistant",
+        content=content,
+        tool_calls=list(assistant_tool_calls),  # mutable-ok: the assistant message type takes a list
+    )
+
+
+ToolT = TypeVar("ToolT")
+
+
+def request_tools(raw_tools: object) -> tuple[ChatCompletionToolParam, ...]:
+    """The request's ``tools`` list, as the chat completion request model already validated it upstream."""
+    if not isinstance(raw_tools, list):
+        return ()
+    return tuple(
+        cast(Sequence[ChatCompletionToolParam], raw_tools)  # cast-ok: the request model validated tools upstream
+    )
+
+
+def openai_tool_name(tool: object) -> str | None:
+    if not isinstance(tool, dict):
+        return None
+    function: Final = tool.get("function")
+    if isinstance(function, dict):
+        function_name: Final = function.get("name")
+        return function_name if isinstance(function_name, str) else None
+    flat_name: Final = tool.get("name")
+    return flat_name if isinstance(flat_name, str) else None
+
+
+def anthropic_tool_names(tool: object) -> tuple[str, ...]:
+    """Every name a /v1/messages tool dict can act under: the flat Anthropic ``name`` plus
+    ``function.name`` for OpenAI-format tools the bridge forwards verbatim. Allowlist checks
+    must see both, or a decoy flat name could smuggle a disallowed ``function.name`` through."""
+    if not isinstance(tool, dict):
+        return ()
+    function: Final = tool.get("function") if tool.get("type") == "function" else None
+    function_name: Final = function.get("name") if isinstance(function, dict) else None
+    return tuple(name for name in (tool.get("name"), function_name) if isinstance(name, str) and name)
+
+
+def anthropic_tool_name(tool: object) -> str | None:
+    names: Final = anthropic_tool_names(tool)
+    return names[0] if names else None
+
+
+def merge_returned_tools_into_request_tools(
+    request_tools: Sequence[ToolT] | None,
+    returned_tools: Sequence[ToolT],
+    tool_name: Callable[[ToolT], str | None],
+) -> list[ToolT]:
+    """Union of the request's tools and guardrail-returned tools, keyed by name.
+
+    Under ``scan_only_tool_results`` the guardrail never saw the request's
+    tools, so a returned list can neither replace them (it would drop every
+    user-defined function) nor be discarded (it may carry a tool the guardrail
+    synthesized and told the model to call, like Compresr's retrieve tool).
+    Keep every request tool and append only returned tools whose names aren't
+    already taken by a request tool or an earlier returned tool.
+    """
+    originals: Final = tuple(request_tools or ())
+    taken_names: Final = frozenset(name for tool in originals if (name := tool_name(tool)) is not None)
+    additions: Final = tuple(
+        tool
+        for index, tool in enumerate(returned_tools)
+        if (name := tool_name(tool)) not in taken_names
+        and (name is None or all(tool_name(earlier) != name for earlier in returned_tools[:index]))
+    )
+    return [*originals, *additions]
+
+
+def merge_guardrailed_scoped_messages(
+    full_messages: Sequence[AllMessageValues],
+    scoped_indices: Sequence[int],
+    guardrailed_scoped: Sequence[AllMessageValues],
+) -> list[AllMessageValues]:
+    """Substitute guardrail-returned messages back into the full conversation.
+
+    Guardrails only ever see the scoped subset of messages, so a replacement
+    list they hand back describes that subset, not the whole request. Writing
+    it over ``data["messages"]`` wholesale would silently drop every
+    out-of-scope message (system prompt, prior turns). Instead, swap each
+    returned message into the position its scoped original came from; extra
+    returned messages land after the last scoped position, and scoped
+    originals without a counterpart are treated as removed by the guardrail.
+    When nothing was filtered out this degenerates to the returned list
+    itself, preserving wholesale-replacement behavior for unscoped guardrails.
+    """
+    replacements: Final = dict(zip(scoped_indices, guardrailed_scoped))
+    removed: Final = frozenset(scoped_indices[len(guardrailed_scoped) :])
+    appended: Final = tuple(guardrailed_scoped[len(scoped_indices) :])
+    last_scoped_index: Final = scoped_indices[-1] if scoped_indices else None
+
+    def _merged() -> Iterator[AllMessageValues]:
+        for index, message in enumerate(full_messages):
+            if index in removed:
+                continue
+            yield replacements.get(index, message)
+            if index == last_scoped_index:
+                yield from appended
+
+    return list(_merged())
+
+
+def _content_part_text(part: object) -> str | None:
+    if not isinstance(part, Mapping):
+        return None
+    text: Final = part.get("text")
+    return text if isinstance(text, str) else None
+
+
+def message_slot_texts(message: Mapping[str, object]) -> tuple[str, ...]:
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return (content,)
+    if isinstance(content, list):
+        return tuple(text for part in content if (text := _content_part_text(part)) is not None)
+    return ()
+
+
+def message_text_slot_count(message: AllMessageValues) -> int:
+    return len(message_slot_texts(message))
+
+
+def _part_with_text(part: object, text: str) -> object:
+    if not isinstance(part, Mapping):
+        return part
+    return {**part, "text": text}  # mutable-ok: content parts stay JSON-plain dicts
+
+
+def _content_with_slot_texts(content: Sequence[object], texts: Sequence[str]) -> Sequence[object]:
+    remaining_texts: Final = iter(texts)
+    return [  # mutable-ok: message content stays a JSON list
+        _part_with_text(part, next(remaining_texts)) if _content_part_text(part) is not None else part
+        for part in content
+    ]
+
+
+def message_with_slot_texts(message: AllMessageValues, texts: Sequence[str]) -> AllMessageValues | None:
+    """Swap one rewritten text into each text slot of a chat row, in order.
+
+    A slot is a string ``content`` or one list part carrying a string ``text``;
+    images and other parts ride along untouched. Returns None unless the counts
+    line up exactly, so a rewrite never lands on the wrong slot.
+    """
+    if message_text_slot_count(message) != len(texts):
+        return None
+    content: Final = message.get("content")
+    if not isinstance(content, (str, list)):
+        return message
+    rewritten_content: Final = texts[0] if isinstance(content, str) else _content_with_slot_texts(content, texts)
+    rewritten: Final = {**message, "content": rewritten_content}  # mutable-ok: chat rows stay JSON-plain dicts
+    return cast("AllMessageValues", rewritten)  # cast-ok: the same row with only its text slots swapped
+
+
+class UnappliableRequestRewrite(Exception):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(
+            f"Guardrail '{guardrail_name}' rewrote the request in a way this endpoint cannot apply, "
+            "so the request was rejected rather than sent unrewritten"
+        )
+        self.guardrail_name: Final = guardrail_name
+
+
+def unappliable_request_rewrite(guardrail_name: str | None) -> UnappliableRequestRewrite:
+    return UnappliableRequestRewrite(guardrail_name or "unknown")

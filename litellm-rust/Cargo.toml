@@ -1,0 +1,60 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/BerriAI/litellm"
+
+[workspace.dependencies]
+litellm-core = { path = "crates/core" }
+litellm-callbacks = { path = "crates/callbacks" }
+litellm-callbacks-legacy = { path = "crates/callbacks-legacy" }
+litellm-framing = { path = "crates/framer" }
+litellm-auth = { path = "crates/auth" }
+litellm-auth-aws = { path = "crates/auth-aws" }
+litellm-auth-azure = { path = "crates/auth-azure" }
+litellm-auth-gcp = { path = "crates/auth-gcp" }
+litellm-providers = { path = "crates/providers" }
+litellm-cache = { path = "crates/cache" }
+litellm-cache-memory = { path = "crates/cache-memory" }
+litellm-token-counter = { path = "crates/token-counter" }
+litellm-host-python = { path = "crates/host-python" }
+
+bytes = "1"
+pyo3 = "0.29.2"
+pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
+pythonize = "0.29.0"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls", "http2", "stream"] }
+rstest = "0.26.1"
+rstest_reuse = "0.7.0"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+serde_with = { version = "=3.16.1", default-features = false, features = ["std", "macros"] }
+sha2 = "0.10"
+subtle = "2"
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+base64 = "0.22"
+moka = { version = "0.12.16", features = ["future"] }
+strum = { version = "0.28.0", features = ["derive"] }
+url = "2.5.8"
+time = { version = "0.3.53", features = ["parsing"] }
+criterion = "0.8.2"
+veil = "0.3.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+debug = false
+incremental = false
+strip = "symbols"

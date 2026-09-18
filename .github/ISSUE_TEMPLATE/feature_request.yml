@@ -1,0 +1,106 @@
+name: 🚀 Feature Request 
+description: Submit a proposal/request for a new LiteLLM feature.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for making LiteLLM better! 
+  - type: checkboxes
+    id: duplicate-check
+    attributes:
+      label: Check for existing issues
+      description: Please search to see if an issue already exists for the feature you are requesting.
+      options:
+        - label: I have searched the existing issues and checked that my issue is not a duplicate.
+          required: true
+  - type: textarea
+    id: the-feature
+    attributes:
+      label: The Feature
+      description: A clear and concise description of the feature proposal
+      placeholder: Tell us what you want!
+    validations:
+      required: true
+  - type: textarea
+    id: user-flow
+    attributes:
+      label: User Flow
+      description: |
+        Two ordered lists, "Before this feature (today)" and "After this feature (ideal user flow)", walking the same end user through the same task, written strictly from that user's seat. Every rule below applies.
+
+        - Describe the real application and the routes its users actually hit, not a generic scenario. Link any related GitHub issue or provider API docs
+        - Lead each list with one plain sentence saying where the flow dead-ends today and what it would let them do instead, then number the steps
+        - Every step is something the user does or observes: the HTTP method and full URL they hit, what they sent, and what visibly came back (status code, error text, the shape of an ID). UI steps name the page URL and what is on screen
+        - No LiteLLM internals: never name functions, files, DB tables, config classes, hooks, callbacks, or code paths. Ask for the behavior you need, not the implementation you imagine
+        - Keep the two lists step-for-step identical until they diverge, so the missing capability is obvious
+        - "Before this feature" is also where you show the workaround you're living with, which is what tells us how badly this is needed
+      placeholder: |
+        Before this feature (today): a developer batching nightly summaries has no way to mark those calls as low priority, so they compete with live traffic for the same rate limit
+
+        1. They send POST https://litellm-domain/v1/chat/completions for 500 documents in a loop
+        2. Around document 120 they start getting 429s naming the rpm limit, and their user-facing chat app starts getting them too
+        3. Their workaround is a hand-rolled sleep between calls, which stretches the batch to 3 hours and still collides at peak
+
+        After this feature (ideal user flow): the same batch runs as background work that yields to live traffic
+
+        1. The developer sends the same POST with "service_tier": "flex"
+        2. Batch calls queue behind interactive ones instead of 429ing, and the response comes back with the tier it was served at
+        3. The live chat app keeps returning 200s throughout the batch
+        4. https://litellm-domain/ui/?page=logs shows the batch requests tagged with that tier
+    validations:
+      required: true
+  - type: textarea
+    id: how-far-you-got
+    attributes:
+      label: How far you got
+      description: |
+        Run as many steps of the "After this feature (ideal user flow)" list as you can against a live proxy you ran yourself (e.g., `litellm --config config.yaml --detailed_debug` on localhost:4000), then paste the commands (e.g., curl) and their full output, ending at the step that dead-ends. Every rule below applies.
+
+        - Say plainly what stopped you there, in user terms: the option you passed came back ignored, the response 400'd naming an unsupported field, there is no button on the page for it. This is what proves the feature is genuinely missing rather than undocumented
+        - No mocks. Where the flow involves a provider call, hit the real provider API, even if it costs real $. `pytest` commands are not enough
+        - Include the config.yaml (or SDK setup) and env vars the proxy ran with, plus the version or commit you were on. Keep the real values for env vars that aren't sensitive, and redact only the secrets: never paste a real API key, virtual key, database URL, or other credential, here or anywhere else in the issue
+        - If the provider already supports this, link their API docs and paste a direct call to them succeeding, so we can see the shape LiteLLM should be sending
+        - For UI asks: include screenshots of the page you got stuck on and its URL. Scrub keys and tokens out of screenshots too (for example, the virtual key is briefly shown in the panel right after you create a virtual key)
+      placeholder: |
+        Config / setup the proxy ran with:
+
+        Version or commit:
+
+        Commands and their full output, up to the step that dead-ends:
+
+        What stopped me there:
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: What part of LiteLLM is this about?
+      options:
+        - ''
+        - "SDK (litellm Python package)"
+        - "Proxy"
+        - "UI Dashboard"
+        - "Docs"
+        - "Other"
+    validations:
+      required: true
+  - type: dropdown
+    id: hiring-interest
+    attributes:
+      label: LiteLLM is hiring a founding backend engineer, are you interested in joining us and shipping to all our users?
+      description: If yes, apply here - https://www.ycombinator.com/companies/litellm/jobs/6uvoBp3-founding-backend-engineer
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
+  - type: input
+    id: contact
+    attributes:
+      label: Twitter / LinkedIn details 
+      description: We announce new features on Twitter + LinkedIn. When this is announced, and you'd like a mention, we'll gladly shout you out!
+      placeholder: ex. @krrish_dh / https://www.linkedin.com/in/krish-d/
+    validations:
+      required: false

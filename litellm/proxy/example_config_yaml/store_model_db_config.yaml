@@ -1,0 +1,13 @@
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/my-fake-model
+      api_key: my-fake-key
+      api_base: os.environ/FAKE_OPENAI_API_BASE
+
+general_settings:
+  store_model_in_db: true
+  custom_team_metadata_validate: team_metadata_validator_e2e.validate_team_metadata
+  team_metadata_validation_timeout: 5
+  team_metadata_validation_error_message: "Cost center validation is unavailable right now; the team was not saved. Contact FinOps."
+

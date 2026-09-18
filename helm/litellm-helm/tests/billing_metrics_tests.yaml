@@ -1,0 +1,297 @@
+suite: test billingMetrics wiring on the proxy deployment
+templates:
+  - deployment.yaml
+  - configmap-litellm.yaml
+  - migrations-job.yaml
+tests:
+  - it: is off by default, adding no env, volume, or mount
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics-mtls
+            secret:
+              secretName: litellm-billing-metrics-mtls
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: billing-metrics-mtls
+            mountPath: /etc/litellm/billing-mtls
+            readOnly: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+            value: https://telemetry.litellm.ai
+
+  - it: renders the endpoint and the mounted cert paths when enabled
+    template: deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+            value: https://telemetry.litellm.ai
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_CLIENT_CERT
+            value: /etc/litellm/billing-mtls/tls.crt
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_CLIENT_KEY
+            value: /etc/litellm/billing-mtls/tls.key
+
+  # The conventional Secret name is the default, so enabling the block is enough.
+  - it: mounts the default cert secret read-only alongside the config volume
+    template: deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics-mtls
+            secret:
+              secretName: litellm-billing-metrics-mtls
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: billing-metrics-mtls
+            mountPath: /etc/litellm/billing-mtls
+            readOnly: true
+
+  - it: honours a secretName override
+    template: deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+        secretName: my-billing-mtls
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics-mtls
+            secret:
+              secretName: my-billing-mtls
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics-mtls
+            secret:
+              secretName: litellm-billing-metrics-mtls
+
+  - it: honours an endpoint override
+    template: deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+        endpoint: https://collector.internal:4318
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+            value: https://collector.internal:4318
+
+  # The production collector presents a public web-PKI certificate, so the CA
+  # override must stay absent unless a private collector is configured.
+  - it: omits the CA env, volume, and mount when no caSecretName is set
+    template: deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics-mtls-ca
+            secret:
+              secretName: billing-ca
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: billing-metrics-mtls-ca
+            mountPath: /etc/litellm/billing-mtls-ca
+            readOnly: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_CA_CERT
+            value: /etc/litellm/billing-mtls-ca/ca.crt
+
+  - it: mounts the CA secret when caSecretName is set
+    template: deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+        caSecretName: billing-ca
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_CA_CERT
+            value: /etc/litellm/billing-mtls-ca/ca.crt
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics-mtls-ca
+            secret:
+              secretName: billing-ca
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: billing-metrics-mtls-ca
+            mountPath: /etc/litellm/billing-mtls-ca
+            readOnly: true
+
+  - it: passes the export interval through only when set
+    template: deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+        exportIntervalMs: 5000
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS
+            value: "5000"
+
+  - it: omits the export interval when unset
+    template: deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS
+            value: "60000"
+
+  # Kubernetes resolves duplicate env names last-wins, so the chart-owned billing
+  # entries must render after .Values.envVars or a user could silently redirect
+  # the metering export. The three billing entries are the last ones emitted here
+  # (migrationJob, which appends DISABLE_SCHEMA_UPDATE, is off for this case).
+  - it: renders the billing endpoint after envVars so it cannot be shadowed
+    template: deployment.yaml
+    set:
+      migrationJob:
+        enabled: false
+      billingMetrics:
+        enabled: true
+      envVars:
+        LITELLM_BILLING_METRICS_ENDPOINT: https://shadowed.example
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+            value: https://shadowed.example
+      - equal:
+          path: spec.template.spec.containers[0].env[-3]
+          value:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+            value: https://telemetry.litellm.ai
+      - equal:
+          path: spec.template.spec.containers[0].env[-2].name
+          value: LITELLM_BILLING_METRICS_CLIENT_CERT
+      - equal:
+          path: spec.template.spec.containers[0].env[-1].name
+          value: LITELLM_BILLING_METRICS_CLIENT_KEY
+
+  - it: keeps user-supplied volumes and mounts alongside the billing secret
+    template: deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+      volumes:
+        - name: custom-callbacks
+          configMap:
+            name: my-callbacks
+      volumeMounts:
+        - name: custom-callbacks
+          mountPath: /app/callbacks
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: custom-callbacks
+            configMap:
+              name: my-callbacks
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics-mtls
+            secret:
+              secretName: litellm-billing-metrics-mtls
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: custom-callbacks
+            mountPath: /app/callbacks
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: billing-metrics-mtls
+            mountPath: /etc/litellm/billing-mtls
+            readOnly: true
+
+  - it: still mounts the proxy config when enabled
+    template: deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: litellm-config
+            mountPath: /etc/litellm/config.yaml
+            subPath: config.yaml
+
+  # Only the proxy serves billable traffic. The migrations Job must never mount
+  # the client certificate, and it renders its own env and volumes, so nothing
+  # stops a future edit from wiring the billing include into it by mistake.
+  - it: does not touch the migrations job when enabled
+    template: migrations-job.yaml
+    set:
+      billingMetrics:
+        enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+            value: https://telemetry.litellm.ai
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notExists:
+          path: spec.template.spec.volumes
+
+  - it: fails loudly when enabled with an emptied secretName
+    template: deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+        secretName: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: billingMetrics.secretName is required when billingMetrics.enabled is true (an existing Secret with tls.crt and tls.key)
+
+  - it: fails loudly when enabled without an endpoint
+    template: deployment.yaml
+    set:
+      billingMetrics:
+        enabled: true
+        endpoint: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: billingMetrics.endpoint is required when billingMetrics.enabled is true

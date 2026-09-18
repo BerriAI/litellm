@@ -1,0 +1,42 @@
+name: UI Build Check
+permissions:
+  contents: read
+  pull-requests: read
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_staging
+      - "litellm_**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-changes
+        with:
+          category: ui
+
+      # Built through the image stage rather than the checkout, because the
+      # stage copies ui/litellm-dashboard/ alone: an import reaching above the
+      # dashboard root resolves in a checkout and fails in every image we ship.
+      # Dockerfile, docker/Dockerfile.non_root and ui/Dockerfile share this
+      # stage verbatim, so building one covers all three.
+      - name: Build the dashboard as the shipped images build it
+        if: steps.changes.outputs.decision != 'skip'
+        run: docker build --target ui-builder -f Dockerfile .
