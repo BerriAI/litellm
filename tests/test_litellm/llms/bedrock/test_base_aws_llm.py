@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 
 
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch
@@ -3557,14 +3558,14 @@ def test_run_aws_signing_leaves_the_default_executor_free_for_other_providers():
     assert signing_thread.startswith("aws-signing")
 
 
-def _recording_boto3_client(recorded: Dict[str, Any]):
+def _recording_boto3_client(recorded: dict[str, dict[str, object]]) -> Callable[..., MagicMock]:
     """boto3.client replacement that records the STS client kwargs and the assume-role params."""
 
-    def _client(service_name, **client_kwargs):
+    def _client(service_name: str, **client_kwargs: object) -> MagicMock:
         recorded["client_kwargs"] = client_kwargs
         sts = MagicMock()
 
-        def _assume(**params):
+        def _assume(**params: object) -> dict[str, object]:
             recorded["assume_role"] = params
             return {
                 "Credentials": {
@@ -3575,7 +3576,7 @@ def _recording_boto3_client(recorded: Dict[str, Any]):
                 }
             }
 
-        def _assume_web_identity(**params):
+        def _assume_web_identity(**params: object) -> dict[str, object]:
             recorded["assume_role_with_web_identity"] = params
             return {
                 "Credentials": {
@@ -3608,7 +3609,7 @@ def test_resolve_credentials_forwards_static_keys_role_session_and_external_id()
         aws_sts_endpoint="https://custom-sts.example",
         aws_session_tags=[{"Key": "team", "Value": "genai"}, {"Key": "cost-center", "Value": "42"}],
     )
-    recorded: Dict[str, Any] = {}
+    recorded: dict[str, dict[str, object]] = {}
 
     with (
         patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True),
@@ -3648,7 +3649,7 @@ def test_resolve_credentials_rejects_malformed_session_tags(malformed_tags):
         aws_session_name="litellm-session",
         aws_session_tags=malformed_tags,
     )
-    recorded: Dict[str, Any] = {}
+    recorded: dict[str, dict[str, object]] = {}
 
     with (
         patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True),
@@ -3669,7 +3670,7 @@ def test_resolve_credentials_forwards_web_identity_token():
         aws_role_name="arn:aws:iam::123456789012:role/litellm-wif",
         aws_session_name="litellm-wif-session",
     )
-    recorded: Dict[str, Any] = {}
+    recorded: dict[str, dict[str, object]] = {}
 
     with (
         patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True),
