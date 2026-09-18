@@ -311,7 +311,8 @@ mod tests {
 
     use crate::ocr::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks};
     use crate::ocr::test_support::{
-        MockResponse, RetainedFieldsHost, mock_server, perform_ocr, wire_request, with_source,
+        MockResponse, RetainedFieldsHost, mock_server, perform_ocr, wire_request, with_hooks,
+        with_source,
     };
 
     #[tokio::test]
@@ -389,11 +390,13 @@ mod tests {
         .await;
         let source = format!("{base}/scan.pdf");
         let retained_fields = Arc::new(Mutex::new(Vec::new()));
-        let mut request = with_source(wire_request("azure_ai/model", &base, json!({})), &source);
-        request.hooks = Arc::new(RetainedFieldsHost {
-            original_document: json!({"type":"document_url","document_url":source}),
-            retained_fields: retained_fields.clone(),
-        });
+        let request = with_hooks(
+            with_source(wire_request("azure_ai/model", &base, json!({})), &source),
+            Arc::new(RetainedFieldsHost {
+                original_document: json!({"type":"document_url","document_url":source}),
+                retained_fields: retained_fields.clone(),
+            }),
+        );
 
         let result = perform_ocr(request).await.unwrap();
         server.await.unwrap();

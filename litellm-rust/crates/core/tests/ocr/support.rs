@@ -65,6 +65,13 @@ pub(crate) fn with_source(request: LiteLLMOcrRequest, source: &str) -> LiteLLMOc
     request.with_document(document.into())
 }
 
+pub(crate) fn with_hooks(
+    request: LiteLLMOcrRequest,
+    hooks: Arc<dyn OcrHooks>,
+) -> LiteLLMOcrRequest {
+    LiteLLMOcrRequest { hooks, ..request }
+}
+
 pub(crate) struct RetainedFieldsHost {
     pub original_document: Value,
     pub retained_fields: Arc<Mutex<Vec<String>>>,

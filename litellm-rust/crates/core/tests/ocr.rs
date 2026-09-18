@@ -9,7 +9,8 @@ use super::hooks::{
     OcrPreCallRequest,
 };
 use super::test_support::{
-    MockResponse, RetainedFieldsHost, mock_server, perform_ocr, wire_request, with_source,
+    MockResponse, RetainedFieldsHost, mock_server, perform_ocr, wire_request, with_hooks,
+    with_source,
 };
 use super::wire::{OcrWireRequest, decode_request};
 use super::{
@@ -114,11 +115,13 @@ async fn facade_keeps_the_host_document_when_the_url_is_sent_unchanged() {
         "document_name":"scan.pdf"
     });
     let retained_fields = Arc::new(Mutex::new(Vec::new()));
-    let mut request = with_source(wire_request("mistral/model", &base, json!({})), &source);
-    request.hooks = Arc::new(RetainedFieldsHost {
-        original_document: original_document.clone(),
-        retained_fields: retained_fields.clone(),
-    });
+    let request = with_hooks(
+        with_source(wire_request("mistral/model", &base, json!({})), &source),
+        Arc::new(RetainedFieldsHost {
+            original_document: original_document.clone(),
+            retained_fields: retained_fields.clone(),
+        }),
+    );
 
     perform_ocr(request).await.unwrap();
     server.await.unwrap();

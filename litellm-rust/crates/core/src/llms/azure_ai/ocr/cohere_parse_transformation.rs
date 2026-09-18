@@ -142,7 +142,7 @@ mod tests {
     use super::*;
     use crate::ocr::test_support::{
         MockResponse, RetainedFieldsHost, mock_server, perform_ocr, wire_request_with_document,
-        with_source,
+        with_hooks, with_source,
     };
 
     #[tokio::test]
@@ -154,19 +154,21 @@ mod tests {
         .await;
         let source = format!("{base}/scan.png");
         let retained_fields = Arc::new(Mutex::new(Vec::new()));
-        let mut request = with_source(
-            wire_request_with_document(
-                "azure_ai/cohere-parse-v5",
-                &base,
-                json!({"type":"image_url","image_url":"data:image/png;base64,YWJj"}),
-                json!({}),
+        let request = with_hooks(
+            with_source(
+                wire_request_with_document(
+                    "azure_ai/cohere-parse-v5",
+                    &base,
+                    json!({"type":"image_url","image_url":"data:image/png;base64,YWJj"}),
+                    json!({}),
+                ),
+                &source,
             ),
-            &source,
+            Arc::new(RetainedFieldsHost {
+                original_document: json!({"type":"image_url","image_url":source}),
+                retained_fields: retained_fields.clone(),
+            }),
         );
-        request.hooks = Arc::new(RetainedFieldsHost {
-            original_document: json!({"type":"image_url","image_url":source}),
-            retained_fields: retained_fields.clone(),
-        });
 
         let result = perform_ocr(request).await.unwrap();
         server.await.unwrap();
