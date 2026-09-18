@@ -3,16 +3,16 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from hashlib import sha256
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Final, TypeVar
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
 
-from integration._support.database import read_rows
+from tests.integration._support.database import read_rows
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 T = TypeVar("T")
@@ -124,6 +124,16 @@ class Scenario:
         assert response.status_code == 200, response.text
         assert read_rows('SELECT project_id FROM "LiteLLM_ProjectTable" WHERE project_id = %s', (identity,)) == []
 
+    def budget(self, **fields: JsonValue) -> str:
+        created: Final = self.gateway.post("/budget/new", fields)
+        identity: Final = string_value(created["budget_id"])
+        self.cleanups.callback(self.delete_budget, identity)
+        return identity
+
+    def delete_budget(self, identity: str) -> None:
+        self.gateway.post("/budget/delete", {"id": identity})
+        assert read_rows('SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (identity,)) == []
+
     def user(self, **fields: JsonValue) -> str:
         created: Final = self.gateway.post(
             "/user/new", {"user_id": f"integration-{uuid.uuid4().hex}", "auto_create_key": False, **fields}
@@ -139,8 +149,10 @@ class Scenario:
 
     def delete_key(self, token: str) -> None:
         self.gateway.post("/key/delete", {"keys": [token]})
-        response: Final = self.gateway.request("GET", "/key/info", params={"key": sha256(token.encode()).hexdigest()})
-        assert response.status_code == 404, f"Deleted key remains readable: {response.status_code}"
+        hashed: Final = sha256(token.encode()).hexdigest()
+        assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token = %s', (hashed,)) == []
+        info: Final = object_value(self.gateway.get("/key/info", {"key": hashed})["info"])
+        assert info["status"] == "deleted", f"Deleted key still served as live: {info['status']}"
 
     def delete_model(self, identity: str) -> None:
         self.gateway.post("/model/delete", {"id": identity})

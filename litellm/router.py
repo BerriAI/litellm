@@ -109,7 +109,14 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
     vector_store_request_metadata,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.llms.openai_like.model_info import (
+    MODEL_INFO_DISCOVERY_PROVIDERS,
+    MODEL_INFO_REFRESH_CONCURRENCY,
+    MODEL_INFO_REFRESH_SECONDS,
+    get_openai_compatible_model_info,
+)
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -242,6 +249,7 @@ from litellm.types.router import (
     Deployment,
     DeploymentModelListingInfo,
     DeploymentTypedDict,
+    DiscoveredDeploymentModelInfo,
     FallbackAccessCheck,
     FallbackBudgetCheck,
     GuardrailTypedDict,
@@ -972,6 +980,10 @@ class Router:
         self._zero_cost_cache: dict[str, bool] = {}
         self.cached_deployment_model_info = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
             self.get_deployment_model_info
+        )
+        self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
+            max_size_in_memory=max(len(model_list or ()), 1),
+            default_ttl=2 * MODEL_INFO_REFRESH_SECONDS,
         )
         self._routing_group_rows: tuple[DeploymentTypedDict, ...] | None = None
         self._init_routing_groups(None)
@@ -9492,6 +9504,7 @@ class Router:
 
     def set_model_list(self, model_list: list):
         original_model_list: Final = copy.deepcopy(model_list)
+        self._discovered_model_info_cache.flush_cache()
         self.model_list = []
         self.model_id_to_deployment_index_map = {}  # Reset the index
         self.model_name_to_deployment_indices = {}  # Reset the model_name index
@@ -9786,6 +9799,7 @@ class Router:
         - model_id: str - the id of the deployment that was removed
         - removal_idx: int - the index where the deployment was removed from model_list
         """
+        self._discovered_model_info_cache.delete_cache(model_id)
         # Update indices for all models after the removed one
         for deployment_id, idx in self.model_id_to_deployment_index_map.items():
             if idx > removal_idx:
@@ -10316,11 +10330,85 @@ class Router:
             return None
         return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
 
+    async def arefresh_model_info(self, *, client: AsyncHTTPHandler | None = None) -> None:
+        """Refresh token limits advertised by configured OpenAI-compatible deployments."""
+        deployments: Final = iter(tuple(self.model_list))
+
+        async def refresh_worker() -> None:
+            for raw_deployment in deployments:
+                try:
+                    await self._arefresh_deployment_model_info(raw_deployment, client=client)
+                except Exception:  # noqa: BLE001  # one invalid deployment must not prevent refreshing the others
+                    verbose_router_logger.debug("Could not refresh deployment model info")
+
+        await asyncio.gather(*(refresh_worker() for _ in range(MODEL_INFO_REFRESH_CONCURRENCY)))
+        self._invalidate_model_group_info_cache()
+
+    async def _arefresh_deployment_model_info(
+        self, raw_deployment: Mapping[str, object], *, client: AsyncHTTPHandler | None
+    ) -> None:
+        deployment: Final = Deployment.model_validate(raw_deployment)
+        params: Final = LiteLLM_Params.model_validate(
+            MappingProxyType(
+                {
+                    **deployment.litellm_params.model_dump(exclude_none=True),
+                    **(
+                        self.get_deployment_credentials_with_provider(deployment.model_info.id or "")
+                        or MappingProxyType({})
+                    ),
+                }
+            )
+        )
+        model, provider, dynamic_api_key, api_base = litellm.get_llm_provider(model=params.model, litellm_params=params)
+        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
+            return
+        if api_base is None or "*" in model or params.get("use_clientside_credentials"):
+            return
+        api_key: Final = params.api_key or dynamic_api_key
+        headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
+            params.get("extra_headers") or params.get("headers") or MappingProxyType({})
+        )
+        auth_headers: Final = (
+            MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
+        )
+        limits: Final = await get_openai_compatible_model_info(
+            model=model,
+            api_base=api_base,
+            headers=MappingProxyType(
+                {
+                    **auth_headers,
+                    **MappingProxyType({key.lower(): value for key, value in headers.items()}),
+                }
+            ),
+            client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
+            cache=self.cache.in_memory_cache,
+        )
+        model_id: Final = deployment.model_info.id
+        if not limits or model_id is None or self.get_model_info(model_id) is not raw_deployment:
+            return
+        self._discovered_model_info_cache.max_size_in_memory = max(len(self.model_list), 1)
+        self._discovered_model_info_cache.delete_cache(model_id)
+        self._discovered_model_info_cache.set_cache(
+            model_id, DiscoveredDeploymentModelInfo(deployment=raw_deployment, limits=limits)
+        )
+        self._invalidate_model_group_info_cache()
+
+    def get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
+        cached: Final[object] = self._discovered_model_info_cache.get_cache(model_id)
+        if (
+            model_id is not None
+            and isinstance(cached, DiscoveredDeploymentModelInfo)
+            and cached.deployment is self.get_model_info(model_id)
+        ):
+            configured: Final = TypeAdapter(Mapping[str, object]).validate_python(cached.deployment["model_info"])
+            return MappingProxyType({key: value for key, value in cached.limits.items() if configured.get(key) is None})
+        return MappingProxyType({})
+
     def get_model_listing_info(self, model_name: str) -> DeploymentModelListingInfo | None:
         """
         Return what the concrete deployments behind model_name contribute to its
         /v1/models entry: the cost-map keys for their underlying models, plus the widest
-        token limits explicitly configured in their model_info. Resolved via O(1) index
+        configured or discovered token limits. Resolved via O(1) index
         lookup.
 
         Returns None for wildcard-expanded or unknown names, where the listed name is the
@@ -10340,7 +10428,21 @@ class Router:
             return None
 
         deployments: Final = tuple(self.model_list[index] for index in indices)
-        model_infos: Final = tuple(deployment.get("model_info") or MappingProxyType({}) for deployment in deployments)
+        model_infos: Final = tuple(
+            MappingProxyType(
+                {
+                    **self.get_discovered_model_info((deployment.get("model_info") or MappingProxyType({})).get("id")),
+                    **MappingProxyType(
+                        {
+                            k: v
+                            for k, v in (deployment.get("model_info") or MappingProxyType({})).items()
+                            if v is not None
+                        }
+                    ),
+                }
+            )
+            for deployment in deployments
+        )
         params: Final = tuple(deployment.get("litellm_params") or MappingProxyType({}) for deployment in deployments)
         # base_model resolution mirrors get_router_model_info: unset or blank means the
         # deployment's own model name is the cost-map key.
@@ -10372,8 +10474,8 @@ class Router:
 
     def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
         """
-        Return (max_input_tokens, max_output_tokens) explicitly configured in a concrete
-        deployment's model_info for model_name, via O(1) index lookup.
+        Return (max_input_tokens, max_output_tokens) configured or discovered for a concrete
+        deployment of model_name, via O(1) index lookup.
 
         Returns (None, None) for wildcard-expanded or unknown names, and treats a
         malformed configured value as absent rather than failing the caller.
@@ -10386,7 +10488,12 @@ class Router:
         if deployment is None:
             return (None, None)
 
-        model_info: Final = deployment.model_info
+        model_info: Final = MappingProxyType(
+            {
+                **self.get_discovered_model_info(deployment.model_info.id),
+                **deployment.model_info.model_dump(exclude_none=True),
+            }
+        )
         return (
             coerce_token_limit(model_info.get("max_input_tokens")),
             coerce_token_limit(model_info.get("max_output_tokens")),
@@ -10651,11 +10758,13 @@ class Router:
 
         # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
         # values are skipped or Deployment's None pricing defaults would erase the map's
-        merged_model_info: Final = copy.deepcopy(model_info)
-        if user_model_info:
-            for key, value in user_model_info.items():
-                if value is not None:
-                    merged_model_info[key] = value
+        merged_model_info: Final[ModelMapInfo] = {
+            **copy.deepcopy(model_info),
+            **self.get_discovered_model_info((deployment.get("model_info") or {}).get("id")),
+            **MappingProxyType(
+                {key: value for key, value in (user_model_info or MappingProxyType({})).items() if value is not None}
+            ),
+        }
 
         return merged_model_info
 
@@ -10702,7 +10811,14 @@ class Router:
         litellm_model_name_model_info: ModelInfo | None = None
 
         try:
-            custom_model_info = copy.deepcopy(litellm.model_cost.get(model_id))
+            custom_model_info = (
+                {  # mutable-ok: the legacy model-info merge updates this private copy
+                    **copy.deepcopy(litellm.model_cost.get(model_id) or MappingProxyType({})),
+                    **self.get_discovered_model_info(model_id),
+                }
+                if model_id in litellm.model_cost
+                else None
+            )
         except Exception:
             pass
 

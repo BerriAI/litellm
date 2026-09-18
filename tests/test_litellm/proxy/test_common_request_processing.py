@@ -328,6 +328,35 @@ class TestProxyBaseLLMRequestProcessing:
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("requested_model", [{"bad": "value"}, ["gpt-5.2"], 1])
+    async def test_common_processing_pre_call_logic_rejects_a_non_string_model_with_400(
+        self, monkeypatch, requested_model: dict[str, str] | list[str] | int
+    ):
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"model": requested_model, "messages": [{"role": "user", "content": "hi"}]}
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        add_litellm_data_to_request = AsyncMock()
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing, "add_litellm_data_to_request", add_litellm_data_to_request
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                proxy_logging_obj=MagicMock(spec=ProxyLogging),
+                proxy_config=MagicMock(spec=ProxyConfig),
+                route_type="acompletion",
+            )
+
+        assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+        assert exc_info.value.param == "model"
+        add_litellm_data_to_request.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_refreshes_proxy_server_request_body_after_guardrails(
         self, monkeypatch
     ):

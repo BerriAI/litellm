@@ -307,7 +307,7 @@ async def test_chat_completion():
                 model="gpt-4",
                 messages=[{"role": "user", "content": "Hello!"}],
             )
-        assert "is not available for this API key" in str(e)
+        assert "is not available for this API key" in str(e.value)
 
 
 @pytest.mark.asyncio

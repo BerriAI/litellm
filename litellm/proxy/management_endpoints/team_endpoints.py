@@ -16,6 +16,7 @@ import math
 import traceback
 from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import (
@@ -128,6 +129,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
+    member_budget_patch,
     validate_budget_duration,
     validate_team_model_max_budget,
 )
@@ -338,6 +340,14 @@ class _DeletedTeamsResult(TypedDict):
 
 class _ErrorDetail(TypedDict):
     error: ReadOnly[str]
+
+
+class _TeamIdWhere(TypedDict):
+    team_id: ReadOnly[str]
+
+
+class _TeamIdAndBudgetWhere(_TeamIdWhere):
+    max_budget: ReadOnly[float | None]
 
 
 class _TeamCreateTx(AccessGroupSyncTx, Protocol):
@@ -1200,26 +1210,39 @@ async def _check_user_team_limits(
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _MaxBudgetGuard:
+    """The team write only lands while the stored max_budget still equals `expected`."""
+
+    expected: float | None
+
+
 def _check_team_budget_update_authority(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth,
     existing_team_max_budget: float | None,
-) -> None:
+) -> _MaxBudgetGuard | None:
     """
-    Restrict who can grow a standalone team's spend ceiling on /team/update.
+    Restrict who can grow a team's spend ceiling on /team/update.
 
-    A team admin (already authorized via _verify_team_access) may keep or lower
-    the team budget, but only a proxy admin may grow it - by raising max_budget
-    above the team's current value or by removing the cap (setting it to None).
-    Setting a finite budget on a team that has no cap is a restriction and is
-    allowed. Org-scoped teams are governed by _check_org_team_limits().
+    A team admin may keep or lower the team budget, but only a proxy admin may
+    grow it - by raising max_budget above the team's current value or by
+    removing the cap (setting it to None). Setting a finite budget on a team
+    that has no cap is a restriction and is allowed. Org admins editing
+    org-scoped teams are governed by _check_org_team_limits() instead.
+
+    The verdict holds only for the budget it was checked against, so a restricted
+    caller's budget write gets a guard; without it, a concurrent budget cut could
+    be overwritten with a higher value.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
-        return
-    if existing_team_max_budget is None:
-        return
+        return None
 
     budget_explicitly_set: Final = "max_budget" in (getattr(data, "model_fields_set", None) or set())
+    guard: Final = _MaxBudgetGuard(expected=existing_team_max_budget) if budget_explicitly_set else None
+    if existing_team_max_budget is None:
+        return guard
+
     if budget_explicitly_set and data.max_budget is None:
         raise HTTPException(
             status_code=403,
@@ -1235,6 +1258,37 @@ def _check_team_budget_update_authority(
                 "error": f"Only a proxy admin can raise a team's max_budget. Team's current max_budget={existing_team_max_budget}, requested={data.max_budget}."
             },
         )
+    return guard
+
+
+_TEAM_UPDATE_INCLUDE: Final = MappingProxyType(
+    {
+        "litellm_model_table": True,
+        # `object_permission` is included so `_refresh_cached_team`
+        # doesn't write a cached team with the relation nulled out.
+        # See team_model_add for the full rationale.
+        "object_permission": True,
+    }
+)
+
+
+async def _write_team_update(
+    prisma_client: PrismaClient | None,
+    team_id: str,
+    team_update_data: Mapping[str, object],
+    max_budget_guard: _MaxBudgetGuard | None,
+) -> "prisma_models.LiteLLM_TeamTable | None":
+    by_id: Final[_TeamIdWhere] = {"team_id": team_id}
+    if max_budget_guard is None:
+        return await _team_db(prisma_client).update(where=by_id, data=team_update_data, include=_TEAM_UPDATE_INCLUDE)
+    by_id_and_budget: Final[_TeamIdAndBudgetWhere] = {"team_id": team_id, "max_budget": max_budget_guard.expected}
+    written: Final = await _team_db(prisma_client).update_many(where=by_id_and_budget, data=team_update_data)
+    if written == 0:
+        conflict: Final[_ErrorDetail] = {
+            "error": "The team's max_budget changed during this update. Reload the team and try again."
+        }
+        raise HTTPException(status_code=409, detail=conflict)
+    return await _team_db(prisma_client).find_unique(where=by_id, include=_TEAM_UPDATE_INCLUDE)
 
 
 def _existing_model_cap(raw_budget_config: object) -> BudgetConfig | None:
@@ -2339,14 +2393,17 @@ async def update_team(
                     prisma_client=prisma_client,
                 )
 
-        # Only a proxy admin may grow a standalone team's spend ceiling.
-        # Org-scoped teams are validated by _check_org_team_limits() above.
-        if org_id_to_check is None:
+        # A team admin never grows its own team's spend ceiling. Org admins grow org-scoped teams
+        # within the org limits _check_org_team_limits() enforced above.
+        max_budget_guard: Final = (
             _check_team_budget_update_authority(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
                 existing_team_max_budget=existing_team_row.max_budget,
             )
+            if org_id_to_check is None or access_role == "team_admin"
+            else None
+        )
         _check_team_model_budget_update_authority(
             data=data,
             user_api_key_dict=user_api_key_dict,
@@ -2493,17 +2550,7 @@ async def update_team(
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
         team_update_data: Final[Mapping[str, object]] = updated_kv
-        team_row: Final = await _team_db(prisma_client).update(
-            where={"team_id": data.team_id},
-            data=team_update_data,
-            # `object_permission` is included so `_refresh_cached_team`
-            # doesn't write a cached team with the relation nulled out.
-            # See team_model_add for the full rationale.
-            include={
-                "litellm_model_table": True,
-                "object_permission": True,
-            },
-        )
+        team_row: Final = await _write_team_update(prisma_client, data.team_id, team_update_data, max_budget_guard)
 
         if team_row is None or team_row.team_id is None:
             raise HTTPException(
@@ -3645,27 +3692,6 @@ async def team_member_delete(
     return existing_team_row
 
 
-_MEMBER_BUDGET_PATCH_FIELDS: Final = {
-    "max_budget_in_team": "max_budget",
-    "tpm_limit": "tpm_limit",
-    "rpm_limit": "rpm_limit",
-    "budget_duration": "budget_duration",
-    "allowed_models": "allowed_models",
-}
-
-
-def _build_member_budget_patch(data: TeamMemberUpdateRequest) -> dict[str, object]:
-    """Map the budget fields the request actually set (merge-patch: a sent
-    value updates, an explicit null clears, an absent field is left untouched)
-    to their budget-table columns."""
-    provided: Final = data.model_dump(exclude_unset=True)
-    return {
-        column: provided[request_field]
-        for request_field, column in _MEMBER_BUDGET_PATCH_FIELDS.items()
-        if request_field in provided
-    }
-
-
 @router.post(
     "/team/member_update",
     tags=["team management"],
@@ -3771,7 +3797,7 @@ async def team_member_update(
             team_default_budget_id = raw_default_budget_id
 
     ### upsert new budget
-    budget_patch: Final = _build_member_budget_patch(data)
+    budget_patch: Final = member_budget_patch(data)
     async with prisma_client.tx() as tx:
         await _upsert_budget_and_membership(
             tx=tx,

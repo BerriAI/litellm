@@ -367,7 +367,7 @@ async def obtain_cli_sso_token_via_poll_flow(
     models: list[str],
 ) -> str:
     """
-    Obtain a CLI SSO JWT through the same HTTP flow as `litellm-proxy login`:
+    Obtain a CLI SSO JWT through the same HTTP flow as `lite login`:
     /sso/cli/start -> (SSO callback) -> /sso/cli/complete -> /sso/cli/poll.
 
     When the proxy SSO session cache is not shared with the test runner (otel CI
@@ -551,7 +551,7 @@ async def test_team_budget_enforcement():
 @pytest.mark.asyncio
 async def test_team_budget_enforcement_cli_sso_token():
     """
-    Team budget enforcement for CLI SSO session tokens (litellm-proxy login JWT).
+    Team budget enforcement for CLI SSO session tokens (lite login JWT).
 
     1. Create team with a tiny max_budget and a user on that team
     2. Obtain a CLI SSO JWT (HTTP poll flow when Redis is shared, else mint)

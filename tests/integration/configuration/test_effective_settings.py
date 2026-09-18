@@ -4,8 +4,8 @@ from typing import Final
 import httpx
 import pytest
 
-from integration._support.client import Gateway, object_value, string_value
-from integration._support.database import read_rows
+from tests.integration._support.client import Gateway, object_value, string_value
+from tests.integration._support.database import read_rows
 
 
 def model_identity(gateway: Gateway, alias: str) -> str:
