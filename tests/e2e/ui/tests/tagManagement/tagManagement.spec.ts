@@ -17,22 +17,22 @@ test.describe("Tag management", () => {
     await navigateToPage(page, DashboardPage.TagManagement);
     await page.getByRole("button", { name: "+ Create New Tag" }).click();
 
-    try {
-      await expect(
-        page.getByRole("dialog", { name: "Create New Tag" }),
-      ).toBeVisible();
-      await page.getByLabel("Tag Name").fill(tagName);
-      await page.getByLabel("Description").fill(description);
-      await page.getByRole("button", { name: "Create Tag" }).click();
+    await expect(
+      page.getByRole("dialog", { name: "Create New Tag" }),
+    ).toBeVisible();
+    await page.getByLabel("Tag Name").fill(tagName);
+    await page.getByLabel("Description").fill(description);
+    await page.getByRole("button", { name: "Create Tag" }).click();
 
-      await expect
-        .poll(async () => {
-          const response = await readBack<
-            Record<string, Record<string, unknown>>
-          >(page, "/tag/list");
-          return Object.values(response).some((tag) => tag.name === tagName);
-        })
-        .toBe(true);
+    await expect
+      .poll(async () => {
+        const response = await readBack<
+          Record<string, Record<string, unknown>>
+        >(page, "/tag/list");
+        return Object.values(response).some((tag) => tag.name === tagName);
+      })
+      .toBe(true);
+    try {
       await expect(page.getByText(tagName, { exact: true })).toBeVisible();
 
       await page.getByText(tagName, { exact: true }).click();
