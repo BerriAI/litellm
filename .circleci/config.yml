@@ -394,6 +394,82 @@ jobs:
               --resolution "<< parameters.resolution >>" --no-sources -r pyproject.toml dist/*.whl
             /tmp/base-sdk/bin/python tests/base_sdk_tests/check_base_sdk_install.py
 
+  mcp_dependency_gate:
+    parameters:
+      python_version:
+        type: string
+    docker:
+      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - install_rust
+      - run:
+          name: Build source wheels for the isolated dependency gate
+          environment:
+            UV_HTTP_TIMEOUT: "300"
+          command: |
+            uv build --wheel --out-dir /tmp/mcp-wheels
+            uv build --wheel --package litellm-enterprise --out-dir /tmp/mcp-wheels
+            uv build --wheel --package litellm-proxy-extras --out-dir /tmp/mcp-wheels
+      - run:
+          name: Verify core and SDK2 minimum and locked installations
+          environment:
+            UV_HTTP_TIMEOUT: "300"
+          command: |
+            set -euo pipefail
+            wheel=(/tmp/mcp-wheels/litellm-[0-9]*.whl)
+            mkdir -p /tmp/mcp-gate-reports
+            for profile in core mcp proxy; do
+              for mode in minimum locked; do
+                uv run --no-project --python 3.12 --with 'packaging==26.0' --with 'coverage==7.14.0' \
+                  coverage run --append --branch --source=tests/mcp_dependency_tests,tests/base_sdk_tests \
+                  tests/mcp_dependency_tests/runner.py check \
+                  --wheel "${wheel[0]}" --profile "$profile" --mode "$mode" \
+                  --python '<< parameters.python_version >>' \
+                  --environment "/tmp/mcp-gate/${profile}-${mode}"
+                cp "/tmp/mcp-gate/${profile}-${mode}/report.json" "/tmp/mcp-gate-reports/${profile}-${mode}.json"
+              done
+            done
+            git diff --exit-code -- pyproject.toml uv.lock
+      - when:
+          condition:
+            equal: ["3.12", << parameters.python_version >>]
+          steps:
+            - run:
+                name: Test dependency runner behavior
+                command: |
+                  set -euo pipefail
+                  for profile in core mcp; do
+                    instrumented="/tmp/mcp-gate-coverage-${profile}"
+                    cp -a "/tmp/mcp-gate/${profile}-locked" "$instrumented"
+                    uv pip install --python "$instrumented/bin/python" 'coverage==7.14.0'
+                    "$instrumented/bin/python" -m coverage run --append --branch \
+                      --source=tests/mcp_dependency_tests,tests/base_sdk_tests \
+                      tests/mcp_dependency_tests/check_environment.py "$profile" "$instrumented"
+                    if [ "$profile" = core ]; then
+                      "$instrumented/bin/python" -m coverage run --append --branch \
+                        --source=tests/mcp_dependency_tests,tests/base_sdk_tests \
+                        tests/base_sdk_tests/check_base_sdk_install.py
+                    fi
+                  done
+                  uv run --no-project --python 3.12 --with 'packaging==26.0' \
+                    --with 'pytest==9.0.3' --with 'pytest-cov==5.0.0' --with 'coverage==7.14.0' \
+                    pytest tests/mcp_dependency_tests/test_runner.py \
+                    --cov=tests/mcp_dependency_tests \
+                    --cov=tests/base_sdk_tests --cov-append --cov-branch \
+                    --cov-report=xml:mcp-dependency-coverage.xml
+            - codecov/upload:
+                file: ./mcp-dependency-coverage.xml
+      - store_artifacts:
+          path: /tmp/mcp-gate-reports
+          destination: mcp-dependency-gate
+
   local_testing_part1:
     docker:
       - &python312_image
@@ -3038,6 +3114,11 @@ workflows:
       - base_sdk_install:
           name: base_sdk_minimum_<< matrix.python_version >>
           resolution: lowest-direct
+          matrix:
+            parameters:
+              python_version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+          filters: *main_branches
+      - mcp_dependency_gate:
           matrix:
             parameters:
               python_version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
