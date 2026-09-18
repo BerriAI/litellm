@@ -1625,6 +1625,33 @@ async def test_update_daily_spend_keeps_failed_transactions_for_retry():
 
 
 @pytest.mark.asyncio
+async def test_update_daily_spend_drops_the_batch_whose_failure_cannot_be_resent():
+    """A reply lost after the statement was sent may already have applied, so the batch is
+    taken out of the caller's dict before the error propagates: whichever requeue the caller
+    runs afterwards, the Redis restore included, cannot send it a second time."""
+
+    def lose_the_reply() -> int:
+        raise httpx.ReadTimeout("no reply")
+
+    prisma_client = _RecordingPrisma(execute_raw=lose_the_reply)
+    daily_spend_transactions = {"user-key": _daily_txn(user_id="user-1")}
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    with pytest.raises(httpx.ReadTimeout):
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=0,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="user",
+            entity_id_field="user_id",
+        )
+
+    assert daily_spend_transactions == {}
+
+
+@pytest.mark.asyncio
 async def test_commit_key_spend_updates_includes_last_active():
     """
     Test that _commit_spend_updates_to_db sets last_active alongside spend
@@ -2872,6 +2899,33 @@ async def test_failed_daily_spend_commit_is_requeued_only_when_the_rows_are_prov
     )
 
     assert len(_daily_upserts(db, "LiteLLM_DailyUserSpend")) == (1 if lands_on_the_next_tick else 0)
+    assert db_writer.daily_spend_update_queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_failed_daily_spend_commit_drops_only_the_batch_that_was_sent():
+    """A tick holding more than one batch of 100 rows sends them one statement at a time, and
+    a reply lost on one statement says nothing about the batches after it: only the batch that
+    was on the wire is dropped, the ones never sent go back on the queue and land next tick."""
+    db_writer = DBSpendUpdateWriter()
+    await db_writer.daily_spend_update_queue.add_update(
+        {f"user-{i:03d}": _daily_txn(user_id=f"user-{i:03d}") for i in range(150)}
+    )
+    db = _DailySpendFakeDB(failing_table="LiteLLM_DailyUserSpend", failure=httpx.ReadTimeout("no reply"))
+    db_writer._flush_tool_discovery_queue = AsyncMock()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+    db.failing_table = None
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db), n_retry_times=0, proxy_logging_obj=proxy_logging_obj
+    )
+
+    (upsert,) = _daily_upserts(db, "LiteLLM_DailyUserSpend")
+    assert _row_values(upsert, "user_id") == [f"user-{i:03d}" for i in range(100, 150)]
     assert db_writer.daily_spend_update_queue.update_queue.empty()
 
 

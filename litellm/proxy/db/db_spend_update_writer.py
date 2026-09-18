@@ -1332,15 +1332,7 @@ class DBSpendUpdateWriter:
                 daily_spend_transactions=cast(dict[str, _DailySpendTransactionT], transactions),
             )
         except Exception as e:  # noqa: BLE001  # whatever failed here, the other tables must still flush
-            if not _daily_spend_commit_failure_is_requeue_safe(e):
-                spend_log_error(
-                    "Spend tracking - dropped %d daily %s spend rows: the failed commit may have applied "
-                    "or the database refused the data, so re-sending it is not safe. Error: %s",
-                    len(transactions),
-                    entity_type,
-                    str(e),
-                    exc=e,
-                )
+            if not transactions:
                 return
             spend_log_error(
                 "Spend tracking - failed to commit daily %s spend updates. "
@@ -2050,13 +2042,25 @@ class DBSpendUpdateWriter:
                             sql, params = build_bulk_upsert(table=table, batch=merged_batch)
                             await prisma_client.db.execute_raw(sql, *params)
                         except Exception as batch_error:
-                            # Log detailed error information for debugging batch upsert failures
-                            # This helps diagnose issues like unique constraint violations
+                            if _daily_spend_commit_failure_is_requeue_safe(batch_error):
+                                spend_log_error(
+                                    "Daily %s spend batch upsert failed. Table: %s, Rows: %d, Error: %s",
+                                    entity_type,
+                                    table.name,
+                                    len(transactions_to_process),
+                                    str(batch_error),
+                                    exc=batch_error,
+                                )
+                                raise
+                            for key in transactions_to_process:
+                                daily_spend_transactions.pop(key, None)
                             spend_log_error(
-                                "Daily %s spend batch upsert failed. Table: %s, Rows: %d, Error: %s",
+                                "Spend tracking - dropped %d daily %s spend rows: the failed statement may have "
+                                "applied or the database refused the data, so re-sending it is not safe. "
+                                "Table: %s, Error: %s",
+                                len(transactions_to_process),
                                 entity_type,
                                 table.name,
-                                len(transactions_to_process),
                                 str(batch_error),
                                 exc=batch_error,
                             )
