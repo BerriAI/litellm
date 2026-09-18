@@ -3,6 +3,7 @@ import json
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
+from unittest.mock import create_autospec
 
 import httpx
 import pytest
@@ -37,6 +38,37 @@ class _UsageRecorder(CustomLogger):
         if str(kwargs.get("model", "")).removeprefix("typesafe/") != "jev-accounting":
             return
         self.calls = (*self.calls, kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [400, 429, 500, 503])
+async def test_jev_http_errors_do_not_dispatch_successful_usage(
+    monkeypatch: pytest.MonkeyPatch, status_code: int
+) -> None:
+    recorder: Final = _UsageRecorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    handler: Final = create_autospec(AsyncHTTPHandler, instance=True)
+    handler.post.return_value = httpx.Response(
+        status_code,
+        request=httpx.Request("POST", "https://typesafe.test/v1/systemone"),
+        json={
+            "model": "jev-accounting",
+            "usage": {"input_tokens": 3, "output_tokens": 2},
+            "answers": {"tier": _answer().model_dump()},
+        },
+    )
+    provider: Final = HttpJevClassifierClient("test", "https://typesafe.test", handler)
+    request: Final = build_jev_request(
+        "choose a tier", None, "jev-accounting", DEFAULT_JEV_INSTRUCTIONS, {"SIMPLE": "cheap"}
+    )
+
+    with pytest.raises(httpx.HTTPStatusError) as error:
+        await provider.evaluate(request, timeout_s=3)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert error.value.response.status_code == status_code
+    handler.post.assert_awaited_once()
+    assert recorder.calls == ()
 
 
 @pytest.mark.asyncio

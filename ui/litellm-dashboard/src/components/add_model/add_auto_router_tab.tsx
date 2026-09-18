@@ -415,6 +415,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
     classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
     classifierContextBudgetChars: complexityRouterConfig.classifier_context_budget_chars,
+    classifierContextPerTurnChars: complexityRouterConfig.classifier_context_per_turn_chars,
     classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
     classifierFallback: complexityRouterConfig.classifier_fallback,
     sessionAffinity: complexityRouterConfig.session_affinity ?? DEFAULT_SESSION_AFFINITY,

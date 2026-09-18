@@ -100,8 +100,8 @@ class HttpJevClassifierClient:
             ),  # pyright: ignore[reportArgumentType]  # HTTP headers are not mutated by AsyncHTTPHandler
             timeout=timeout_s,
         )
-        self._log_response(request, response, request_kwargs, start_time)
         response.raise_for_status()
+        self._log_response(request, response, request_kwargs, start_time)
         return TypeAdapter(JevSystemOneResponse).validate_python(response.json())
 
     @staticmethod

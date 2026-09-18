@@ -144,6 +144,10 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.classifier_context_budget_chars === "number"
         ? parsedConfig.classifier_context_budget_chars
         : undefined,
+    classifier_context_per_turn_chars:
+      typeof parsedConfig.classifier_context_per_turn_chars === "number"
+        ? parsedConfig.classifier_context_per_turn_chars
+        : undefined,
     classifier_context_include_assistant_turns:
       typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
         ? parsedConfig.classifier_context_include_assistant_turns
@@ -342,6 +346,7 @@ export const buildUpdatedComplexityRouterConfig = (
     classifierLlmConfig: value.classifier_llm_config,
     classifierContextWindowSize: value.classifier_context_window_size,
     classifierContextBudgetChars: value.classifier_context_budget_chars,
+    classifierContextPerTurnChars: value.classifier_context_per_turn_chars,
     classifierContextIncludeAssistantTurns: value.classifier_context_include_assistant_turns,
     classifierFallback: value.classifier_fallback,
     sessionAffinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,

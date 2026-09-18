@@ -80,6 +80,7 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
       },
       classifier_context_window_size: 7,
       classifier_context_budget_chars: 9000,
+      classifier_context_per_turn_chars: 450,
       classifier_context_include_assistant_turns: true,
       some_future_backend_key: { nested: true },
     };
@@ -87,12 +88,14 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
     expect(effectiveClassifierType(hydrated)).toBe("jev");
     expect(hydrated.classifier_llm_config).toBeUndefined();
     expect(hydrated.jev_classifier_config).toEqual(stored.jev_classifier_config);
+    expect(hydrated.classifier_context_per_turn_chars).toBe(450);
     const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
     const expectedSavedConfig = {
       classifier_type: "jev",
       jev_classifier_config: stored.jev_classifier_config,
       classifier_context_window_size: 7,
       classifier_context_budget_chars: 9000,
+      classifier_context_per_turn_chars: 450,
       classifier_context_include_assistant_turns: true,
       some_future_backend_key: { nested: true },
     };
@@ -100,6 +103,7 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
     expect(saved).not.toHaveProperty("classifier_llm_config");
     const reloaded = hydrateComplexityRouterConfig(saved, undefined);
     expect(reloaded.jev_classifier_config).toEqual(hydrated.jev_classifier_config);
+    expect(reloaded.classifier_context_per_turn_chars).toBe(450);
     expect(effectiveClassifierType(reloaded)).toBe("jev");
     const llm = buildUpdatedComplexityRouterConfig(saved, transitionClassifierType(reloaded, "llm"));
     expect(llm).not.toHaveProperty("jev_classifier_config");
@@ -287,6 +291,17 @@ describe("capability classifier configuration", () => {
 });
 
 describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
+  it.each(["llm", "jev"] as const)("saves the form's per-turn bound over the stored %s bound", (classifier_type) => {
+    const formValue = {
+      ...hydrateComplexityRouterConfig({ ...STORED_LLM, classifier_type }, undefined),
+      classifier_context_per_turn_chars: 600,
+    };
+    const saved = buildUpdatedComplexityRouterConfig(STORED_LLM, formValue);
+
+    expect(saved.classifier_context_per_turn_chars).toBe(600);
+    expect(hydrateComplexityRouterConfig(saved, undefined).classifier_context_per_turn_chars).toBe(600);
+  });
+
   it("round-trips an untouched edit without changing the classifier context values", () => {
     const formValue = {
       tiers: STORED_LLM.tiers,
