@@ -318,7 +318,8 @@ async def image_edit_api(
         data["mask"] = mask_files
 
     for _field in ("image", "mask"):
-        if _field in data and isinstance(data[_field], str):
+        _value = data.get(_field)
+        if isinstance(_value, str) or (isinstance(_value, list) and any(isinstance(_v, str) for _v in _value)):
             raise HTTPException(
                 status_code=422,
                 detail=f"'{_field}' must be provided as a multipart file upload, not a string.",
