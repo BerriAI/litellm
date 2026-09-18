@@ -16,7 +16,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
-from litellm.responses.main import aresponses
+from litellm.responses.main import aresponses  # noqa: TID251  # inner call must skip the MCP gateway that invoked it
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -691,6 +691,7 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_call_id: str | None = None,
         litellm_trace_id: str | None = None,
         request_tags: list[str] | None = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -854,6 +855,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     raw_headers=raw_headers,
                     proxy_logging_obj=proxy_logging_obj,
                     litellm_logging_obj=litellm_logging_obj,
+                    guardrail_context=guardrail_context,
                 )
 
                 if proxy_logging_obj:

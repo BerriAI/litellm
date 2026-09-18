@@ -3864,6 +3864,54 @@ class TestModelInfoServerDerivedPricingFilter:
         assert written["access_groups"] == ["prod"]
 
 
+class TestUpdateDBModelClearCacheControlInjectionPoints:
+    def test_explicit_null_removes_stored_injection_points(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import LiteLLM_Params, ModelInfo, updateLiteLLMParams
+
+        db_model = Deployment(
+            model_name="haiku-cached",
+            litellm_params=LiteLLM_Params(
+                model="anthropic/claude-haiku-4-5",
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+            ),
+            model_info=ModelInfo(id="dep-cache-0"),
+        )
+        patch = updateDeployment(
+            litellm_params=updateLiteLLMParams(cache_control_injection_points=None)
+        )
+
+        result = update_db_model(db_model=db_model, updated_patch=patch)
+
+        params = json.loads(result["litellm_params"])
+        assert "cache_control_injection_points" not in params
+        assert params["model"] == "anthropic/claude-haiku-4-5"
+
+    def test_omitted_key_keeps_stored_injection_points(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import LiteLLM_Params, ModelInfo, updateLiteLLMParams
+
+        db_model = Deployment(
+            model_name="haiku-cached",
+            litellm_params=LiteLLM_Params(
+                model="anthropic/claude-haiku-4-5",
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+            ),
+            model_info=ModelInfo(id="dep-cache-0"),
+        )
+        patch = updateDeployment(litellm_params=updateLiteLLMParams(tpm=10))
+
+        result = update_db_model(db_model=db_model, updated_patch=patch)
+
+        params = json.loads(result["litellm_params"])
+        assert params["cache_control_injection_points"] == [{"location": "message", "role": "system"}]
+        assert params["tpm"] == 10
+
+
 class TestGetModelInfoWithIdBlocked:
     """`ProxyConfig.get_model_info_with_id` must propagate the DB-level `blocked`
     column into the in-memory `model_info` dict so the router filter can read it."""
@@ -6058,11 +6106,27 @@ class TestBlockModelResponseSerialization:
 
 
 class TestAccessGroupModelSync:
-    """A rename or delete of a deployment must land in every unified access group that names it."""
+    """A rename or delete of a deployment must land in every access group and models allowlist that names it."""
 
     _PS = "litellm.proxy.proxy_server"
     _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
     _INVALIDATE = "litellm.proxy.management_helpers.access_group_model_sync.invalidate_access_group_caches"
+    _EVICT = "litellm.proxy.management_helpers.model_allowlist_rename_sync.evict_and_broadcast"
+    _ALLOWLIST_TABLES = (
+        "LiteLLM_TeamTable",
+        "LiteLLM_VerificationToken",
+        "LiteLLM_OrganizationTable",
+        "LiteLLM_ProjectTable",
+        "LiteLLM_UserTable",
+    )
+    _ALLOWLIST_ROWS = [
+        {"kind": "team", "object_id": "team-1", "team_alias": "alias-1"},
+        {"kind": "team", "object_id": "team-2", "team_alias": None},
+        {"kind": "key", "object_id": "hashed-token-1", "team_alias": None},
+        {"kind": "org", "object_id": "org-1", "team_alias": None},
+        {"kind": "project", "object_id": "proj-1", "team_alias": None},
+        {"kind": "user", "object_id": "user-1", "team_alias": None},
+    ]
 
     @staticmethod
     def _admin():
@@ -6082,7 +6146,10 @@ class TestAccessGroupModelSync:
         async def query_raw(sql, *params):
             if sql.startswith("SELECT COUNT(*)"):
                 return [{"deployment_count": deployment_count}]
-            return [{"access_group_id": "ag-1"}]
+            if sql.startswith('UPDATE "LiteLLM_AccessGroupTable"'):
+                return [{"access_group_id": "ag-1"}]
+            assert sql.startswith("WITH ")
+            return TestAccessGroupModelSync._ALLOWLIST_ROWS
 
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
@@ -6101,8 +6168,16 @@ class TestAccessGroupModelSync:
             if call.args[0].startswith('UPDATE "LiteLLM_AccessGroupTable"')
         ]
 
+    @staticmethod
+    def _allowlist_updates(mock_prisma):
+        return [
+            call
+            for call in mock_prisma.db.query_raw.await_args_list
+            if call.args[0].startswith("WITH ") and 'SET "models"' in call.args[0]
+        ]
+
     @contextlib.contextmanager
-    def _endpoint_env(self, mock_prisma, router):
+    def _endpoint_env(self, mock_prisma, router, evict=None):
         with contextlib.ExitStack() as stack:
             for target in (
                 patch(f"{self._PS}.prisma_client", mock_prisma),
@@ -6111,7 +6186,10 @@ class TestAccessGroupModelSync:
                 patch(f"{self._PS}.premium_user", True),
                 patch(f"{self._PS}.proxy_logging_obj", MagicMock()),
                 patch(f"{self._PS}.user_api_key_cache", MagicMock()),
-                patch(f"{self._MOD}.ModelManagementAuthChecks.can_user_make_model_call", new=AsyncMock(return_value=None)),
+                patch(self._EVICT, new=evict or AsyncMock()),
+                patch(
+                    f"{self._MOD}.ModelManagementAuthChecks.can_user_make_model_call", new=AsyncMock(return_value=None)
+                ),
                 patch(
                     f"{self._MOD}.clear_cache",
                     new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
@@ -6171,7 +6249,9 @@ class TestAccessGroupModelSync:
         router.get_model_ids.return_value = ["m-same"]
 
         with self._endpoint_env(mock_prisma, router) as invalidate:
-            await patch_model(model_id="m-same", patch_data=updateDeployment(blocked=True), user_api_key_dict=self._admin())
+            await patch_model(
+                model_id="m-same", patch_data=updateDeployment(blocked=True), user_api_key_dict=self._admin()
+            )
 
         mock_prisma.db.query_raw.assert_not_awaited()
         invalidate.assert_not_awaited()
@@ -6231,6 +6311,97 @@ class TestAccessGroupModelSync:
         assert "array_replace" in update_call.args[0]
         assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
         invalidate.assert_awaited_once_with(("ag-1",))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    async def test_rename_rewrites_key_team_org_project_and_user_allowlists_and_evicts_their_caches(self, endpoint):
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model, update_model
+
+        mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=0)
+        router = MagicMock()
+        router.get_model_ids.return_value = ["m-rename"]
+        evict = AsyncMock()
+
+        with self._endpoint_env(mock_prisma, router, evict=evict):
+            if endpoint == "patch":
+                await patch_model(
+                    model_id="m-rename",
+                    patch_data=updateDeployment(model_name="gpt-5.6-eu"),
+                    user_api_key_dict=self._admin(),
+                )
+            else:
+                await update_model(
+                    model_params=updateDeployment(
+                        model_name="gpt-5.6-eu",
+                        litellm_params=updateLiteLLMParams(model="openai/gpt-5.6"),
+                        model_info=ModelInfo(id="m-rename"),
+                    ),
+                    user_api_key_dict=self._admin(),
+                )
+
+        (update_call,) = self._allowlist_updates(mock_prisma)
+        for table in self._ALLOWLIST_TABLES:
+            assert (
+                f'UPDATE "{table}" SET "models" = array_replace(array_remove("models", $2), $1, $2) '
+                'WHERE $1 = ANY("models") RETURNING'
+            ) in update_call.args[0]
+        assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
+        evict.assert_awaited_once()
+        assert evict.await_args.args[0] == (
+            "team_id:team-1",
+            "team_alias:alias-1",
+            "team_id:team-2",
+            "hashed-token-1",
+            "org_id:org-1",
+            "org_id:org-1:with_budget",
+            "project_id:proj-1",
+            "user-1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_rename_appends_to_allowlists_when_a_sibling_deployment_keeps_the_old_name(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=1)
+        router = MagicMock()
+        router.get_model_ids.return_value = ["m-rename"]
+
+        with self._endpoint_env(mock_prisma, router):
+            await patch_model(
+                model_id="m-rename",
+                patch_data=updateDeployment(model_name="gpt-5.6-eu"),
+                user_api_key_dict=self._admin(),
+            )
+
+        (update_call,) = self._allowlist_updates(mock_prisma)
+        for table in self._ALLOWLIST_TABLES:
+            assert (
+                f'UPDATE "{table}" SET "models" = array_append("models", $2) '
+                'WHERE $1 = ANY("models") AND NOT ($2 = ANY("models")) RETURNING'
+            ) in update_call.args[0]
+        assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
+
+    @pytest.mark.asyncio
+    async def test_unchanged_name_never_touches_allowlists(self):
+        from litellm.proxy.management_helpers.model_allowlist_rename_sync import (
+            sync_model_allowlists_for_renamed_model,
+        )
+
+        mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=0)
+        evict = AsyncMock()
+
+        with patch(self._EVICT, new=evict):
+            await sync_model_allowlists_for_renamed_model(
+                prisma_client=mock_prisma,
+                model_id="m-rename",
+                old_name="gpt-5.6",
+                new_name="gpt-5.6",
+                llm_router=None,
+                user_api_key_cache=MagicMock(),
+            )
+
+        assert self._allowlist_updates(mock_prisma) == []
+        evict.assert_not_awaited()
 
 
 class TestTeamMemberAutoRouterWrites:

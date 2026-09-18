@@ -1,10 +1,9 @@
 use serde_json::Value;
 
 use super::Error;
-use crate::http_utils::{http_request, truncate_error_body};
-
 use super::client::http_client;
 use super::types::ProviderAudioTranscriptionRequest;
+use crate::http_utils::{http_request, truncate_error_body};
 
 pub async fn execute_audio_transcription_provider_call(
     request: ProviderAudioTranscriptionRequest,
@@ -37,7 +36,7 @@ pub async fn execute_audio_transcription_provider_call(
         .map_err(|error| Error::InvalidResponse(format!("invalid audio response JSON: {error}")))?;
     Ok(request
         .config
-        .transform_transcription_response(&request.model, response_json)?
+        .transform_audio_transcription_response(&request.model, response_json)?
         .into_json())
 }
 
@@ -48,9 +47,8 @@ async fn signed_headers(
     use std::collections::BTreeMap;
     use std::time::SystemTime;
 
-    use crate::audio_transcription::transformation::AudioTranscriptionAuth;
-    use crate::providers::bedrock::audio_transcription::aws_auth_config;
-    use crate::providers::bedrock::aws_base::{resolve_credentials, sign_bedrock_post};
+    use litellm_auth_aws::{aws_auth_config, resolve_credentials, sign_bedrock_post};
+    use litellm_providers::base_llm::audio_transcription::transformation::AudioTranscriptionAuth;
 
     let AudioTranscriptionAuth::AwsSigV4 { region, .. } = &request.auth else {
         return Ok(request.upstream_headers.clone());

@@ -1,5 +1,6 @@
 import math
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from fastapi import HTTPException, status
@@ -33,23 +34,11 @@ def validate_budget_duration(budget_duration: str | None, status_code: int = 400
     enough of them exist, they fill each batch and starve every other tenant's
     reset.
     """
-    if budget_duration is None:
-        return
+    from litellm.proxy.common_utils.timezone_utils import budget_duration_error
 
-    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-    try:
-        if duration_in_seconds(budget_duration) <= 0:
-            raise ValueError("budget_duration must be positive")
-        get_budget_reset_time(budget_duration=budget_duration)
-    except (ValueError, OverflowError):
-        raise HTTPException(
-            status_code=status_code,
-            detail={
-                "error": f"Invalid budget_duration '{budget_duration}'. Use a format like '1h', '24h', '7d', or '30d'."
-            },
-        )
+    error: Final = budget_duration_error(budget_duration)
+    if error is not None:
+        raise HTTPException(status_code=status_code, detail={"error": error})
 
 
 from litellm._logging import verbose_proxy_logger
@@ -490,6 +479,33 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
 )
 
 
+MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
+    {
+        "max_budget_in_team": "max_budget",
+        "tpm_limit": "tpm_limit",
+        "rpm_limit": "rpm_limit",
+        "budget_duration": "budget_duration",
+        "allowed_models": "allowed_models",
+    }
+)
+
+
+def _prisma_value(value: object) -> object:
+    return list(value) if isinstance(value, tuple) else value
+
+
+def member_budget_patch(source: BaseModel) -> dict[str, Any]:
+    """Map the per-member limit fields a request actually set to their budget-table
+    columns (merge-patch: a sent value updates, an explicit null clears, an absent
+    field is left untouched)."""
+    provided: Final = source.model_dump(exclude_unset=True)
+    return {
+        column: _prisma_value(provided[request_field])
+        for request_field, column in MEMBER_BUDGET_PATCH_FIELDS.items()
+        if request_field in provided
+    }
+
+
 def _is_set_budget_value(value: object) -> bool:
     if value is None:
         return False
@@ -513,6 +529,7 @@ async def _upsert_budget_and_membership(
     user_api_key_dict: UserAPIKeyAuth,
     budget_patch: dict[str, Any],
     team_default_budget_id: str | None = None,
+    shared_budget_ids: frozenset[str] | None = None,
 ):
     """
     Apply a merge-patch of per-member budget fields to a team membership.
@@ -527,6 +544,10 @@ async def _upsert_budget_and_membership(
     (from team metadata.team_member_budget_id). When the membership still
     points at it, we clone-on-write so editing one member's budget does not
     mutate the shared default that every other member points at.
+
+    ``shared_budget_ids`` extends that protection to any other row more than one
+    membership points at, which a caller patching several members at once has
+    already counted; a row listed there is cloned rather than written in place.
     """
     if not budget_patch:
         return
@@ -538,10 +559,8 @@ async def _upsert_budget_and_membership(
             get_budget_reset_time(budget_duration=duration) if duration is not None else None
         )
 
-    is_shared_default: Final = (
-        existing_budget_id is not None
-        and team_default_budget_id is not None
-        and existing_budget_id == team_default_budget_id
+    is_shared_default: Final = existing_budget_id is not None and (
+        existing_budget_id == team_default_budget_id or existing_budget_id in (shared_budget_ids or frozenset())
     )
 
     async def _disconnect():
@@ -563,25 +582,25 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    create_data: Final[dict[str, Any]] = {
+    source_row: Final = (
+        await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id}) if is_shared_default else None
+    )
+    source: Final[Mapping[str, Any]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
+
+    create_data: Final[dict[str, Any]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
+        **MappingProxyType(
+            {f: source[f] for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS if _is_set_budget_value(source.get(f))}
+        ),
+        **write_data,
     }
 
-    if is_shared_default:
-        default_budget_row: Final = await tx.litellm_budgettable.find_unique(where={"budget_id": existing_budget_id})
-        if default_budget_row is not None:
-            default_budget_dict: Final = default_budget_row.model_dump()
-            for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS:
-                value = default_budget_dict.get(field)
-                if _is_set_budget_value(value):
-                    create_data[field] = value
-
-    create_data.update(write_data)
-
-    if create_data.get("budget_duration") is not None:
-        create_data["budget_reset_at"] = get_budget_reset_time(budget_duration=create_data["budget_duration"])
-    else:
+    # Restarting an inherited window on an unrelated edit hands the member a free period.
+    carried: Final = source.get("budget_reset_at") if "budget_duration" not in budget_patch else None
+    if carried is not None:
+        create_data["budget_reset_at"] = carried
+    if create_data.get("budget_reset_at") is None:
         create_data.pop("budget_reset_at", None)
 
     if not _has_meaningful_budget_limit(create_data):
