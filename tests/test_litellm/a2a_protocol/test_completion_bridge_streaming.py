@@ -26,9 +26,7 @@ class TestA2AStreamingTransformation:
             "parts": [{"text": "Reply to ticket #4823"}],
             "metadata": {"skillId": "draft_reply"},
         }
-        openai_messages = (
-            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
-        )
+        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
         # Metadata is forwarded on the run payload only, not duplicated on messages.
         assert "metadata" not in openai_messages[0]
 
@@ -174,10 +172,7 @@ class TestA2AStreamingTransformation:
         assert "artifactId" in event["result"]["artifact"]
         assert event["result"]["artifact"]["name"] == "response"
         assert event["result"]["artifact"]["parts"][0]["kind"] == "text"
-        assert (
-            event["result"]["artifact"]["parts"][0]["text"]
-            == "Hello, I am an AI assistant."
-        )
+        assert event["result"]["artifact"]["parts"][0]["text"] == "Hello, I am an AI assistant."
 
 
 @pytest.mark.asyncio
@@ -332,3 +327,43 @@ async def test_handle_non_streaming_forwards_api_key():
         assert call_kwargs["api_key"] == "my-secret-api-key"
         assert call_kwargs["api_base"] == "https://my-azure.com/"
         assert call_kwargs["model"] == "azure_ai/agents/asst_456"
+
+
+@pytest.mark.asyncio
+async def test_handle_streaming_keeps_agent_card_path_out_of_the_completion_call():
+    """agent_card_path describes where an A2A agent serves its card; a completion-bridge agent carrying
+    it must not pass it to litellm.acompletion, where an unknown kwarg breaks the provider call."""
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2ACompletionBridgeHandler,
+    )
+
+    async def mock_streaming_response():
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta = MagicMock()
+        chunk.choices[0].delta.content = "Hello"
+        yield chunk
+
+    with (
+        patch(  # test-quality-ok: the bridge calls litellm.acompletion directly; the sibling tests capture its kwargs through the same seam
+            "litellm.acompletion", new_callable=AsyncMock
+        ) as mock_acompletion
+    ):
+        mock_acompletion.return_value = mock_streaming_response()
+
+        events = [
+            event
+            async for event in A2ACompletionBridgeHandler.handle_streaming(
+                request_id="req-card-path",
+                params={"message": {"role": "user", "parts": [{"kind": "text", "text": "Hi"}], "messageId": "m1"}},
+                litellm_params={
+                    "custom_llm_provider": "langgraph",
+                    "model": "agent",
+                    "agent_card_path": "agentCard/v1.0",
+                },
+                api_base="http://localhost:2024",
+            )
+        ]
+
+    assert len(events) == 4
+    assert "agent_card_path" not in mock_acompletion.call_args.kwargs
