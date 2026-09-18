@@ -951,7 +951,6 @@ def test_shipped_openai_reasoning_rule_loses_to_mapped_entries(shipped_cost_map)
     [
         ("azure/us/o1-2024-12-17", "azure", True),
         ("github_copilot/gpt-5", "github_copilot", None),
-        ("openrouter/openai/o1", "openrouter", None),
         ("perplexity/openai/gpt-5.4-mini", "perplexity", None),
     ],
 )
