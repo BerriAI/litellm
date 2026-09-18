@@ -1,4 +1,4 @@
-import manifest from "../.github/labels.json";
+import manifest from "../.github/issue-labels.json";
 
 export const NAMESPACES = ["domain", "provider", "kind", "priority", "lift", "needs"] as const;
 export type Namespace = (typeof NAMESPACES)[number];

@@ -97,7 +97,7 @@ export function parseVerdict(raw: string): ParsedVerdict {
   const known = new Set(manifestLabels(MANIFEST).map((label) => label.name));
   const unknown = desiredLabels(verdict).filter((label) => !known.has(label));
   if (unknown.length > 0) {
-    return { kind: "invalid", reason: `not in .github/labels.json: ${unknown.join(", ")}` };
+    return { kind: "invalid", reason: `not in .github/issue-labels.json: ${unknown.join(", ")}` };
   }
   return { kind: "verdict", verdict };
 }
