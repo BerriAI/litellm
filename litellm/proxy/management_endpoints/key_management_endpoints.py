@@ -1233,8 +1233,7 @@ async def _common_key_generation_helper(
 
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # cannot grant a key a higher budget than their own authority.
-    # Session tokens (lite login) use their session max_budget for team keys, but
-    # personal keys are capped by user_max_budget when it is available.
+    # UI session personal keys are capped by user_max_budget when it is available.
     is_ui_session_token: Final = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
     is_ui_session_team_key = is_ui_session_token and _requested_team_id is not None
     if (
