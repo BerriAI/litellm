@@ -7591,11 +7591,16 @@ async def test_deleting_the_stored_pass_through_row_takes_the_route_out_of_servi
     deleted. The proxy's own registry of live pass-through routes is what decides whether
     a request is routed upstream or falls through to the auth error, so it has to lose the
     entry on the reload rather than at the next process restart."""
-    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
-    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        _registered_pass_through_routes,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig, app
 
     path: Final = f"/v1/deleted-{uuid.uuid4().hex[:8]}"
     db_endpoint: Final = {"id": "db-1", "path": path, "target": "https://example.com/post"}
+    prior_routes: Final = list(app.routes)
+    prior_registry: Final = dict(_registered_pass_through_routes)
 
     def live_routes() -> set[str]:
         return {route for route in InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes() if path in route}
@@ -7603,14 +7608,19 @@ async def test_deleting_the_stored_pass_through_row_takes_the_route_out_of_servi
     settings: Final = patch("litellm.proxy.proxy_server.general_settings", {})  # test-quality-ok: the method reads this module global; no injection seam
     yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", None)  # test-quality-ok: module global holding the YAML endpoints; this case has none
     app_routes: Final = patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists")  # test-quality-ok: the registry is the observable; a real route would stay on the shared FastAPI app for the rest of the xdist worker
-    with settings, yaml_endpoints, app_routes:
-        pc = ProxyConfig()
-        await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
-        assert live_routes(), "the stored endpoint should be serving before the row is deleted"
+    try:
+        with settings, yaml_endpoints, app_routes:
+            pc = ProxyConfig()
+            await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+            assert live_routes(), "the stored endpoint should be serving before the row is deleted"
 
-        await pc._update_general_settings(db_general_settings={})
+            await pc._update_general_settings(db_general_settings={})
 
-        assert live_routes() == set()
+            assert live_routes() == set()
+    finally:
+        app.routes[:] = prior_routes
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(prior_registry)
 
 
 @pytest.mark.asyncio
@@ -7620,15 +7630,18 @@ async def test_a_stored_pass_through_row_never_disturbs_the_config_declared_rout
     serving untouched. The stored entry never gets a route of its own."""
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         InitPassThroughEndpointHelpers,
+        _registered_pass_through_routes,
         initialize_pass_through_endpoints,
     )
-    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.proxy_server import ProxyConfig, app
 
     marker: Final = uuid.uuid4().hex[:8]
     config_path: Final = f"/v1/kept-{marker}"
     db_path: Final = f"/v1/ignored-{marker}"
     config_endpoint: Final = {"id": f"cfg-{marker}", "path": config_path, "target": "https://example.com/post"}
     db_endpoint: Final = {"id": f"db-{marker}", "path": db_path, "target": "https://example.com/post"}
+    prior_routes: Final = list(app.routes)
+    prior_registry: Final = dict(_registered_pass_through_routes)
 
     def live_paths() -> set[str]:
         registered: Final = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
@@ -7637,17 +7650,22 @@ async def test_a_stored_pass_through_row_never_disturbs_the_config_declared_rout
     settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [config_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
     yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [config_endpoint])  # test-quality-ok: module global holding the YAML endpoints the reload merges in
     app_routes: Final = patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.SafeRouteAdder.add_api_route_if_not_exists")  # test-quality-ok: the registry is the observable; a real route would stay on the shared FastAPI app for the rest of the xdist worker
-    with settings, yaml_endpoints, app_routes:
-        await initialize_pass_through_endpoints(pass_through_endpoints=[config_endpoint])
-        assert live_paths() == {config_path}
+    try:
+        with settings, yaml_endpoints, app_routes:
+            await initialize_pass_through_endpoints(pass_through_endpoints=[config_endpoint])
+            assert live_paths() == {config_path}
 
-        pc = ProxyConfig()
-        await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
-        assert live_paths() == {config_path}
+            pc = ProxyConfig()
+            await pc._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
+            assert live_paths() == {config_path}
 
-        await pc._update_general_settings(db_general_settings={})
+            await pc._update_general_settings(db_general_settings={})
 
-        assert live_paths() == {config_path}
+            assert live_paths() == {config_path}
+    finally:
+        app.routes[:] = prior_routes
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(prior_registry)
 
 
 def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
@@ -14370,3 +14388,74 @@ async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revisi
         ]
     finally:
         litellm.utils._select_custom_tokenizer_helper.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached_by_this_worker():
+    """A peer worker's BYOK revocation broadcast must reach this worker's BYOK credential cache."""
+    from redis.asyncio import Redis
+
+    from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
+        byok_credential_cache,
+        byok_credential_cache_key,
+        cache_byok_credential,
+        get_cached_byok_credential,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _QueuePubSub:
+        def __init__(self, messages: list[object]) -> None:
+            self.queue: asyncio.Queue[object] = asyncio.Queue()
+            for message in messages:
+                self.queue.put_nowait(message)
+
+        async def subscribe(self, *channels: str) -> None:
+            return None
+
+        async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> object | None:
+            try:
+                return await asyncio.wait_for(self.queue.get(), timeout)
+            except asyncio.TimeoutError:
+                return None
+
+        async def aclose(self) -> None:
+            return None
+
+    class _PubSubRedisClient(Redis):
+        def __init__(self, pubsub: _QueuePubSub) -> None:
+            self._scripted_pubsub = pubsub
+
+        def pubsub(self) -> _QueuePubSub:
+            return self._scripted_pubsub
+
+    class _FakeRedisCache:
+        namespace = None
+
+        def __init__(self, client: object) -> None:
+            self._client = client
+
+        def init_async_client(self) -> object:
+            return self._client
+
+    byok_credential_cache.flush_cache()
+    cache_byok_credential("mallory", "srv-byok", "sk-revoked-elsewhere")
+    message: Final = {
+        "type": "message",
+        "data": json.dumps({"cache_key": byok_credential_cache_key("mallory", "srv-byok")}).encode(),
+    }
+    proxy_config: Final = proxy_server_module.ProxyConfig()
+    proxy_config.start_auth_cache_invalidation_subscriber(
+        redis_cache=_FakeRedisCache(_PubSubRedisClient(_QueuePubSub([message]))),  # pyright: ignore[reportArgumentType]  # fake pub/sub capable redis; no live redis in this unit test
+        user_api_key_cache=UserApiKeyCache(),
+    )
+    try:
+        for _ in range(200):
+            if get_cached_byok_credential("mallory", "srv-byok") is None:
+                break
+            await asyncio.sleep(0.01)
+        evicted: Final = get_cached_byok_credential("mallory", "srv-byok") is None
+    finally:
+        await proxy_config.stop_auth_cache_invalidation_subscriber()
+        byok_credential_cache.flush_cache()
+
+    assert evicted, "the subscriber does not evict the BYOK credential cache on a peer worker's broadcast"
