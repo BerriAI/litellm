@@ -1,10 +1,11 @@
-use std::sync::Arc;
-
+use litellm_callbacks::event::{CallEvent, WireRequest};
 use rstest::rstest;
 use serde_json::{Value, json};
 
-use super::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrPostCallRequest};
-use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+use super::{
+    LocalOcrHost,
+    test_support::{MockResponse, mock_server, perform_ocr, perform_ocr_with, wire_request},
+};
 
 fn request_body(request: &str) -> Value {
     serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
@@ -56,8 +57,7 @@ async fn request_mapping_matches_python(
         "result":{"chunks":[]}
     }))])
     .await;
-    let mut request = wire_request(model, &base, options);
-    request.document = request.document.with_source(source.into());
+    let request = super::test_support::with_source(wire_request(model, &base, options), source);
 
     perform_ocr(request).await.unwrap();
     server.await.unwrap();
@@ -71,21 +71,34 @@ async fn request_mapping_matches_python(
 #[case("parse-v3")]
 #[case("parse-legacy")]
 #[tokio::test]
-async fn data_uri_upload_preserves_multipart_headers(#[case] model: &str) {
+async fn data_uri_upload_preserves_multipart_headers(
+    #[case] model: &str,
+    #[values("application/pdf", "image/png")] mime_type: &str,
+) {
     let (base, seen, server) = mock_server(vec![
         MockResponse::json(json!({"file_id":"reducto://uploaded.pdf"})),
         MockResponse::json(json!({"result":{"chunks":[{"content":"hello"}]}})),
     ])
     .await;
-    let mut request = wire_request(&format!("reducto/{model}"), &base, json!({}));
-    request.connection.extra_headers = vec![
+    let document = if mime_type.starts_with("image/") {
+        json!({"type":"image_url","image_url":format!("data:{mime_type};base64,YWJj")})
+    } else {
+        json!({"type":"document_url","document_url":format!("data:{mime_type};base64,YWJj")})
+    };
+    let mut request = super::LiteLLMOcrRequest {
+        document: serde_json::from_value::<super::OcrDocument>(document)
+            .unwrap()
+            .into(),
+        ..wire_request(&format!("reducto/{model}"), &base, json!({}))
+    };
+    request.transport.extra_headers = vec![
         ("Content-Type".into(), "application/json".into()),
         ("X-Trace".into(), "upload-test".into()),
     ];
 
     let response = perform_ocr(request).await.unwrap();
     server.await.unwrap();
-    assert_eq!(response.pages[0]["markdown"], "hello");
+    assert_eq!(response.pages[0].markdown, "hello");
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert!(requests[0].starts_with("POST /upload "));
@@ -95,43 +108,46 @@ async fn data_uri_upload_preserves_multipart_headers(#[case] model: &str) {
             .contains("content-type: multipart/form-data; boundary=")
     );
     assert!(requests[0].contains("x-trace: upload-test"));
-    assert!(requests[0].contains("application/pdf"));
-    assert!(requests[0].contains("abc"));
+    let multipart = requests[0].split_once("\r\n\r\n").unwrap().1;
+    assert!(multipart.contains(&format!("Content-Type: {mime_type}\r\n")));
+    assert!(multipart.contains("\r\n\r\nabc\r\n--"));
     assert!(requests[1].starts_with("POST /parse "));
-}
-
-struct ParseBoundary {
-    request_count: Arc<std::sync::Mutex<Vec<String>>>,
-}
-
-impl OcrHooks for ParseBoundary {
-    fn post_call(&self, request: OcrPostCallRequest) -> OcrHookFuture<'_, OcrPostCallRequest> {
-        Box::pin(async move {
-            assert_eq!(self.request_count.lock().unwrap().len(), 2);
-            assert_eq!(
-                request.original_response,
-                json!(r#"{"result":{"chunks":[]}}"#)
-            );
-            Ok(request)
-        })
+    let source_field = if model == "parse-legacy" {
+        "document_url"
+    } else {
+        "input"
+    };
+    assert_eq!(
+        request_body(&requests[1]),
+        json!({source_field:"reducto://uploaded.pdf"})
+    );
+    for request in requests.iter() {
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-key\r\n")
+        );
     }
 }
 
 #[tokio::test]
-async fn post_call_stays_after_reducto_upload_and_parse() {
+async fn response_received_stays_after_reducto_upload_and_parse() {
     let (base, seen, server) = mock_server(vec![
         MockResponse::json(json!({"file_id":"reducto://uploaded.pdf"})),
         MockResponse::json(json!({"result":{"chunks":[]}})),
     ])
     .await;
-    let request = super::LiteLLMOcrRequest {
-        hooks: Arc::new(ParseBoundary {
-            request_count: seen.clone(),
-        }),
-        ..wire_request("reducto/parse-v3", &base, json!({}))
-    };
+    let request_count = seen.clone();
+    let host = LocalOcrHost::new(wire_request("reducto/parse-v3", &base, json!({}))).with_observer(
+        move |event| {
+            if let CallEvent::ResponseReceived { raw } = event {
+                assert_eq!(request_count.lock().unwrap().len(), 2);
+                assert_eq!(raw.body, r#"{"result":{"chunks":[]}}"#);
+            }
+        },
+    );
 
-    perform_ocr(request).await.unwrap();
+    perform_ocr_with(host).await.unwrap();
     server.await.unwrap();
     assert_eq!(seen.lock().unwrap().len(), 2);
 }
@@ -169,20 +185,44 @@ async fn upload_failure_stops_before_parse() {
 }
 
 #[rstest]
-#[case("https://example.com/a.pdf")]
-#[case("reducto://")]
-#[case("data:application/pdf;base64")]
-#[case("data:application/pdf;base64,INVALID!")]
+#[case("https://example.com/a.pdf", crate::ocr::Error::ReductoSource)]
+#[case("reducto://", crate::ocr::Error::RequestField { path: "document file id".into() })]
+#[case("data:application/pdf;base64", crate::ocr::Error::InvalidDataUri)]
+#[case(
+    "data:application/pdf;base64,INVALID!",
+    crate::ocr::Error::InvalidDataUri
+)]
 #[tokio::test]
-async fn rejects_invalid_document_sources_before_network(#[case] source: &str) {
-    let mut request = wire_request("reducto/parse-v3", "http://127.0.0.1:1", json!({}));
-    request.document = request.document.with_source(source.into());
-    assert!(perform_ocr(request).await.is_err());
+async fn rejects_invalid_document_sources_before_network(
+    #[case] source: &str,
+    #[case] expected: super::Error,
+) {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({}))]).await;
+    let request = super::test_support::with_source(
+        wire_request("reducto/parse-v3", &base, json!({})),
+        source,
+    );
+    let result = perform_ocr(request).await;
+    server.abort();
+    let _ = server.await;
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "sent invalid source: {source}"
+    );
+    let error = result.unwrap_err();
+    assert_eq!(
+        std::mem::discriminant(&error),
+        std::mem::discriminant(&expected)
+    );
+    assert_eq!(error.http_status_code(), Some(400));
+    assert_eq!(error.to_string(), expected.to_string());
 }
 
 #[test]
 fn response_normalization_groups_blocks_and_distinguishes_null_result() {
-    use crate::ocr::codecs::reducto::{ReductoResponse, transform_ocr_response};
+    use crate::llms::reducto::ocr::transformation::{
+        ReductoResponse, normalize_response as transform_ocr_response,
+    };
 
     let raw = json!({"usage":{"num_pages":"2","credits":"3"},"result":{"type":"full","chunks":[
         {"blocks":[{
@@ -218,7 +258,7 @@ fn response_normalization_groups_blocks_and_distinguishes_null_result() {
     let missing: ReductoResponse =
         serde_json::from_value(json!({"chunks":[{"content":"text"}]})).unwrap();
     let missing = transform_ocr_response("parse-v3", missing).unwrap();
-    assert_eq!(missing.pages[0]["markdown"], "text");
+    assert_eq!(missing.pages[0].markdown, "text");
     let null: ReductoResponse = serde_json::from_value(
         json!({"result":null,"chunks":[{"content":"ignored"}],"usage":null}),
     )
@@ -231,9 +271,11 @@ fn response_normalization_groups_blocks_and_distinguishes_null_result() {
 async fn facade_omits_native_response_by_default_and_preserves_auth_priority() {
     let raw = json!({"job_id":"job-1","result":{"chunks":[]}});
     let (base, seen, server) = mock_server(vec![MockResponse::json(raw)]).await;
-    let mut request = wire_request("reducto/parse-v3", &base, json!({}));
-    request.document = request.document.with_source("reducto://ready.pdf".into());
-    request.connection.extra_headers = vec![("authorization".into(), "Bearer existing".into())];
+    let mut request = super::test_support::with_source(
+        wire_request("reducto/parse-v3", &base, json!({})),
+        "reducto://ready.pdf",
+    );
+    request.transport.extra_headers = vec![("authorization".into(), "Bearer existing".into())];
 
     let response = perform_ocr(request).await.unwrap();
     server.await.unwrap();
@@ -245,38 +287,66 @@ async fn facade_omits_native_response_by_default_and_preserves_auth_priority() {
     );
 }
 
-struct RewriteDocument;
+#[tokio::test]
+async fn native_format_retains_the_provider_response() {
+    let raw = json!({
+        "result":{"chunks":[{"content":"native OCR response"}]},
+        "usage":{"num_pages":1}
+    });
+    let (base, _, server) = mock_server(vec![MockResponse::json(raw.clone())]).await;
+    let request = super::test_support::with_source(
+        wire_request("reducto/parse-v3", &base, json!({"req_format":"native"})),
+        "reducto://ready.pdf",
+    );
 
-impl OcrHooks for RewriteDocument {
-    fn intercepts_requests(&self) -> bool {
-        true
-    }
+    let response = perform_ocr(request).await.unwrap();
+    server.await.unwrap();
 
-    fn during_call(
-        &self,
-        request: OcrDuringCallRequest,
-    ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
-        Box::pin(async move {
-            assert_eq!(
-                request.body["document_url"],
-                "data:application/pdf;base64,YWJj"
-            );
-            Ok(OcrDuringCallRequest {
-                body: json!({"type":"document_url","document_url":"reducto://guarded.pdf"}),
-                ..request
-            })
-        })
-    }
+    assert_eq!(response.pages[0].markdown, "native OCR response");
+    assert_eq!(response.provider_native_response.as_ref(), raw.as_object());
+}
+
+#[tokio::test]
+async fn unknown_model_reaches_parse_and_keeps_its_name() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({
+        "result":{"chunks":[{"content":"future model response"}]}
+    }))])
+    .await;
+    let request = super::test_support::with_source(
+        wire_request("reducto/future-parse-model", &base, json!({})),
+        "reducto://ready.pdf",
+    );
+
+    let response = perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+
+    assert_eq!(response.model, "future-parse-model");
+    assert_eq!(response.pages[0].markdown, "future model response");
+    let requests = seen.lock().unwrap();
+    assert!(requests[0].starts_with("POST /parse "));
+    assert_eq!(
+        request_body(&requests[0]),
+        json!({"input":"reducto://ready.pdf"})
+    );
 }
 
 #[tokio::test]
 async fn guardrail_rewrites_document_before_upload() {
     let (base, seen, server) =
         mock_server(vec![MockResponse::json(json!({"result":{"chunks":[]}}))]).await;
-    let mut request = wire_request("reducto/parse-v3", &base, json!({}));
-    request.hooks = Arc::new(RewriteDocument);
+    let host = LocalOcrHost::new(wire_request("reducto/parse-v3", &base, json!({})))
+        .with_before_send(|wire, _| {
+            assert_eq!(
+                wire.body["document_url"],
+                "data:application/pdf;base64,YWJj"
+            );
+            Ok(WireRequest {
+                body: json!({"type":"document_url","document_url":"reducto://guarded.pdf"}),
+                ..wire
+            })
+        });
 
-    perform_ocr(request).await.unwrap();
+    perform_ocr_with(host).await.unwrap();
     server.await.unwrap();
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 1);

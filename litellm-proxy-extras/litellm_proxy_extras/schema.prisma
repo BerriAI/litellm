@@ -678,6 +678,7 @@ model LiteLLM_SpendLogs {
   @@index([end_user])
   @@index([session_id])
   @@index([litellm_call_id])
+  @@index([api_key, startTime])
 }
 
 model LiteLLM_BudgetWindowSpend {
@@ -1409,6 +1410,7 @@ model LiteLLM_PolicyAttachmentTable {
   keys             String[]  @default([])  // Key aliases or patterns
   models           String[]  @default([])  // Model names or patterns
   tags             String[]  @default([])  // Tag patterns (e.g., ["healthcare", "prod-*"])
+  priority         Int?                    // Explicit execution order
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt
