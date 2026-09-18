@@ -1773,3 +1773,32 @@ async def test_keyed_grant_begin_preserves_existing_binding_and_rechecks_cleanup
         table.delete_many.assert_not_awaited()
     assert await store.get("new-grant") is row
     assert table.find_unique.call_args.kwargs["where"] == {"id": "new-grant"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("writer_down", (False, True))
+async def test_keyed_grant_never_trusts_stale_replica_after_revocation(writer_down: bool) -> None:
+    from litellm.proxy._experimental.mcp_server.db import KeyedOAuthGrantStore
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    authoritative: Final = SimpleNamespace(status="revoked")
+    writer_table: Final = SimpleNamespace(
+        find_many=AsyncMock(),
+        create=AsyncMock(),
+        find_unique=AsyncMock(
+            return_value=authoritative, side_effect=RuntimeError("writer unavailable") if writer_down else None
+        ),
+    )
+    reader_table: Final = SimpleNamespace(find_unique=AsyncMock(return_value=SimpleNamespace(status="active")))
+    db: Final = RoutingPrismaWrapper(
+        writer=SimpleNamespace(litellm_mcpkeyedoauthgrant=writer_table),
+        reader=SimpleNamespace(litellm_mcpkeyedoauthgrant=reader_table),
+    )
+    db._writer_unavailable = writer_down
+    store: Final = KeyedOAuthGrantStore(SimpleNamespace(db=db))
+    if writer_down:
+        with pytest.raises(RuntimeError, match="writer unavailable"):
+            await store.get("revoked-grant")
+    else:
+        assert await store.get("revoked-grant") is authoritative
+    reader_table.find_unique.assert_not_awaited()

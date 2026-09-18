@@ -83,7 +83,23 @@ def test_keyed_authorization_requires_an_owned_key(missing: str) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fault", ("none", "client", "pkce", "resource", "replayed", "storage"))
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "none",
+        "client",
+        "pkce",
+        "resource",
+        "replayed",
+        "storage",
+        "expired",
+        "upstream",
+        "server",
+        "name",
+        "named",
+        "claim_outage",
+    ),
+)
 async def test_headerless_token_exchange_retains_original_key(monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
     import base64
     import hashlib
@@ -149,6 +165,10 @@ async def test_headerless_token_exchange_retains_original_key(monkeypatch: pytes
         transition=AsyncMock(return_value=fault != "replayed"),
         revoke=AsyncMock(),
     )
+    if fault == "claim_outage":
+        store.transition.side_effect = RuntimeError("private-database-details")
+    if fault == "server":
+        monkeypatch.delitem(registry, server.server_id)
     monkeypatch.setattr(keyed_oauth_flow, "_store", lambda: store)
     original_key: Final = UserAPIKeyAuth(api_key=flow.key_hash, user_id="owner", models=["limited-model"])
     monkeypatch.setattr(
@@ -170,12 +190,19 @@ async def test_headerless_token_exchange_retains_original_key(monkeypatch: pytes
         assert b"client_id=configured-client" in outbound.content
         assert "x-litellm-api-key" not in outbound.headers
         return httpx.Response(
-            200, json={"access_token": "upstream-token", "refresh_token": "upstream-refresh", "token_type": "Bearer"}
+            401 if fault == "upstream" else 200,
+            json={"error": "invalid_grant"}
+            if fault == "upstream"
+            else {"access_token": "upstream-token", "refresh_token": "upstream-refresh", "token_type": "Bearer"},
         )
 
     code: Final = _seal(
         keyed_oauth_flow.KEYED_CODE_PREFIX,
-        keyed_oauth_flow.KeyedCode(grant_id=flow.jti, upstream_code="real-upstream-code", exp=int(time.time()) + 120),
+        keyed_oauth_flow.KeyedCode(
+            grant_id=flow.jti,
+            upstream_code="real-upstream-code",
+            exp=0 if fault == "expired" else int(time.time()) + 120,
+        ),
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(upstream_response)) as transport:
         upstream: Final = AsyncHTTPHandler()
@@ -193,9 +220,9 @@ async def test_headerless_token_exchange_retains_original_key(monkeypatch: pytes
             client_secret=None,
             refresh_token=None,
             scope=None,
-            mcp_server_name=None,
+            mcp_server_name="missing-server" if fault == "name" else server.name if fault == "named" else None,
         )
-    if fault == "none":
+    if fault in ("none", "named"):
         assert response.status_code == 200
         result: Final = json.loads(response.body)
         assert result["access_token"].startswith(keyed_oauth_flow.KEYED_ACCESS_PREFIX)
@@ -206,7 +233,13 @@ async def test_headerless_token_exchange_retains_original_key(monkeypatch: pytes
         assert stored.call_args.kwargs["require_persistence"] is True
         assert permission.call_args.args[1] is original_key
         assert permission.call_args.args[1].models == ["limited-model"]
-    elif fault == "storage":
+    elif fault == "upstream":
+        assert response.status_code == 400
+        assert json.loads(response.body)["error"] == "invalid_grant"
+        assert store.transition.await_count == 1
+        assert store.transition.call_args.args[1:3] == ("code", "exchanging")
+        stored.assert_not_awaited()
+    elif fault in ("storage", "claim_outage"):
         assert response.status_code == 503
         assert "access_token" not in json.loads(response.body)
     else:
@@ -528,3 +561,217 @@ async def test_token_storage_outage_returns_safe_oauth_error(active_grant) -> No
     assert response.status_code == 503
     assert json.loads(response.body)["error"] == "server_error"
     assert b"private-database" not in response.body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ("revoked", "missing", "database", "expired"))
+async def test_mcp_bearer_rejection_has_safe_transport_status(active_grant, fault: str) -> None:
+    from litellm.proxy._experimental.mcp_server import keyed_oauth_flow
+
+    binding, row, store = active_grant
+    if fault == "database":
+        store.get.side_effect = RuntimeError("private-database-details")
+    elif fault == "missing":
+        store.get.return_value = None
+    elif fault == "expired":
+        from datetime import datetime, timezone
+
+        row.expires_at = datetime.fromtimestamp(0, timezone.utc)
+    else:
+        row.status = "revoked"
+    token: Final = _seal(
+        keyed_oauth_flow.KEYED_ACCESS_PREFIX,
+        keyed_oauth_flow.KeyedToken(kind="access", grant_id=binding.flow.jti, jti="access", exp=int(time.time()) + 600),
+    )
+    request: Final = _request()
+    request.scope["headers"].append((b"authorization", f"Bearer {token}".encode()))
+    auth: Final = UserAPIKeyAuth(user_id="owner")
+    auth.via_virtual_key = True
+    with pytest.raises(HTTPException) as rejected:
+        await keyed_oauth_flow.validate_keyed_bearer(request, auth)
+    assert rejected.value.status_code == (503 if fault == "database" else 401)
+    assert "private-database" not in str(rejected.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ("policy", "resource", "pkce", "conflict", "http"))
+async def test_key_confirmation_refuses_invalid_authorization_context(
+    monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from fastapi.responses import JSONResponse
+    from litellm.proxy._experimental.mcp_server import keyed_oauth_flow, gateway_dcr_flow
+
+    request: Final = _request(host="gateway.example" if fault == "http" else "localhost:4000")
+    flow: Final = start_keyed_oauth_flow(request, UserAPIKeyAuth(user_id="owner"), "server-one")
+    policy: Final = JSONResponse({"error": "invalid_client"}, status_code=400) if fault == "policy" else None
+    monkeypatch.setattr(gateway_dcr_flow, "_rejected_authorize_request", lambda *args: policy)
+    store: Final = SimpleNamespace(begin=AsyncMock())
+    monkeypatch.setattr(keyed_oauth_flow, "_store", lambda: store)
+    binding: Final = keyed_oauth_flow.KeyedAuthorization(
+        flow=open_keyed_oauth_flow(request, flow),
+        client_id="different" if fault == "conflict" else "registered",
+        redirect_uri="http://localhost:8787/callback",
+        state="state",
+        code_challenge="c" * 43,
+    )
+    monkeypatch.setattr(keyed_oauth_flow, "_binding", AsyncMock(return_value=binding))
+
+    async def authorize():
+        return await keyed_oauth_flow.keyed_authorize(
+            request,
+            flow,
+            "registered",
+            binding.redirect_uri,
+            "state",
+            "short" if fault == "pkce" else "c" * 43,
+            "S256",
+            "code",
+            "https://other.example/mcp" if fault == "resource" else binding.flow.resource,
+        )
+
+    if fault == "policy":
+        assert await authorize() is policy
+        store.begin.assert_not_awaited()
+    else:
+        with pytest.raises(HTTPException) as rejected:
+            await authorize()
+        assert rejected.value.status_code == 400
+        if fault in ("resource", "pkce", "http"):
+            store.begin.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_keyed_callback_preserves_existing_identity_binding_and_client_state(
+    monkeypatch: pytest.MonkeyPatch, active_grant
+) -> None:
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlsplit
+    from unittest.mock import AsyncMock
+    from litellm.proxy._experimental.mcp_server import keyed_oauth_flow, discoverable_endpoints
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    binding, row, store = active_grant
+    row.status = "authorizing"
+    auth: Final = UserAPIKeyAuth(user_id="owner")
+    monkeypatch.setattr(keyed_oauth_flow, "_active_key", AsyncMock(return_value=auth))
+    server: Final = MCPServer(
+        server_id=binding.flow.server_id,
+        name="interactive",
+        transport="http",
+        auth_type="oauth2",
+        oauth2_flow="authorization_code",
+        client_id="configured-app",
+        authorization_url="https://upstream.example/authorize",
+        token_url="https://upstream.example/token",
+        oauth_identity_binding={
+            "mode": "enforce",
+            "issuer": "https://upstream.example",
+            "audiences": ["configured-app"],
+        },
+    )
+    authorized: Final = await discoverable_endpoints.authorize_with_server(
+        _request(key=None),
+        server,
+        server.client_id,
+        binding.redirect_uri,
+        state=binding.state,
+        code_challenge=binding.code_challenge,
+        code_challenge_method="S256",
+        keyed_auth=auth,
+        keyed_grant_id=binding.flow.jti,
+    )
+    query: Final = parse_qs(urlsplit(authorized.headers["location"]).query)
+    cookies: Final = SimpleCookie()
+    cookies.load(authorized.headers["set-cookie"])
+    cookie_name: Final = discoverable_endpoints._oauth_state_cookie_name(query["state"][0])
+    request: Final = _request(key=None)
+    request.scope["path"] = "/callback"
+    request.scope["headers"].append((b"cookie", f"{cookie_name}={cookies[cookie_name].value}".encode()))
+    completed: Final = await discoverable_endpoints.callback(request, code="upstream-code", state=query["state"][0])
+    returned: Final = parse_qs(urlsplit(completed.headers["location"]).query)
+    outer: Final = keyed_oauth_flow._open_sealed(
+        returned["code"][0], keyed_oauth_flow.KEYED_CODE_PREFIX, keyed_oauth_flow.KeyedCode, "test"
+    )
+    inner: Final = discoverable_endpoints.open_bridge_authorization_code(outer.upstream_code)
+    assert outer.grant_id == binding.flow.jti
+    assert inner.upstream_code == "upstream-code"
+    assert inner.litellm_user_id == binding.flow.user_id
+    assert inner.mcp_server_id == binding.flow.server_id
+    assert inner.oauth_nonce == query["nonce"][0]
+    assert returned["state"] == [binding.state]
+    assert store.transition.call_args.kwargs["code_hash"] == hash_token(returned["code"][0])
+
+
+@pytest.mark.asyncio
+async def test_missing_database_blocks_authorization(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import keyed_oauth_flow
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    with pytest.raises(HTTPException) as rejected:
+        await keyed_oauth_flow._binding("grant", _request(key=None))
+    assert rejected.value.status_code == 503
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ("expired", "corrupt", "other_resource"))
+async def test_unusable_durable_binding_cannot_authorize(active_grant, fault: str) -> None:
+    from datetime import datetime, timezone
+    from litellm.proxy._experimental.mcp_server import keyed_oauth_flow
+
+    _, row, _ = active_grant
+    if fault == "expired":
+        row.expires_at = datetime.fromtimestamp(0, timezone.utc)
+    elif fault == "corrupt":
+        row.binding_b64 = "invalid"
+    with pytest.raises(HTTPException) as rejected:
+        await keyed_oauth_flow._binding(
+            "grant", _request(host="other.example" if fault == "other_resource" else "localhost:4000")
+        )
+    assert rejected.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_non_keyed_bearer_keeps_existing_admission() -> None:
+    from litellm.proxy._experimental.mcp_server import keyed_oauth_flow
+
+    request: Final = _request()
+    request.scope["headers"].append((b"authorization", b"Bearer existing-upstream-pat"))
+    auth: Final = UserAPIKeyAuth(user_id="owner")
+    assert await keyed_oauth_flow.validate_keyed_bearer(request, auth) is auth
+
+
+@pytest.mark.asyncio
+async def test_cached_discovery_outlives_initiation_without_reopening_authorization() -> None:
+    import json
+    from litellm.proxy._experimental.mcp_server import keyed_oauth_flow
+
+    request: Final = _request(key=None)
+    flow: Final = keyed_oauth_flow.KeyedOAuthFlow(
+        key_hash=hash_token("sk-owned"),
+        user_id="owner",
+        server_id="server-one",
+        resource="http://localhost:4000/mcp",
+        jti="expired-flow",
+        exp=1,
+    )
+    sealed: Final = _seal(KEYED_FLOW_PREFIX, flow)
+    resource: Final = keyed_oauth_flow.keyed_resource_metadata(request, sealed)
+    issuer: Final = keyed_oauth_flow.keyed_server_metadata(request, sealed)
+    assert json.loads(resource.body)["authorization_servers"] == [json.loads(issuer.body)["issuer"]]
+    assert json.loads(issuer.body)["token_endpoint"] == "http://localhost:4000/token"
+    with pytest.raises(HTTPException) as rejected:
+        await keyed_oauth_flow.keyed_authorize(
+            request,
+            sealed,
+            "client",
+            "http://localhost:8787/callback",
+            "state",
+            "c" * 43,
+            "S256",
+            "code",
+            flow.resource,
+        )
+    assert rejected.value.status_code == 400

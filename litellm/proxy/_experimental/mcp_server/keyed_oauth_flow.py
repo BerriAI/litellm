@@ -76,7 +76,7 @@ def open_keyed_oauth_flow(request: Request, value: str, *, allow_expired: bool =
 
 
 def keyed_resource_metadata(request: Request, value: str) -> JSONResponse:
-    flow: Final = open_keyed_oauth_flow(request, value)
+    flow: Final = open_keyed_oauth_flow(request, value, allow_expired=True)
     metadata: Final = ProtectedResourceMetadata.model_validate(
         MappingProxyType(
             {
@@ -139,6 +139,10 @@ async def keyed_authorize(
         raise HTTPException(status_code=400, detail="OAuth resource does not match this connection")
     if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge or ""):
         raise HTTPException(status_code=400, detail="A valid S256 PKCE challenge is required")
+    base: Final = get_request_base_url(request)
+    parsed: Final = urlparse(base)
+    if parsed.scheme != "https" and parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+        raise HTTPException(status_code=400, detail="Key confirmation requires HTTPS outside localhost")
     binding: Final = KeyedAuthorization(
         flow=flow, client_id=client_id, redirect_uri=redirect_uri, state=state, code_challenge=code_challenge or ""
     )
@@ -147,10 +151,6 @@ async def keyed_authorize(
     if stored != binding:
         raise HTTPException(status_code=400, detail="This connection has already started. Reconnect your MCP client.")
     browser: Final = KeyedBrowser(grant_id=flow.jti, csrf=secrets.token_urlsafe(32), exp=flow.exp)
-    base: Final = get_request_base_url(request)
-    parsed: Final = urlparse(base)
-    if parsed.scheme != "https" and parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
-        raise HTTPException(status_code=400, detail="Key confirmation requires HTTPS outside localhost")
     response: Final = HTMLResponse(
         "<!doctype html><html><head><title>Connect MCP server</title></head><body>"
         "<h1>Confirm your LiteLLM key</h1>"
@@ -237,8 +237,13 @@ def _expires(seconds: int) -> datetime:
     return datetime.fromtimestamp(time.time() + seconds, timezone.utc)
 
 
-async def _binding(grant_id: str, request: Request) -> KeyedAuthorization:
-    row: Final = await _store().get(grant_id)
+async def _binding(grant_id: str, request: Request, *, require_active: bool = False) -> KeyedAuthorization:
+    try:
+        row: Final = await _store().get(grant_id)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="OAuth authorization storage is unavailable") from exc
+    if require_active and (row is None or row.status != "active"):
+        raise HTTPException(status_code=401, detail="MCP authorization grant is revoked")
     if row is None or row.status == "revoked" or row.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="OAuth grant is expired or revoked. Reconnect your client.")
     binding: Final = _open_sealed(row.binding_b64, KEYED_BINDING_PREFIX, KeyedAuthorization, "keyed_binding")
@@ -292,8 +297,6 @@ async def confirm_keyed_authorization(request: Request) -> Response:
     ):
         raise HTTPException(status_code=403, detail="Key confirmation expired. Reconnect your client.")
     binding: Final = await _binding(grant_id, request)
-    if binding.flow.resource != f"{base}/mcp":
-        raise HTTPException(status_code=403, detail="Key confirmation belongs to another gateway")
     store: Final = _store()
     if not await store.attempt(grant_id):
         raise HTTPException(status_code=403, detail="Key confirmation expired. Reconnect your client.")
@@ -479,7 +482,12 @@ async def validate_keyed_bearer(request: Request, auth: UserAPIKeyAuth) -> UserA
     token: Final = _open_sealed(value, KEYED_ACCESS_PREFIX, KeyedToken, "keyed_access")
     if token is None or token.kind != "access" or token.exp <= time.time():
         raise HTTPException(status_code=401, detail="MCP authorization token is invalid or expired")
-    binding: Final = await _binding(token.grant_id, request)
+    try:
+        binding: Final = await _binding(token.grant_id, request, require_active=True)
+    except HTTPException as exc:
+        if exc.status_code == 400:
+            raise HTTPException(status_code=401, detail="MCP authorization grant is invalid or expired") from exc
+        raise
     presented_key: Final = _litellm_key_from_request(request)
     if (
         not auth.via_virtual_key
@@ -488,9 +496,6 @@ async def validate_keyed_bearer(request: Request, auth: UserAPIKeyAuth) -> UserA
         or not hmac.compare_digest(hash_token(presented_key), binding.flow.key_hash)
     ):
         raise HTTPException(status_code=403, detail="MCP authorization requires its original virtual key")
-    row: Final = await _store().get(token.grant_id)
-    if row is None or row.status != "active":
-        raise HTTPException(status_code=401, detail="MCP authorization grant is revoked")
     return auth.model_copy(update=MappingProxyType({"mcp_session_resource_server_id": binding.flow.server_id}))
 
 

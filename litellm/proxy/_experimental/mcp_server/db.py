@@ -2099,7 +2099,9 @@ KeyedGrantStatus = Literal["pending", "authorizing", "code", "exchanging", "acti
 
 class KeyedOAuthGrantStore:
     def __init__(self, prisma_client: PrismaClient) -> None:
-        self._table = MCPKeyedOAuthGrantRepository(prisma_client).table
+        from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient, writer_wrapper
+
+        self._table = MCPKeyedOAuthGrantRepository(WriterPinnedClient(writer_wrapper(prisma_client.db))).table
 
     async def begin(self, grant_id: str, binding: str, expires_at: datetime) -> None:
         now: Final = datetime.now(timezone.utc)
