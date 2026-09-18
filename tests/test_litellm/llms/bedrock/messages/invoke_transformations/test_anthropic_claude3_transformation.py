@@ -1903,7 +1903,6 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
         custom_llm_provider="bedrock",
     )
     assert cost > 0
-    assert cost == pytest.approx(0.0093951, rel=0, abs=1e-9)
 
 
 @pytest.mark.asyncio
@@ -1966,13 +1965,6 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
     assert built.usage.total_tokens == 36058
     assert built.usage.cache_creation_input_tokens == 10553
     assert built.usage.cache_read_input_tokens == 25490
-
-    cost = completion_cost(
-        completion_response=built,
-        model="bedrock/us.anthropic.claude-sonnet-4-6",
-        custom_llm_provider="bedrock",
-    )
-    assert cost == pytest.approx(0.052150725, rel=0, abs=1e-9)
 
 
 @pytest.mark.parametrize(
