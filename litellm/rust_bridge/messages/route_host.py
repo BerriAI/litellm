@@ -20,4 +20,4 @@ def arguments(request: LiteLLMMessagesRequest) -> Mapping[str, object]:
 
 
 def map_failure(error: Exception, request: LiteLLMMessagesRequest, request_provider: str) -> Exception:
-    return failures.map_failure(error, request.model, request_provider, arguments(request))
+    return failures.map_native_failure(error, request.model, request_provider, arguments(request), request.api_base)

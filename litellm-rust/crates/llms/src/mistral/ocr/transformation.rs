@@ -135,8 +135,8 @@ impl MistralOcrConfig {
         }
         let api_key = connection
             .api_key
-            .as_deref()
-            .map(str::trim)
+            .as_ref()
+            .map(|key| key.expose().trim())
             .filter(|key| !key.is_empty())
             .map(str::to_string)
             .or_else(|| {
@@ -212,7 +212,7 @@ mod tests {
         #[default(vec![])] extra_headers: Vec<(String, String)>,
     ) -> OcrConnection {
         OcrConnection {
-            api_key: api_key.map(str::to_string),
+            api_key: api_key.map(litellm_auth::SecretValue::new),
             extra_headers,
             ..OcrConnection::default()
         }
