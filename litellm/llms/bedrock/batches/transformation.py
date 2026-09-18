@@ -63,7 +63,7 @@ def _validate_bedrock_tags(raw_tags: object) -> list[BedrockTag]:
 
 def titan_embedding_usage_from_batch_output(model_output: Mapping[str, object]) -> Usage | None:
     """Titan embedding batch lines report usage as a top-level inputTextTokenCount, not a usage block."""
-    if "embedding" not in model_output:
+    if "embedding" not in model_output and "embeddingsByType" not in model_output:
         return None
     input_text_token_count: Final = model_output.get("inputTextTokenCount")
     if isinstance(input_text_token_count, bool) or not isinstance(input_text_token_count, int):
