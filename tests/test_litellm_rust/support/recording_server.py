@@ -25,6 +25,7 @@ class ResponseSpec:
     status: int = 200
     headers: dict[str, str] = field(default_factory=dict)
     delay: float = 0
+    raw: bytes | None = None
 
 
 @dataclass
@@ -73,7 +74,7 @@ def recording_service() -> Iterator[RecordingServer]:
             response: Final = responses.pop(0) if responses else copy.deepcopy(recording_server.default_response)
             if response.delay:
                 time.sleep(response.delay)
-            payload: Final = json.dumps(response.body).encode()
+            payload: Final = json.dumps(response.body).encode() if response.raw is None else response.raw
             self.send_response(response.status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))

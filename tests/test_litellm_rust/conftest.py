@@ -84,6 +84,13 @@ async def isolate_ocr_test_state() -> AsyncIterator[None]:
                 await GLOBAL_LOGGING_WORKER.stop()
 
 
+@pytest.fixture(params=[False, True], ids=["python", "rust"])
+def ocr_backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> bool:
+    enabled: Final = bool(request.param)
+    monkeypatch.setenv("LITELLM_RUST", "1" if enabled else "0")
+    return enabled
+
+
 @pytest.fixture
 def recording_server() -> Generator[RecordingServer]:
     with recording_service() as server:

@@ -13,6 +13,7 @@ from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
+    call_native,
     call_native_aocr,
     call_native_ocr,
     request_body,
@@ -35,6 +36,24 @@ def call_native_ocr_with_callbacks(server: RecordingServer, callbacks: list[Cust
 
 async def call_native_aocr_with_callbacks(server: RecordingServer, callbacks: list[CustomLogger], **kwargs: object):
     return await call_native_aocr(server, callbacks=callbacks, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_ocr_contract_post_call_event_carries_the_api_key_and_only_the_request_body(
+    ocr_server: RecordingServer, ocr_backend: bool, asynchronous: bool
+) -> None:
+    observations: Final = []
+
+    class Observe(CustomLogger):
+        def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+            observations.append((kwargs["api_key"], copy.deepcopy(kwargs["additional_args"])))
+
+    await call_native(ocr_server, asynchronous, callbacks=[Observe()])
+
+    assert observations == [
+        ("test-key", {"complete_input_dict": {"model": "mistral-ocr-latest", "document": OCR_DOCUMENT}})
+    ]
 
 
 def test_native_ocr_pre_call_callback_receives_transformed_provider_request(ocr_server: RecordingServer) -> None:
@@ -123,9 +142,7 @@ async def test_native_ocr_pre_call_nested_document_edit_updates_caller_callback_
         "callbacks": [Retain(), Edit()],
     }
     response: Final = (
-        await call_native_aocr(ocr_server, **arguments)
-        if asynchronous
-        else call_native_ocr(ocr_server, **arguments)
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
     )
 
     assert aliases == [True]
