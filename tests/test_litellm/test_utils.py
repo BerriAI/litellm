@@ -6503,3 +6503,30 @@ def test_completion_finishes_response_metadata_before_handing_the_response_to_th
     assert snapshot["litellm_call_id"]
     assert snapshot["response_cost"] is not None
     assert snapshot["api_base"]
+
+
+@pytest.mark.parametrize(
+    "stream,passed,expected",
+    [
+        (False, {"include_usage": True}, None),
+        (None, {"include_usage": True}, None),
+        (True, {"include_usage": True}, {"include_usage": True}),
+        (False, {"include_usage": True, "include_obfuscation": True}, {"include_obfuscation": True}),
+        (False, {"include_obfuscation": True}, {"include_obfuscation": True}),
+    ],
+)
+def test_get_optional_params_strips_include_usage_when_not_streaming(stream, passed, expected):
+    """`stream_options.include_usage` only means anything for a streaming request.
+    OpenAI ignores it otherwise, but OpenAI-compatible backends such as vLLM reject
+    the call with a 400 (#29431). Only that key is stripped; the rest are kept.
+    """
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        stream=stream,
+        stream_options=dict(passed),
+    )
+
+    assert optional_params.get("stream_options") == expected
