@@ -151,6 +151,25 @@ async def test_async_filter_deployments_narrows_prompt_above_model_minimum():
 
 
 @pytest.mark.asyncio
+async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+    messages = _messages(word_count=5000)
+
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"_target_order": 2},
+    )
+
+    assert filtered == deployments
+
+
+@pytest.mark.asyncio
 async def test_async_filter_deployments_narrows_for_group_whose_model_minimum_is_lower():
     """
     Same ~1400-token prompt that must not pin an Opus 4.6 group, on an Opus 4.8 group whose real
@@ -314,6 +333,67 @@ async def test_per_request_enable_prompt_caching_reaches_the_affinity_key(monkey
 
 
 @pytest.mark.asyncio
+async def test_claude_code_one_shot_subagent_does_not_reuse_an_auto_injected_affinity_key(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    messages = cast(List[AllMessageValues], [{"role": "user", "content": "unique " * 3000}])
+    request_kwargs = {
+        "system": [
+            {
+                "type": "text",
+                "text": "x-anthropic-billing-header: cc_version=2.1.263; cc_is_subagent=true;",
+            }
+        ],
+        "proxy_server_request": {"headers": {"user-agent": "claude-cli/2.1.263 (external, cli)"}},
+    }
+    auto_injected_messages = AnthropicCacheControlHook.messages_with_default_injections(
+        messages=messages,
+        models=(AUTO_CACHING_MODEL,),
+    )
+    assert auto_injected_messages != messages
+    await PromptCachingCache(cache=cache).async_add_model_id(
+        model_id="dep-2", messages=auto_injected_messages, tools=None
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs=request_kwargs,
+    )
+
+    assert filtered == deployments
+
+
+@pytest.mark.asyncio
+async def test_root_cache_control_does_not_reuse_an_auto_injected_affinity_key(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    messages = _auto_caching_messages()
+    auto_injected_messages = AnthropicCacheControlHook.messages_with_default_injections(
+        messages=messages,
+        models=(AUTO_CACHING_MODEL,),
+    )
+    assert auto_injected_messages != messages
+    await PromptCachingCache(cache=cache).async_add_model_id(
+        model_id="dep-2", messages=auto_injected_messages, tools=None
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"cache_control": {"type": "ephemeral"}},
+    )
+
+    assert filtered == deployments
+
+
+@pytest.mark.asyncio
 async def test_tool_marked_cache_control_keeps_routing_off_another_requests_prefix(monkeypatch, local_model_cost_map):
     """
     Tools carrying the client's own cache_control make auto-injection stand down, so this request
@@ -397,3 +477,65 @@ async def test_wildcard_route_resolves_underlying_model_minimum(local_model_cost
 
     assert deployments[0]["litellm_params"]["model"] == "anthropic/claude-opus-4-6"
     assert _get_min_token_count_for_deployments(deployments) == 4096
+
+
+@pytest.mark.asyncio
+async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer("anthropic/claude-fable-5")
+    check = PromptCachingDeploymentCheck(cache=DualCache())
+    deployments = _deployments("anthropic/claude-fable-5")
+    messages = cast(List[AllMessageValues], [{"role": "user", "content": text * 100}])
+
+    result, took, lags = await timed_with_loop_lags(
+        lambda: check.async_filter_deployments(
+            model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=messages
+        )
+    )
+
+    assert result == deployments
+    assert_loop_stayed_free(took, lags)
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer("anthropic/claude-fable-5")
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    messages = cast(
+        List[AllMessageValues],
+        [{"role": "user", "content": [{"type": "text", "text": text * 100, "cache_control": {"type": "ephemeral"}}]}],
+    )
+    standard_logging_object = {
+        "call_type": "acompletion",
+        "model": "anthropic/claude-fable-5",
+        "messages": messages,
+        "model_id": "dep-1",
+    }
+
+    _, took, lags = await timed_with_loop_lags(
+        lambda: check.async_log_success_event(
+            kwargs={"standard_logging_object": standard_logging_object},
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+    )
+
+    assert await PromptCachingCache(cache=cache).async_get_model_id(messages=messages, tools=None) == {
+        "model_id": "dep-1"
+    }
+    assert_loop_stayed_free(took, lags)

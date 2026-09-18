@@ -7,25 +7,23 @@
 //! is the streaming variant; it hands the raw upstream response back so a host
 //! can splice the event stream to its own caller.
 
+mod error;
+pub use error::Error;
 mod client;
 mod common_utils;
 mod handler;
 mod prepare;
-pub mod transformation;
-pub mod types;
-
-use crate::error::CoreResult;
+pub use litellm_providers::messages::types;
 
 use handler::{execute_messages_provider_call, execute_messages_provider_stream};
-use prepare::prepare_messages_call;
 use types::{AnthropicMessagesResponse, MessagesRequest};
 
-pub async fn messages(request: MessagesRequest<'_>) -> CoreResult<AnthropicMessagesResponse> {
-    execute_messages_provider_call(prepare_messages_call(request)?).await
+pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
+    execute_messages_provider_call(request).await
 }
 
-pub async fn messages_stream(request: MessagesRequest<'_>) -> CoreResult<reqwest::Response> {
-    execute_messages_provider_stream(prepare_messages_call(request)?).await
+pub async fn messages_stream(request: MessagesRequest<'_>) -> Result<reqwest::Response, Error> {
+    execute_messages_provider_stream(request).await
 }
 
 #[cfg(test)]

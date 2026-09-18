@@ -59,7 +59,7 @@ interface UISettings {
 interface CreateUserFormValues {
   user_email?: string;
   user_role: string;
-  team_id?: string;
+  team_id?: string | null;
   organization_ids?: string[];
   metadata?: string;
   send_invite_email: boolean;
@@ -270,7 +270,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   );
 
   const sendInviteEmailField = (
-    <FormField control={form.control} name="send_invite_email" label="Send invitation email">
+    <FormField control={form.control} name="send_invite_email" label="Send invitation email" orientation="horizontal">
       {({ id, value, onChange, onBlur }) => (
         <Checkbox id={id} checked={value} onCheckedChange={onChange} onBlur={onBlur} />
       )}

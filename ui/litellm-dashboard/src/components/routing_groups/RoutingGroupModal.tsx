@@ -23,7 +23,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import {
   GROUP_NAME_MAX_LENGTH,
-  GROUP_NAME_PATTERN,
   STRATEGIES_WITH_ARGS,
   argsForStrategy,
   buildRoutingGroupPayload,
@@ -74,10 +73,10 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
     const shape = {
       group_name: z
         .string()
+        .trim()
         .min(1, "Group name is required")
         .max(GROUP_NAME_MAX_LENGTH, `Must be ${GROUP_NAME_MAX_LENGTH} characters or fewer`)
-        .regex(GROUP_NAME_PATTERN, "Only letters, numbers, dot, underscore, and dash are allowed")
-        .refine((value) => !reservedNames.has(value.trim().toLowerCase()), "A group with this name already exists"),
+        .refine((value) => !reservedNames.has(value.toLowerCase()), "A group with this name already exists"),
       models: z.array(z.string()).min(1, "Select at least one model"),
       routing_strategy: z.string().min(1, "Strategy is required"),
       routing_strategy_args: z.string(),

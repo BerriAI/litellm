@@ -14,7 +14,7 @@ import json
 from collections.abc import AsyncGenerator, Mapping
 from copy import deepcopy
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -144,31 +144,32 @@ def _validate_push_notification_url(url: str) -> None:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> dict[str, str]:
-    headers: Final[dict[str, str]] = {}
-    if user_api_key_dict.user_id:
-        headers["X-LiteLLM-User-Id"] = user_api_key_dict.user_id
-    if user_api_key_dict.team_id:
-        headers["X-LiteLLM-Team-Id"] = user_api_key_dict.team_id
-    return headers
+def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            name: value
+            for name, value in (
+                ("X-LiteLLM-User-Id", user_api_key_dict.user_id),
+                ("X-LiteLLM-Team-Id", user_api_key_dict.team_id),
+            )
+            if value
+        }
+    )
 
 
 def _forwarding_headers(
-    user_api_key_dict: UserAPIKeyAuth,
+    caller_identity: Mapping[str, str],
     request_data: Mapping[str, object],
     agent_extra_headers: Mapping[str, str] | None,
-) -> Mapping[str, str] | None:
-    sanitized: Final = (
-        {k: v for k, v in agent_extra_headers.items() if not k.lower().startswith("x-litellm-")}
-        if agent_extra_headers
-        else None
+) -> dict[str, str] | None:
+    passthrough: Final = tuple(
+        (name, value)
+        for name, value in (agent_extra_headers.items() if agent_extra_headers else ())
+        if not name.lower().startswith("x-litellm-")
     )
-    merged: Final = merge_agent_headers(dynamic_headers=sanitized, static_headers=None) or {}
-    identity: Final = _caller_identity_headers(user_api_key_dict)
     trace_id: Final = request_data.get("litellm_trace_id")
-    if trace_id:
-        identity["X-LiteLLM-Trace-Id"] = str(trace_id)
-    merged.update(identity)
+    trace: Final = (("X-LiteLLM-Trace-Id", str(trace_id)),) if trace_id else ()
+    merged: Final = dict((*passthrough, *caller_identity.items(), *trace))
     return merged or None
 
 
@@ -215,11 +216,20 @@ def _enforce_inbound_trace_id(agent: "AgentResponse", request: Request) -> None:
         )
 
 
+class _JsonRpcResponse(Protocol):
+    def json(self) -> dict[str, object]: ...
+
+
+def _jsonrpc_body(response: _JsonRpcResponse) -> dict[str, object]:
+    """The decoded JSON-RPC body of ``response``."""
+    return response.json()
+
+
 async def _forward_jsonrpc(
     agent_url: str,
     body: dict[str, object],
     extra_headers: Mapping[str, str] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -230,7 +240,7 @@ async def _forward_jsonrpc(
     )
     resp: Final = await handler.post(agent_url, json=body, headers=headers)
     try:
-        result: Final = resp.json()
+        result: Final = _jsonrpc_body(resp)
     except Exception:
         resp.raise_for_status()
         raise
@@ -746,6 +756,7 @@ async def invoke_agent_a2a(
             ProxyBaseLLMRequestProcessing,
         )
 
+        caller_identity: Final = _caller_identity_headers(user_api_key_dict)
         processor: Final = ProxyBaseLLMRequestProcessing(data=body)
         data, logging_obj = await processor.common_processing_pre_call_logic(
             request=request,
@@ -784,9 +795,13 @@ async def invoke_agent_a2a(
                     if header_name:
                         dynamic_headers[header_name] = val
 
-        agent_extra_headers = merge_agent_headers(
-            dynamic_headers=dynamic_headers or None,
-            static_headers=static_headers or None,
+        agent_extra_headers = _forwarding_headers(
+            caller_identity=caller_identity,
+            request_data=data,
+            agent_extra_headers=merge_agent_headers(
+                dynamic_headers=dynamic_headers or None,
+                static_headers=static_headers or None,
+            ),
         )
 
         # Databricks App endpoints require a short-lived OAuth M2M token rather
@@ -933,15 +948,10 @@ async def invoke_agent_a2a(
                 "method": method,
                 "params": params,
             }
-            caller_headers: Final = _forwarding_headers(
-                user_api_key_dict=user_api_key_dict,
-                request_data=data,
-                agent_extra_headers=agent_extra_headers,
-            )
-            result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=caller_headers)
+            result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=agent_extra_headers)
             if method == "agent/getAuthenticatedExtendedCard":
-                if isinstance(result.get("result"), dict):
-                    card: Final = result["result"]
+                card: Final = result.get("result")
+                if isinstance(card, dict):
                     proxy_url: Final = get_custom_url(str(request.base_url), route=f"a2a/{agent_id}")
                     # Rewrite the upstream agent URL in both 0.3 (top-level `url`)
                     # and 1.0 (`supportedInterfaces[0].url`) wire formats so that
@@ -979,16 +989,11 @@ async def invoke_agent_a2a(
                 "method": method,
                 "params": params,
             }
-            sse_caller_headers: Final = _forwarding_headers(
-                user_api_key_dict=user_api_key_dict,
-                request_data=data,
-                agent_extra_headers=agent_extra_headers,
-            )
             return await _forward_jsonrpc_sse(
                 agent_url,
                 forward_body,
                 request_id=request_id,
-                extra_headers=sse_caller_headers,
+                extra_headers=agent_extra_headers,
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
@@ -1010,4 +1015,6 @@ async def invoke_agent_a2a(
             )
         except Exception:
             pass
+        if isinstance(e, litellm.BadRequestError):
+            return _jsonrpc_error(body.get("id"), -32602, e.message, 400)
         return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e}", 500)

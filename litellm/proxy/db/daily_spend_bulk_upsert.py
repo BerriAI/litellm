@@ -57,11 +57,14 @@ _COUNTER_COLUMNS: Final = (
     "cache_read_input_tokens",
     "cache_creation_input_tokens",
     "compression_saved_tokens",
+    "total_response_time_ms",
+    "timed_requests",
 )
 _SPEND_COLUMNS: Final = (
     "spend",
     "compression_savings_spend",
     "prompt_caching_savings_spend",
+    "gateway_injected_caching_savings_spend",
     "autorouter_savings_spend",
 )
 

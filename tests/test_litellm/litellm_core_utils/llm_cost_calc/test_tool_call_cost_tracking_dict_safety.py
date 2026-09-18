@@ -10,8 +10,8 @@ import pytest
 
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
-    get_web_search_requests,
 )
+from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests
 from litellm.types.utils import ModelResponse, ServerToolUse, Usage
 
 

@@ -83,6 +83,24 @@ jobs:
         if: steps.changes.outputs.relevant == 'true'
         run: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
+      - name: Regenerate the lazy OpenAPI snapshot
+        if: steps.changes.outputs.relevant == 'true'
+        run: uv run --no-sync python -m litellm.proxy._lazy_openapi_snapshot
+
+      - name: Fail if the lazy OpenAPI snapshot is stale
+        if: steps.changes.outputs.relevant == 'true'
+        run: |
+          if ! git diff --exit-code -- litellm/proxy/_lazy_openapi_snapshot.json; then
+            echo "::error file=litellm/proxy/_lazy_openapi_snapshot.json::The lazy OpenAPI snapshot is out of sync with the lazily loaded routes."
+            echo ""
+            echo "A lazily loaded route or model changed without regenerating the snapshot that /openapi.json serves for unloaded features."
+            echo "To fix, run from the repo root:"
+            echo "  uv run python -m litellm.proxy._lazy_openapi_snapshot"
+            echo "then run npm run gen:api from ui/litellm-dashboard and commit both files."
+            exit 1
+          fi
+          echo "_lazy_openapi_snapshot.json is in sync with the lazily loaded routes."
+
       - name: Set up Node.js
         if: steps.changes.outputs.relevant == 'true'
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0

@@ -71,24 +71,24 @@ async def test_responses_batch_reconciles_to_real_tokens_and_spend(local_model_c
     input_tokens = 33
     output_tokens = 57
 
-    cost, usage, models = await bu.calculate_batch_cost_and_usage(
+    result = await bu.calculate_batch_cost_and_usage(
         file_content_dictionary=[_responses_line(input_tokens, output_tokens)],
         custom_llm_provider="openai",
         model_name=MODEL,
         model_info=model_info,
     )
 
-    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (
         input_tokens,
         output_tokens,
         input_tokens + output_tokens,
     )
-    assert models == [MODEL]
-    assert cost == pytest.approx(
+    assert result.models == [MODEL]
+    assert result.cost == pytest.approx(
         input_tokens * model_info["input_cost_per_token_batches"]
         + output_tokens * model_info["output_cost_per_token_batches"]
     )
-    assert cost > 0.0
+    assert result.cost > 0.0
 
 
 async def test_mixed_shape_batch_output_sums_across_both_line_shapes(local_model_cost_map):
@@ -96,15 +96,15 @@ async def test_mixed_shape_batch_output_sums_across_both_line_shapes(local_model
     batch's declared endpoint rather than each line's shape would miss this."""
     model_info = litellm.get_model_info(model=MODEL, custom_llm_provider="openai")
 
-    cost, usage, _ = await bu.calculate_batch_cost_and_usage(
+    result = await bu.calculate_batch_cost_and_usage(
         file_content_dictionary=[_responses_line(100, 50), _chat_line(33, 57)],
         custom_llm_provider="openai",
         model_name=MODEL,
         model_info=model_info,
     )
 
-    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (133, 107, 240)
-    assert cost == pytest.approx(
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (133, 107, 240)
+    assert result.cost == pytest.approx(
         133 * model_info["input_cost_per_token_batches"] + 107 * model_info["output_cost_per_token_batches"]
     )
 

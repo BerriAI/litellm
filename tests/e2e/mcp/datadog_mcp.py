@@ -38,9 +38,9 @@ def register_datadog_mcp(
     mcp_access_groups: list[str] | None = None,
     allowed_tools: Sequence[str] | None = (SEARCH_LOGS_TOOL,),
 ) -> str:
-    """Register the Datadog remote MCP server. `allowed_tools` defaults to the
-    search-logs slice; pass None to expose the full core toolset (needed when a
-    test must prove narrowing, so a second tool has to exist to be denied)."""
+    """Register the core Datadog toolset with its credentials from the env. By default
+    the server exposes only `search_datadog_logs`; pass `allowed_tools=None` to expose
+    every tool the core toolset serves."""
     assert_dd_mcp_creds()
     name = f"e2e_dd_mcp_{unique_marker()}"
     server_id = client.register_server(
@@ -52,7 +52,7 @@ def register_datadog_mcp(
             "DD-API-KEY": _dd_api_key(),
             "DD-APPLICATION-KEY": _dd_app_key(),
         },
-        allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
+        allowed_tools=None if allowed_tools is None else list(allowed_tools),
         mcp_access_groups=mcp_access_groups,
     )
     resources.defer(lambda: client.delete_server(server_id))

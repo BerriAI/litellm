@@ -108,3 +108,38 @@ things to settle before treating the set as final:
   boundary needs a decision, and the auth cluster may deserve promotion to its own module
 - the P2 "niche" cells each stand in for a large tail of integrations/providers by design,
   so the denominator is deliberately P0-weighted rather than a full inventory
+
+## MCP migration acceptance (LIT-4506)
+
+This matrix tracks the ten security/compatibility guards and the added JWT acceptance
+criteria. Registry membership means a desired behavior, not a passing execution
+record. Preserve the source/harness commits, SDK version, auth and transport topology,
+executed node IDs and live results with each PR. A skipped or unexecuted case remains
+pending. Integration contract IDs belong in `tests/integration/contracts.json`, not
+`mcp.yaml`; links below connect the two suites without merging their namespaces
+
+| Requirement | Existing regression or owning suite | Remaining acceptance and owner | Required before |
+|---|---|---|---|
+| Principal discovery | `mcp/test_mcp_key_access_e2e.py`, `mcp/test_mcp_access_group_e2e.py`, `mcp/test_mcp_toolset_enforcement_e2e.py` | Run key/team/org/user controls on every configured replica; native/REST parity remains LIT-4506 | Phase 0 and affected authorization changes |
+| No self-attached unauthorized grants | Management key authorization tests | Read back unchanged server/toolset/access-group grants after rejected writes, LIT-4502 | Affected grant capability activation |
+| UI/API parity | Admin MCP UI suite | Same non-admin actor and permissions across both surfaces, LIT-3644 / LIT-4506 | Affected UI capability activation |
+| Server identity routing | Saved-server lifecycle integration and resolver tests | Cold routing, duplicate/unprefixed names, LIT-4500 | Routing changes |
+| Same-URL credential isolation | Outbound credential resolver subject/server tests | Observe distinct user/server credentials at actual upstream transport, LIT-4506 with LIT-3467 / LIT-3559 | Affected auth capability activation |
+| Fail-closed credentials | LIT-4501 production-path tests; integration lifecycle owns warm credential-removal follow-up | Observe rejection and zero upstream calls after persisted removal; refresh/challenge work remains LIT-4436 / LIT-4422 / LIT-3433 | Phase 0 auth release |
+| Upstream session continuity | Existing controlled integration peer is stateless | Observe upstream session ID across operations, LIT-3143 | Stateful upstream activation |
+| Real hooks/guardrails | `mcp/test_mcp_guardrail_e2e.py`, LIT-4889 production-path tests | Request-selected direct/virtual pre-call guard integration and removal of void assertions, LIT-4506 | Phase 0 and changed guardrail paths |
+| Discovery and execution permissions | Key-denial and principal-toolset E2E; `integration/compatibility/test_persisted_toolsets.py` | Preserve permitted calls and explicit denial, expand remaining protocol combinations, LIT-4506 | Every authorization migration |
+| Stateless/stateful combinations | Stateless SDK-peer integration | Explicit incoming/outgoing combinations and supported versions, LIT-3143 / LIT-3559 | Affected transport activation |
+| JWT canonical owner and restart | LIT-3794 / LIT-3795 merged regressions | Real process restart, cold cache, header precedence, expired/invalid JWT and inactive user, LIT-4506 | Applicable Phase 0 auth release |
+| No gateway JWT upstream | Existing credential resolver/unit evidence | Observe actual upstream headers across users and same-URL servers, LIT-4506 | Applicable Phase 0 auth release |
+| Uninterrupted OAuth and aggregate SSO | `mcp/test_mcp_chat_completion_oauth_e2e.py` | Immediate SDK continuation and aggregate SSO, LIT-3467 with LIT-4506 acceptance; missing browser login is not a pass | Applicable Phase 0 auth release |
+
+The initial package does not close LIT-4506. Recheck all applicable rows before the
+execution plan's final acceptance step. Keep protocol conformance, canary and rollback
+evidence with their owners; a static registry percentage cannot authorize rollout
+
+The E2E consolidation incorporates PR #34055's inventory and PR #35405's remaining
+Datadog input-schema guard. The telemetry argument removal and unskipping already
+landed in #38640. LIT-5052 requires the schema guard and all three affected real-Datadog
+tests, including seeded completion retrieval, to pass before closure. LIT-5749's runtime
+fix already landed in #38488; the principal tests add regression evidence

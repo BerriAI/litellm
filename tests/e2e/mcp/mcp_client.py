@@ -15,24 +15,13 @@ import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from e2e_config import settle_propagation
 from e2e_http import Headers, NoBody, Result, Success, UnknownApiError, unwrap
-from models import (
-    KeyGenerateBody,
-    ObjectPermission,
-    OrgDeleteBody,
-    OrgNewBody,
-    OrgNewResponse,
-    TeamDeleteBody,
-    TeamNewBody,
-    TeamNewResponse,
-    UserDeleteBody,
-    UserNewBody,
-    UserNewResponse,
-)
+from models import KeyGenerateBody, McpServerListResponse, McpServerRow, ObjectPermission
 from proxy_client import ProxyClient
 
 McpToolArg = str | int | float | bool | list[str] | dict[str, str]
@@ -58,27 +47,16 @@ class McpServerNewResponse(BaseModel):
     server_id: str
 
 
-class McpToolsetToolSpec(BaseModel):
+class McpHealthParams(BaseModel):
+    server_ids: list[str] | None = None
+
+
+class McpHealthRow(BaseModel):
     server_id: str
-    tool_name: str
+    status: Literal["healthy", "unhealthy", "unknown"] | None
 
 
-class McpToolsetNewBody(BaseModel):
-    toolset_name: str
-    tools: list[McpToolsetToolSpec]
-
-
-class McpToolsetNewResponse(BaseModel):
-    toolset_id: str
-
-
-class McpServerRow(BaseModel):
-    server_id: str
-    alias: str | None = None
-    url: str | None = None
-
-
-class McpServersListResponse(RootModel[list[McpServerRow]]):
+class McpHealthResponse(RootModel[list[McpHealthRow]]):
     pass
 
 
@@ -87,10 +65,22 @@ class McpToolMcpInfo(BaseModel):
     alias: str | None = None
 
 
+class McpToolInputSchema(BaseModel):
+    properties: dict[str, object] = {}
+
+
 class McpToolEntry(BaseModel):
     name: str
     description: str | None = None
     mcp_info: McpToolMcpInfo | None = None
+    input_schema: McpToolInputSchema = Field(alias="inputSchema")
+
+    def assert_arguments_are_documented(self, arguments: McpToolArguments) -> None:
+        undocumented = frozenset(arguments).difference(self.input_schema.properties)
+        assert not undocumented, (
+            f"tool {self.name!r} arguments absent from advertised input schema: {sorted(undocumented)}; "
+            f"documented arguments: {sorted(self.input_schema.properties)}"
+        )
 
 
 class McpToolsListResponse(BaseModel):
@@ -104,12 +94,16 @@ class McpToolsListResponse(BaseModel):
         )
 
     def tool_name_containing(self, server_id: str, needle: str) -> str | None:
+        tool = self.tool_containing(server_id, needle)
+        return tool.name if tool is not None else None
+
+    def tool_containing(self, server_id: str, needle: str) -> McpToolEntry | None:
         needle_l = needle.lower()
         for tool in self.tools:
             if tool.mcp_info is None or tool.mcp_info.server_id != server_id:
                 continue
             if needle_l in tool.name.lower() or tool.name.lower().endswith(needle_l):
-                return tool.name
+                return tool
         return None
 
 
@@ -217,30 +211,34 @@ class McpClient:
                 "/v1/mcp/server",
                 headers=self.proxy.transport.master,
                 params=NoBody(),
-                response_type=McpServersListResponse,
+                response_type=McpServerListResponse,
             )
         ).root
 
-    def await_registered(self, server_id: str) -> None:
-        """Poll /v1/mcp/server until `server_id` is listed. Fails at poll_timeout.
+    def list_servers(self, key: str) -> Result[McpServerListResponse]:
+        return self.proxy.transport.get(
+            "/v1/mcp/server",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            params=NoBody(),
+            response_type=McpServerListResponse,
+        )
 
-        The DB row exists the moment registration returns, but a data-plane pod
-        answers the listing from a registry it refreshes on a periodic DB sync, so a
-        pod that joined the load balancer after the write reports the server as
-        absent until its first sync.
-        """
-        deadline = time.monotonic() + self.proxy.poll_timeout
-        while True:
-            registered = frozenset(row.server_id for row in self.registered_servers())
-            if server_id in registered:
-                return
-            if time.monotonic() >= deadline:
-                raise AssertionError(
-                    f"registered server {server_id} still absent from /v1/mcp/server "
-                    f"{self.proxy.poll_timeout}s after registration (the data plane never synced "
-                    f"the row): {registered}"
-                )
-            time.sleep(self.proxy.poll_interval)
+    def server_health(self, key: str, server_ids: list[str] | None = None) -> Result[McpHealthResponse]:
+        return self.proxy.transport.get(
+            "/v1/mcp/server/health",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            params=McpHealthParams(server_ids=server_ids),
+            response_type=McpHealthResponse,
+        )
+
+    def await_registered(self, server_id: str) -> McpServerRow:
+        """Wait for every configured replica to list the server and return its row."""
+        registered = self.proxy.read_body_back_everywhere(
+            "/v1/mcp/server",
+            McpServerListResponse,
+            settled=lambda response: any(row.server_id == server_id for row in response.root),
+        )
+        return next(row for response in registered.values() for row in response.root if row.server_id == server_id)
 
     def generate_key(
         self,
@@ -248,124 +246,24 @@ class McpClient:
         user_id: str,
         mcp_servers: list[str] | None,
         mcp_access_groups: list[str] | None = None,
+        mcp_toolsets: list[str] | None = None,
         models: list[str] | None = None,
-        team_id: str | None = None,
     ) -> str:
         object_permission = (
-            ObjectPermission(mcp_servers=mcp_servers, mcp_access_groups=mcp_access_groups)
-            if mcp_servers is not None or mcp_access_groups is not None
+            ObjectPermission(
+                mcp_servers=mcp_servers,
+                mcp_access_groups=mcp_access_groups,
+                mcp_toolsets=mcp_toolsets,
+            )
+            if mcp_servers is not None or mcp_access_groups is not None or mcp_toolsets is not None
             else None
         )
         return self.proxy.generate_key(
             KeyGenerateBody(
                 models=models if models is not None else [],
                 user_id=user_id,
-                team_id=team_id,
                 object_permission=object_permission,
             )
-        )
-
-    def create_toolset(self, *, name: str, server_id: str, tool_names: list[str]) -> str:
-        """Create a named toolset over `server_id` (admin), returning its id."""
-        return unwrap(
-            self.proxy.transport.post(
-                "/v1/mcp/toolset",
-                headers=self.proxy.transport.master,
-                json=McpToolsetNewBody(
-                    toolset_name=name,
-                    tools=[McpToolsetToolSpec(server_id=server_id, tool_name=tool) for tool in tool_names],
-                ),
-                response_type=McpToolsetNewResponse,
-            )
-        ).toolset_id
-
-    def delete_toolset(self, toolset_id: str) -> None:
-        _ = self.proxy.transport.delete(
-            f"/v1/mcp/toolset/{toolset_id}",
-            headers=self.proxy.transport.master,
-            json=NoBody(),
-            response_type=NoBody,
-        )
-
-    def create_team(
-        self,
-        *,
-        alias: str,
-        object_permission: ObjectPermission | None = None,
-        organization_id: str | None = None,
-    ) -> str:
-        return unwrap(
-            self.proxy.transport.post(
-                "/team/new",
-                headers=self.proxy.transport.master,
-                json=TeamNewBody(
-                    team_alias=alias,
-                    organization_id=organization_id,
-                    object_permission=object_permission,
-                ),
-                response_type=TeamNewResponse,
-            )
-        ).team_id
-
-    def delete_team(self, team_id: str) -> None:
-        _ = self.proxy.transport.post(
-            "/team/delete",
-            headers=self.proxy.transport.master,
-            json=TeamDeleteBody(team_ids=[team_id]),
-            response_type=NoBody,
-        )
-
-    def create_org(
-        self,
-        *,
-        alias: str,
-        object_permission: ObjectPermission | None = None,
-    ) -> str:
-        return unwrap(
-            self.proxy.transport.post(
-                "/organization/new",
-                headers=self.proxy.transport.master,
-                json=OrgNewBody(
-                    organization_alias=alias,
-                    object_permission=object_permission,
-                ),
-                response_type=OrgNewResponse,
-            )
-        ).organization_id
-
-    def delete_org(self, organization_id: str) -> None:
-        _ = self.proxy.transport.delete(
-            "/organization/delete",
-            headers=self.proxy.transport.master,
-            json=OrgDeleteBody(organization_ids=[organization_id]),
-            response_type=NoBody,
-        )
-
-    def create_user(
-        self,
-        *,
-        user_email: str,
-        object_permission: ObjectPermission | None = None,
-    ) -> str:
-        return unwrap(
-            self.proxy.transport.post(
-                "/user/new",
-                headers=self.proxy.transport.master,
-                json=UserNewBody(
-                    user_email=user_email,
-                    user_role="internal_user",
-                    object_permission=object_permission,
-                ),
-                response_type=UserNewResponse,
-            )
-        ).user_id
-
-    def delete_user(self, user_id: str) -> None:
-        _ = self.proxy.transport.post(
-            "/user/delete",
-            headers=self.proxy.transport.master,
-            json=UserDeleteBody(user_ids=[user_id]),
-            response_type=NoBody,
         )
 
     def list_tools(self, key: str) -> Result[McpToolsListResponse]:
@@ -377,8 +275,11 @@ class McpClient:
         )
 
     def await_tool(self, key: str, server_id: str, needle: str) -> str:
+        return self.await_tool_entry(key, server_id, needle).name
+
+    def await_tool_entry(self, key: str, server_id: str, needle: str) -> McpToolEntry:
         """Poll tools/list until `server_id` serves a tool matching `needle`, and
-        return its fully-qualified name. Fails at poll_timeout.
+        return the successful tool snapshot. Fails at poll_timeout.
 
         /v1/mcp/server returns as soon as the DB row is written, but the gateway
         runs the initialize + tools/list handshake against the upstream lazily on
@@ -390,15 +291,29 @@ class McpClient:
         while True:
             result = self.list_tools(key)
             if isinstance(result, Success):
-                tool_name = result.data.tool_name_containing(server_id, needle)
-                if tool_name is not None:
-                    return tool_name
+                tool = result.data.tool_containing(server_id, needle)
+                if tool is not None:
+                    return tool
             if time.monotonic() >= deadline:
                 raise AssertionError(
                     f"server {server_id} never served a tool matching {needle!r} within "
                     f"{self.proxy.poll_timeout}s of registration (upstream unreachable, or "
                     f"the key's grant was not applied); last tools/list: {result}"
                 )
+            time.sleep(self.proxy.poll_interval)
+
+    def await_tools(self, key: str, server_id: str, *, expected: frozenset[str]) -> frozenset[str]:
+        """Poll tools/list until `server_id`'s tools as `key` sees them are exactly
+        `expected`, and return the last listing either way, so the caller's equality
+        assertion names the difference. Fails at poll_timeout only when the read
+        itself never succeeded."""
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        while True:
+            result = self.list_tools(key)
+            if isinstance(result, Success) and result.data.tool_names_for_server(server_id) == expected:
+                return expected
+            if time.monotonic() >= deadline:
+                return unwrap(result).tool_names_for_server(server_id)
             time.sleep(self.proxy.poll_interval)
 
     def await_call_tool(

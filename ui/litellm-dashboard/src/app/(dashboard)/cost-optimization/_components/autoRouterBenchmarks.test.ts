@@ -37,6 +37,7 @@ const totals = (overrides: Partial<AutoRouterBenchmarkGroup> = {}) => ({
   avg_session_seconds: 7560,
   avg_tokens_per_session: 5_300_000,
   spend: 359.86,
+  classifier_cost: 6.146,
   saved_spend: 2174.59,
   baseline_spend: 2534.45,
   saved_pct: 85.8,

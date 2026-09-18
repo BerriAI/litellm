@@ -310,7 +310,7 @@ class XecGuardGuardrail(CustomGuardrail):
         scan_type: str,
         suppress_errors: bool = False,
     ) -> dict | None:
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "model": self.xecguard_model,
             "scan_type": scan_type,
             "messages": messages,
@@ -385,7 +385,7 @@ class XecGuardGuardrail(CustomGuardrail):
     def _build_full_history(
         self,
         request_data: dict,
-        inputs: Any,
+        inputs: GenericGuardrailAPIInputs,
         input_type: str,
     ) -> list[dict]:
         """Assemble the full message list that will be sent to XecGuard.
